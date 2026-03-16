@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: ai-app-generation
+server:
+  port: 9025
+  servlet:
+    context-path: /api
+# springdoc-openapi
+springdoc:
+  group-configs:
+    - group: 'default'
+      packages-to-scan: com.lyw.appgeneration.controller
+# knife
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
