@@ -4,10 +4,13 @@ import com.lyw.appgeneration.common.BaseResponse;
 import com.lyw.appgeneration.common.ResultUtils;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
+import com.lyw.appgeneration.model.dto.UserLoginRequest;
 import com.lyw.appgeneration.model.dto.UserRegisterRequest;
 import com.lyw.appgeneration.model.entity.User;
+import com.lyw.appgeneration.model.vo.LoginUserVO;
 import com.lyw.appgeneration.service.UserService;
 import com.mybatisflex.core.paginate.Page;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -36,6 +39,24 @@ public class UserController {
 
         return ResultUtils.success(result);
     }
+
+    /**
+     * 用户登录
+     * @param userLoginRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/login")
+    public BaseResponse<LoginUserVO> userLogin(@RequestBody UserLoginRequest userLoginRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(userLoginRequest == null, ErrorCode.PARAMS_ERROR);
+        String userAccount = userLoginRequest.getUserAccount();
+        String userPassword = userLoginRequest.getUserPassword();
+        LoginUserVO loginUserVO = userService.userLogin(userAccount, userPassword, request);
+
+        return ResultUtils.success(loginUserVO);
+    }
+
+
     /**
      * 保存用户。
      *

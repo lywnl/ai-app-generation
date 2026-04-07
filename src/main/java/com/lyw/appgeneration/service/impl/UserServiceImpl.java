@@ -1,19 +1,24 @@
 package com.lyw.appgeneration.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.model.dto.UserRegisterRequest;
 import com.lyw.appgeneration.model.enums.UserRoleEnum;
+import com.lyw.appgeneration.model.vo.LoginUserVO;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.mapper.UserMapper;
 import com.lyw.appgeneration.service.UserService;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
 
 import java.nio.charset.StandardCharsets;
+
+import static com.lyw.appgeneration.constants.UserConstant.USER_LOGIN_STATE;
 
 /**
  * 用户 服务层实现。
@@ -69,6 +74,47 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
     public String getEncryptPassword(String password) {
         final String SALT = "lyw";
         return DigestUtils.md5DigestAsHex((password + SALT).getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Override
+    public LoginUserVO getLoginUserVO(User user) {
+        if (user == null) {
+            return null;
+        }
+
+        LoginUserVO loginUserVO = new LoginUserVO();
+        BeanUtil.copyProperties(user, loginUserVO);
+
+        return loginUserVO;
+    }
+
+    @Override
+    public LoginUserVO userLogin(String userAccount, String userPassword, HttpServletRequest request) {
+        //1.参数校验
+        if (userAccount.length() < 4) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户账号长度不能小于4");
+        }
+
+        if (userPassword.length() < 8) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户密码长度不能小于8");
+        }
+
+        //2.加密密码
+        String encryptPassword = getEncryptPassword(userPassword);
+
+        //3.查询用户是否存在
+        QueryWrapper queryWrapper = new QueryWrapper();
+        queryWrapper.eq(User::getUserAccount, userAccount);
+        queryWrapper.eq(User::getUserPassword, encryptPassword);
+        User user = userMapper.selectOneByQuery(queryWrapper);
+        if (user == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");
+        }
+
+        //4.如果用户存在 记录用户的登录状态
+        request.getSession().setAttribute(USER_LOGIN_STATE, user);
+
+        return getLoginUserVO(user);
     }
 
 }

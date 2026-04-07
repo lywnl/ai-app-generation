@@ -1,8 +1,12 @@
 package com.lyw.appgeneration.service;
 
 import com.lyw.appgeneration.model.dto.UserRegisterRequest;
+import com.lyw.appgeneration.model.vo.LoginUserVO;
 import com.mybatisflex.core.service.IService;
 import com.lyw.appgeneration.model.entity.User;
+import com.sun.net.httpserver.HttpServer;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * 用户 服务层。
@@ -26,4 +30,20 @@ public interface UserService extends IService<User> {
      * @return
      */
     String getEncryptPassword(String password);
+
+    /**
+     * 获取登录用户信息(脱敏后)
+     * @param user
+     * @return
+     */
+    LoginUserVO getLoginUserVO(User user);
+
+    /**
+     * 用户登录
+     * @param userAccount
+     * @param userPassword
+     * @param request
+     * @return
+     */
+    LoginUserVO userLogin(String userAccount, String userPassword, HttpServletRequest request);
 }
