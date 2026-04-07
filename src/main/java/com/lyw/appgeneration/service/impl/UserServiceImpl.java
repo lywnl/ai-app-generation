@@ -117,4 +117,36 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         return getLoginUserVO(user);
     }
 
+    @Override
+    public User getLoginUser(HttpServletRequest request) {
+        //先判断用户是否登录
+        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
+        User currentUser = (User) userObj;
+
+        if (currentUser == null || currentUser.getId() == null) {
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+
+        //从数据库查询 确保最新数据
+        currentUser = getById(currentUser.getId());
+        if (currentUser == null) {
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+
+        return currentUser;
+    }
+
+    @Override
+    public boolean userLogout(HttpServletRequest request) {
+        //先判断用户是否登录
+        Object object = request.getSession().getAttribute(USER_LOGIN_STATE);
+        if (object == null) {
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        //移除登录状态
+        request.getSession().removeAttribute(USER_LOGIN_STATE);
+
+        return true;
+    }
+
 }
