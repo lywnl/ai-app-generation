@@ -1,10 +1,17 @@
-spring:
-  application:
-    name: ai-app-generation
 server:
   port: 9025
   servlet:
     context-path: /api
+
+spring:
+  application:
+    name: ai-app-generation
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3406/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false
+    username: root
+    password: lyw666
+
 # springdoc-openapi
 springdoc:
   group-configs:
