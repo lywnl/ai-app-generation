@@ -3,8 +3,8 @@
     <a-row :wrap="false" align="middle">
       <a-col flex="200px">
         <div class="logo-area">
-          <img src="@/assets/logo.svg" alt="logo" class="logo" />
-          <span class="title">AI代码生成</span>
+          <img src="@/assets/logo.png" class="logo" />
+          <span class="title">AI代码生成平台</span>
         </div>
       </a-col>
       <a-col flex="auto">
