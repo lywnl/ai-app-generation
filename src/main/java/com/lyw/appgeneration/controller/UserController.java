@@ -1,7 +1,9 @@
 package com.lyw.appgeneration.controller;
 
+import com.lyw.appgeneration.annotation.AuthCheck;
 import com.lyw.appgeneration.common.BaseResponse;
 import com.lyw.appgeneration.common.ResultUtils;
+import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
 import com.lyw.appgeneration.model.dto.UserLoginRequest;
@@ -84,6 +86,7 @@ public class UserController {
      * @return {@code true} 保存成功，{@code false} 保存失败
      */
     @PostMapping("save")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public boolean save(@RequestBody User user) {
         return userService.save(user);
     }
