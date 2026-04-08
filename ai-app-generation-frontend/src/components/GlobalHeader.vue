@@ -16,9 +16,18 @@
         />
       </a-col>
       <a-col flex="80px">
-        <div class="user-info">
-          <a-button type="primary">登录</a-button>
+        <div class="user-login-status">
+          <div v-if="loginUserStore.loginUser.id">
+            <a-space>
+              <a-avatar :src="loginUserStore.loginUser.userAvatar" />
+              {{ loginUserStore.loginUser.userName ?? '无名' }}
+            </a-space>
+          </div>
+          <div v-else>
+            <a-button type="primary" href="/user/login">登录</a-button>
+          </div>
         </div>
+
       </a-col>
     </a-row>
   </div>
@@ -27,6 +36,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useLoginUserStore } from '@/stores/loginUser.ts'
+
+const loginUserStore = useLoginUserStore()
 
 const router = useRouter()
 const current = ref<string[]>(['/'])
