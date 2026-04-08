@@ -1,12 +1,17 @@
 package com.lyw.appgeneration.service;
 
+import com.lyw.appgeneration.model.dto.UserQueryRequest;
 import com.lyw.appgeneration.model.dto.UserRegisterRequest;
 import com.lyw.appgeneration.model.vo.LoginUserVO;
+import com.lyw.appgeneration.model.vo.UserVO;
+import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
 import com.lyw.appgeneration.model.entity.User;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
+
+import java.util.List;
 
 /**
  * 用户 服务层。
@@ -61,4 +66,24 @@ public interface UserService extends IService<User> {
      */
     boolean userLogout(HttpServletRequest request);
 
+    /**
+     * 获取用户信息
+     * @param user
+     * @return
+     */
+    UserVO getUserVO(User user);
+
+    /**
+     * 获取用户信息列表
+     * @param userList
+     * @return
+     */
+    List<UserVO> getUserVOList(List<User> userList);
+
+    /**
+     * 获取查询条件
+     * @param userQueryRequest
+     * @return
+     */
+    QueryWrapper getQueryWrapper(UserQueryRequest userQueryRequest);
 }
