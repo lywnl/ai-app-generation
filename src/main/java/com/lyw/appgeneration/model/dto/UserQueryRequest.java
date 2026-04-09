@@ -6,6 +6,11 @@ import lombok.EqualsAndHashCode;
 
 import java.io.Serializable;
 
+/**
+ * 用户查询请求
+ *
+ * @author lyw
+ */
 @EqualsAndHashCode(callSuper = true)
 @Data
 public class UserQueryRequest extends PageRequest implements Serializable {

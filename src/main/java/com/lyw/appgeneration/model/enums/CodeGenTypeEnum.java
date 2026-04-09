@@ -3,6 +3,11 @@ package com.lyw.appgeneration.model.enums;
 import cn.hutool.core.util.ObjUtil;
 import lombok.Getter;
 
+/**
+ * 代码生成类型枚举
+ *
+ * @author lyw
+ */
 @Getter
 public enum CodeGenTypeEnum {
 

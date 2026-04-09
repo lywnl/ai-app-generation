@@ -16,6 +16,11 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+/**
+ * 权限拦截器
+ *
+ * @author lyw
+ */
 @Aspect
 @Component
 public class AuthInterceptor {

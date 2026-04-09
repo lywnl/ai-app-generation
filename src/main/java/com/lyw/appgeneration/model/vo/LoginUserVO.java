@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
 
 /**
  * 登录用户信息
+ *
+ * @author lyw
  */
 @Data
 public class LoginUserVO implements Serializable {

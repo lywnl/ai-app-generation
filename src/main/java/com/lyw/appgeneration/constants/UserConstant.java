@@ -1,5 +1,10 @@
 package com.lyw.appgeneration.constants;
 
+/**
+ * 用户常量
+ *
+ * @author lyw
+ */
 public interface UserConstant {
 
     /**

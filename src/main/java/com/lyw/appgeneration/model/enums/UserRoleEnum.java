@@ -5,6 +5,8 @@ import lombok.Getter;
 
 /**
  * 用户角色枚举
+ *
+ * @author lyw
  */
 @Getter
 public enum UserRoleEnum {

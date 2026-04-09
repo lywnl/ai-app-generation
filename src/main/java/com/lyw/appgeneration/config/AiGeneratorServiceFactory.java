@@ -8,6 +8,11 @@ import jakarta.annotation.Resource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * AI 生成服务工厂
+ *
+ * @author lyw
+ */
 @Configuration
 public class AiGeneratorServiceFactory {
 

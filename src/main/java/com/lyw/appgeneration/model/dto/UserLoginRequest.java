@@ -7,6 +7,8 @@ import java.io.Serializable;
 
 /**
  * 用户登录请求
+ *
+ * @author lyw
  */
 @Data
 public class UserLoginRequest implements Serializable {

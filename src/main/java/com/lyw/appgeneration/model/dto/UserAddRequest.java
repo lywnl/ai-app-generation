@@ -4,6 +4,11 @@ import lombok.Data;
 
 import java.io.Serializable;
 
+/**
+ * 用户新增请求
+ *
+ * @author lyw
+ */
 @Data
 public class UserAddRequest implements Serializable {
 

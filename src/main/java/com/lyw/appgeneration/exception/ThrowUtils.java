@@ -3,7 +3,7 @@ package com.lyw.appgeneration.exception;
 /**
  * 异常抛出工具类
  *
- * @author system
+ * @author lyw
  */
 public class ThrowUtils {
     public static void throwIf(boolean condition, RuntimeException runtimeException) {

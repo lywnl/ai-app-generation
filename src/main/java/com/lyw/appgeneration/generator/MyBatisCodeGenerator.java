@@ -10,6 +10,8 @@ import java.util.Map;
 
 /**
  * MyBatis flex代码生成器
+ *
+ * @author lyw
  */
 public class MyBatisCodeGenerator {
 

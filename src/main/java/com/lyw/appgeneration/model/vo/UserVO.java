@@ -5,6 +5,11 @@ import lombok.Data;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 
+/**
+ * 用户视图
+ *
+ * @author lyw
+ */
 @Data
 public class UserVO implements Serializable {
 

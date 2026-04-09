@@ -10,6 +10,11 @@ import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 代码文件保存器
+ *
+ * @author lyw
+ */
 public class CodeFileSaver {
 
     /**
