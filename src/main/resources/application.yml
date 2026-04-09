@@ -12,6 +12,21 @@ spring:
     username: root
     password: lyw666
 
+# AI
+langchain4j:
+  open-ai:
+    chat-model:
+      base-url: https://api.deepseek.com
+      api-key: ${DEEPSEEK_API_KEY}
+      model-name: deepseek-chat
+      log-requests: true
+      log-responses: true
+      max-tokens: 8192
+      strict-json-schema: true  # 严格遵守JSON Schema
+      response-format: json_object #json格式输出
+      max-retries: 2
+
+
 # springdoc-openapi
 springdoc:
   group-configs:
