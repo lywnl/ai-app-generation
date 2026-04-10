@@ -3,11 +3,10 @@ package com.lyw.appgeneration.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
-import com.lyw.appgeneration.model.dto.UserQueryRequest;
-import com.lyw.appgeneration.model.dto.UserRegisterRequest;
+import com.lyw.appgeneration.model.dto.user.UserQueryRequest;
 import com.lyw.appgeneration.model.enums.UserRoleEnum;
-import com.lyw.appgeneration.model.vo.LoginUserVO;
-import com.lyw.appgeneration.model.vo.UserVO;
+import com.lyw.appgeneration.model.vo.user.LoginUserVO;
+import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.lyw.appgeneration.model.entity.User;
@@ -109,8 +108,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
 
         //3.查询用户是否存在
         QueryWrapper queryWrapper = new QueryWrapper();
-        queryWrapper.eq(User::getUserAccount, userAccount);
-        queryWrapper.eq(User::getUserPassword, encryptPassword);
+        queryWrapper.eq("userAccount", userAccount);
+        queryWrapper.eq("userPassword", encryptPassword);
         User user = userMapper.selectOneByQuery(queryWrapper);
         if (user == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");

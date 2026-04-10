@@ -1,16 +1,24 @@
-package com.lyw.appgeneration.model.dto;
+package com.lyw.appgeneration.model.dto.user;
 
+import com.lyw.appgeneration.common.PageRequest;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 import java.io.Serializable;
 
 /**
- * 用户新增请求
+ * 用户查询请求
  *
  * @author lyw
  */
+@EqualsAndHashCode(callSuper = true)
 @Data
-public class UserAddRequest implements Serializable {
+public class UserQueryRequest extends PageRequest implements Serializable {
+
+    /**
+     * id
+     */
+    private Long id;
 
     /**
      * 用户昵称
@@ -23,21 +31,15 @@ public class UserAddRequest implements Serializable {
     private String userAccount;
 
     /**
-     * 用户头像
-     */
-    private String userAvatar;
-
-    /**
-     * 用户简介
+     * 简介
      */
     private String userProfile;
 
     /**
-     * 用户角色: user, admin
+     * 用户角色：user/admin/ban
      */
     private String userRole;
 
     private static final long serialVersionUID = 1L;
-
 }
 

@@ -1,4 +1,4 @@
-package com.lyw.appgeneration.model.dto;
+package com.lyw.appgeneration.model.dto.user;
 
 import lombok.Data;
 

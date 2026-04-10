@@ -1,14 +1,11 @@
 package com.lyw.appgeneration.service;
 
-import com.lyw.appgeneration.model.dto.UserQueryRequest;
-import com.lyw.appgeneration.model.dto.UserRegisterRequest;
-import com.lyw.appgeneration.model.vo.LoginUserVO;
-import com.lyw.appgeneration.model.vo.UserVO;
+import com.lyw.appgeneration.model.dto.user.UserQueryRequest;
+import com.lyw.appgeneration.model.vo.user.LoginUserVO;
+import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
 import com.lyw.appgeneration.model.entity.User;
-import com.sun.net.httpserver.HttpServer;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
