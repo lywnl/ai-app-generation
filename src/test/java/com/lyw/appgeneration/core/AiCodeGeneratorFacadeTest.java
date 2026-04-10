@@ -21,13 +21,13 @@ class AiCodeGeneratorFacadeTest {
     @Test
     void generateAndSaveCode() {
 //        File file = aiCodeGeneratorFacade.generateAndSaveCode("给我生成一个博客网站20行以内", CodeGenTypeEnum.HTML);
-        File file = aiCodeGeneratorFacade.generateAndSaveCode("给我生成一个博客网站20行以内", CodeGenTypeEnum.MULTI_FILE);
+        File file = aiCodeGeneratorFacade.generateAndSaveCode("给我生成一个博客网站20行以内", CodeGenTypeEnum.MULTI_FILE, 1L);
         assertNotNull(file);
     }
 
     @Test
     void generateAndSaveCodeStream() {
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("给我生成一个博客网站20行以内", CodeGenTypeEnum.MULTI_FILE);
+        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("给我生成一个博客网站20行以内", CodeGenTypeEnum.MULTI_FILE, 1L);
         //阻塞等待所有数据收集完成
         List<String> result = codeStream.collectList().block();
         //验证结果

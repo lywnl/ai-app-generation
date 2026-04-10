@@ -7,8 +7,6 @@ import com.mybatisflex.annotation.Table;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 
-import java.io.Serial;
-
 import com.mybatisflex.core.keygen.KeyGenerators;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -29,7 +27,6 @@ import javax.crypto.KeyGenerator;
 @Table("user")
 public class User implements Serializable {
 
-    @Serial
     private static final long serialVersionUID = 1L;
 
     /**

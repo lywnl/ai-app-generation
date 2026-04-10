@@ -192,7 +192,7 @@ public class UserController {
      * @return {@code true} 删除成功，{@code false} 删除失败
      */
     @DeleteMapping("remove/{id}")
-    public boolean remove(@PathVariable Long id) {
+    public boolean remove(@PathVariable("id") Long id) {
         return userService.removeById(id);
     }
 
@@ -224,7 +224,7 @@ public class UserController {
      * @return 用户详情
      */
     @GetMapping("getInfo/{id}")
-    public User getInfo(@PathVariable Long id) {
+    public User getInfo(@PathVariable("id") Long id) {
         return userService.getById(id);
     }
 
