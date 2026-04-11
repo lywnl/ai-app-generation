@@ -12,10 +12,7 @@ import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
-import com.lyw.appgeneration.model.dto.app.AppAddRequest;
-import com.lyw.appgeneration.model.dto.app.AppAdminUpdateRequest;
-import com.lyw.appgeneration.model.dto.app.AppQueryRequest;
-import com.lyw.appgeneration.model.dto.app.AppUpdateRequest;
+import com.lyw.appgeneration.model.dto.app.*;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -79,6 +76,25 @@ public class AppController {
                                 .event("done")
                                 .data("")
                                 .build()));
+    }
+
+    /**
+     * 应用部署
+     *
+     * @param appDeployRequest 部署请求
+     * @param request          请求
+     * @return 部署 URL
+     */
+    @PostMapping("/deploy")
+    public BaseResponse<String> deployApp(@RequestBody AppDeployRequest appDeployRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(appDeployRequest == null, ErrorCode.PARAMS_ERROR);
+        Long appId = appDeployRequest.getAppId();
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
+        // 获取当前登录用户
+        User loginUser = userService.getLoginUser(request);
+        // 调用服务部署应用
+        String deployUrl = appService.deployApp(appId, loginUser);
+        return ResultUtils.success(deployUrl);
     }
 
     /**
