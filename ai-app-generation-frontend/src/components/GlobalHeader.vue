@@ -6,7 +6,7 @@
         <RouterLink to="/">
           <div class="header-left">
             <img class="logo" src="@/assets/logo.png" alt="Logo" />
-            <h1 class="site-title">鱼皮应用生成</h1>
+            <h1 class="site-title">AI应用生成</h1>
           </div>
         </RouterLink>
       </a-col>
@@ -81,11 +81,6 @@ const originItems = [
     key: '/admin/appManage',
     label: '应用管理',
     title: '应用管理',
-  },
-  {
-    key: 'others',
-    label: h('a', { href: 'https://www.codefather.cn', target: '_blank' }, '编程导航'),
-    title: '编程导航',
   },
 ]
 
