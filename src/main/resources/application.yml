@@ -4,6 +4,9 @@ server:
     context-path: /api
 
 spring:
+  mvc:
+    async:
+      request-timeout: 600000  # SSE 流式接口异步超时时间：10分钟
   application:
     name: ai-app-generation
   datasource:
