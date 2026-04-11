@@ -169,18 +169,18 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         try {
             FileUtil.copyContent(file, new File(deployPath), true);
         } catch (Exception e) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "部署目录拷贝失败: {}" + e.getMessage());
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "部署目录拷贝失败: " + e.getMessage());
         }
         //8. 更新数据库
         App updateApp = new App();
-        updateApp.setDeployKey(deployPath);
+        updateApp.setDeployKey(deployKey);
         updateApp.setId(appId);
         updateApp.setDeployedTime(LocalDateTime.now());
         boolean result = updateById(updateApp);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新部署失败");
 
         //9. 返回可访问的地址
-        return String.format("%s/%s", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        return String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
 
     }
 
