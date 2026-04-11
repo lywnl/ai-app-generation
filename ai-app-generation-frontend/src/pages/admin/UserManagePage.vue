@@ -127,7 +127,6 @@ const doTableChange = (page: { current: number; pageSize: number }) => {
 // 搜索数据
 const doSearch = () => {
   // 重置页码
-
   searchParams.pageNum = 1
   fetchData()
 }

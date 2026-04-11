@@ -1,14 +1,13 @@
 <template>
   <a-layout class="basic-layout">
-    <a-layout-header class="header">
-      <GlobalHeader />
-    </a-layout-header>
-    <a-layout-content class="content">
+    <!-- 顶部导航栏 -->
+    <GlobalHeader />
+    <!-- 主要内容区域 -->
+    <a-layout-content class="main-content">
       <router-view />
     </a-layout-content>
-    <a-layout-footer class="footer">
-      <GlobalFooter />
-    </a-layout-footer>
+    <!-- 底部版权信息 -->
+    <GlobalFooter />
   </a-layout>
 </template>
 
@@ -19,22 +18,13 @@ import GlobalFooter from '@/components/GlobalFooter.vue'
 
 <style scoped>
 .basic-layout {
-  min-height: 100vh;
+  background: none;
 }
 
-.header {
+.main-content {
+  width: 100%;
   padding: 0;
-  background: #fff;
-  box-shadow: 0 2px 8px #f0f1f2;
-}
-
-.content {
-  padding: 24px;
-  background: linear-gradient(to right, #fefefe, #fff);
-  /* Optionally add a background gradient or plain color here */
-}
-
-.footer {
-  padding: 0;
+  background: none;
+  margin: 0;
 }
 </style>

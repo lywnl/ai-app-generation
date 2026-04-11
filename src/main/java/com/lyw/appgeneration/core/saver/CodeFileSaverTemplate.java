@@ -56,7 +56,7 @@ public abstract class CodeFileSaverTemplate<T> {
      */
     protected final String buildUniqueDir(long appId) {
         String codeType = getCodeType().getValue();
-        String uniqueDirName = StrUtil.format("{}_{}", appId);
+        String uniqueDirName = StrUtil.format("{}_{}", codeType, appId);
         String dirPath = FILE_SAVE_ROOT_DIR + File.separator + uniqueDirName;
         FileUtil.mkdir(dirPath);
         return dirPath;

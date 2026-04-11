@@ -1,50 +1,45 @@
 {
-  "name": "ai-app-generation-frontend",
+  "name": "yu-ai-code-mother-frontend",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "run-p type-check \"build-only {@}\" --",
+    "openapi2ts": "openapi2ts",
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "lint": "run-s lint:*",
-    "lint:oxlint": "oxlint . --fix",
-    "lint:eslint": "eslint . --fix --cache",
-    "format": "prettier --write --experimental-cli src/",
-    "openapi2ts": "openapi2ts"
+    "lint": "eslint . --fix",
+    "format": "prettier --write src/"
   },
   "dependencies": {
     "ant-design-vue": "^4.2.6",
-    "axios": "^1.14.0",
-    "pinia": "^3.0.4",
-    "vue": "^3.5.31",
-    "vue-router": "^5.0.4"
+    "axios": "^1.11.0",
+    "@types/markdown-it": "^14.1.2",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.17",
+    "vue-router": "^4.5.1"
   },
   "devDependencies": {
-    "@tsconfig/node24": "^24.0.4",
-    "@types/node": "^24.12.0",
-    "@umijs/openapi": "^1.14.1",
-    "@vitejs/plugin-vue": "^6.0.5",
-    "@vitejs/plugin-vue-jsx": "^5.1.5",
-    "@vue/eslint-config-typescript": "^14.7.0",
-    "@vue/tsconfig": "^0.9.1",
-    "eslint": "^10.1.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-oxlint": "~1.57.0",
-    "eslint-plugin-vue": "~10.8.0",
-    "jiti": "^2.6.1",
+    "@tsconfig/node22": "^22.0.2",
+    "@types/node": "^22.15.32",
+    "@umijs/openapi": "^1.13.15",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/eslint-config-prettier": "^10.2.0",
+    "@vue/eslint-config-typescript": "^14.5.1",
+    "@vue/tsconfig": "^0.7.0",
+    "eslint": "^9.29.0",
+    "eslint-plugin-vue": "~10.2.0",
+    "jiti": "^2.4.2",
     "npm-run-all2": "^8.0.4",
-    "oxlint": "~1.57.0",
-    "prettier": "3.8.1",
+    "prettier": "3.5.3",
     "tslib": "^2.8.1",
-    "typescript": "~6.0.0",
-    "vite": "^8.0.3",
-    "vite-plugin-vue-devtools": "^8.1.1",
-    "vue-tsc": "^3.2.6"
-  },
-  "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "typescript": "~5.8.0",
+    "vite": "^7.0.0",
+    "vite-plugin-vue-devtools": "^7.7.7",
+    "vue-tsc": "^2.2.10"
   }
 }
