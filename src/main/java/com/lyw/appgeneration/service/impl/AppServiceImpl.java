@@ -8,6 +8,8 @@ import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
+import com.lyw.appgeneration.core.parser.CodeParserExecutor;
+import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -15,18 +17,23 @@ import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.model.dto.app.AppQueryRequest;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
+import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.lyw.appgeneration.service.AppService;
+import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.UserService;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 
 import java.io.File;
+import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,17 +46,18 @@ import java.util.stream.Collectors;
  *
  * @author <a href="https://gitee.com/lywynl">lyw</a>
  */
+@Slf4j
 @Service
 public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppService {
-
-    @Resource
-    private AppMapper appMapper;
 
     @Resource
     private UserService userService;
 
     @Resource
     private AiCodeGeneratorFacade aiCodeGeneratorFacade;
+
+    @Resource
+    private ChatHistoryService chatHistoryService;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -133,8 +141,25 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (codeGenTypeEnum == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型");
         }
-        // 5. 调用 AI 生成代码
-        return aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
+        //5. 调用AI前, 先将用户消息保存到数据库
+        chatHistoryService.addChatMessage(appId, message, ChatHistoryMessageTypeEnum.USER.getValue(), loginUser.getId());
+        //6. 调用 AI 生成代码
+        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
+        //7. 收集AI响应的内容并且在完成后保存到数据库
+        StringBuilder aiResponseContent = new StringBuilder();
+        return codeStream.map(chunk -> {
+            //实时收集AI的内容
+            aiResponseContent.append(chunk);
+            return chunk;
+        }).doOnComplete(() -> {
+           //流式返回结束后 保存AI消息的历史对话到数据库
+            String aiResponseContentStr = aiResponseContent.toString();
+            chatHistoryService.addChatMessage(appId, aiResponseContentStr, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
+        }).doOnError(error -> {
+            String errorMessage = "AI回复失败: " + error.getMessage();
+            chatHistoryService.addChatMessage(appId, errorMessage, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
+        });
+
     }
 
     @Override
@@ -184,5 +209,38 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     }
 
+    /**
+     * 重写删除方法，删除应用时，需要删除应用相关的所有数据，包括代码生成目录、部署目录、数据库记录等
+     * @param id
+     * @return
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean removeById(Serializable id) {
+        if (id == null) {
+            return false;
+        }
+        Long appId = Long.parseLong(id.toString());
+        if (appId <= 0) {
+            return false;
+        }
+        App app = getById(appId);
+        if (app == null) {
+            return false;
+        }
 
+        // DB 操作 — 事务保护，失败自动回滚
+        chatHistoryService.deleteByAppId(appId);
+        super.removeById(appId);
+
+        // 文件操作 — 尽力清理，失败不影响事务
+        try {
+            FileUtil.del(AppConstant.CODE_OUTPUT_ROOT_DIR + File.separator + app.getCodeGenType() + "_" + appId);
+            FileUtil.del(AppConstant.CODE_DEPLOY_ROOT_DIR + File.separator + app.getDeployKey());
+        } catch (Exception e) {
+            log.warn("应用记录已删除，但文件清理失败: appId={}, error={}", appId, e.getMessage());
+        }
+
+        return true;
+    }
 }

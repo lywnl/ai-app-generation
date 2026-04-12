@@ -1,6 +1,5 @@
-package com.lyw.appgeneration.config;
+package com.lyw.appgeneration.ai;
 
-import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.service.AiServices;
