@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core;
 
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
+import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
@@ -25,8 +26,7 @@ import java.io.File;
 public class AiCodeGeneratorFacade {
 
     @Resource
-    private AiCodeGeneratorService aiCodeGeneratorService;
-
+    private AiGeneratorServiceFactory aiGeneratorServiceFactory;
 
     /**
      * 生成并保存代码
@@ -38,7 +38,8 @@ public class AiCodeGeneratorFacade {
         if (bizType == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "生成的类型不能为空");
         }
-
+        // 根据ID 获取AI代码生成服务
+        AiCodeGeneratorService aiCodeGeneratorService = aiGeneratorServiceFactory.getAiCodeGeneratorService(appId);
         return switch (bizType) {
            case HTML -> {
                HtmlCodeResult htmlCodeResult = aiCodeGeneratorService.generateHtmlCode(userMessage);
@@ -65,6 +66,8 @@ public class AiCodeGeneratorFacade {
         if (codeGenTypeEnum == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "生成类型为空");
         }
+        // 根据ID 获取AI代码生成服务
+        AiCodeGeneratorService aiCodeGeneratorService = aiGeneratorServiceFactory.getAiCodeGeneratorService(appId);
         return switch (codeGenTypeEnum) {
             case HTML -> {
                 Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(userMessage);
@@ -109,23 +112,4 @@ public class AiCodeGeneratorFacade {
 
     }
 
-    /**
-     * 生成并保存html代码
-     * @param userMessage
-     * @return
-     */
-    private File generateAndSaveHtmlCode(String userMessage) {
-        HtmlCodeResult htmlCodeResult = aiCodeGeneratorService.generateHtmlCode(userMessage);
-        return CodeFileSaver.saveHtmlCodeResult(htmlCodeResult);
-    }
-
-    /**
-     * 生成并保存多文件代码
-     * @param userMessage
-     * @return
-     */
-    private File generateAndSaveMultiFileCode(String userMessage) {
-        MultiFileCodeResult multiFileCodeResult = aiCodeGeneratorService.generateMultiFileCode(userMessage);
-        return CodeFileSaver.saveMultiFileCodeResult(multiFileCodeResult);
-    }
 }

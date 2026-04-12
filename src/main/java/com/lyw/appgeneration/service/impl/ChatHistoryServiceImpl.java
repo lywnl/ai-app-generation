@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.impl;
 
+import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.ErrorCode;
@@ -15,17 +16,23 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 对话历史 服务层实现。
  *
  * @author <a href="https://gitee.com/lywynl">lyw</a>
  */
+@Slf4j
 @Service
 public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatHistory>  implements ChatHistoryService {
 
@@ -122,5 +129,38 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
         return this.page(Page.of(1, pageSize), queryWrapper);
     }
 
+    @Override
+    public int loadChatHistoryToMemory(Long appId, MessageWindowChatMemory chatMemory, int maxCount) {
+        try {
+            QueryWrapper queryWrapper = QueryWrapper.create()
+                    .eq("appId", appId)
+                    .orderBy("createTime", false)
+                    .limit(1, maxCount);
+            List<ChatHistory> history = this.list(queryWrapper);
+            if (CollUtil.isEmpty(history)) {
+                return 0;
+            }
+            //反转列表 确保时间正序 老的在前
+            CollUtil.reverse(history);
+            //按照时间顺序添加到激励中
+            int loadCount = 0;
+            //先清理历史缓存 防止重复加载
+            chatMemory.clear();
+            for (ChatHistory chatHistory : history) {
+                if (ChatHistoryMessageTypeEnum.USER.getValue().equals(chatHistory.getMessageType())) {
+                    chatMemory.add(UserMessage.from(chatHistory.getMessage()));
+                } else if (ChatHistoryMessageTypeEnum.AI.getValue().equals(chatHistory.getMessageType())) {
+                    chatMemory.add(AiMessage.from(chatHistory.getMessage()));
+                }
+                loadCount++;
+            }
+            log.info("成功加载 {} 条对话历史到内存中，应用ID：{}", loadCount, appId);
+            return loadCount;
+        } catch (Exception e) {
+            log.error("加载对话历史到内存中出错：{}", e.getMessage());
+            return 0;
+        }
+
+    }
 
 }
