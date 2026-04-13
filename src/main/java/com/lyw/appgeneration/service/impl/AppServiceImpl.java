@@ -8,6 +8,7 @@ import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
+import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
@@ -58,6 +59,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private ChatHistoryService chatHistoryService;
+
+    @Resource
+    private StreamHandlerExecutor streamHandlerExecutor;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -145,21 +149,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         chatHistoryService.addChatMessage(appId, message, ChatHistoryMessageTypeEnum.USER.getValue(), loginUser.getId());
         //6. 调用 AI 生成代码
         Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
-        //7. 收集AI响应的内容并且在完成后保存到数据库
-        StringBuilder aiResponseContent = new StringBuilder();
-        return codeStream.map(chunk -> {
-            //实时收集AI的内容
-            aiResponseContent.append(chunk);
-            return chunk;
-        }).doOnComplete(() -> {
-           //流式返回结束后 保存AI消息的历史对话到数据库
-            String aiResponseContentStr = aiResponseContent.toString();
-            chatHistoryService.addChatMessage(appId, aiResponseContentStr, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
-        }).doOnError(error -> {
-            String errorMessage = "AI回复失败: " + error.getMessage();
-            chatHistoryService.addChatMessage(appId, errorMessage, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
-        });
-
+        //7. 收集AI响应的内容并且在完成后保存到数据库;
+        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum);
     }
 
     @Override
