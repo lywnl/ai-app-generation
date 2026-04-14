@@ -8,6 +8,7 @@ import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
+import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
@@ -62,6 +63,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private StreamHandlerExecutor streamHandlerExecutor;
+
+    @Resource
+    private VueProjectBuilder vueProjectBuilder;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -180,14 +184,27 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (!file.exists() || !file.isDirectory()) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "代码生成目录不存在");
         }
-        //7. 拷贝文件到部署目录
+        //7. Vue项目特殊处理：执行构建
+        CodeGenTypeEnum enumByValue = CodeGenTypeEnum.getEnumByValue(codeGenType);
+        if (enumByValue == CodeGenTypeEnum.VUE_PROJECT) {
+            //vue项目构建
+            boolean result = vueProjectBuilder.buildProject(sourceDirPath);
+            ThrowUtils.throwIf(!result, ErrorCode.SYSTEM_ERROR, "Vue项目构建失败 请重试");
+            //检查dist目录是否存在
+            File distDir = new File(sourceDirPath, "dist");
+            ThrowUtils.throwIf(!distDir.exists() || !distDir.isDirectory(), ErrorCode.SYSTEM_ERROR, "Vue项目构建失败 请重试");
+            //构建成功 复制到部署目录
+            file = distDir;
+        }
+        //8. 拷贝文件到部署目录
         String deployPath = AppConstant.CODE_DEPLOY_ROOT_DIR + File.separator + deployKey;
         try {
             FileUtil.copyContent(file, new File(deployPath), true);
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "部署目录拷贝失败: " + e.getMessage());
         }
-        //8. 更新数据库
+
+        //9. 更新数据库
         App updateApp = new App();
         updateApp.setDeployKey(deployKey);
         updateApp.setId(appId);
@@ -195,7 +212,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         boolean result = updateById(updateApp);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新部署失败");
 
-        //9. 返回可访问的地址
+        //10. 返回可访问的地址
         return String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
 
     }
