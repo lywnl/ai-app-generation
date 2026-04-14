@@ -1,7 +1,7 @@
 <template>
   <div class="app-card" :class="{ 'app-card--featured': featured }">
     <div class="app-preview">
-      <img v-if="app.cover" :src="app.cover" :alt="app.appName" />
+      <img v-if="app.cover" :src="normalizeCoverUrl(app.cover)" :alt="app.appName" />
       <div v-else class="app-placeholder">
         <span>🤖</span>
       </div>
@@ -44,6 +44,20 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<Emits>()
+
+const normalizeCoverUrl = (cover?: string) => {
+  if (!cover) {
+    return ''
+  }
+  const trimmed = cover.trim()
+  if (!trimmed) {
+    return ''
+  }
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed
+  }
+  return `https://${trimmed.replace(/^\/+/, '')}`
+}
 
 const handleViewChat = () => {
   emit('view-chat', props.app.id)

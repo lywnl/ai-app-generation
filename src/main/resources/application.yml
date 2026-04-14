@@ -62,3 +62,13 @@ knife4j:
   enable: true
   setting:
     language: zh_cn
+
+
+# 添加 COS 对象存储配置（需要从腾讯云获取）
+cos:
+  client:
+    host: ${COS_HOST}
+    secretId: ${TEN_SERCET_ID}
+    secretKey: ${TEN_SECRET_KEY}
+    region: ap-beijing
+    bucket: ai-gen-app-1374604134

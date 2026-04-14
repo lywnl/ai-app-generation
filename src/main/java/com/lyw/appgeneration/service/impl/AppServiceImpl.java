@@ -25,6 +25,7 @@ import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.ScreenshotService;
 import com.lyw.appgeneration.service.UserService;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
@@ -66,6 +67,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private VueProjectBuilder vueProjectBuilder;
+
+    @Resource
+    private ScreenshotService screenshotService;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -203,7 +207,6 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "部署目录拷贝失败: " + e.getMessage());
         }
-
         //9. 更新数据库
         App updateApp = new App();
         updateApp.setDeployKey(deployKey);
@@ -211,10 +214,12 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         updateApp.setDeployedTime(LocalDateTime.now());
         boolean result = updateById(updateApp);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新部署失败");
-
         //10. 返回可访问的地址
-        return String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        String formatUrl = String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        //11. 异步生成截图并且更新应用封面
+        generateAppScreenshotAsync(appId, formatUrl);
 
+        return formatUrl;
     }
 
     /**
@@ -250,5 +255,18 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
 
         return true;
+    }
+
+    public void generateAppScreenshotAsync(Long appId, String appUrl) {
+        //调用截图服务生成截图并且上传
+        String screenshotUrl = StrUtil.trim(screenshotService.generateAndUploadScreenshot(appUrl));
+        screenshotUrl = StrUtil.removeSuffix(screenshotUrl, "/");
+        ThrowUtils.throwIf(StrUtil.isBlank(screenshotUrl), ErrorCode.OPERATION_ERROR, "截图地址为空，更新应用封面失败");
+        //更新应用封面字段
+        App updateApp = new App();
+        updateApp.setId(appId);
+        updateApp.setCover(screenshotUrl);
+        boolean result = updateById(updateApp);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新应用封面失败");
     }
 }
