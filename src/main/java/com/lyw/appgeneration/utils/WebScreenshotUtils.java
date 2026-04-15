@@ -172,7 +172,4 @@ public class WebScreenshotUtils {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "压缩图片失败");
         }
     }
-
-
 }
-
