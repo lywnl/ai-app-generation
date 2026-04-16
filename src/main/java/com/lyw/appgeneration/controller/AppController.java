@@ -3,6 +3,7 @@ package com.lyw.appgeneration.controller;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
+import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.annotation.AuthCheck;
 import com.lyw.appgeneration.common.BaseResponse;
 import com.lyw.appgeneration.common.DeleteRequest;
@@ -148,23 +149,10 @@ public class AppController {
     @PostMapping("/add")
     public BaseResponse<Long> addApp(@RequestBody AppAddRequest appAddRequest, HttpServletRequest request) {
         ThrowUtils.throwIf(appAddRequest == null, ErrorCode.PARAMS_ERROR);
-        // 参数校验
-        String initPrompt = appAddRequest.getInitPrompt();
-        ThrowUtils.throwIf(StrUtil.isBlank(initPrompt), ErrorCode.PARAMS_ERROR, "初始化 prompt 不能为空");
         // 获取当前登录用户
         User loginUser = userService.getLoginUser(request);
-        // 构造入库对象
-        App app = new App();
-        BeanUtil.copyProperties(appAddRequest, app);
-        app.setUserId(loginUser.getId());
-        // 应用名称暂时为 initPrompt 前 12 位
-        app.setAppName(initPrompt.substring(0, Math.min(initPrompt.length(), 12)));
-        // 暂时设置为 VUE 工程生成
-        app.setCodeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue());
-        // 插入数据库
-        boolean result = appService.save(app);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        return ResultUtils.success(app.getId());
+        Long appId = appService.addApp(appAddRequest, loginUser);
+        return ResultUtils.success(appId);
     }
 
     /**

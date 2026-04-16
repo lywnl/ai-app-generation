@@ -6,6 +6,7 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
+import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
@@ -16,6 +17,7 @@ import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
 import com.lyw.appgeneration.mapper.AppMapper;
+import com.lyw.appgeneration.model.dto.app.AppAddRequest;
 import com.lyw.appgeneration.model.dto.app.AppQueryRequest;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
@@ -70,6 +72,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private ScreenshotService screenshotService;
+
+    @Resource
+    private AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -268,5 +273,26 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         updateApp.setCover(screenshotUrl);
         boolean result = updateById(updateApp);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新应用封面失败");
+    }
+
+    @Override
+    public Long addApp(AppAddRequest appAddRequest, User loginUser) {
+        // 参数校验
+        String initPrompt = appAddRequest.getInitPrompt();
+        ThrowUtils.throwIf(StrUtil.isBlank(initPrompt), ErrorCode.PARAMS_ERROR, "初始化 prompt 不能为空");
+        // 构造入库对象
+        App app = new App();
+        BeanUtil.copyProperties(appAddRequest, app);
+        app.setUserId(loginUser.getId());
+        // 应用名称暂时为 initPrompt 前 12 位
+        app.setAppName(initPrompt.substring(0, Math.min(initPrompt.length(), 12)));
+        // 根据 AI 选择代码生成类型
+        CodeGenTypeEnum selectGenType = aiCodeGenTypeRoutingService.routeCodeGenType(initPrompt);
+        app.setCodeGenType(selectGenType.getValue());
+        // 插入数据库
+        boolean result = save(app);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+
+        return app.getId();
     }
 }

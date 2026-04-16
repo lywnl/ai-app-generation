@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service;
 
+import com.lyw.appgeneration.model.dto.app.AppAddRequest;
 import com.lyw.appgeneration.model.dto.app.AppDeployRequest;
 import com.lyw.appgeneration.model.dto.app.AppQueryRequest;
 import com.lyw.appgeneration.model.entity.App;
@@ -55,4 +56,12 @@ public interface AppService extends IService<App> {
      * @return
      */
     String deployApp(Long appId, User loginUser);
+
+    /**
+     * 添加应用
+     * @param appAddRequest
+     * @param loginUser
+     * @return
+     */
+    Long addApp(AppAddRequest appAddRequest, User loginUser);
 }
