@@ -50,6 +50,9 @@ public class WebScreenshotUtils {
         }
     }
 
+    static void main() {
+
+    }
     /**
      * 生成网页截图
      *
