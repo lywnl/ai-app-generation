@@ -6,8 +6,11 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
+import com.lyw.appgeneration.ai.model.message.ToolArgumentDeltaMessage;
+import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
+import com.lyw.appgeneration.ai.parser.ToolRequestStreamParser;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
@@ -22,6 +25,8 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * AI 代码生成门面
@@ -103,19 +108,41 @@ public class AiCodeGeneratorFacade {
      */
     private Flux<String> processTokenStream(TokenStream tokenStream) {
         return Flux.create(sink -> {
+            // 每个 tool call id 维护独立的字符级状态机。同一 id 的多次 partial 喂入同一 parser。
+            Map<String, ToolRequestStreamParser> parsers = new HashMap<>();
             tokenStream.onPartialResponse((String partialResponse) -> {
                         AiResponseMessage aiResponseMessage = new AiResponseMessage(partialResponse);
                         sink.next(JSONUtil.toJsonStr(aiResponseMessage));
                     })
                     .onPartialToolExecutionRequest((index, toolExecutionRequest) -> {
-                        ToolRequestMessage toolRequestMessage = new ToolRequestMessage(toolExecutionRequest);
-                        sink.next(JSONUtil.toJsonStr(toolRequestMessage));
+                        String toolId = toolExecutionRequest.id();
+                        String toolName = toolExecutionRequest.name();
+                        // 首次出现该 id:发一条 TOOL_REQUEST(兼容现有下游去重逻辑),并创建 parser
+                        ToolRequestStreamParser parser = parsers.get(toolId);
+                        if (parser == null) {
+                            sink.next(JSONUtil.toJsonStr(new ToolRequestMessage(toolExecutionRequest)));
+                            parser = new ToolRequestStreamParser(toolName, evt -> {
+                                switch (evt.type) {
+                                    case DELTA -> sink.next(JSONUtil.toJsonStr(
+                                            new ToolArgumentDeltaMessage(toolId, toolName, evt.key, evt.payload)));
+                                    case VALUE_READY -> sink.next(JSONUtil.toJsonStr(
+                                            new ToolArgumentMessage(toolId, toolName, evt.key, evt.payload)));
+                                    case KEY_READY -> { /* 不单独下发,KEY 信息会在紧随的 DELTA/VALUE 中携带 */ }
+                                }
+                            });
+                            parsers.put(toolId, parser);
+                        }
+                        parser.feed(toolExecutionRequest.arguments());
                     })
                     .onToolExecuted((ToolExecution toolExecution) -> {
+                        // 某工具调用真正执行前,先 finish 对应 parser(确保字面量 value 也能 flush)
+                        ToolRequestStreamParser parser = parsers.remove(toolExecution.request().id());
+                        if (parser != null) parser.finish();
                         ToolExecutedMessage toolExecutedMessage = new ToolExecutedMessage(toolExecution);
                         sink.next(JSONUtil.toJsonStr(toolExecutedMessage));
                     })
                     .onCompleteResponse((ChatResponse response) -> {
+                        parsers.values().forEach(ToolRequestStreamParser::finish);
                         sink.complete();
                     })
                     .onError((Throwable error) -> {

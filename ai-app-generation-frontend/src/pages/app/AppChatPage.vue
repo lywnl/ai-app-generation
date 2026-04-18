@@ -61,6 +61,40 @@
               </div>
               <div class="message-content">
                 <MarkdownRenderer v-if="message.content" :content="message.content" />
+                <!-- 工具调用实时视图:文件路径 + 流式内容预览 -->
+                <div
+                  v-if="message.toolCalls && message.toolCalls.size > 0"
+                  class="tool-calls-panel"
+                >
+                  <div
+                    v-for="[id, view] in message.toolCalls"
+                    :key="id"
+                    class="tool-call-card"
+                    :class="{ 'is-done': view.status === 'done' }"
+                  >
+                    <div class="tool-call-header">
+                      <span class="tool-call-name">{{ view.name }}</span>
+                      <span v-if="view.args.relativeFilePath" class="tool-call-path">
+                        {{ view.args.relativeFilePath }}
+                      </span>
+                      <span class="tool-call-status" :class="view.status">
+                        <template v-if="view.status === 'done'">✓ 已完成</template>
+                        <template v-else>⏳ 执行中</template>
+                      </span>
+                    </div>
+                    <!-- 修改文件:展示 old → new 两段 -->
+                    <template v-if="view.name === 'modifyFile'">
+                      <div v-if="view.args.oldContent" class="tool-call-label">旧内容</div>
+                      <pre v-if="view.args.oldContent" v-auto-scroll class="tool-call-code old">{{ view.args.oldContent }}</pre>
+                      <div v-if="view.args.newContent !== undefined" class="tool-call-label">新内容</div>
+                      <pre v-if="view.args.newContent !== undefined" v-auto-scroll class="tool-call-code new">{{ view.args.newContent }}</pre>
+                    </template>
+                    <!-- 写入文件:实时文件内容 -->
+                    <template v-else-if="view.name === 'writeFile' && view.args.content !== undefined">
+                      <pre v-auto-scroll class="tool-call-code">{{ view.args.content }}</pre>
+                    </template>
+                  </div>
+                </div>
                 <div v-if="message.loading" class="loading-indicator">
                   <a-spin size="small" />
                   <span>AI 正在思考...</span>
@@ -224,6 +258,27 @@ import { CodeGenTypeEnum, formatCodeGenType } from '@/utils/codeGenTypes'
 import request from '@/request'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+
+/**
+ * 代码块自动贴底滚动指令:
+ * - 只在"用户没有手动向上滚"时才贴底(阈值 16px);否则让用户保持阅读位置,避免骚扰。
+ * - 绑定到 pre 元素,每次 updated(即 DELTA 追加后 DOM 重排)尝试滚到底。
+ */
+const vAutoScroll = {
+  mounted(el: HTMLElement) {
+    el.scrollTop = el.scrollHeight
+    el.dataset.stickBottom = '1'
+    el.addEventListener('scroll', () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 16
+      el.dataset.stickBottom = atBottom ? '1' : '0'
+    })
+  },
+  updated(el: HTMLElement) {
+    if (el.dataset.stickBottom === '1') {
+      el.scrollTop = el.scrollHeight
+    }
+  },
+}
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
 import aiAvatar from '@/assets/aiAvatar.png'
@@ -248,11 +303,24 @@ const appInfo = ref<API.AppVO>()
 const appId = ref<any>()
 
 // 对话相关
+interface ToolArgView {
+  /** 参数 key → 当前累积的 value(buffered 字段一次性来,streaming 字段会持续 append) */
+  args: Record<string, string>
+  /** streaming 字段的 key,用于前端识别"这个字段正在实时写入" */
+  streamingKeys: Set<string>
+  /** 工具名,例:writeFile / modifyFile */
+  name: string
+  /** 生命周期:streaming(正在流式接收参数) → done(工具已真正执行完毕) */
+  status: 'streaming' | 'done'
+}
+
 interface Message {
   type: 'user' | 'ai'
   content: string
   loading?: boolean
   createTime?: string
+  /** tool call id → 当前调用参数视图;保持插入顺序用 Map */
+  toolCalls?: Map<string, ToolArgView>
 }
 
 const messages = ref<Message[]>([])
@@ -498,6 +566,67 @@ const generateCode = async (userMessage: string, aiMessageIndex: number) => {
     })
 
     let fullContent = ''
+    // streaming 字段白名单:需要与后端 ToolStreamingSpec 对齐
+    const STREAMING_KEYS: Record<string, string[]> = {
+      writeFile: ['content'],
+      modifyFile: ['newContent'],
+    }
+
+    // 尝试把 parsed.d 识别成结构化工具事件;不是则返回 null,按普通文本处理
+    const tryParseToolEvent = (raw: string): null | {
+      type: string
+      id: string
+      name: string
+      key?: string
+      value?: string
+      delta?: string
+    } => {
+      if (typeof raw !== 'string' || raw.length === 0 || raw[0] !== '{') return null
+      try {
+        const obj = JSON.parse(raw)
+        if (
+          obj &&
+          (obj.type === 'tool_argument' ||
+            obj.type === 'tool_argument_delta' ||
+            obj.type === 'tool_executed')
+        ) {
+          return obj
+        }
+      } catch {
+        // 普通文本里偶尔出现以 { 开头的字符串(如代码块),静默跳过
+      }
+      return null
+    }
+
+    const ensureToolCalls = (idx: number): Map<string, ToolArgView> => {
+      const msg = messages.value[idx]
+      if (!msg.toolCalls) msg.toolCalls = new Map()
+      return msg.toolCalls
+    }
+
+    const applyToolEvent = (idx: number, evt: NonNullable<ReturnType<typeof tryParseToolEvent>>) => {
+      const toolCalls = ensureToolCalls(idx)
+      let view = toolCalls.get(evt.id)
+      if (!view) {
+        view = {
+          name: evt.name,
+          args: {},
+          streamingKeys: new Set(STREAMING_KEYS[evt.name] ?? []),
+          status: 'streaming',
+        }
+        toolCalls.set(evt.id, view)
+      }
+      if (evt.type === 'tool_executed') {
+        // 执行完成:切到 done,后续 DELTA 不会再来(同一 toolCallId 的生命周期结束)
+        view.status = 'done'
+        return
+      }
+      if (evt.type === 'tool_argument_delta' && evt.key && evt.delta !== undefined) {
+        view.args[evt.key] = (view.args[evt.key] ?? '') + evt.delta
+      } else if (evt.type === 'tool_argument' && evt.key && evt.value !== undefined) {
+        view.args[evt.key] = evt.value
+      }
+    }
 
     // 处理接收到的消息
     eventSource.onmessage = function (event) {
@@ -510,6 +639,14 @@ const generateCode = async (userMessage: string, aiMessageIndex: number) => {
 
         // 拼接内容
         if (content !== undefined && content !== null) {
+          // 先尝试把内容识别为结构化工具事件,命中则只更新 toolCalls,不污染正文
+          const toolEvt = tryParseToolEvent(content)
+          if (toolEvt) {
+            applyToolEvent(aiMessageIndex, toolEvt)
+            messages.value[aiMessageIndex].loading = false
+            scrollToBottom()
+            return
+          }
           fullContent += content
           messages.value[aiMessageIndex].content = fullContent
           messages.value[aiMessageIndex].loading = false
@@ -1055,5 +1192,83 @@ onUnmounted(() => {
     background-color: #73d13d !important;
     border-color: #73d13d !important;
   }
+}
+
+/* 工具调用实时视图 */
+.tool-calls-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-call-card {
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  background: #fafbfc;
+  padding: 8px 10px;
+  font-size: 12px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.tool-call-card.is-done {
+  border-color: #b7eb8f;
+  background: #f6ffed;
+}
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.tool-call-name {
+  font-weight: 600;
+  color: #1677ff;
+}
+.tool-call-path {
+  color: #595959;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  flex: 1;
+}
+.tool-call-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.tool-call-status.streaming {
+  color: #d46b08;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+}
+.tool-call-status.done {
+  color: #389e0d;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+}
+.tool-call-label {
+  margin: 4px 0 2px;
+  color: #8c8c8c;
+}
+.tool-call-code {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  background: #0b1021;
+  color: #e6edf3;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tool-call-code.old {
+  background: #3a1f1f;
+  color: #fecaca;
+}
+.tool-call-code.new {
+  background: #0f2a1a;
+  color: #bbf7d0;
 }
 </style>

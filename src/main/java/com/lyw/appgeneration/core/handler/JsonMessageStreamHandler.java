@@ -19,6 +19,7 @@ import reactor.core.publisher.Flux;
 
 import java.io.File;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -53,11 +54,11 @@ public class JsonMessageStreamHandler {
         // 用于跟踪已经见过的工具ID，判断是否是第一次调用
         Set<String> seenToolIds = new HashSet<>();
         return originFlux
-                .map(chunk -> {
-                    // 解析每个 JSON 消息块
-                    return handleJsonMessageChunk(chunk, chatHistoryStringBuilder, seenToolIds);
+                .concatMap(chunk -> {
+                    // 大部分 case 产出单条字符串,TOOL_EXECUTED 会产出两条(状态事件 + markdown 正文)
+                    return Flux.fromIterable(handleJsonMessageChunk(chunk, chatHistoryStringBuilder, seenToolIds));
                 })
-                .filter(StrUtil::isNotEmpty) // 过滤空字串
+                .filter(StrUtil::isNotEmpty)
                 .doOnComplete(() -> {
                     // 流式响应完成后，添加 AI 消息到对话历史
                     String aiResponse = chatHistoryStringBuilder.toString();
@@ -75,7 +76,7 @@ public class JsonMessageStreamHandler {
     /**
      * 解析并收集 TokenStream 数据
      */
-    private String handleJsonMessageChunk(String chunk, StringBuilder chatHistoryStringBuilder, Set<String> seenToolIds) {
+    private List<String> handleJsonMessageChunk(String chunk, StringBuilder chatHistoryStringBuilder, Set<String> seenToolIds) {
         // 解析 JSON
         StreamMessage streamMessage = JSONUtil.toBean(chunk, StreamMessage.class);
         StreamMessageTypeEnum typeEnum = StreamMessageTypeEnum.getEnumByValue(streamMessage.getType());
@@ -83,42 +84,40 @@ public class JsonMessageStreamHandler {
             case AI_RESPONSE -> {
                 AiResponseMessage aiMessage = JSONUtil.toBean(chunk, AiResponseMessage.class);
                 String data = aiMessage.getData();
-                // 直接拼接响应
                 chatHistoryStringBuilder.append(data);
-                return data;
+                return List.of(data);
             }
             case TOOL_REQUEST -> {
                 ToolRequestMessage toolRequestMessage = JSONUtil.toBean(chunk, ToolRequestMessage.class);
                 String toolId = toolRequestMessage.getId();
                 String toolName = toolRequestMessage.getName();
-                // 检查是否是第一次看到这个工具 ID
                 if (toolId != null && !seenToolIds.contains(toolId)) {
-                    // 第一次调用这个工具，记录 ID 并返回工具信息
                     seenToolIds.add(toolId);
-                    // 根据工具名称获取工具实例
                     BaseTool tool = toolManager.getTool(toolName);
-                    // 返回格式化的工具调用信息
-                    return tool.generateToolRequestResponse();
-                } else {
-                    // 不是第一次调用这个工具，直接返回空
-                    return "";
+                    return List.of(tool.generateToolRequestResponse());
                 }
+                return List.of();
             }
             case TOOL_EXECUTED -> {
                 ToolExecutedMessage toolExecutedMessage = JSONUtil.toBean(chunk, ToolExecutedMessage.class);
                 String toolName = toolExecutedMessage.getName();
                 JSONObject jsonObject = JSONUtil.parseObj(toolExecutedMessage.getArguments());
-                // 根据工具名称获取工具实例并生成相应的结果格式
                 BaseTool tool = toolManager.getTool(toolName);
                 String result = tool.generateToolExecutedResult(jsonObject);
-                // 输出前端和要持久化的内容
                 String output = String.format("\n\n%s\n\n", result);
                 chatHistoryStringBuilder.append(output);
-                return output;
+                // 先发"状态事件":告知前端该 toolCallId 已执行完成,便于卡片切换到 done 状态;
+                // 再发原来的 markdown 正文。两者前后顺序不能反,否则前端会在状态切换前渲染结论性文案。
+                return List.of(chunk, output);
+            }
+            case TOOL_ARGUMENT, TOOL_ARGUMENT_DELTA -> {
+                // 工具参数事件:原样透传给前端,供 UI 渲染"正在写入的文件路径 / 实时文件内容"等。
+                // 不计入 chatHistory —— 这些属于交互细节,不是对话正文。
+                return List.of(chunk);
             }
             default -> {
                 log.error("不支持的消息类型: {}", typeEnum);
-                return "";
+                return List.of();
             }
         }
     }
