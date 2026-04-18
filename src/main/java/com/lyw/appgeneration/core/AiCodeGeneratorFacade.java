@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
@@ -39,6 +40,9 @@ public class AiCodeGeneratorFacade {
 
     @Resource
     private AiGeneratorServiceFactory aiGeneratorServiceFactory;
+
+    @Resource
+    private ImageCollectionService imageCollectionService;
 
     /**
      * 生成并保存代码
@@ -86,11 +90,13 @@ public class AiCodeGeneratorFacade {
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.HTML, appId);
             }
             case MULTI_FILE -> {
-                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(userMessage);
+                String enhancedPrompt = imageCollectionService.enhancePrompt(userMessage);
+                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(enhancedPrompt);
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
-                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, userMessage);
+                String enhancedPrompt = imageCollectionService.enhancePrompt(userMessage);
+                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, enhancedPrompt);
                 yield processTokenStream(tokenStream);
             }
             default -> {
