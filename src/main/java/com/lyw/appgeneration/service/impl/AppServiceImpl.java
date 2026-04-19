@@ -7,12 +7,11 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
+import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingServiceFactory;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
-import com.lyw.appgeneration.core.parser.CodeParserExecutor;
-import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -74,7 +73,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private ScreenshotService screenshotService;
 
     @Resource
-    private AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService;
+    private AiCodeGenTypeRoutingServiceFactory aiCodeGenTypeRoutingServiceFactory;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -287,7 +286,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // 应用名称暂时为 initPrompt 前 12 位
         app.setAppName(initPrompt.substring(0, Math.min(initPrompt.length(), 12)));
         // 根据 AI 选择代码生成类型
-        CodeGenTypeEnum selectGenType = aiCodeGenTypeRoutingService.routeCodeGenType(initPrompt);
+        AiCodeGenTypeRoutingService routingService = aiCodeGenTypeRoutingServiceFactory.createAiCodeGenTypeRoutingService();
+        CodeGenTypeEnum selectGenType = routingService.routeCodeGenType(initPrompt);
         app.setCodeGenType(selectGenType.getValue());
         // 插入数据库
         boolean result = save(app);
