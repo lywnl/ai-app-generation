@@ -1,4 +1,4 @@
-package com.lyw.appgeneration.config;
+package com.lyw.appgeneration.ratelimiter.config;
 
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;

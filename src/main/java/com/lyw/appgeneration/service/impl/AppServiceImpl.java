@@ -24,6 +24,8 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
+import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
+import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.ScreenshotService;
@@ -140,6 +142,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     }
 
     @Override
+    @RateLimit(limitType = RateLimitType.USER, rate = 5, rateInterval = 60, message = "AI请求过于频繁，请稍后再试")
     public Flux<String> chatToGenCode(Long appId, String message, User loginUser) {
         // 1. 参数校验
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");

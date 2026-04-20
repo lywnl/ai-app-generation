@@ -438,6 +438,7 @@ const loadChatHistory = async (isLoadMore = false) => {
   }
 }
 
+
 // 加载更多历史消息
 const loadMoreHistory = async () => {
   await loadChatHistory(true)
@@ -689,6 +690,29 @@ const generateCode = async (userMessage: string, aiMessageIndex: number) => {
       finalizeGeneration()
     })
 
+    // 处理business-error事件（后端限流等错误）
+    eventSource.addEventListener('business-error', function (event: MessageEvent) {
+      if (streamCompleted) return
+
+      try {
+        const errorData = JSON.parse(event.data)
+        console.error('SSE业务错误事件:', errorData)
+
+        // 显示具体的错误信息
+        const errorMessage = errorData.message || '生成过程中出现错误'
+        messages.value[aiMessageIndex].content = `❌ ${errorMessage}`
+        messages.value[aiMessageIndex].loading = false
+        message.error(errorMessage)
+
+        streamCompleted = true
+        isGenerating.value = false
+        eventSource?.close()
+      } catch (parseError) {
+        console.error('解析错误事件失败:', parseError, '原始数据:', event.data)
+        handleError(new Error('服务器返回错误'), aiMessageIndex)
+      }
+    })
+    
     // 处理错误
     eventSource.onerror = function () {
       if (streamCompleted || !isGenerating.value) return
