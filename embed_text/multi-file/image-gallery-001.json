@@ -1,0 +1,16 @@
+{
+  "id": "multi-image-gallery-001",
+  "type": "multi-file",
+  "category": "display",
+  "style": ["minimal", "clean"],
+  "tech": ["html5", "css3", "vanilla-js"],
+  "title": "图片画廊(网格 + 点击查看大图 lightbox)",
+  "embedText": "图片画廊 图片墙 作品集 相册 网格布局 瀑布流 点击放大 大图预览 lightbox 灯箱 图片展示 摄影作品",
+  "description": "响应式图片画廊,CSS Grid 布局,点击缩略图在 lightbox 层查看大图,支持键盘 Esc 关闭,移动端单列,桌面端多列",
+  "files": [
+    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>画廊</title><link rel=\"stylesheet\" href=\"style.css\"></head><body><h1>作品画廊</h1><div class=\"grid\" id=\"grid\"></div><div class=\"lb\" id=\"lb\"><span class=\"close\">×</span><img id=\"lbImg\"></div><script src=\"script.js\"></script></body></html>"},
+    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#0f172a;color:#fff;padding:40px 20px}h1{text-align:center;margin-bottom:32px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;max-width:1200px;margin:0 auto}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:pointer;transition:transform .2s,opacity .2s}.grid img:hover{transform:scale(1.03);opacity:.85}.lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:100}.lb.on{display:flex}.lb img{max-width:92%;max-height:88%;border-radius:8px}.close{position:absolute;top:20px;right:28px;font-size:40px;color:#fff;cursor:pointer;user-select:none}"},
+    {"path": "script.js", "content": "const imgs=Array.from({length:12},(_,i)=>`https://picsum.photos/seed/${i+1}/600/600`);const grid=document.getElementById('grid');const lb=document.getElementById('lb');const lbImg=document.getElementById('lbImg');imgs.forEach(src=>{const el=document.createElement('img');el.src=src;el.loading='lazy';el.addEventListener('click',()=>{lbImg.src=src.replace('/600/600','/1200/1200');lb.classList.add('on')});grid.appendChild(el)});lb.addEventListener('click',()=>lb.classList.remove('on'));document.addEventListener('keydown',e=>{if(e.key==='Escape')lb.classList.remove('on')});"}
+  ],
+  "qualityScore": 0.92
+}

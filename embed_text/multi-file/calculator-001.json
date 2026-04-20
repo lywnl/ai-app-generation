@@ -1,0 +1,16 @@
+{
+  "id": "multi-calculator-001",
+  "type": "multi-file",
+  "category": "tool",
+  "style": ["minimal"],
+  "tech": ["html5", "css3", "vanilla-js"],
+  "title": "简易计算器(四则运算 + 清零 + 键盘支持)",
+  "embedText": "计算器 四则运算 加减乘除 数字键盘 清零 小数点 百分号 计算 calculator 运算工具 键盘输入",
+  "description": "经典计算器应用,支持加减乘除四则运算、小数、清零、删除最后一位、百分号。按键同时支持键盘输入",
+  "files": [
+    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>计算器</title><link rel=\"stylesheet\" href=\"style.css\"></head><body><div class=\"calc\"><div class=\"screen\" id=\"screen\">0</div><div class=\"keys\"><button data-k=\"C\" class=\"op\">C</button><button data-k=\"DEL\" class=\"op\">⌫</button><button data-k=\"%\" class=\"op\">%</button><button data-k=\"/\" class=\"op\">÷</button><button data-k=\"7\">7</button><button data-k=\"8\">8</button><button data-k=\"9\">9</button><button data-k=\"*\" class=\"op\">×</button><button data-k=\"4\">4</button><button data-k=\"5\">5</button><button data-k=\"6\">6</button><button data-k=\"-\" class=\"op\">−</button><button data-k=\"1\">1</button><button data-k=\"2\">2</button><button data-k=\"3\">3</button><button data-k=\"+\" class=\"op\">+</button><button data-k=\"0\" class=\"zero\">0</button><button data-k=\".\">.</button><button data-k=\"=\" class=\"eq\">=</button></div></div><script src=\"script.js\"></script></body></html>"},
+    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#1e293b;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}.calc{background:#0f172a;border-radius:20px;padding:20px;width:320px;box-shadow:0 20px 60px rgba(0,0,0,.3)}.screen{background:#020617;color:#fff;font-size:2.5rem;font-weight:300;text-align:right;padding:20px 16px;border-radius:12px;margin-bottom:16px;min-height:90px;word-break:break-all;overflow:hidden}.keys{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}button{padding:18px;border:none;border-radius:12px;font-size:1.25rem;font-weight:500;background:#334155;color:#fff;cursor:pointer;transition:background .1s}button:hover{background:#475569}button:active{transform:scale(.96)}.op{background:#f97316}.op:hover{background:#fb923c}.eq{background:#10b981}.eq:hover{background:#34d399}.zero{grid-column:span 2}"},
+    {"path": "script.js", "content": "const screen=document.getElementById('screen');let expr='0';function render(){screen.textContent=expr}function press(k){if(k==='C'){expr='0'}else if(k==='DEL'){expr=expr.length>1?expr.slice(0,-1):'0'}else if(k==='='){try{let r=Function('return '+expr.replace(/%/g,'/100'))();expr=String(+r.toFixed(10)).replace(/\\.?0+$/,'')}catch{expr='错误'}}else{if(expr==='0'&&'0123456789.'.includes(k))expr=k==='.'?'0.':k;else expr+=k}render()}document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>press(b.dataset.k)));document.addEventListener('keydown',e=>{const k=e.key;if('0123456789.+-*/%'.includes(k))press(k);else if(k==='Enter'||k==='=')press('=');else if(k==='Escape')press('C');else if(k==='Backspace')press('DEL')});"}
+  ],
+  "qualityScore": 0.90
+}

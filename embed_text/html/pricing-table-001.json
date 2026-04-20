@@ -1,0 +1,12 @@
+{
+  "id": "html-pricing-table-001",
+  "type": "html",
+  "category": "landing",
+  "style": ["minimal", "corporate"],
+  "tech": ["html5", "css3"],
+  "title": "三列定价方案对比表(含高亮推荐列 + 勾选功能列表 + CTA 按钮)",
+  "embedText": "定价页 价格方案 三列对比 基础版 专业版 企业版 推荐标签 功能勾选 月费 年费 购买按钮 SaaS 订阅 价格表",
+  "description": "SaaS 产品常用的定价展示区,三列方案,中间列高亮为推荐,每列含价格、描述、功能勾选列表、CTA 按钮,响应式网格布局",
+  "files": [{"path": "index.html", "content": "<section class=\"pricing\"><h2>选择适合你的方案</h2><p class=\"sub\">按月付费 · 随时可以取消</p><div class=\"plans\"><div class=\"plan\"><h3>基础版</h3><div class=\"price\">¥<span>29</span>/月</div><p class=\"desc\">适合个人开发者</p><ul><li>✓ 10 GB 存储</li><li>✓ 社区支持</li><li class=\"off\">✗ 高级分析</li></ul><a href=\"#\" class=\"btn\">立即开始</a></div><div class=\"plan featured\"><div class=\"badge\">最受欢迎</div><h3>专业版</h3><div class=\"price\">¥<span>99</span>/月</div><p class=\"desc\">适合小团队协作</p><ul><li>✓ 100 GB 存储</li><li>✓ 优先支持</li><li>✓ 高级分析</li></ul><a href=\"#\" class=\"btn btn-primary\">立即开始</a></div><div class=\"plan\"><h3>企业版</h3><div class=\"price\">联系我们</div><p class=\"desc\">定制化方案</p><ul><li>✓ 无限存储</li><li>✓ 专属经理</li><li>✓ SLA 99.99%</li></ul><a href=\"#\" class=\"btn\">联系销售</a></div></div></section><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#f8fafc;padding:60px 20px}.pricing{max-width:1100px;margin:0 auto}.pricing h2{text-align:center;font-size:2.25rem;color:#0f172a;margin-bottom:8px}.sub{text-align:center;color:#64748b;margin-bottom:40px}.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}.plan{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:32px;position:relative;transition:transform .2s}.plan:hover{transform:translateY(-4px);box-shadow:0 12px 32px rgba(0,0,0,.08)}.featured{border:2px solid #6366f1}.badge{position:absolute;top:-12px;right:24px;background:#6366f1;color:#fff;font-size:12px;padding:4px 12px;border-radius:999px}.plan h3{color:#0f172a;margin-bottom:16px}.price{font-size:1.25rem;color:#0f172a;margin-bottom:8px}.price span{font-size:3rem;font-weight:800;color:#6366f1}.desc{color:#64748b;font-size:14px;margin-bottom:24px}.plan ul{list-style:none;margin-bottom:28px}.plan li{padding:8px 0;color:#334155}.off{color:#cbd5e1}.btn{display:block;text-align:center;padding:12px;border-radius:8px;text-decoration:none;color:#6366f1;border:1px solid #6366f1;font-weight:600}.btn:hover{background:#6366f1;color:#fff}.btn-primary{background:#6366f1;color:#fff}.btn-primary:hover{background:#4f46e5}</style>"}],
+  "qualityScore": 0.91
+}

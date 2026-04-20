@@ -1,0 +1,12 @@
+{
+  "id": "html-contact-form-001",
+  "type": "html",
+  "category": "form",
+  "style": ["minimal", "clean"],
+  "tech": ["html5", "css3", "vanilla-js"],
+  "title": "联系表单页(姓名/邮箱/主题/消息 + 前端校验 + 提交反馈)",
+  "embedText": "联系表单 留言 咨询 反馈 contact form 邮箱校验 必填项 校验提示 提交按钮 加载状态 成功提示 表单验证",
+  "description": "标准的 Contact Us 表单页,包含姓名、邮箱、主题、消息四个字段,前端校验(必填 + 邮箱格式),提交按钮带 loading 状态,成功后显示提示",
+  "files": [{"path": "index.html", "content": "<div class=\"wrap\"><div class=\"card\"><h1>联系我们</h1><p class=\"sub\">我们会在 1 个工作日内回复</p><form id=\"cf\"><div class=\"row\"><label>姓名 *</label><input name=\"name\" required maxlength=\"50\" placeholder=\"你的姓名\"></div><div class=\"row\"><label>邮箱 *</label><input name=\"email\" type=\"email\" required placeholder=\"you@example.com\"></div><div class=\"row\"><label>主题</label><input name=\"subject\" placeholder=\"一句话说明\"></div><div class=\"row\"><label>消息 *</label><textarea name=\"message\" required rows=\"5\" placeholder=\"请详细描述...\"></textarea></div><button id=\"btn\" type=\"submit\">发送消息</button><div id=\"ok\" class=\"ok\" hidden>✓ 感谢您的留言,我们会尽快回复</div></form></div></div><script>const f=document.getElementById('cf');const btn=document.getElementById('btn');const ok=document.getElementById('ok');f.addEventListener('submit',e=>{e.preventDefault();btn.disabled=true;btn.textContent='发送中...';setTimeout(()=>{btn.hidden=true;ok.hidden=false;f.reset();},600)});</script><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#f1f5f9;min-height:100vh;padding:40px 16px;display:flex;align-items:center;justify-content:center}.card{background:#fff;border-radius:16px;padding:40px;max-width:520px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.05)}h1{color:#0f172a;margin-bottom:8px}.sub{color:#64748b;margin-bottom:28px}.row{margin-bottom:18px}label{display:block;font-size:14px;color:#334155;margin-bottom:6px;font-weight:500}input,textarea{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:15px;font-family:inherit;transition:border .2s}input:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.1)}textarea{resize:vertical}button{width:100%;padding:14px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:background .2s}button:hover:not(:disabled){background:#4f46e5}button:disabled{opacity:.6;cursor:not-allowed}.ok{padding:14px;background:#dcfce7;color:#166534;border-radius:8px;text-align:center;font-weight:500}</style>"}],
+  "qualityScore": 0.91
+}

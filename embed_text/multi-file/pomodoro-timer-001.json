@@ -1,0 +1,16 @@
+{
+  "id": "multi-pomodoro-timer-001",
+  "type": "multi-file",
+  "category": "tool",
+  "style": ["minimal", "playful"],
+  "tech": ["html5", "css3", "vanilla-js"],
+  "title": "番茄钟计时器(25 分钟工作 + 5 分钟休息 + 自动切换 + 周期计数)",
+  "embedText": "番茄钟 Pomodoro timer 25 分钟 5 分钟 工作 休息 专注 时间管理 计时器 循环 周期 切换 开始 暂停 重置",
+  "description": "经典番茄工作法计时器:25 分钟工作 + 5 分钟休息自动切换,支持开始/暂停/重置,记录已完成的番茄数,模式切换时背景色变化",
+  "files": [
+    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>番茄钟</title><link rel=\"stylesheet\" href=\"style.css\"></head><body class=\"work\"><div class=\"wrap\"><div class=\"mode\" id=\"mode\">🍅 专注工作</div><div class=\"time\" id=\"time\">25:00</div><div class=\"btns\"><button id=\"toggle\">开始</button><button id=\"reset\" class=\"sec\">重置</button></div><div class=\"count\">已完成 <span id=\"cyc\">0</span> 个番茄</div></div><script src=\"script.js\"></script></body></html>"},
+    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{min-height:100vh;display:flex;align-items:center;justify-content:center;color:#fff;transition:background .5s}.work{background:linear-gradient(135deg,#ef4444,#f97316)}.rest{background:linear-gradient(135deg,#10b981,#06b6d4)}.wrap{text-align:center;padding:40px;background:rgba(0,0,0,.15);border-radius:24px;backdrop-filter:blur(10px);min-width:320px}.mode{font-size:1.25rem;opacity:.9;margin-bottom:16px;letter-spacing:2px}.time{font-size:clamp(5rem,18vw,8rem);font-weight:200;line-height:1;margin-bottom:32px;font-variant-numeric:tabular-nums}.btns{display:flex;gap:12px;justify-content:center;margin-bottom:24px}button{padding:14px 32px;border:none;border-radius:999px;font-size:16px;font-weight:600;background:#fff;color:#0f172a;cursor:pointer;transition:transform .1s}button:hover{transform:scale(1.05)}button.sec{background:rgba(255,255,255,.2);color:#fff}.count{opacity:.85;font-size:14px}"},
+    {"path": "script.js", "content": "const WORK=25*60,REST=5*60;let mode='work',left=WORK,timer=null,cyc=0;const body=document.body;const modeEl=document.getElementById('mode');const timeEl=document.getElementById('time');const toggle=document.getElementById('toggle');const reset=document.getElementById('reset');const cycEl=document.getElementById('cyc');function render(){const m=Math.floor(left/60),s=left%60;timeEl.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;modeEl.textContent=mode==='work'?'🍅 专注工作':'☕ 短暂休息';body.className=mode}function switchMode(){if(mode==='work'){cyc++;cycEl.textContent=cyc;mode='rest';left=REST}else{mode='work';left=WORK}render();try{new Audio('data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YVAAAAA=').play()}catch{}}function tick(){left--;if(left<0)switchMode();else render()}toggle.addEventListener('click',()=>{if(timer){clearInterval(timer);timer=null;toggle.textContent='继续'}else{timer=setInterval(tick,1000);toggle.textContent='暂停'}});reset.addEventListener('click',()=>{clearInterval(timer);timer=null;mode='work';left=WORK;toggle.textContent='开始';render()});render();"}
+  ],
+  "qualityScore": 0.91
+}

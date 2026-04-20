@@ -1,0 +1,12 @@
+{
+  "id": "html-features-grid-001",
+  "type": "html",
+  "category": "landing",
+  "style": ["minimal", "playful"],
+  "tech": ["html5", "css3"],
+  "title": "6 宫格产品特性展示(大号 emoji 图标 + 标题 + 说明)",
+  "embedText": "产品特性 功能卡片 六宫格 三宫格 卖点展示 为什么选择我们 产品优势 核心功能 emoji 图标 landing page 特性区 feature cards",
+  "description": "产品 landing 页的特性展示区,6 个卡片网格布局,每个卡片含大号 emoji 图标、简短标题和说明文字,响应式自适应",
+  "files": [{"path": "index.html", "content": "<section class=\"features\"><h2>为什么选择我们</h2><p class=\"sub\">用数据驱动增长,让团队专注创造</p><div class=\"grid\"><div class=\"card\"><div class=\"icon\">⚡</div><h3>极速性能</h3><p>毫秒级响应,99.99% 可用性,全球 CDN 加速分发</p></div><div class=\"card\"><div class=\"icon\">🔒</div><h3>安全可信</h3><p>银行级加密,数据本地化,符合 ISO27001 认证</p></div><div class=\"card\"><div class=\"icon\">🤖</div><h3>AI 驱动</h3><p>内置 AI 助手,智能建议,自动优化工作流程</p></div><div class=\"card\"><div class=\"icon\">📊</div><h3>实时分析</h3><p>多维度数据看板,支持自定义报表和告警</p></div><div class=\"card\"><div class=\"icon\">🌍</div><h3>全球部署</h3><p>多区域机房,一键切换,支持多语言本地化</p></div><div class=\"card\"><div class=\"icon\">💬</div><h3>7x24 支持</h3><p>专属客户经理 + 社区论坛,问题平均 30 分钟响应</p></div></div></section><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#fff;padding:80px 20px;color:#0f172a}.features{max-width:1200px;margin:0 auto;text-align:center}.features h2{font-size:2.5rem;margin-bottom:12px}.sub{color:#64748b;margin-bottom:48px;font-size:18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px;text-align:left}.card{background:#f8fafc;border-radius:16px;padding:32px;transition:transform .2s,background .2s}.card:hover{transform:translateY(-4px);background:#eef2ff}.icon{font-size:48px;margin-bottom:16px}.card h3{font-size:1.25rem;margin-bottom:8px}.card p{color:#475569;line-height:1.6}</style>"}],
+  "qualityScore": 0.90
+}
