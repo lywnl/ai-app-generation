@@ -206,13 +206,17 @@
           </div>
         </div>
         <div class="preview-content">
-          <div v-if="!previewUrl && !isGenerating" class="preview-placeholder">
+          <div v-if="!previewUrl && !isGenerating && !isBuildingVue" class="preview-placeholder">
             <div class="placeholder-icon">🌐</div>
             <p>网站文件生成完成后将在这里展示</p>
           </div>
           <div v-else-if="isGenerating" class="preview-loading">
             <a-spin size="large" />
             <p>正在生成网站...</p>
+          </div>
+          <div v-else-if="isBuildingVue" class="preview-loading">
+            <a-spin size="large" />
+            <p>正在构建 Vue 项目，可能需要几秒钟...</p>
           </div>
           <iframe
             v-else
@@ -282,7 +286,7 @@ const vAutoScroll = {
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
 import aiAvatar from '@/assets/aiAvatar.png'
-import { API_BASE_URL, getStaticPreviewUrl } from '@/config/env'
+import { API_BASE_URL, STATIC_BASE_URL, getStaticPreviewUrl } from '@/config/env'
 import { VisualEditor, type ElementInfo } from '@/utils/visualEditor'
 
 import {
@@ -347,6 +351,9 @@ const historyLoaded = ref(false)
 // 预览相关
 const previewUrl = ref('')
 const previewReady = ref(false)
+// Vue 构建就绪探测:后端 npm install + build 是异步的,前端用 HEAD 轮询 dist/index.html 来判定完成
+const isBuildingVue = ref(false)
+let buildWaitTimer: ReturnType<typeof setTimeout> | null = null
 
 // 部署相关
 const deploying = ref(false)
@@ -678,11 +685,8 @@ const generateCode = async (userMessage: string, aiMessageIndex: number) => {
       isGenerating.value = false
       eventSource?.close()
 
-      // 延迟更新预览，确保后端已完成处理
-      setTimeout(async () => {
-        await fetchAppInfo()
-        updatePreview()
-      }, 1000)
+      // Vue 模式等构建就绪再刷预览;非 Vue 模式直接刷新
+      finalizeGeneration()
     })
 
     // 处理错误
@@ -694,10 +698,7 @@ const generateCode = async (userMessage: string, aiMessageIndex: number) => {
         isGenerating.value = false
         eventSource?.close()
 
-        setTimeout(async () => {
-          await fetchAppInfo()
-          updatePreview()
-        }, 1000)
+        finalizeGeneration()
       } else {
         handleError(new Error('SSE连接错误'), aiMessageIndex)
       }
@@ -724,6 +725,57 @@ const updatePreview = () => {
     const newPreviewUrl = getStaticPreviewUrl(codeGenType, appId.value)
     previewUrl.value = newPreviewUrl
     previewReady.value = true
+  }
+}
+
+// 等 Vue 项目构建就绪
+// 原子性依据:Vite 在所有 bundle 就绪后才写 dist/index.html,所以该文件存在 = 构建完成
+// 破缓存:StaticResourceController 未设 Cache-Control,一次 404 会被浏览器按启发式规则缓存
+const waitForVueBuild = async () => {
+  if (!appId.value) return
+  if (buildWaitTimer) {
+    clearTimeout(buildWaitTimer)
+    buildWaitTimer = null
+  }
+  isBuildingVue.value = true
+  const url = `${STATIC_BASE_URL}/vue_project_${appId.value}/dist/index.html`
+  const startAt = Date.now()
+  const TIMEOUT_MS = 8 * 60 * 1000
+  const INTERVAL_MS = 1500
+  try {
+    while (Date.now() - startAt < TIMEOUT_MS) {
+      try {
+        const resp = await fetch(`${url}?_t=${Date.now()}`, {
+          method: 'HEAD',
+          credentials: 'include',
+          cache: 'no-store',
+        })
+        if (resp.ok) {
+          updatePreview()
+          return
+        }
+      } catch {
+        // 网络抖动/连接被中断,静默重试
+      }
+      await new Promise<void>((resolve) => {
+        buildWaitTimer = setTimeout(() => resolve(), INTERVAL_MS)
+      })
+    }
+    message.error('构建超时，请重试')
+  } finally {
+    isBuildingVue.value = false
+    buildWaitTimer = null
+  }
+}
+
+// 流式生成收尾:Vue 走轮询探测,其他类型直接刷预览
+const finalizeGeneration = async () => {
+  await fetchAppInfo()
+  const codeGenType = appInfo.value?.codeGenType
+  if (codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
+    await waitForVueBuild()
+  } else {
+    updatePreview()
   }
 }
 
@@ -902,6 +954,10 @@ onMounted(() => {
 onUnmounted(() => {
   // EventSource 会在组件卸载时自动清理
   messagesContainer.value?.removeEventListener('scroll', handleMessagesScroll)
+  if (buildWaitTimer) {
+    clearTimeout(buildWaitTimer)
+    buildWaitTimer = null
+  }
 })
 </script>
 
