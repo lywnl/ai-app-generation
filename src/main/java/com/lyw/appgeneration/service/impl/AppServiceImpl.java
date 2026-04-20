@@ -157,10 +157,12 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (codeGenTypeEnum == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型");
         }
-        //5. 调用AI前, 先将用户消息保存到数据库
+        //5. 判断是否首次对话（必须在保存用户消息之前，否则 count 永远 >= 1）
+        boolean isFirstMessage = !chatHistoryService.existsByAppId(appId);
+        //6. 调用AI前, 先将用户消息保存到数据库
         chatHistoryService.addChatMessage(appId, message, ChatHistoryMessageTypeEnum.USER.getValue(), loginUser.getId());
-        //6. 调用 AI 生成代码
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
+        //7. 调用 AI 生成代码；仅首次对话时触发图片收集
+        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId, isFirstMessage);
         //7. 收集AI响应的内容并且在完成后保存到数据库;
         return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum);
     }

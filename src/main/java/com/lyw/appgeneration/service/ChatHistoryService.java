@@ -60,4 +60,11 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      * @return
      */
     int loadChatHistoryToMemory(Long appId, MessageWindowChatMemory chatMemory, int maxCount);
+
+    /**
+     * 判断指定应用是否已存在任何对话记录（用于「是否首次对话」判定）
+     * @param appId 应用 ID
+     * @return 已有记录返回 true
+     */
+    boolean existsByAppId(Long appId);
 }

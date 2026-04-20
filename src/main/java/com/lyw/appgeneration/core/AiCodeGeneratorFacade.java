@@ -89,8 +89,10 @@ public class AiCodeGeneratorFacade {
      *
      * @param userMessage     用户提示词
      * @param codeGenTypeEnum 生成类型
+     * @param appId           应用 ID
+     * @param isFirstMessage  是否首次对话；仅首次时触发图片收集增强
      */
-    public Flux<String> generateAndSaveCodeStream(String userMessage, CodeGenTypeEnum codeGenTypeEnum, long appId) {
+    public Flux<String> generateAndSaveCodeStream(String userMessage, CodeGenTypeEnum codeGenTypeEnum, long appId, boolean isFirstMessage) {
         if (codeGenTypeEnum == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "生成类型为空");
         }
@@ -103,13 +105,13 @@ public class AiCodeGeneratorFacade {
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.HTML, appId);
             }
             case MULTI_FILE -> {
-                String enhancedPrompt = imageCollectionService.enhancePrompt(userMessage);
+                String enhancedPrompt = isFirstMessage ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
                 String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.MULTI_FILE);
                 Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(augmentedMessage);
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
-                String enhancedPrompt = imageCollectionService.enhancePrompt(userMessage);
+                String enhancedPrompt = isFirstMessage ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
                 String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.VUE_PROJECT);
                 TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, augmentedMessage);
                 yield processTokenStream(tokenStream);

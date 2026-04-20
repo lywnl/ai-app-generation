@@ -130,6 +130,12 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     @Override
+    public boolean existsByAppId(Long appId) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID不能为空");
+        return this.count(QueryWrapper.create().eq("appId", appId)) > 0;
+    }
+
+    @Override
     public int loadChatHistoryToMemory(Long appId, MessageWindowChatMemory chatMemory, int maxCount) {
         try {
             QueryWrapper queryWrapper = QueryWrapper.create()
