@@ -328,6 +328,16 @@ const userInput = ref('')
 const isGenerating = ref(false)
 const messagesContainer = ref<HTMLElement>()
 
+// 外层消息容器智能吸底状态:用户上滑取消吸底,滑回接近底部(距底 ≤ 32px)恢复吸底。
+// 阈值 32 不是宽容,是流式场景下 scrollHeight 持续增长的兜底 —— 1px 在抖动中不可达。
+const stickBottom = ref(true)
+const handleMessagesScroll = () => {
+  const el = messagesContainer.value
+  if (!el) return
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  stickBottom.value = distance <= 32
+}
+
 // 对话历史相关
 const loadingHistory = ref(false)
 const hasMoreHistory = ref(false)
@@ -486,6 +496,7 @@ const sendInitialMessage = async (prompt: string) => {
   })
 
   await nextTick()
+  stickBottom.value = true
   scrollToBottom()
 
   // 开始生成
@@ -536,6 +547,7 @@ const sendMessage = async () => {
   })
 
   await nextTick()
+  stickBottom.value = true
   scrollToBottom()
 
   // 开始生成
@@ -716,10 +728,17 @@ const updatePreview = () => {
 }
 
 // 滚动到底部
+// 必须在 nextTick 里滚:流式 chunk 同步调用时 DOM 尚未更新,scrollHeight 还是旧值,
+// 直接 scrollTop = scrollHeight 会把滚动条卡在"旧底部"即新视图的中间。
+// nextTick 内二次检查 stickBottom:等待期间用户可能上滑,避免覆盖用户意图。
 const scrollToBottom = () => {
-  if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-  }
+  if (!stickBottom.value) return
+  nextTick(() => {
+    if (!stickBottom.value) return
+    const el = messagesContainer.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  })
 }
 
 // 下载代码
@@ -875,11 +894,14 @@ onMounted(() => {
   window.addEventListener('message', (event) => {
     visualEditor.handleIframeMessage(event)
   })
+
+  messagesContainer.value?.addEventListener('scroll', handleMessagesScroll, { passive: true })
 })
 
 // 清理资源
 onUnmounted(() => {
   // EventSource 会在组件卸载时自动清理
+  messagesContainer.value?.removeEventListener('scroll', handleMessagesScroll)
 })
 </script>
 
