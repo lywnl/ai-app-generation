@@ -17,6 +17,9 @@ import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.service.rag.RagPromptAssembler;
+import com.lyw.appgeneration.service.rag.RagRetrievalService;
+import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.ToolExecution;
@@ -27,6 +30,7 @@ import reactor.core.publisher.Flux;
 
 import java.io.File;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -44,6 +48,12 @@ public class AiCodeGeneratorFacade {
     @Resource
     private ImageCollectionService imageCollectionService;
 
+    @Resource
+    private RagRetrievalService ragRetrievalService;
+
+    @Resource
+    private RagPromptAssembler ragPromptAssembler;
+
     /**
      * 生成并保存代码
      * @param userMessage
@@ -56,13 +66,15 @@ public class AiCodeGeneratorFacade {
         }
         // 根据ID 获取AI代码生成服务
         AiCodeGeneratorService aiCodeGeneratorService = aiGeneratorServiceFactory.getAiCodeGeneratorService(appId, bizType);
+        // RAG 增强:召回相关模板并前置到用户消息(失败自动降级,不影响主生成)
+        String augmentedMessage = ragAugment(userMessage, bizType);
         return switch (bizType) {
            case HTML -> {
-               HtmlCodeResult htmlCodeResult = aiCodeGeneratorService.generateHtmlCode(userMessage);
+               HtmlCodeResult htmlCodeResult = aiCodeGeneratorService.generateHtmlCode(augmentedMessage);
                yield  CodeFileSaverExecutor.executeSaver(htmlCodeResult, CodeGenTypeEnum.HTML, appId);
            }
            case MULTI_FILE -> {
-               MultiFileCodeResult multiFileCodeResult = aiCodeGeneratorService.generateMultiFileCode(userMessage);
+               MultiFileCodeResult multiFileCodeResult = aiCodeGeneratorService.generateMultiFileCode(augmentedMessage);
                yield  CodeFileSaverExecutor.executeSaver(multiFileCodeResult, CodeGenTypeEnum.MULTI_FILE, appId);
            }
             default -> {
@@ -86,17 +98,20 @@ public class AiCodeGeneratorFacade {
         AiCodeGeneratorService aiCodeGeneratorService = aiGeneratorServiceFactory.getAiCodeGeneratorService(appId, codeGenTypeEnum);
         return switch (codeGenTypeEnum) {
             case HTML -> {
-                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(userMessage);
+                String augmentedMessage = ragAugment(userMessage, CodeGenTypeEnum.HTML);
+                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(augmentedMessage);
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.HTML, appId);
             }
             case MULTI_FILE -> {
                 String enhancedPrompt = imageCollectionService.enhancePrompt(userMessage);
-                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(enhancedPrompt);
+                String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.MULTI_FILE);
+                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(augmentedMessage);
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
                 String enhancedPrompt = imageCollectionService.enhancePrompt(userMessage);
-                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, enhancedPrompt);
+                String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.VUE_PROJECT);
+                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, augmentedMessage);
                 yield processTokenStream(tokenStream);
             }
             default -> {
@@ -104,6 +119,15 @@ public class AiCodeGeneratorFacade {
                 throw new BusinessException(ErrorCode.SYSTEM_ERROR, errorMsg);
             }
         };
+    }
+
+    /**
+     * RAG 增强:召回相关模板片段并前置到用户消息
+     * 失败自动降级为返回原 userMessage(由 RagRetrievalService 保证,不抛异常)
+     */
+    private String ragAugment(String userMessage, CodeGenTypeEnum type) {
+        List<RetrievedSnippet> snippets = ragRetrievalService.retrieve(userMessage, type);
+        return ragPromptAssembler.assemble(userMessage, snippets);
     }
 
     /**

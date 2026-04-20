@@ -101,3 +101,30 @@ dashscope:
   image-model: wan2.2-t2i-flash
 
 
+# RAG 检索增强配置(接入点 B:主生成前注入)
+rag:
+  enabled: true
+  # 模板库根目录(文件系统路径,非 classpath)
+  templates-dir: D:/ai-app-generation/embed_text
+  ingest:
+    enabled: false            # 只在策展变化时手动改 true 跑一次
+  pgvector:
+    host: localhost
+    port: 5432
+    database: ai_codegen_rag
+    user: admin
+    password: lyw666
+  embedding:
+    # 走 DashScope OpenAI 兼容端点,复用 dashscope.api-key
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model-name: text-embedding-v4
+    dimension: 1024
+    timeout-ms: 10000
+  retrieval:
+    top-k: 3
+    min-score: 0.55
+    timeout-ms: 2000
+  prompt:
+    max-context-chars: 4000          # 注入模板的总字符预算(约 2000 token)
+
+

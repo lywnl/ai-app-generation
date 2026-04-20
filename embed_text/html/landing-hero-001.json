@@ -1,0 +1,17 @@
+{
+  "id": "html-landing-hero-001",
+  "type": "html",
+  "category": "landing",
+  "style": ["minimal", "corporate"],
+  "tech": ["html5", "css3", "vanilla-js"],
+  "title": "科技公司落地页 Hero 区(渐变背景 + 主副标题 + CTA)",
+  "embedText": "科技公司 landing page 首屏 Hero 区 渐变背景 主标题 副标题 行动召唤按钮 CTA 响应式布局 大标题",
+  "description": "单页科技公司官网的首屏展示区,包含大标题、副标题说明、主 CTA 按钮、次 CTA 按钮和科技感渐变背景,适合 SaaS、科技创业公司的 landing page",
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<section class=\"hero\"><div class=\"hero-inner\"><h1>用 AI 重塑企业生产力</h1><p class=\"subtitle\">一句话生成应用,从想法到上线只要 30 秒</p><div class=\"cta-group\"><a href=\"#\" class=\"cta-primary\">立即开始</a><a href=\"#\" class=\"cta-secondary\">查看演示</a></div></div></section><style>.hero{min-height:90vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:24px}.hero-inner{max-width:960px;text-align:center}.hero h1{font-size:clamp(2rem,5vw,4rem);font-weight:800;margin:0 0 16px;line-height:1.1}.subtitle{font-size:clamp(1rem,2vw,1.25rem);opacity:.9;margin:0 0 32px}.cta-group{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}.cta-primary,.cta-secondary{padding:14px 32px;border-radius:999px;text-decoration:none;font-weight:600;transition:transform .2s,box-shadow .2s}.cta-primary{background:#fff;color:#667eea;box-shadow:0 4px 20px rgba(0,0,0,.15)}.cta-secondary{background:transparent;color:#fff;border:2px solid rgba(255,255,255,.5)}.cta-primary:hover,.cta-secondary:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(0,0,0,.2)}</style>"
+    }
+  ],
+  "qualityScore": 0.92
+}
