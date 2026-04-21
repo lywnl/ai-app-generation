@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.lyw.appgeneration.ai.guardrail.PromptSafetyInputGuardrail;
 import com.lyw.appgeneration.ai.tools.*;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
@@ -89,6 +90,8 @@ public class AiGeneratorServiceFactory {
                 yield AiServices.builder(AiCodeGeneratorService.class)
                     .streamingChatModel(reasoningStreamingChatModel)
                     .chatMemoryProvider(memoryId -> chatMemory)
+                    // 深度防御第二层：@PromptSafetyCheck 切面是主防线，此处兜底防绕过 AppServiceImpl 直调代理
+                    .inputGuardrails(new PromptSafetyInputGuardrail())
                     .tools(toolManager.getAllTools())
                     .hallucinatedToolNameStrategy(toolExecutionRequest -> ToolExecutionResultMessage.from(
                             toolExecutionRequest, "Error: there is no tool called " + toolExecutionRequest.name()
@@ -103,6 +106,8 @@ public class AiGeneratorServiceFactory {
                     .chatModel(chatModel)
                     .streamingChatModel(openAiStreamingChatModel)
                     .chatMemory(chatMemory)
+                    // 深度防御第二层：@PromptSafetyCheck 切面是主防线，此处兜底防绕过 AppServiceImpl 直调代理
+                    .inputGuardrails(new PromptSafetyInputGuardrail())
                     .build();
             }
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR,
@@ -127,6 +132,5 @@ public class AiGeneratorServiceFactory {
     public AiCodeGeneratorService aiCodeGeneratorService() {
         return getAiCodeGeneratorService(0L, CodeGenTypeEnum.HTML);
     }
-
 
 }
