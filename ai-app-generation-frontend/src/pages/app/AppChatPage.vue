@@ -712,7 +712,7 @@ const generateCode = async (userMessage: string, aiMessageIndex: number) => {
         handleError(new Error('服务器返回错误'), aiMessageIndex)
       }
     })
-    
+
     // 处理错误
     eventSource.onerror = function () {
       if (streamCompleted || !isGenerating.value) return

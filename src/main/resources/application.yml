@@ -122,8 +122,15 @@ rag:
     timeout-ms: 10000
   retrieval:
     top-k: 3
-    min-score: 0.55
+    min-score: 0.30            # 放宽以给 rerank 留足候选池(原 0.55)
     timeout-ms: 2000
+  rerank:
+    enabled: true
+    base-url: https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+    model-name: gte-rerank-v2
+    top-n: 10                  # 粗召回候选数;rerank 后按 retrieval.top-k 截断
+    doc-char-limit: 2000
+    timeout-ms: 3000
   prompt:
     max-context-chars: 4000          # 注入模板的总字符预算(约 2000 token)
 

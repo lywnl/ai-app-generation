@@ -63,6 +63,9 @@ public class RagPromptAssembler {
     }
 
     private String renderSnippet(int idx, RetrievedSnippet s) {
+        double displayScore = s.getRerankScore() != null
+                ? s.getRerankScore()
+                : (s.getScore() == null ? 0.0 : s.getScore());
         return String.format(
                 """
 
@@ -73,7 +76,7 @@ public class RagPromptAssembler {
                         """,
                 idx,
                 s.getTitle() == null ? "未命名" : s.getTitle(),
-                s.getScore() == null ? 0.0 : s.getScore(),
+                displayScore,
                 s.getCode() == null ? "" : s.getCode()
         );
     }

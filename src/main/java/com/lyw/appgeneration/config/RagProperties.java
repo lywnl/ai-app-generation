@@ -32,6 +32,9 @@ public class RagProperties {
     /** 检索参数 */
     private Retrieval retrieval = new Retrieval();
 
+    /** Rerank 精排参数 */
+    private Rerank rerank = new Rerank();
+
     /** Prompt 拼装参数 */
     private Prompt prompt = new Prompt();
 
@@ -59,9 +62,27 @@ public class RagProperties {
 
     @Data
     public static class Retrieval {
+        /** 最终返回给上游的片段数(rerank 精排后取 topK;无 rerank 时直接向量 topK) */
         private int topK = 3;
-        private double minScore = 0.55;
+        /** 向量相似度下限。Rerank 开启时应调低以便给精排留候选池 */
+        private double minScore = 0.30;
         private long timeoutMs = 2000L;
+    }
+
+    @Data
+    public static class Rerank {
+        /** Rerank 总开关;关闭时 retrieve 退化为纯向量召回 */
+        private boolean enabled = true;
+        /** DashScope rerank endpoint */
+        private String baseUrl = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank";
+        /** 模型名,默认 gte-rerank-v2 */
+        private String modelName = "gte-rerank-v2";
+        /** 粗召回候选数(喂给 rerank 的 document 数);最终仍按 retrieval.topK 截断 */
+        private int topN = 10;
+        /** 单条 document 的字符截断阈值,规避 gte-rerank-v2 单条 4000 token 上限 */
+        private int docCharLimit = 2000;
+        /** HTTP 超时 */
+        private long timeoutMs = 3000L;
     }
 
     @Data

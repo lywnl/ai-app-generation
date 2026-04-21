@@ -26,4 +26,7 @@ public class RetrievedSnippet {
 
     /** 相似度分数 [0, 1],越大越相似 */
     private Double score;
+
+    /** Rerank 精排分数 [0, 1],null 表示未经过 rerank 或已降级 */
+    private Double rerankScore;
 }
