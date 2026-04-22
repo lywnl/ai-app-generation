@@ -40,7 +40,7 @@ langchain4j:
       model-name: deepseek-chat
       log-requests: true
       log-responses: true
-      max-tokens: 8192
+      max-tokens: 10000
  #     strict-json-schema: true  # 严格遵守JSON Schema
  #     response-format: json_object #json格式输出
       max-retries: 2
@@ -48,7 +48,7 @@ langchain4j:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
       model-name: deepseek-chat
-      max-tokens: 8192
+      max-tokens: 10000
       log-requests: true
       log-responses: true
     # 推理 AI 模型配置（用于复杂的推理任务）
@@ -133,5 +133,14 @@ rag:
     timeout-ms: 3000
   prompt:
     max-context-chars: 4000          # 注入模板的总字符预算(约 2000 token)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
 
 

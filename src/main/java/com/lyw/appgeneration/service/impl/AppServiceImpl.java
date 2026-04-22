@@ -25,6 +25,8 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
+import com.lyw.appgeneration.monitor.MonitorContext;
+import com.lyw.appgeneration.monitor.MonitorContextHolder;
 import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
@@ -166,10 +168,23 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         boolean isFirstMessage = !chatHistoryService.existsByAppId(appId);
         //6. 调用AI前, 先将用户消息保存到数据库
         chatHistoryService.addChatMessage(appId, message, ChatHistoryMessageTypeEnum.USER.getValue(), loginUser.getId());
-        //7. 调用 AI 生成代码；仅首次对话时触发图片收集
+        //7. 设置监控上下文
+        MonitorContextHolder.setContext(
+                MonitorContext.builder()
+                        .userId(loginUser.getId().toString())
+                        .appId(appId.toString())
+                        .build()
+
+        );
+        //8. 调用 AI 生成代码；仅首次对话时触发图片收集
         Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId, isFirstMessage);
-        //7. 收集AI响应的内容并且在完成后保存到数据库;
-        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum);
+        //9. 收集AI响应的内容并且在完成后保存到数据库;
+        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum)
+                .doFinally(signalType -> {
+                    // 流结束时清理（无论成功/失败/取消）
+                    MonitorContextHolder.clearContext();
+
+                });
     }
 
     @Override
