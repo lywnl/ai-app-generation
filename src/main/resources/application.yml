@@ -30,7 +30,6 @@ spring:
     # session 30 天过期
     timeout: 2592000
 
-
 # AI
 langchain4j:
   open-ai:
@@ -40,7 +39,7 @@ langchain4j:
       model-name: deepseek-chat
       log-requests: true
       log-responses: true
-      max-tokens: 10000
+      max-tokens: 8192
  #     strict-json-schema: true  # 严格遵守JSON Schema
  #     response-format: json_object #json格式输出
       max-retries: 2
@@ -48,7 +47,7 @@ langchain4j:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
       model-name: deepseek-chat
-      max-tokens: 10000
+      max-tokens: 8192
       log-requests: true
       log-responses: true
     # 推理 AI 模型配置（用于复杂的推理任务）
@@ -56,7 +55,7 @@ langchain4j:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
       model-name: deepseek-chat
-      max-tokens: 32768
+      max-tokens: 8192
       temperature: 0.1
       log-requests: true
       log-responses: true

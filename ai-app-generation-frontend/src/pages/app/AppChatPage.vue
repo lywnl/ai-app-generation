@@ -260,6 +260,14 @@ import {
 import { listAppChatHistory } from '@/api/chatHistoryController'
 import { CodeGenTypeEnum, formatCodeGenType } from '@/utils/codeGenTypes'
 import request from '@/request'
+import {
+  type ToolArgView,
+  type GenerationSessionSnapshot,
+  startGenerationSession,
+  subscribeGenerationSession,
+  getGenerationSessionSnapshot,
+  clearGenerationSession,
+} from '@/utils/generationSession'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
@@ -272,14 +280,24 @@ const vAutoScroll = {
   mounted(el: HTMLElement) {
     el.scrollTop = el.scrollHeight
     el.dataset.stickBottom = '1'
-    el.addEventListener('scroll', () => {
+    const onScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 16
       el.dataset.stickBottom = atBottom ? '1' : '0'
-    })
+    }
+    ;(el as HTMLElement & { __autoScrollHandler__?: () => void }).__autoScrollHandler__ = onScroll
+    el.addEventListener('scroll', onScroll)
   },
   updated(el: HTMLElement) {
     if (el.dataset.stickBottom === '1') {
       el.scrollTop = el.scrollHeight
+    }
+  },
+  beforeUnmount(el: HTMLElement) {
+    const handler = (el as HTMLElement & { __autoScrollHandler__?: () => void })
+      .__autoScrollHandler__
+    if (handler) {
+      el.removeEventListener('scroll', handler)
+      delete (el as HTMLElement & { __autoScrollHandler__?: () => void }).__autoScrollHandler__
     }
   },
 }
@@ -304,20 +322,9 @@ const loginUserStore = useLoginUserStore()
 
 // 应用信息
 const appInfo = ref<API.AppVO>()
-const appId = ref<any>()
+const appId = ref<string>()
 
 // 对话相关
-interface ToolArgView {
-  /** 参数 key → 当前累积的 value(buffered 字段一次性来,streaming 字段会持续 append) */
-  args: Record<string, string>
-  /** streaming 字段的 key,用于前端识别"这个字段正在实时写入" */
-  streamingKeys: Set<string>
-  /** 工具名,例:writeFile / modifyFile */
-  name: string
-  /** 生命周期:streaming(正在流式接收参数) → done(工具已真正执行完毕) */
-  status: 'streaming' | 'done'
-}
-
 interface Message {
   type: 'user' | 'ai'
   content: string
@@ -331,6 +338,9 @@ const messages = ref<Message[]>([])
 const userInput = ref('')
 const isGenerating = ref(false)
 const messagesContainer = ref<HTMLElement>()
+const activeSessionAppId = ref<string | null>(null)
+const sessionMessageIndex = ref<number | null>(null)
+const detachSession = ref<null | (() => void)>(null)
 
 // 外层消息容器智能吸底状态:用户上滑取消吸底,滑回接近底部(距底 ≤ 32px)恢复吸底。
 // 阈值 32 不是宽容,是流式场景下 scrollHeight 持续增长的兜底 —— 1px 在抖动中不可达。
@@ -395,7 +405,7 @@ const loadChatHistory = async (isLoadMore = false) => {
   loadingHistory.value = true
   try {
     const params: API.listAppChatHistoryParams = {
-      appId: appId.value,
+      appId: appId.value as unknown as number,
       pageSize: 10,
     }
     // 如果是加载更多，传递最后一条消息的创建时间作为游标
@@ -462,8 +472,26 @@ const fetchAppInfo = async () => {
 
       // 先加载对话历史
       await loadChatHistory()
-      // 如果有至少2条对话记录，展示对应的网站
-      if (messages.value.length >= 2) {
+      const sessionSnapshot = getGenerationSessionSnapshot(id)
+      if (sessionSnapshot?.status === 'streaming') {
+        if (messages.value.length >= 2) {
+          updatePreview()
+        }
+        restoreActiveSessionIfNeeded()
+      } else if (sessionSnapshot?.status === 'done') {
+        if (appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
+          await waitForVueBuild()
+        } else if (messages.value.length >= 2) {
+          updatePreview()
+        }
+        clearGenerationSession(id)
+      } else if (sessionSnapshot?.status === 'error') {
+        if (messages.value.length >= 2) {
+          updatePreview()
+        }
+        isGenerating.value = false
+        clearGenerationSession(id)
+      } else if (messages.value.length >= 2) {
         updatePreview()
       }
       // 检查是否需要自动发送初始提示词
@@ -487,6 +515,89 @@ const fetchAppInfo = async () => {
   }
 }
 
+const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
+  const idx = sessionMessageIndex.value
+  if (idx === null || !messages.value[idx]) {
+    return
+  }
+  const aiMessage = messages.value[idx]
+  aiMessage.content = snapshot.content
+  aiMessage.loading = snapshot.loading
+  aiMessage.toolCalls = new Map(snapshot.toolCalls)
+  isGenerating.value = snapshot.status === 'streaming'
+}
+
+const attachSessionListener = (targetAppId: string) => {
+  detachSession.value?.()
+  detachSession.value = subscribeGenerationSession(targetAppId, (snapshot, eventType) => {
+    if (snapshot.appId !== activeSessionAppId.value) {
+      return
+    }
+    applySessionSnapshot(snapshot)
+    scrollToBottom()
+    if (eventType === 'business-error') {
+      const errorMsg = snapshot.errorMessage || '生成过程中出现错误'
+      message.error(errorMsg)
+      return
+    }
+    if (eventType === 'error') {
+      message.error(snapshot.errorMessage || '生成失败，请重试')
+      return
+    }
+    if (eventType === 'done') {
+      finalizeGeneration()
+    }
+  })
+}
+
+const startGeneration = async (inputMessage: string, aiMessageIndex: number) => {
+  const targetAppId = appId.value
+  if (!targetAppId) {
+    message.error('应用ID不存在')
+    return
+  }
+  activeSessionAppId.value = targetAppId
+  sessionMessageIndex.value = aiMessageIndex
+  isGenerating.value = true
+
+  startGenerationSession({
+    appId: targetAppId,
+    userMessage: inputMessage,
+    baseURL: request.defaults.baseURL || API_BASE_URL,
+    renderMode:
+      appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT ? 'direct' : 'throttled',
+    throttleMs: 100,
+  })
+  attachSessionListener(targetAppId)
+  const snapshot = getGenerationSessionSnapshot(targetAppId)
+  if (snapshot) {
+    applySessionSnapshot(snapshot)
+  }
+}
+
+const restoreActiveSessionIfNeeded = () => {
+  const targetAppId = appId.value
+  if (!targetAppId || isGenerating.value || sessionMessageIndex.value !== null) {
+    return
+  }
+  const snapshot = getGenerationSessionSnapshot(targetAppId)
+  if (!snapshot || snapshot.status !== 'streaming') {
+    return
+  }
+  const aiMessageIndex = messages.value.length
+  messages.value.push({
+    type: 'ai',
+    content: '',
+    loading: true,
+    toolCalls: new Map(),
+  })
+  activeSessionAppId.value = targetAppId
+  sessionMessageIndex.value = aiMessageIndex
+  attachSessionListener(targetAppId)
+  applySessionSnapshot(snapshot)
+  scrollToBottom()
+}
+
 // 发送初始消息
 const sendInitialMessage = async (prompt: string) => {
   // 添加用户消息
@@ -501,15 +612,14 @@ const sendInitialMessage = async (prompt: string) => {
     type: 'ai',
     content: '',
     loading: true,
+    toolCalls: new Map(),
   })
 
   await nextTick()
   stickBottom.value = true
   scrollToBottom()
 
-  // 开始生成
-  isGenerating.value = true
-  await generateCode(prompt, aiMessageIndex)
+  await startGeneration(prompt, aiMessageIndex)
 }
 
 // 发送消息
@@ -558,188 +668,7 @@ const sendMessage = async () => {
   stickBottom.value = true
   scrollToBottom()
 
-  // 开始生成
-  isGenerating.value = true
-  await generateCode(message, aiMessageIndex)
-}
-
-// 生成代码 - 使用 EventSource 处理流式响应
-const generateCode = async (userMessage: string, aiMessageIndex: number) => {
-  let eventSource: EventSource | null = null
-  let streamCompleted = false
-
-  try {
-    // 获取 axios 配置的 baseURL
-    const baseURL = request.defaults.baseURL || API_BASE_URL
-
-    // 构建URL参数
-    const params = new URLSearchParams({
-      appId: appId.value || '',
-      message: userMessage,
-    })
-
-    const url = `${baseURL}/app/chat/gen/code?${params}`
-
-    // 创建 EventSource 连接
-    eventSource = new EventSource(url, {
-      withCredentials: true,
-    })
-
-    let fullContent = ''
-    // streaming 字段白名单:需要与后端 ToolStreamingSpec 对齐
-    const STREAMING_KEYS: Record<string, string[]> = {
-      writeFile: ['content'],
-      modifyFile: ['newContent'],
-    }
-
-    // 尝试把 parsed.d 识别成结构化工具事件;不是则返回 null,按普通文本处理
-    const tryParseToolEvent = (raw: string): null | {
-      type: string
-      id: string
-      name: string
-      key?: string
-      value?: string
-      delta?: string
-    } => {
-      if (typeof raw !== 'string' || raw.length === 0 || raw[0] !== '{') return null
-      try {
-        const obj = JSON.parse(raw)
-        if (
-          obj &&
-          (obj.type === 'tool_argument' ||
-            obj.type === 'tool_argument_delta' ||
-            obj.type === 'tool_executed')
-        ) {
-          return obj
-        }
-      } catch {
-        // 普通文本里偶尔出现以 { 开头的字符串(如代码块),静默跳过
-      }
-      return null
-    }
-
-    const ensureToolCalls = (idx: number): Map<string, ToolArgView> => {
-      const msg = messages.value[idx]
-      if (!msg.toolCalls) msg.toolCalls = new Map()
-      return msg.toolCalls
-    }
-
-    const applyToolEvent = (idx: number, evt: NonNullable<ReturnType<typeof tryParseToolEvent>>) => {
-      const toolCalls = ensureToolCalls(idx)
-      let view = toolCalls.get(evt.id)
-      if (!view) {
-        view = {
-          name: evt.name,
-          args: {},
-          streamingKeys: new Set(STREAMING_KEYS[evt.name] ?? []),
-          status: 'streaming',
-        }
-        toolCalls.set(evt.id, view)
-      }
-      if (evt.type === 'tool_executed') {
-        // 执行完成:切到 done,后续 DELTA 不会再来(同一 toolCallId 的生命周期结束)
-        view.status = 'done'
-        return
-      }
-      if (evt.type === 'tool_argument_delta' && evt.key && evt.delta !== undefined) {
-        view.args[evt.key] = (view.args[evt.key] ?? '') + evt.delta
-      } else if (evt.type === 'tool_argument' && evt.key && evt.value !== undefined) {
-        view.args[evt.key] = evt.value
-      }
-    }
-
-    // 处理接收到的消息
-    eventSource.onmessage = function (event) {
-      if (streamCompleted) return
-
-      try {
-        // 解析JSON包装的数据
-        const parsed = JSON.parse(event.data)
-        const content = parsed.d
-
-        // 拼接内容
-        if (content !== undefined && content !== null) {
-          // 先尝试把内容识别为结构化工具事件,命中则只更新 toolCalls,不污染正文
-          const toolEvt = tryParseToolEvent(content)
-          if (toolEvt) {
-            applyToolEvent(aiMessageIndex, toolEvt)
-            messages.value[aiMessageIndex].loading = false
-            scrollToBottom()
-            return
-          }
-          fullContent += content
-          messages.value[aiMessageIndex].content = fullContent
-          messages.value[aiMessageIndex].loading = false
-          scrollToBottom()
-        }
-      } catch (error) {
-        console.error('解析消息失败:', error)
-        handleError(error, aiMessageIndex)
-      }
-    }
-
-    // 处理done事件
-    eventSource.addEventListener('done', function () {
-      if (streamCompleted) return
-
-      streamCompleted = true
-      isGenerating.value = false
-      eventSource?.close()
-
-      // Vue 模式等构建就绪再刷预览;非 Vue 模式直接刷新
-      finalizeGeneration()
-    })
-
-    // 处理business-error事件（后端限流等错误）
-    eventSource.addEventListener('business-error', function (event: MessageEvent) {
-      if (streamCompleted) return
-
-      try {
-        const errorData = JSON.parse(event.data)
-        console.error('SSE业务错误事件:', errorData)
-
-        // 显示具体的错误信息
-        const errorMessage = errorData.message || '生成过程中出现错误'
-        messages.value[aiMessageIndex].content = `❌ ${errorMessage}`
-        messages.value[aiMessageIndex].loading = false
-        message.error(errorMessage)
-
-        streamCompleted = true
-        isGenerating.value = false
-        eventSource?.close()
-      } catch (parseError) {
-        console.error('解析错误事件失败:', parseError, '原始数据:', event.data)
-        handleError(new Error('服务器返回错误'), aiMessageIndex)
-      }
-    })
-
-    // 处理错误
-    eventSource.onerror = function () {
-      if (streamCompleted || !isGenerating.value) return
-      // 检查是否是正常的连接关闭
-      if (eventSource?.readyState === EventSource.CONNECTING) {
-        streamCompleted = true
-        isGenerating.value = false
-        eventSource?.close()
-
-        finalizeGeneration()
-      } else {
-        handleError(new Error('SSE连接错误'), aiMessageIndex)
-      }
-    }
-  } catch (error) {
-    console.error('创建 EventSource 失败：', error)
-    handleError(error, aiMessageIndex)
-  }
-}
-
-// 错误处理函数
-const handleError = (error: unknown, aiMessageIndex: number) => {
-  console.error('生成代码失败：', error)
-  messages.value[aiMessageIndex].content = '抱歉，生成过程中出现了错误，请重试。'
-  messages.value[aiMessageIndex].loading = false
-  message.error('生成失败，请重试')
-  isGenerating.value = false
+  await startGeneration(message, aiMessageIndex)
 }
 
 // 更新预览
@@ -801,6 +730,15 @@ const finalizeGeneration = async () => {
   } else {
     updatePreview()
   }
+  const currentAppId = activeSessionAppId.value
+  if (currentAppId) {
+    clearGenerationSession(currentAppId)
+  }
+  activeSessionAppId.value = null
+  sessionMessageIndex.value = null
+  detachSession.value?.()
+  detachSession.value = null
+  isGenerating.value = false
 }
 
 // 滚动到底部
@@ -962,21 +900,25 @@ const getInputPlaceholder = () => {
   return '请描述你想生成的网站，越详细效果越好哦'
 }
 
+const handleIframeMessage = (event: MessageEvent) => {
+  visualEditor.handleIframeMessage(event)
+}
+
 // 页面加载时获取应用信息
 onMounted(() => {
   fetchAppInfo()
 
   // 监听 iframe 消息
-  window.addEventListener('message', (event) => {
-    visualEditor.handleIframeMessage(event)
-  })
+  window.addEventListener('message', handleIframeMessage)
 
   messagesContainer.value?.addEventListener('scroll', handleMessagesScroll, { passive: true })
 })
 
 // 清理资源
 onUnmounted(() => {
-  // EventSource 会在组件卸载时自动清理
+  window.removeEventListener('message', handleIframeMessage)
+  detachSession.value?.()
+  detachSession.value = null
   messagesContainer.value?.removeEventListener('scroll', handleMessagesScroll)
   if (buildWaitTimer) {
     clearTimeout(buildWaitTimer)
