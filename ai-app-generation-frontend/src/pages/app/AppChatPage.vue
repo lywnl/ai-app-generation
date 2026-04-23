@@ -151,7 +151,7 @@
                 :placeholder="getInputPlaceholder()"
                 :rows="4"
                 :maxlength="1000"
-                @keydown.enter.prevent="sendMessage"
+                @keydown="handleInputKeydown"
                 :disabled="isGenerating || !isOwner"
               />
             </a-tooltip>
@@ -161,9 +161,10 @@
               :placeholder="getInputPlaceholder()"
               :rows="4"
               :maxlength="1000"
-              @keydown.enter.prevent="sendMessage"
+              @keydown="handleInputKeydown"
               :disabled="isGenerating"
             />
+            <div class="input-shortcut-hint">Enter 发送，Shift + Enter 换行</div>
             <div class="input-actions">
               <a-button
                 type="primary"
@@ -901,6 +902,17 @@ const getInputPlaceholder = () => {
   return '请描述你想生成的网站，越详细效果越好哦'
 }
 
+const handleInputKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Enter') {
+    return
+  }
+  if (event.shiftKey) {
+    return
+  }
+  event.preventDefault()
+  sendMessage()
+}
+
 const handleIframeMessage = (event: MessageEvent) => {
   visualEditor.handleIframeMessage(event)
 }
@@ -1315,5 +1327,138 @@ onUnmounted(() => {
 .tool-call-code.new {
   background: #0f2a1a;
   color: #bbf7d0;
+}
+
+/* Meituan-like visual overrides */
+#appChatPage {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255, 152, 63, 0.16) 0%, transparent 30%),
+    #f8f6f2;
+}
+
+.header-bar {
+  background: linear-gradient(135deg, #fffaf2 0%, #ffffff 100%);
+  border: 1px solid #f4e4cd;
+  border-radius: 16px;
+  box-shadow: 0 8px 18px rgba(52, 39, 21, 0.06);
+}
+
+.app-name {
+  color: #2f2a20;
+}
+
+.main-content {
+  padding: 10px 0 0;
+  gap: 14px;
+}
+
+.chat-section,
+.preview-section {
+  border: 1px solid #f2e8da;
+  border-radius: 16px;
+  box-shadow: 0 10px 20px rgba(47, 35, 18, 0.07);
+}
+
+.messages-container {
+  background: linear-gradient(180deg, #fffefc 0%, #fff8f0 100%);
+}
+
+.message-content {
+  border-radius: 14px;
+}
+
+.user-message .message-content {
+  background: linear-gradient(135deg, #ff8f1f 0%, #ff6a00 100%);
+}
+
+.ai-message .message-content {
+  background: #fff;
+  border: 1px solid #f2e6d5;
+  color: #3a352d;
+}
+
+.input-container {
+  background: #fff;
+  border-top: 1px solid #f2e8da;
+}
+
+.input-wrapper .ant-input {
+  border-radius: 12px;
+  border-color: #f2dfc5;
+  background: #fffdf9;
+}
+
+.input-wrapper .ant-input:focus {
+  border-color: #ffb36e;
+  box-shadow: 0 0 0 3px rgba(255, 126, 22, 0.14);
+}
+
+.input-shortcut-hint {
+  position: absolute;
+  left: 10px;
+  bottom: 12px;
+  font-size: 12px;
+  color: #8a816f;
+}
+
+.input-actions {
+  right: 10px;
+  bottom: 10px;
+}
+
+.input-actions :deep(.ant-btn-primary) {
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #ff8f1f 0%, #ff6a00 100%);
+  box-shadow: 0 8px 16px rgba(255, 106, 0, 0.24);
+}
+
+.preview-header {
+  border-bottom: 1px solid #f2e8da;
+  background: #fffaf3;
+}
+
+.preview-header h3 {
+  color: #3b3428;
+}
+
+.preview-placeholder,
+.preview-loading {
+  color: #7e7566;
+}
+
+.placeholder-icon {
+  width: 68px;
+  height: 68px;
+  border-radius: 999px;
+  background: #fff0dd;
+  color: #de6500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.tool-call-card {
+  border-radius: 10px;
+  border-color: #f0dfc9;
+  background: #fff;
+}
+
+.tool-call-name {
+  color: #dc6200;
+}
+
+@media (max-width: 768px) {
+  .header-bar {
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+
+  .chat-section,
+  .preview-section {
+    border-radius: 12px;
+  }
 }
 </style>
