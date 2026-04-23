@@ -210,13 +210,13 @@
             <div class="placeholder-icon">🌐</div>
             <p>网站文件生成完成后将在这里展示</p>
           </div>
-          <div v-else-if="isGenerating" class="preview-loading">
-            <a-spin size="large" />
-            <p>正在生成网站...</p>
-          </div>
           <div v-else-if="isBuildingVue" class="preview-loading">
             <a-spin size="large" />
             <p>正在构建 Vue 项目，可能需要几秒钟...</p>
+          </div>
+          <div v-else-if="isGenerating" class="preview-loading">
+            <a-spin size="large" />
+            <p>正在生成网站...</p>
           </div>
           <iframe
             v-else
@@ -522,8 +522,9 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   }
   const aiMessage = messages.value[idx]
   aiMessage.content = snapshot.content
-  aiMessage.loading = snapshot.loading
   aiMessage.toolCalls = new Map(snapshot.toolCalls)
+  const hasAnyOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
+  aiMessage.loading = !hasAnyOutput && snapshot.loading
   isGenerating.value = snapshot.status === 'streaming'
 }
 
@@ -723,6 +724,7 @@ const waitForVueBuild = async () => {
 
 // 流式生成收尾:Vue 走轮询探测,其他类型直接刷预览
 const finalizeGeneration = async () => {
+  isGenerating.value = false
   await fetchAppInfo()
   const codeGenType = appInfo.value?.codeGenType
   if (codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
@@ -738,7 +740,6 @@ const finalizeGeneration = async () => {
   sessionMessageIndex.value = null
   detachSession.value?.()
   detachSession.value = null
-  isGenerating.value = false
 }
 
 // 滚动到底部
