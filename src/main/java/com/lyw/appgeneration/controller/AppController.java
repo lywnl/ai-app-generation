@@ -32,7 +32,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.io.File;
 import java.time.LocalDateTime;
@@ -113,12 +112,24 @@ public class AppController {
                             .data(jsonData)
                             .build();
                 })
-                .concatWith(Mono.just(
-                        // 发送结束事件
-                        ServerSentEvent.<String>builder()
-                                .event("done")
-                                .data("")
-                                .build()));
+                .onErrorResume(ex -> {
+                    Map<String, Object> errorData = Map.of(
+                            "error", true,
+                            "code", ErrorCode.SYSTEM_ERROR.getCode(),
+                            "message", ex.getMessage() == null ? "系统错误" : ex.getMessage()
+                    );
+                    String errorJson = JSONUtil.toJsonStr(errorData);
+                    return Flux.just(
+                            ServerSentEvent.<String>builder()
+                                    .event("business-error")
+                                    .data(errorJson)
+                                    .build(),
+                            ServerSentEvent.<String>builder()
+                                    .event("done")
+                                    .data("")
+                                    .build()
+                    );
+                });
     }
 
     /**

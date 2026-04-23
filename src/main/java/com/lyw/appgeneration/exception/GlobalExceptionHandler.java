@@ -59,11 +59,18 @@ public class GlobalExceptionHandler {
         }
         HttpServletRequest request = attributes.getRequest();
         HttpServletResponse response = attributes.getResponse();
+        if (response == null) {
+            return false;
+        }
         // 判断是否是SSE请求（通过Accept头或URL路径）
         String accept = request.getHeader("Accept");
         String uri = request.getRequestURI();
         if ((accept != null && accept.contains("text/event-stream")) ||
                 uri.contains("/chat/gen/code")) {
+            if (response.isCommitted()) {
+                log.warn("SSE response already committed, skip writing error event");
+                return true;
+            }
             try {
                 // 设置SSE响应头
                 response.setContentType("text/event-stream");
@@ -85,6 +92,10 @@ public class GlobalExceptionHandler {
                 response.getWriter().write("event: done\ndata: {}\n\n");
                 response.getWriter().flush();
                 // 表示已处理SSE请求
+                return true;
+            } catch (IllegalStateException stateException) {
+                // getOutputStream/getWriter 冲突时不再二次抛错，避免级联异常
+                log.warn("Failed to write SSE error response due to committed stream: {}", stateException.getMessage());
                 return true;
             } catch (IOException ioException) {
                 log.error("Failed to write SSE error response", ioException);
