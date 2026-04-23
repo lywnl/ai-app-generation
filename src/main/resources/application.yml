@@ -34,9 +34,9 @@ spring:
 langchain4j:
   open-ai:
     chat-model:
-      base-url: https://api.deepseek.com
-      api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-chat
+      base-url: https://open.bigmodel.cn/api/paas/v4
+      api-key: ${GLM_KEY}
+      model-name: glm-5.1
       log-requests: true
       log-responses: true
       max-tokens: 8192
@@ -44,18 +44,18 @@ langchain4j:
  #     response-format: json_object #json格式输出
       max-retries: 2
     streaming-chat-model:
-      base-url: https://api.deepseek.com
-      api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-chat
+      base-url: https://open.bigmodel.cn/api/paas/v4
+      api-key: ${GLM_KEY}
+      model-name: glm-5.1
       max-tokens: 8192
       log-requests: true
       log-responses: true
     # 推理 AI 模型配置（用于复杂的推理任务）
     reasoning-streaming-chat-model:
-      base-url: https://api.deepseek.com
-      api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-chat
-      max-tokens: 8192
+      base-url: https://open.bigmodel.cn/api/paas/v4
+      api-key: ${GLM_KEY}
+      model-name: glm-5.1
+      max-tokens: 32768
       temperature: 0.1
       log-requests: true
       log-responses: true
