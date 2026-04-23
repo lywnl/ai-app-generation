@@ -261,7 +261,7 @@ import { listAppChatHistory } from '@/api/chatHistoryController'
 import { CodeGenTypeEnum, formatCodeGenType } from '@/utils/codeGenTypes'
 import request from '@/request'
 import {
-  type ToolArgView,
+  type ToolCallView,
   type GenerationSessionSnapshot,
   startGenerationSession,
   subscribeGenerationSession,
@@ -331,7 +331,7 @@ interface Message {
   loading?: boolean
   createTime?: string
   /** tool call id → 当前调用参数视图;保持插入顺序用 Map */
-  toolCalls?: Map<string, ToolArgView>
+  toolCalls?: Map<string, ToolCallView>
 }
 
 const messages = ref<Message[]>([])
