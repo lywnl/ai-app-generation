@@ -104,8 +104,7 @@ public class WebScreenshotUtils {
      */
     private static WebDriver initChromeDriver(int width, int height) {
         try {
-            // 自动管理 ChromeDriver
-            WebDriverManager.chromedriver().setup();
+            configureChromeDriver();
             // 创建驱动
             WebDriver driver = getWebDriver(width, height);
             // 设置页面加载超时
@@ -119,10 +118,32 @@ public class WebScreenshotUtils {
         }
     }
 
+    private static void configureChromeDriver() {
+        String explicitDriverPath = System.getenv("WEBDRIVER_CHROME_DRIVER");
+        if (StrUtil.isNotBlank(explicitDriverPath) && new File(explicitDriverPath).exists()) {
+            System.setProperty("webdriver.chrome.driver", explicitDriverPath);
+            return;
+        }
+        String defaultLinuxDriverPath = "/usr/bin/chromedriver";
+        if (new File(defaultLinuxDriverPath).exists()) {
+            System.setProperty("webdriver.chrome.driver", defaultLinuxDriverPath);
+            return;
+        }
+        // 兜底：本地不存在驱动时才回退到在线下载
+        WebDriverManager.chromedriver().setup();
+    }
+
     private static @NonNull WebDriver getWebDriver(int width, int height) {
         ChromeOptions options = new ChromeOptions();
+        String chromeBin = System.getenv("CHROME_BIN");
+        if (StrUtil.isBlank(chromeBin) && new File("/usr/bin/chromium").exists()) {
+            chromeBin = "/usr/bin/chromium";
+        }
+        if (StrUtil.isNotBlank(chromeBin)) {
+            options.setBinary(chromeBin);
+        }
         // 无头模式
-        options.addArguments("--headless");
+        options.addArguments("--headless=new");
         // 禁用 GPU（在某些环境下避免问题）
         options.addArguments("--disable-gpu");
         // 禁用沙箱模式（Docker 环境常见）

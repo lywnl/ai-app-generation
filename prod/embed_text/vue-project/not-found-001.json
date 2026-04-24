@@ -1,0 +1,12 @@
+{
+  "id": "vue-404-page-001",
+  "type": "vue-project",
+  "category": "error",
+  "style": ["minimal", "playful"],
+  "tech": ["vue3", "composition-api", "element-plus"],
+  "title": "Vue3 404 错误页(大号错误提示 + 返回首页 CTA)",
+  "embedText": "Vue3 404 页面 not found 找不到页面 错误页 error page 返回首页 页面不存在 迷路了 路由兜底 NotFound",
+  "description": "路由兜底 404 页面,居中展示超大 404 数字、友好错误提示、返回首页按钮,配合可爱的小插画增加亲和力",
+  "files": [{"path": "src/views/NotFound.vue", "content": "<template>\n  <div class=\"wrap\">\n    <div class=\"emoji\">🙈</div>\n    <div class=\"num\">404</div>\n    <h2>页面走丢了</h2>\n    <p>你访问的页面可能已被移除、名称已更改,或暂时不可用。</p>\n    <div class=\"btns\">\n      <el-button type=\"primary\" size=\"large\" @click=\"goHome\">返回首页</el-button>\n      <el-button size=\"large\" @click=\"goBack\">返回上一页</el-button>\n    </div>\n  </div>\n</template>\n\n<script setup>\nimport { useRouter } from 'vue-router'\nconst router = useRouter()\nfunction goHome() { router.push('/') }\nfunction goBack() { router.back() }\n</script>\n\n<style scoped>\n.wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; background: linear-gradient(135deg, #fef3c7, #fde68a); text-align: center; }\n.emoji { font-size: 72px; margin-bottom: 12px; animation: float 3s ease-in-out infinite; }\n@keyframes float { 50% { transform: translateY(-12px); } }\n.num { font-size: clamp(6rem, 20vw, 12rem); font-weight: 900; color: #78350f; line-height: 1; margin-bottom: 8px; letter-spacing: -4px; }\nh2 { color: #78350f; margin-bottom: 8px; }\np { color: #92400e; margin-bottom: 32px; max-width: 480px; line-height: 1.6; }\n.btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }\n</style>"}],
+  "qualityScore": 0.90
+}

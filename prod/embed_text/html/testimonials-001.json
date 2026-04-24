@@ -1,0 +1,12 @@
+{
+  "id": "html-testimonials-001",
+  "type": "html",
+  "category": "landing",
+  "style": ["minimal", "corporate"],
+  "tech": ["html5", "css3"],
+  "title": "用户评价推荐区(头像 + 姓名职位 + 评语 + 5 星评分)",
+  "embedText": "用户评价 客户推荐 证言 好评 testimonials 头像 姓名 职位 5 星评分 引号 社会证明 信任 landing 用户故事",
+  "description": "landing 页的社交证明模块,3 张用户评价卡片并排,每张含头像、姓名、职位、评语、5 星评分,用引号装饰增加仪式感",
+  "files": [{"path": "index.html", "content": "<section class=\"test\"><h2>用户怎么说</h2><p class=\"sub\">来自真实客户的反馈,让我们不断前进</p><div class=\"grid\"><div class=\"card\"><div class=\"stars\">★★★★★</div><p class=\"quote\">使用这款产品后,团队协作效率提升了 3 倍,项目交付时间从周级别缩短到天级别,是我们今年最值的投资。</p><div class=\"author\"><img src=\"https://i.pravatar.cc/60?img=1\" alt=\"\"><div><div class=\"name\">张伟</div><div class=\"title\">CEO · 某科技公司</div></div></div></div><div class=\"card\"><div class=\"stars\">★★★★★</div><p class=\"quote\">界面简洁,学习成本极低,团队新人 1 天就能上手。客服响应也非常及时,强烈推荐给所有中小型团队。</p><div class=\"author\"><img src=\"https://i.pravatar.cc/60?img=5\" alt=\"\"><div><div class=\"name\">李娜</div><div class=\"title\">产品经理 · 某互联网公司</div></div></div></div><div class=\"card\"><div class=\"stars\">★★★★★</div><p class=\"quote\">集成了我们已有的工作流,无需重新培训。API 文档完整清晰,半天就完成了对接,非常省心。</p><div class=\"author\"><img src=\"https://i.pravatar.cc/60?img=8\" alt=\"\"><div><div class=\"name\">王强</div><div class=\"title\">技术总监 · 某金融公司</div></div></div></div></div></section><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#f8fafc;padding:80px 20px;color:#0f172a}.test{max-width:1200px;margin:0 auto;text-align:center}h2{font-size:2.25rem;margin-bottom:12px}.sub{color:#64748b;margin-bottom:48px;font-size:17px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px;text-align:left}.card{background:#fff;border-radius:16px;padding:32px;position:relative;transition:transform .2s,box-shadow .2s}.card::before{content:'❝';position:absolute;top:-10px;left:24px;font-size:60px;color:#6366f1;opacity:.25;font-family:Georgia}.card:hover{transform:translateY(-4px);box-shadow:0 12px 32px rgba(0,0,0,.08)}.stars{color:#fbbf24;margin-bottom:16px;font-size:18px;letter-spacing:2px}.quote{color:#334155;line-height:1.7;margin-bottom:24px;min-height:84px}.author{display:flex;align-items:center;gap:12px}.author img{width:48px;height:48px;border-radius:50%;object-fit:cover}.name{font-weight:600;color:#0f172a}.title{color:#64748b;font-size:13px;margin-top:2px}</style>"}],
+  "qualityScore": 0.92
+}

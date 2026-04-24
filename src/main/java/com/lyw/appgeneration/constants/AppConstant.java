@@ -25,7 +25,10 @@ public interface AppConstant {
     /**
      * 应用部署域名
      */
-    String CODE_DEPLOY_HOST = "http://localhost:90";
+    String CODE_DEPLOY_HOST = System.getProperty(
+            "app.code.deploy.host",
+            System.getenv().getOrDefault("APP_CODE_DEPLOY_HOST", "http://localhost:100")
+    );
 
 }
 

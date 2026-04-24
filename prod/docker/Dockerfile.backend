@@ -1,0 +1,51 @@
+FROM node:22-bullseye-slim AS node22
+
+FROM eclipse-temurin:latest
+WORKDIR /app
+
+ARG APT_MIRROR=http://mirrors.aliyun.com/ubuntu/
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
+RUN set -eux; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    . /etc/os-release; \
+    if [ "${ID}" = "ubuntu" ]; then \
+      printf "Types: deb\nURIs: %s\nSuites: %s %s-updates %s-backports\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n\nTypes: deb\nURIs: %s\nSuites: %s-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n" "${APT_MIRROR}" "${VERSION_CODENAME}" "${VERSION_CODENAME}" "${VERSION_CODENAME}" "${APT_MIRROR}" "${VERSION_CODENAME}" > /etc/apt/sources.list.d/ubuntu.sources; \
+    fi; \
+    apt_install_with_retry() { \
+      for i in 1 2 3 4 5; do \
+        if apt-get update && apt-get install -y --no-install-recommends "$@"; then \
+          return 0; \
+        fi; \
+        echo "apt install failed (attempt ${i}), retrying..." >&2; \
+        sleep 5; \
+      done; \
+      return 1; \
+    }; \
+    apt_install_with_retry \
+      curl \
+      wget \
+      ca-certificates \
+      fonts-noto-cjk \
+      tzdata; \
+    if ! apt_install_with_retry chromium chromium-driver; then \
+      apt_install_with_retry chromium-browser chromium-chromedriver; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
+# 复制整套 Node 运行时，避免 npm/npx 符号链接断裂
+COPY --from=node22 /usr/local/ /usr/local/
+
+ENV TZ=Asia/Shanghai
+ENV CHROME_BIN=/usr/bin/chromium
+ENV WEBDRIVER_CHROME_DRIVER=/usr/bin/chromedriver
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+RUN npm config set registry ${NPM_REGISTRY} \
+    && npm install -g @mermaid-js/mermaid-cli
+
+COPY artifacts/backend/app.jar /app/app.jar
+
+EXPOSE 9025
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
