@@ -20,6 +20,9 @@ public class RedissonConfig {
     @Value("${spring.data.redis.password}")
     private String redisPassword;
 
+    @Value("${spring.data.redis.username:${spring.data.redis.user:}}")
+    private String redisUsername;
+
     @Value("${spring.data.redis.database}")
     private Integer redisDatabase;
 
@@ -40,6 +43,9 @@ public class RedissonConfig {
         // 如果有密码则设置密码
         if (redisPassword != null && !redisPassword.isEmpty()) {
             singleServerConfig.setPassword(redisPassword);
+        }
+        if (redisUsername != null && !redisUsername.isEmpty()) {
+            singleServerConfig.setUsername(redisUsername);
         }
         return Redisson.create(config);
     }
