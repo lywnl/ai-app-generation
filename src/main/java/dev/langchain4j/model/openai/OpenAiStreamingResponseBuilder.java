@@ -3,6 +3,7 @@ package dev.langchain4j.model.openai;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.internal.ToolArgumentsJsonNormalizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.openai.internal.chat.*;
 import dev.langchain4j.model.openai.internal.completion.CompletionChoice;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Comparator;
 
 import static dev.langchain4j.internal.Utils.isNullOrBlank;
 import static dev.langchain4j.internal.Utils.isNullOrEmpty;
@@ -110,13 +112,11 @@ public class OpenAiStreamingResponseBuilder {
         }
 
         if (delta.toolCalls() != null) {
-            System.out.println("OLOLO " + delta.toolCalls()); // TODO
-
             for (ToolCall toolCall : delta.toolCalls()) {
 
                 ToolExecutionRequestBuilder builder = this.indexToToolExecutionRequestBuilder.computeIfAbsent(
                         toolCall.index(),
-                        idx -> new ToolExecutionRequestBuilder()
+                        ToolExecutionRequestBuilder::new
                 );
 
                 if (toolCall.id() != null) {
@@ -182,9 +182,10 @@ public class OpenAiStreamingResponseBuilder {
 
         String toolName = toolNameBuilder.toString();
         if (!toolName.isEmpty()) {
+            String normalizedArguments = normalizeToolArguments(toolArgumentsBuilder.toString());
             ToolExecutionRequest toolExecutionRequest = ToolExecutionRequest.builder()
                     .name(toolName)
-                    .arguments(toolArgumentsBuilder.toString())
+                    .arguments(normalizedArguments)
                     .build();
 
             AiMessage aiMessage = isNullOrBlank(text) ?
@@ -199,10 +200,11 @@ public class OpenAiStreamingResponseBuilder {
 
         if (!indexToToolExecutionRequestBuilder.isEmpty()) {
             List<ToolExecutionRequest> toolExecutionRequests = indexToToolExecutionRequestBuilder.values().stream()
+                    .sorted(Comparator.comparingInt(it -> it.index))
                     .map(it -> ToolExecutionRequest.builder()
                             .id(it.idBuilder.toString())
                             .name(it.nameBuilder.toString())
-                            .arguments(it.argumentsBuilder.toString())
+                            .arguments(normalizeToolArguments(it.argumentsBuilder.toString()))
                             .build())
                     .collect(toList());
 
@@ -229,8 +231,18 @@ public class OpenAiStreamingResponseBuilder {
 
     private static class ToolExecutionRequestBuilder {
 
+        private final int index;
         private final StringBuffer idBuilder = new StringBuffer();
         private final StringBuffer nameBuilder = new StringBuffer();
         private final StringBuffer argumentsBuilder = new StringBuffer();
+
+        private ToolExecutionRequestBuilder(int index) {
+            this.index = index;
+        }
+    }
+
+    private static String normalizeToolArguments(String rawArguments) {
+        ToolArgumentsJsonNormalizer.Result normalized = ToolArgumentsJsonNormalizer.normalize(rawArguments);
+        return normalized.isValid() ? normalized.normalizedArguments() : rawArguments;
     }
 }

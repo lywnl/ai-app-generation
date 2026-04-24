@@ -9,6 +9,7 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.guardrail.ChatExecutor;
 import dev.langchain4j.guardrail.GuardrailRequestParams;
 import dev.langchain4j.guardrail.OutputGuardrailRequest;
+import dev.langchain4j.internal.ToolArgumentsJsonNormalizer;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -118,22 +119,42 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
         if (aiMessage.hasToolExecutionRequests()) {
             for (ToolExecutionRequest toolExecutionRequest : aiMessage.toolExecutionRequests()) {
-                String toolName = toolExecutionRequest.name();
+                ToolExecutionRequest normalizedRequest = normalizeToolExecutionRequest(toolExecutionRequest);
+                if (normalizedRequest == null) {
+                    continue;
+                }
+                String toolName = normalizedRequest.name();
                 ToolExecutor toolExecutor = toolExecutors.get(toolName);
+                if (toolExecutor == null) {
+                    LOG.warn("Tool executor not found, skip tool call: name={}, id={}", toolName, normalizedRequest.id());
+                    ToolExecutionResultMessage skippedMessage = ToolExecutionResultMessage.from(
+                            normalizedRequest,
+                            String.format("Skipped tool '%s' because no executor is registered", toolName)
+                    );
+                    addToMemory(skippedMessage);
+                    continue;
+                }
                 String toolExecutionResult;
                 try {
-                    toolExecutionResult = toolExecutor.execute(toolExecutionRequest, memoryId);
+                    toolExecutionResult = toolExecutor.execute(normalizedRequest, memoryId);
                 } catch (RuntimeException e) {
-                    onError(e);
-                    return;
+                    LOG.warn("Tool execution failed, skip this tool and continue: name={}, id={}",
+                            normalizedRequest.name(), normalizedRequest.id(), e);
+                    ToolExecutionResultMessage skippedMessage = ToolExecutionResultMessage.from(
+                            normalizedRequest,
+                            String.format("Skipped tool '%s' due to execution error: %s",
+                                    normalizedRequest.name(), e.getMessage())
+                    );
+                    addToMemory(skippedMessage);
+                    continue;
                 }
                 ToolExecutionResultMessage toolExecutionResultMessage =
-                        ToolExecutionResultMessage.from(toolExecutionRequest, toolExecutionResult);
+                        ToolExecutionResultMessage.from(normalizedRequest, toolExecutionResult);
                 addToMemory(toolExecutionResultMessage);
 
                 if (toolExecutionHandler != null) {
                     ToolExecution toolExecution = ToolExecution.builder()
-                            .request(toolExecutionRequest)
+                            .request(normalizedRequest)
                             .result(toolExecutionResult)
                             .build();
                     toolExecutionHandler.accept(toolExecution);
@@ -233,5 +254,29 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         } else {
             LOG.warn("Ignored error", error);
         }
+    }
+
+    private ToolExecutionRequest normalizeToolExecutionRequest(ToolExecutionRequest request) {
+        ToolArgumentsJsonNormalizer.Result normalized = ToolArgumentsJsonNormalizer.normalize(request.arguments());
+        if (!normalized.isValid()) {
+            LOG.warn("Skip malformed tool arguments: id={}, name={}, reason={}",
+                    request.id(), request.name(), normalized.reason());
+            ToolExecutionResultMessage skippedMessage = ToolExecutionResultMessage.from(
+                    request,
+                    String.format("Skipped tool '%s' due to malformed JSON arguments",
+                            request.name())
+            );
+            addToMemory(skippedMessage);
+            return null;
+        }
+        if (normalized.repaired()) {
+            LOG.info("Repaired malformed tool arguments before execution: id={}, name={}, reason={}",
+                    request.id(), request.name(), normalized.reason());
+        }
+        return ToolExecutionRequest.builder()
+                .id(request.id())
+                .name(request.name())
+                .arguments(normalized.normalizedArguments())
+                .build();
     }
 }
