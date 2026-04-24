@@ -26,6 +26,17 @@ public class WebScreenshotUtils {
 
     private static final int DEFAULT_WIDTH = 1600;
     private static final int DEFAULT_HEIGHT = 900;
+    private static final String[] CHROME_BINARY_CANDIDATES = {
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable"
+    };
+    private static final String[] CHROME_DRIVER_CANDIDATES = {
+            "/usr/bin/chromedriver",
+            "/usr/lib/chromium/chromedriver",
+            "/usr/bin/chromium-chromedriver"
+    };
     private static final ThreadLocal<WebDriver> DRIVER_LOCAL = new ThreadLocal<>();
 
     private static WebDriver currentDriver() {
@@ -53,6 +64,7 @@ public class WebScreenshotUtils {
     static void main() {
 
     }
+
     /**
      * 生成网页截图
      *
@@ -66,29 +78,20 @@ public class WebScreenshotUtils {
         }
         WebDriver driver = currentDriver();
         try {
-            // 创建临时目录
             String rootPath = System.getProperty("user.dir") + File.separator + "tmp" + File.separator + "screenshots"
                     + File.separator + UUID.randomUUID().toString().substring(0, 8);
             FileUtil.mkdir(rootPath);
-            // 图片后缀
             final String imageSuffix = ".png";
-            // 原始截图文件路径
             String imageSavePath = rootPath + File.separator + RandomUtil.randomNumbers(5) + imageSuffix;
-            // 访问网页
             driver.get(webUrl);
-            // 等待页面加载完成
             waitForPageLoad(driver);
-            // 截图
             byte[] screenshotBytes = ((TakesScreenshot) driver).getScreenshotAs(OutputType.BYTES);
-            // 保存原始图片
             saveImage(screenshotBytes, imageSavePath);
             log.info("原始截图保存成功: {}", imageSavePath);
-            // 压缩图片
             final String compressionSuffix = "_compressed.jpg";
             String compressedImagePath = rootPath + File.separator + RandomUtil.randomNumbers(5) + compressionSuffix;
             compressImage(imageSavePath, compressedImagePath);
             log.info("压缩图片保存成功: {}", compressedImagePath);
-            // 删除原始图片，只保留压缩图片
             FileUtil.del(imageSavePath);
             return compressedImagePath;
         } catch (Exception e) {
@@ -105,11 +108,8 @@ public class WebScreenshotUtils {
     private static WebDriver initChromeDriver(int width, int height) {
         try {
             configureChromeDriver();
-            // 创建驱动
             WebDriver driver = getWebDriver(width, height);
-            // 设置页面加载超时
             driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(30));
-            // 设置隐式等待
             driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(10));
             return driver;
         } catch (Exception e) {
@@ -119,45 +119,53 @@ public class WebScreenshotUtils {
     }
 
     private static void configureChromeDriver() {
-        String explicitDriverPath = System.getenv("WEBDRIVER_CHROME_DRIVER");
-        if (StrUtil.isNotBlank(explicitDriverPath) && new File(explicitDriverPath).exists()) {
-            System.setProperty("webdriver.chrome.driver", explicitDriverPath);
+        String driverPath = resolveExecutablePath(System.getenv("WEBDRIVER_CHROME_DRIVER"), CHROME_DRIVER_CANDIDATES);
+        if (StrUtil.isNotBlank(driverPath)) {
+            System.setProperty("webdriver.chrome.driver", driverPath);
+            log.info("ChromeDriver 路径: {}", driverPath);
+            System.setProperty("webdriver.chrome.logfile", "/app/tmp/chromedriver.log");
+            System.setProperty("webdriver.chrome.verboseLogging", "true");
             return;
         }
-        String defaultLinuxDriverPath = "/usr/bin/chromedriver";
-        if (new File(defaultLinuxDriverPath).exists()) {
-            System.setProperty("webdriver.chrome.driver", defaultLinuxDriverPath);
-            return;
-        }
-        // 兜底：本地不存在驱动时才回退到在线下载
+        log.warn("未检测到本地 ChromeDriver，回退到 WebDriverManager 自动下载");
         WebDriverManager.chromedriver().setup();
     }
 
     private static @NonNull WebDriver getWebDriver(int width, int height) {
         ChromeOptions options = new ChromeOptions();
-        String chromeBin = System.getenv("CHROME_BIN");
-        if (StrUtil.isBlank(chromeBin) && new File("/usr/bin/chromium").exists()) {
-            chromeBin = "/usr/bin/chromium";
-        }
+        String chromeBin = resolveExecutablePath(System.getenv("CHROME_BIN"), CHROME_BINARY_CANDIDATES);
         if (StrUtil.isNotBlank(chromeBin)) {
             options.setBinary(chromeBin);
+            log.info("Chrome binary 路径: {}", chromeBin);
+        } else {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "未检测到 Chrome 可执行文件，请检查 CHROME_BIN 或镜像安装");
         }
-        // 无头模式
-        options.addArguments("--headless=new");
-        // 禁用 GPU（在某些环境下避免问题）
+        options.addArguments("--headless");
         options.addArguments("--disable-gpu");
-        // 禁用沙箱模式（Docker 环境常见）
         options.addArguments("--no-sandbox");
-        // 禁用 /dev/shm 使用
+        options.addArguments("--disable-setuid-sandbox");
         options.addArguments("--disable-dev-shm-usage");
-        // 设置窗口大小
+        options.addArguments("--remote-debugging-port=9222");
+        options.addArguments("--no-zygote");
         options.addArguments(String.format("--window-size=%d,%d", width, height));
-        // 禁用扩展
         options.addArguments("--disable-extensions");
-        // 设置用户代理
         options.addArguments("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-        // 创建驱动
         return new ChromeDriver(options);
+    }
+
+    static String resolveExecutablePath(String explicitPath, String... candidatePaths) {
+        if (StrUtil.isNotBlank(explicitPath)) {
+            if (new File(explicitPath).exists()) {
+                return explicitPath;
+            }
+            log.warn("指定可执行文件不存在: {}", explicitPath);
+        }
+        for (String candidatePath : candidatePaths) {
+            if (new File(candidatePath).exists()) {
+                return candidatePath;
+            }
+        }
+        return null;
     }
 
     /**
@@ -177,11 +185,8 @@ public class WebScreenshotUtils {
      */
     private static void waitForPageLoad(WebDriver driver) {
         try {
-            // 创建等待对象
             WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
-            // 等待 document.readyState 为 complete
             wait.until(d -> ((JavascriptExecutor) d).executeScript("return document.readyState").equals("complete"));
-            // 额外等待一段时间，确保动态内容加载完成
             Thread.sleep(2000);
             log.info("页面加载完成");
         } catch (Exception e) {
@@ -193,7 +198,6 @@ public class WebScreenshotUtils {
      * 压缩图片
      */
     private static void compressImage(String originalImagePath, String compressedImagePath) {
-        // 压缩图片质量，0.3 = 30% 质量
         final float compressionQuality = 0.3f;
         try {
             ImgUtil.compress(

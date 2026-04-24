@@ -57,7 +57,7 @@ services:
       TEN_SERCET_ID: ${TEN_SERCET_ID}
       TEN_SECRET_KEY: ${TEN_SECRET_KEY}
       PEXELS_API_KEY: ${PEXELS_API_KEY}
-      CHROME_BIN: /usr/bin/chromium
+      CHROME_BIN: /usr/bin/google-chrome
       WEBDRIVER_CHROME_DRIVER: /usr/bin/chromedriver
     ports:
       - "${BACKEND_HOST_PORT}:9025"

@@ -8,10 +8,6 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 RUN set -eux; \
     export DEBIAN_FRONTEND=noninteractive; \
-    . /etc/os-release; \
-    if [ "${ID}" = "ubuntu" ]; then \
-      printf "Types: deb\nURIs: %s\nSuites: %s %s-updates %s-backports\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n\nTypes: deb\nURIs: %s\nSuites: %s-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n" "${APT_MIRROR}" "${VERSION_CODENAME}" "${VERSION_CODENAME}" "${VERSION_CODENAME}" "${APT_MIRROR}" "${VERSION_CODENAME}" > /etc/apt/sources.list.d/ubuntu.sources; \
-    fi; \
     apt_install_with_retry() { \
       for i in 1 2 3 4 5; do \
         if apt-get update && apt-get install -y --no-install-recommends "$@"; then \
@@ -25,22 +21,35 @@ RUN set -eux; \
     apt_install_with_retry \
       curl \
       wget \
+      gnupg \
+      unzip \
       ca-certificates \
       fonts-noto-cjk \
       tzdata; \
-    if ! apt_install_with_retry chromium chromium-driver; then \
-      apt_install_with_retry chromium-browser chromium-chromedriver; \
-    fi; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg; \
+    chmod a+r /etc/apt/keyrings/google-linux.gpg; \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-linux.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends google-chrome-stable; \
+    CHROME_VERSION="$(google-chrome --version | awk '{print $3}')"; \
+    CHROME_MAJOR="${CHROME_VERSION%%.*}"; \
+    DRIVER_VERSION="$(curl -fsSL "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${CHROME_MAJOR}")"; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${DRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/chromedriver.zip; \
+    unzip -q /tmp/chromedriver.zip -d /tmp; \
+    install -m 0755 /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
+    ln -sf /usr/local/bin/chromedriver /usr/bin/chromedriver; \
+    rm -rf /tmp/chromedriver.zip /tmp/chromedriver-linux64; \
     rm -rf /var/lib/apt/lists/*
 
 # 复制整套 Node 运行时，避免 npm/npx 符号链接断裂
 COPY --from=node22 /usr/local/ /usr/local/
 
 ENV TZ=Asia/Shanghai
-ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROME_BIN=/usr/bin/google-chrome
 ENV WEBDRIVER_CHROME_DRIVER=/usr/bin/chromedriver
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
 RUN npm config set registry ${NPM_REGISTRY} \
     && npm install -g @mermaid-js/mermaid-cli
