@@ -17,6 +17,10 @@ spring:
     url: jdbc:mysql://127.0.0.1:3406/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: lyw666
+    hikari:
+      connection-timeout: 30000   # 从连接池获取连接的最大等待时间（毫秒）
+      max-lifetime: 1800000       # 连接在池中的最大存活时间（毫秒）
+      idle-timeout: 600000
   data:
     redis:
       host: localhost
