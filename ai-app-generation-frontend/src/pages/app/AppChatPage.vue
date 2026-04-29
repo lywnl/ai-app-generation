@@ -365,6 +365,7 @@ const previewReady = ref(false)
 // Vue 构建就绪探测:后端 npm install + build 是异步的,前端用 HEAD 轮询 dist/index.html 来判定完成
 const isBuildingVue = ref(false)
 let buildWaitTimer: ReturnType<typeof setTimeout> | null = null
+const currentGenerationStartedAt = ref<number | null>(null)
 
 // 部署相关
 const deploying = ref(false)
@@ -589,6 +590,7 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
   activeSessionAppId.value = targetAppId
   sessionMessageIndex.value = aiMessageIndex
   isGenerating.value = true
+  currentGenerationStartedAt.value = Date.now()
 
   startGenerationSession({
     appId: targetAppId,
@@ -702,19 +704,22 @@ const sendMessage = async () => {
 }
 
 // 更新预览
-const updatePreview = () => {
+const updatePreview = (forceReload = false) => {
   if (appId.value) {
     const codeGenType = appInfo.value?.codeGenType || CodeGenTypeEnum.HTML
-    const newPreviewUrl = getStaticPreviewUrl(codeGenType, appId.value)
+    const basePreviewUrl = getStaticPreviewUrl(codeGenType, appId.value)
+    const newPreviewUrl = forceReload
+      ? `${basePreviewUrl}${basePreviewUrl.includes('?') ? '&' : '?'}_t=${Date.now()}`
+      : basePreviewUrl
+    previewReady.value = false
     previewUrl.value = newPreviewUrl
-    previewReady.value = true
   }
 }
 
 // 等 Vue 项目构建就绪
 // 原子性依据:Vite 在所有 bundle 就绪后才写 dist/index.html,所以该文件存在 = 构建完成
 // 破缓存:StaticResourceController 未设 Cache-Control,一次 404 会被浏览器按启发式规则缓存
-const waitForVueBuild = async () => {
+const waitForVueBuild = async (sinceTimestamp?: number) => {
   if (!appId.value) return
   if (buildWaitTimer) {
     clearTimeout(buildWaitTimer)
@@ -734,8 +739,25 @@ const waitForVueBuild = async () => {
           cache: 'no-store',
         })
         if (resp.ok) {
-          updatePreview()
-          return
+          if (!sinceTimestamp) {
+            updatePreview(true)
+            return
+          }
+          const fileModifiedRaw = resp.headers.get('x-file-last-modified')
+          const fileModified = fileModifiedRaw ? Number(fileModifiedRaw) : NaN
+          if (Number.isFinite(fileModified)) {
+            if (fileModified >= sinceTimestamp) {
+              updatePreview(true)
+              return
+            }
+          } else {
+            const lastModifiedRaw = resp.headers.get('last-modified')
+            const lastModified = lastModifiedRaw ? Date.parse(lastModifiedRaw) : NaN
+            if (Number.isFinite(lastModified) && lastModified >= sinceTimestamp) {
+              updatePreview(true)
+              return
+            }
+          }
         }
       } catch {
         // 网络抖动/连接被中断,静默重试
@@ -757,15 +779,16 @@ const finalizeGeneration = async () => {
   await fetchAppInfo()
   const codeGenType = appInfo.value?.codeGenType
   if (codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
-    await waitForVueBuild()
+    await waitForVueBuild(currentGenerationStartedAt.value ?? undefined)
   } else {
-    updatePreview()
+    updatePreview(true)
   }
   const currentAppId = activeSessionAppId.value
   if (currentAppId) {
     clearGenerationSession(currentAppId)
   }
   activeSessionAppId.value = null
+  currentGenerationStartedAt.value = null
   sessionMessageIndex.value = null
   detachSession.value?.()
   detachSession.value = null
