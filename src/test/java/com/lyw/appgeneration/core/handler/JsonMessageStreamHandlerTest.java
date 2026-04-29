@@ -9,6 +9,7 @@ import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import org.junit.jupiter.api.Test;
@@ -108,5 +109,34 @@ class JsonMessageStreamHandlerTest {
         inOrder.verify(tokenStream).onPartialResponse(any());
         inOrder.verify(tokenStream).start();
         inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
+    }
+
+    @Test
+    void handle_shouldSkipPreBuildCheckWhenNotFirstDialogue() {
+        when(chatHistoryService.count(any(QueryWrapper.class))).thenReturn(1L);
+
+        User loginUser = User.builder().id(USER_ID).build();
+        List<String> output = handler.handle(
+                Flux.just("{\"type\":\"ai_response\",\"data\":\"ok\"}"),
+                chatHistoryService,
+                APP_ID,
+                loginUser
+        ).collectList().block();
+
+        assertEquals(List.of("ok"), output);
+
+        String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID;
+        verify(chatHistoryService).addChatMessage(
+                eq(APP_ID),
+                eq("ok"),
+                eq(ChatHistoryMessageTypeEnum.AI.getValue()),
+                eq(USER_ID)
+        );
+        verify(aiGeneratorServiceFactory, never())
+                .getAiCodeGeneratorService(anyLong(), any());
+        verify(aiCodeGeneratorService, never())
+                .generateVueProjectCodeStream(anyLong(), anyString());
+        verify(tokenStream, never()).start();
+        verify(vueProjectBuilder).buildProjectAsync(projectPath);
     }
 }

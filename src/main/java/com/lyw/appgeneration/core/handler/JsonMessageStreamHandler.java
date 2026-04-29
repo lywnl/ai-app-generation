@@ -15,6 +15,7 @@ import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import jakarta.annotation.Resource;
@@ -82,10 +83,15 @@ public class JsonMessageStreamHandler {
                 .filter(StrUtil::isNotEmpty)
                 .doOnComplete(() -> {
                     // 流式响应完成后，添加 AI 消息到对话历史
+                    boolean shouldRunPreBuildCheck = shouldRunPreBuildCheck(chatHistoryService, appId);
                     String aiResponse = chatHistoryStringBuilder.toString();
                     chatHistoryService.addChatMessage(appId, aiResponse, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
                     String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + appId;
-                    runVuePreBuildCheck(appId);
+                    if (shouldRunPreBuildCheck) {
+                        runVuePreBuildCheck(appId);
+                    } else {
+                        log.info("非首轮对话，跳过构建前代码自检: appId={}", appId);
+                    }
                     vueProjectBuilder.buildProjectAsync(projectPath);
                 })
                 .doOnError(error -> {
@@ -94,7 +100,15 @@ public class JsonMessageStreamHandler {
                     chatHistoryService.addChatMessage(appId, errorMessage, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
                 });
     }
-
+    /**
+     * 仅首轮 AI 回复时触发构建前代码自检。
+     */
+    private boolean shouldRunPreBuildCheck(ChatHistoryService chatHistoryService, long appId) {
+        QueryWrapper queryWrapper = QueryWrapper.create();
+        queryWrapper.eq("appId", appId);
+        queryWrapper.eq("messageType", ChatHistoryMessageTypeEnum.AI.getValue());
+        return chatHistoryService.count(queryWrapper) == 0;
+    }
     /**
      * 解析并收集 TokenStream 数据
      */
@@ -180,4 +194,5 @@ public class JsonMessageStreamHandler {
         }
     }
 }
+
 
