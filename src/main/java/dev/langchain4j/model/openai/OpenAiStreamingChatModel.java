@@ -20,6 +20,7 @@ import dev.langchain4j.model.openai.spi.OpenAiStreamingChatModelBuilderFactory;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static dev.langchain4j.internal.InternalStreamingChatResponseHandlerUtils.withLoggingExceptions;
@@ -35,6 +36,8 @@ import static java.time.Duration.ofSeconds;
  * You can find description of parameters <a href="https://platform.openai.com/docs/api-reference/chat/create">here</a>.
  */
 public class OpenAiStreamingChatModel implements StreamingChatModel {
+
+    private static final String DEEPSEEK_V4_FLASH_MODEL_KEYWORD = "deepseek-v4-flash";
 
     private final OpenAiClient client;
     private final OpenAiChatRequestParameters defaultRequestParameters;
@@ -110,9 +113,10 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
 
         OpenAiChatRequestParameters parameters = (OpenAiChatRequestParameters) chatRequest.parameters();
         validate(parameters);
+        OpenAiChatRequestParameters compatibleParameters = disableReasoningEffortForDeepSeekV4Flash(parameters);
 
         ChatCompletionRequest openAiRequest =
-                toOpenAiChatRequest(chatRequest, parameters, strictTools, strictJsonSchema)
+                toOpenAiChatRequest(chatRequest, compatibleParameters, strictTools, strictJsonSchema)
                         .stream(true)
                         .streamOptions(StreamOptions.builder()
                                 .includeUsage(true)
@@ -147,6 +151,27 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
                     withLoggingExceptions(() -> handler.onError(mappedException));
                 })
                 .execute();
+    }
+
+    static OpenAiChatRequestParameters disableReasoningEffortForDeepSeekV4Flash(OpenAiChatRequestParameters parameters) {
+        if (!shouldDisableReasoningEffort(parameters)) {
+            return parameters;
+        }
+        return OpenAiChatRequestParameters.builder()
+                .overrideWith(parameters)
+                .reasoningEffort(null)
+                .build();
+    }
+
+    private static boolean shouldDisableReasoningEffort(OpenAiChatRequestParameters parameters) {
+        if (parameters == null || isNullOrEmpty(parameters.reasoningEffort())) {
+            return false;
+        }
+        String modelName = parameters.modelName();
+        if (isNullOrEmpty(modelName)) {
+            return false;
+        }
+        return modelName.toLowerCase(Locale.ROOT).contains(DEEPSEEK_V4_FLASH_MODEL_KEYWORD);
     }
 
     private static void handle(ChatCompletionResponse partialResponse,
