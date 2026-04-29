@@ -106,6 +106,9 @@ public class JsonMessageStreamHandler {
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<Throwable> errorRef = new AtomicReference<>();
             tokenStream
+                    .onPartialResponse((String ignored) -> {
+                        // 自检阶段不透传文本到前端，但必须注册回调以满足 TokenStream 配置约束
+                    })
                     .onCompleteResponse((ChatResponse ignored) -> done.countDown())
                     .onError(error -> {
                         errorRef.set(error);

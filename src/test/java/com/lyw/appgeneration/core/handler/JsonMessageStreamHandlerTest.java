@@ -63,6 +63,7 @@ class JsonMessageStreamHandlerTest {
                 .thenReturn(aiCodeGeneratorService);
         when(aiCodeGeneratorService.generateVueProjectCodeStream(eq(APP_ID), anyString()))
                 .thenReturn(tokenStream);
+        when(tokenStream.onPartialResponse(any())).thenReturn(tokenStream);
         when(tokenStream.onCompleteResponse(any())).thenAnswer(invocation -> {
             onComplete.set((Consumer<ChatResponse>) invocation.getArgument(0));
             return tokenStream;
@@ -104,8 +105,8 @@ class JsonMessageStreamHandlerTest {
                 .getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         inOrder.verify(aiCodeGeneratorService)
                 .generateVueProjectCodeStream(eq(APP_ID), contains("构建前代码自检"));
+        inOrder.verify(tokenStream).onPartialResponse(any());
         inOrder.verify(tokenStream).start();
         inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
     }
 }
-
