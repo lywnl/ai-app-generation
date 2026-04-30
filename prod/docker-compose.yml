@@ -12,7 +12,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${NGINX_HOST_PORT}:100"
+      - "${NGINX_HOST_PORT}:80"
     volumes:
       - code_deploy_data:/opt/code_deploy:ro
     networks:

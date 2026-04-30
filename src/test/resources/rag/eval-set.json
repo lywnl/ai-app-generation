@@ -1,0 +1,147 @@
+{
+  "version": "v1.0",
+  "createdAt": "2026-04-30",
+  "templates": 30,
+  "totalQueries": 100,
+  "annotators": ["lyw", "machine-draft"],
+  "interAnnotatorAgreement": null,
+  "_说明": [
+    "本评估集为 100 条标注 Query,覆盖全部 30 个模板",
+    "每个模板分配 3 条(直白/同义/长描述各 1) + 10 条陷阱型/复合型",
+    "relevance: 2=完全相关 / 1=部分相关 / 0=不相关(用于陷阱标注)",
+    "type 合法值: html / multi_file / vue_project (与 CodeGenTypeEnum.value 一致)"
+  ],
+  "queries": [
+    {"queryId":"Q-001","query":"做一个落地页 Hero 区,要渐变背景和 CTA 按钮","type":"html","queryStyle":"直白型","relevance":{"html-landing-hero-001":2}},
+    {"queryId":"Q-002","query":"我想要个公司主页最上面那一屏","type":"html","queryStyle":"同义型","relevance":{"html-landing-hero-001":2,"html-navbar-sticky-001":1}},
+    {"queryId":"Q-003","query":"需要一个 SaaS 公司的首屏 hero,带主标题副标题、两个 CTA 按钮、科技感渐变背景","type":"html","queryStyle":"长描述型","relevance":{"html-landing-hero-001":2}},
+
+    {"queryId":"Q-004","query":"做一个 6 宫格产品特性展示","type":"html","queryStyle":"直白型","relevance":{"html-features-grid-001":2}},
+    {"queryId":"Q-005","query":"产品功能介绍区域","type":"html","queryStyle":"同义型","relevance":{"html-features-grid-001":2}},
+    {"queryId":"Q-006","query":"想做一个产品功能介绍区,六个特性每个有 emoji 图标、标题和说明","type":"html","queryStyle":"长描述型","relevance":{"html-features-grid-001":2}},
+
+    {"queryId":"Q-007","query":"做一个三列定价方案对比表","type":"html","queryStyle":"直白型","relevance":{"html-pricing-table-001":2}},
+    {"queryId":"Q-008","query":"价格对比表格","type":"html","queryStyle":"同义型","relevance":{"html-pricing-table-001":2}},
+    {"queryId":"Q-009","query":"需要 SaaS 产品的定价方案对比,三列高亮中间推荐版本,每列带勾选功能列表和 CTA","type":"html","queryStyle":"长描述型","relevance":{"html-pricing-table-001":2}},
+
+    {"queryId":"Q-010","query":"用户评价推荐区","type":"html","queryStyle":"直白型","relevance":{"html-testimonials-001":2}},
+    {"queryId":"Q-011","query":"客户好评展示墙","type":"html","queryStyle":"同义型","relevance":{"html-testimonials-001":2}},
+    {"queryId":"Q-012","query":"需要展示几条客户使用反馈,每条有头像、姓名、职位、评论文字和五星评分","type":"html","queryStyle":"长描述型","relevance":{"html-testimonials-001":2}},
+
+    {"queryId":"Q-013","query":"做一个最终 CTA + 完整页脚","type":"html","queryStyle":"直白型","relevance":{"html-cta-footer-001":2}},
+    {"queryId":"Q-014","query":"网站底部和邮件订阅","type":"html","queryStyle":"同义型","relevance":{"html-cta-footer-001":2}},
+    {"queryId":"Q-015","query":"需要落地页底部:订阅框、产品/公司/资源多列链接、社交媒体图标和版权信息","type":"html","queryStyle":"长描述型","relevance":{"html-cta-footer-001":2}},
+
+    {"queryId":"Q-016","query":"做一个粘性导航栏","type":"html","queryStyle":"直白型","relevance":{"html-navbar-sticky-001":2}},
+    {"queryId":"Q-017","query":"网站顶部菜单栏","type":"html","queryStyle":"同义型","relevance":{"html-navbar-sticky-001":2}},
+    {"queryId":"Q-018","query":"需要一个吸顶的导航栏,移动端汉堡菜单,带下拉子菜单,滚动时变色","type":"html","queryStyle":"长描述型","relevance":{"html-navbar-sticky-001":2}},
+
+    {"queryId":"Q-019","query":"做一个 FAQ 折叠问答","type":"html","queryStyle":"直白型","relevance":{"html-faq-accordion-001":2}},
+    {"queryId":"Q-020","query":"常见问题列表","type":"html","queryStyle":"同义型","relevance":{"html-faq-accordion-001":2}},
+    {"queryId":"Q-021","query":"想要一个常见问题区,点击展开收起,不要用 JS,纯 HTML 实现","type":"html","queryStyle":"长描述型","relevance":{"html-faq-accordion-001":2}},
+
+    {"queryId":"Q-022","query":"博客文章卡片网格","type":"html","queryStyle":"直白型","relevance":{"html-blog-card-grid-001":2}},
+    {"queryId":"Q-023","query":"文章列表展示","type":"html","queryStyle":"同义型","relevance":{"html-blog-card-grid-001":2}},
+    {"queryId":"Q-024","query":"需要一个博客列表,每篇文章卡片有封面图、分类标签、标题、摘要和作者头像名字日期","type":"html","queryStyle":"长描述型","relevance":{"html-blog-card-grid-001":2}},
+
+    {"queryId":"Q-025","query":"联系我们表单","type":"html","queryStyle":"直白型","relevance":{"html-contact-form-001":2}},
+    {"queryId":"Q-026","query":"用户留言反馈页","type":"html","queryStyle":"同义型","relevance":{"html-contact-form-001":2}},
+    {"queryId":"Q-027","query":"做一个联系页面,包含姓名、邮箱、主题、消息四个字段,前端校验,提交后给反馈提示","type":"html","queryStyle":"长描述型","relevance":{"html-contact-form-001":2}},
+
+    {"queryId":"Q-028","query":"做一个简易计算器","type":"multi_file","queryStyle":"直白型","relevance":{"multi-calculator-001":2}},
+    {"queryId":"Q-029","query":"加减乘除运算器","type":"multi_file","queryStyle":"同义型","relevance":{"multi-calculator-001":2}},
+    {"queryId":"Q-030","query":"实现一个四则运算计算器,有数字按钮、运算符按钮、清零键,支持键盘输入","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-calculator-001":2}},
+
+    {"queryId":"Q-031","query":"做一个倒计时页面","type":"multi_file","queryStyle":"直白型","relevance":{"multi-countdown-001":2,"multi-pomodoro-timer-001":1}},
+    {"queryId":"Q-032","query":"距离某个时间还有多久的页面","type":"multi_file","queryStyle":"同义型","relevance":{"multi-countdown-001":2}},
+    {"queryId":"Q-033","query":"自定义目标时间的倒计时,大数字显示天时分秒,本地存储记忆设置","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-countdown-001":2}},
+
+    {"queryId":"Q-034","query":"番茄钟计时器","type":"multi_file","queryStyle":"直白型","relevance":{"multi-pomodoro-timer-001":2}},
+    {"queryId":"Q-035","query":"番茄工作法专注计时","type":"multi_file","queryStyle":"同义型","relevance":{"multi-pomodoro-timer-001":2}},
+    {"queryId":"Q-036","query":"实现番茄钟,25 分钟工作 5 分钟休息自动切换,显示当前是第几个周期","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-pomodoro-timer-001":2,"multi-countdown-001":1}},
+
+    {"queryId":"Q-037","query":"做一个 todo 应用","type":"multi_file","queryStyle":"直白型","relevance":{"multi-todo-app-001":2}},
+    {"queryId":"Q-038","query":"待办事项清单","type":"multi_file","queryStyle":"同义型","relevance":{"multi-todo-app-001":2}},
+    {"queryId":"Q-039","query":"任务清单应用,可以新增、编辑、删除、标记完成,刷新后数据还在","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-todo-app-001":2}},
+
+    {"queryId":"Q-040","query":"知识测验小程序","type":"multi_file","queryStyle":"直白型","relevance":{"multi-quiz-app-001":2}},
+    {"queryId":"Q-041","query":"在线答题系统","type":"multi_file","queryStyle":"同义型","relevance":{"multi-quiz-app-001":2}},
+    {"queryId":"Q-042","query":"做一个测验应用,单选题、答完即时反馈对错、有进度条、最后给出总分","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-quiz-app-001":2}},
+
+    {"queryId":"Q-043","query":"Markdown 编辑器","type":"multi_file","queryStyle":"直白型","relevance":{"multi-markdown-editor-001":2}},
+    {"queryId":"Q-044","query":"实时预览 md 写作工具","type":"multi_file","queryStyle":"同义型","relevance":{"multi-markdown-editor-001":2}},
+    {"queryId":"Q-045","query":"做一个 markdown 编辑器,左边输入右边实时渲染预览,显示字数统计","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-markdown-editor-001":2}},
+
+    {"queryId":"Q-046","query":"图片画廊","type":"multi_file","queryStyle":"直白型","relevance":{"multi-image-gallery-001":2}},
+    {"queryId":"Q-047","query":"照片浏览相册","type":"multi_file","queryStyle":"同义型","relevance":{"multi-image-gallery-001":2}},
+    {"queryId":"Q-048","query":"图片网格画廊,点击缩略图弹出大图灯箱浏览,支持左右切换","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-image-gallery-001":2}},
+
+    {"queryId":"Q-049","query":"天气查询页","type":"multi_file","queryStyle":"直白型","relevance":{"multi-weather-search-001":2}},
+    {"queryId":"Q-050","query":"看城市天气的应用","type":"multi_file","queryStyle":"同义型","relevance":{"multi-weather-search-001":2}},
+    {"queryId":"Q-051","query":"输入城市名查天气,显示当前温度天气状况,以及未来 5 天预报","type":"multi_file","queryStyle":"长描述型","relevance":{"multi-weather-search-001":2}},
+
+    {"queryId":"Q-052","query":"Vue 登录表单","type":"vue_project","queryStyle":"直白型","relevance":{"vue-login-form-001":2}},
+    {"queryId":"Q-053","query":"Vue 用户登入页面","type":"vue_project","queryStyle":"同义型","relevance":{"vue-login-form-001":2}},
+    {"queryId":"Q-054","query":"Vue3 + Element Plus 登录表单,邮箱密码输入,前端校验,记住我勾选,忘记密码链接","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-login-form-001":2,"vue-register-form-001":1}},
+
+    {"queryId":"Q-055","query":"Vue 注册表单","type":"vue_project","queryStyle":"直白型","relevance":{"vue-register-form-001":2}},
+    {"queryId":"Q-056","query":"Vue 用户账号注册","type":"vue_project","queryStyle":"同义型","relevance":{"vue-register-form-001":2}},
+    {"queryId":"Q-057","query":"Vue3 注册页,邮箱、密码、确认密码、协议勾选、完整校验包含密码强度","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-register-form-001":2,"vue-login-form-001":1}},
+
+    {"queryId":"Q-058","query":"Vue 后台管理布局","type":"vue_project","queryStyle":"直白型","relevance":{"vue-dashboard-layout-001":2}},
+    {"queryId":"Q-059","query":"Vue 管理系统主框架","type":"vue_project","queryStyle":"同义型","relevance":{"vue-dashboard-layout-001":2}},
+    {"queryId":"Q-060","query":"Vue3 后台 Dashboard 布局,左侧侧边栏菜单、顶部导航栏、中间内容路由区","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-dashboard-layout-001":2}},
+
+    {"queryId":"Q-061","query":"Vue 数据表格页","type":"vue_project","queryStyle":"直白型","relevance":{"vue-data-table-001":2}},
+    {"queryId":"Q-062","query":"Vue 列表数据展示页","type":"vue_project","queryStyle":"同义型","relevance":{"vue-data-table-001":2}},
+    {"queryId":"Q-063","query":"Vue3 表格页,分页、搜索框、列排序、操作列(编辑/删除按钮)","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-data-table-001":2}},
+
+    {"queryId":"Q-064","query":"Vue 数据统计仪表盘","type":"vue_project","queryStyle":"直白型","relevance":{"vue-stats-dashboard-001":2}},
+    {"queryId":"Q-065","query":"Vue 数据看板首页","type":"vue_project","queryStyle":"同义型","relevance":{"vue-stats-dashboard-001":2}},
+    {"queryId":"Q-066","query":"Vue3 仪表盘首页,顶部统计卡片显示同比环比、进度条、迷你柱状图","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-stats-dashboard-001":2}},
+
+    {"queryId":"Q-067","query":"Vue 个人资料页","type":"vue_project","queryStyle":"直白型","relevance":{"vue-profile-page-001":2}},
+    {"queryId":"Q-068","query":"Vue 用户主页","type":"vue_project","queryStyle":"同义型","relevance":{"vue-profile-page-001":2}},
+    {"queryId":"Q-069","query":"Vue3 个人主页,头像、基本信息卡、统计数据、活动时间线","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-profile-page-001":2}},
+
+    {"queryId":"Q-070","query":"Vue 设置页","type":"vue_project","queryStyle":"直白型","relevance":{"vue-settings-page-001":2}},
+    {"queryId":"Q-071","query":"Vue 系统配置页面","type":"vue_project","queryStyle":"同义型","relevance":{"vue-settings-page-001":2}},
+    {"queryId":"Q-072","query":"Vue3 后台设置页,左侧二级导航(账号/通知/安全),右侧对应表单","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-settings-page-001":2}},
+
+    {"queryId":"Q-073","query":"Vue 商品列表","type":"vue_project","queryStyle":"直白型","relevance":{"vue-product-list-001":2}},
+    {"queryId":"Q-074","query":"Vue 电商产品展示页","type":"vue_project","queryStyle":"同义型","relevance":{"vue-product-list-001":2}},
+    {"queryId":"Q-075","query":"Vue3 商品卡片列表,有图片、价格、加入购物车按钮、左侧分类筛选","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-product-list-001":2}},
+
+    {"queryId":"Q-076","query":"Vue 订单详情页","type":"vue_project","queryStyle":"直白型","relevance":{"vue-order-detail-001":2}},
+    {"queryId":"Q-077","query":"Vue 订单查看页","type":"vue_project","queryStyle":"同义型","relevance":{"vue-order-detail-001":2}},
+    {"queryId":"Q-078","query":"Vue3 订单详情,显示订单号状态、商品清单、收货地址、支付信息和操作按钮","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-order-detail-001":2}},
+
+    {"queryId":"Q-079","query":"Vue 文章详情页","type":"vue_project","queryStyle":"直白型","relevance":{"vue-article-detail-001":2}},
+    {"queryId":"Q-080","query":"Vue 博客阅读页","type":"vue_project","queryStyle":"同义型","relevance":{"vue-article-detail-001":2}},
+    {"queryId":"Q-081","query":"Vue3 文章详情页,正文 markdown 渲染、作者信息、评论区、相关文章推荐","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-article-detail-001":2}},
+
+    {"queryId":"Q-082","query":"Vue 聊天列表","type":"vue_project","queryStyle":"直白型","relevance":{"vue-chat-list-001":2}},
+    {"queryId":"Q-083","query":"Vue 即时通讯界面","type":"vue_project","queryStyle":"同义型","relevance":{"vue-chat-list-001":2}},
+    {"queryId":"Q-084","query":"Vue3 消息聊天,左侧联系人列表、右侧气泡对话框、底部输入框","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-chat-list-001":2}},
+
+    {"queryId":"Q-085","query":"Vue 文件上传","type":"vue_project","queryStyle":"直白型","relevance":{"vue-file-upload-001":2}},
+    {"queryId":"Q-086","query":"Vue 拖拽上传组件","type":"vue_project","queryStyle":"同义型","relevance":{"vue-file-upload-001":2}},
+    {"queryId":"Q-087","query":"Vue3 文件上传页,支持拖拽区、多文件、上传进度条、列表中可删除","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-file-upload-001":2}},
+
+    {"queryId":"Q-088","query":"Vue 404 页面","type":"vue_project","queryStyle":"直白型","relevance":{"vue-404-page-001":2}},
+    {"queryId":"Q-089","query":"Vue 找不到页面","type":"vue_project","queryStyle":"同义型","relevance":{"vue-404-page-001":2}},
+    {"queryId":"Q-090","query":"Vue3 404 错误页面,大号 404 数字、错误说明文字、返回首页 CTA 按钮","type":"vue_project","queryStyle":"长描述型","relevance":{"vue-404-page-001":2}},
+
+    {"queryId":"Q-091","query":"做一个完整的 SaaS 产品落地页","type":"html","queryStyle":"复合型","relevance":{"html-landing-hero-001":2,"html-features-grid-001":2,"html-pricing-table-001":2,"html-testimonials-001":1,"html-cta-footer-001":1,"html-faq-accordion-001":1},"notes":"复合型,测 Recall@10 全召回能力"},
+    {"queryId":"Q-092","query":"完整的后台管理系统页面","type":"vue_project","queryStyle":"复合型","relevance":{"vue-dashboard-layout-001":2,"vue-data-table-001":2,"vue-stats-dashboard-001":2,"vue-settings-page-001":1,"vue-profile-page-001":1}},
+    {"queryId":"Q-093","query":"电商网站的产品和订单页面","type":"vue_project","queryStyle":"复合型","relevance":{"vue-product-list-001":2,"vue-order-detail-001":2}},
+    {"queryId":"Q-094","query":"完整的用户认证流程","type":"vue_project","queryStyle":"复合型","relevance":{"vue-login-form-001":2,"vue-register-form-001":2,"vue-404-page-001":1}},
+    {"queryId":"Q-095","query":"博客系统的文章相关页面","type":"vue_project","queryStyle":"复合型","relevance":{"vue-article-detail-001":2}},
+
+    {"queryId":"Q-096","query":"商品展示卡片网格","type":"html","queryStyle":"陷阱型","relevance":{"html-blog-card-grid-001":1},"notes":"陷阱:商品展示听起来像电商,但 html 库里只有博客卡片,product-list 是 Vue 库的;考察类目漂移"},
+    {"queryId":"Q-097","query":"时间组件","type":"multi_file","queryStyle":"陷阱型","relevance":{"multi-countdown-001":1,"multi-pomodoro-timer-001":1},"notes":"陷阱:笼统说时间组件,countdown 和 pomodoro 都沾边"},
+    {"queryId":"Q-098","query":"数据展示页面","type":"vue_project","queryStyle":"陷阱型","relevance":{"vue-data-table-001":1,"vue-stats-dashboard-001":1},"notes":"陷阱:笼统说数据展示,table 和 dashboard 都相关"},
+    {"queryId":"Q-099","query":"用户填表页面","type":"vue_project","queryStyle":"陷阱型","relevance":{"vue-login-form-001":1,"vue-register-form-001":1,"vue-settings-page-001":1},"notes":"陷阱:笼统的表单需求,多个登录注册设置页都涉及表单"},
+    {"queryId":"Q-100","query":"网站底部和导航","type":"html","queryStyle":"陷阱型","relevance":{"html-cta-footer-001":2,"html-navbar-sticky-001":2},"notes":"复合陷阱:同时涉及顶部导航和底部页脚两个不同模板"}
+  ]
+}
