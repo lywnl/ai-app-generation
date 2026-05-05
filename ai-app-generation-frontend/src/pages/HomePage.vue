@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser'
@@ -131,27 +131,35 @@ const viewWork = (app: API.AppVO) => {
 
 // 格式化时间函数已移除，不再需要显示创建时间
 
+// 鼠标跟随光效:用 rAF 节流到 60fps,passive 让浏览器优化滚动期间的事件分发
+let mouseRafId: number | null = null
+let pendingMouseX = 50
+let pendingMouseY = 50
+
+const handleMouseMove = (e: MouseEvent) => {
+  pendingMouseX = (e.clientX / window.innerWidth) * 100
+  pendingMouseY = (e.clientY / window.innerHeight) * 100
+  if (mouseRafId !== null) return
+  mouseRafId = requestAnimationFrame(() => {
+    document.documentElement.style.setProperty('--mouse-x', `${pendingMouseX}%`)
+    document.documentElement.style.setProperty('--mouse-y', `${pendingMouseY}%`)
+    mouseRafId = null
+  })
+}
+
 // 页面加载时获取数据
 onMounted(() => {
   loadMyApps()
   loadFeaturedApps()
+  document.addEventListener('mousemove', handleMouseMove, { passive: true })
+})
 
-  // 鼠标跟随光效
-  const handleMouseMove = (e: MouseEvent) => {
-    const { clientX, clientY } = e
-    const { innerWidth, innerHeight } = window
-    const x = (clientX / innerWidth) * 100
-    const y = (clientY / innerHeight) * 100
-
-    document.documentElement.style.setProperty('--mouse-x', `${x}%`)
-    document.documentElement.style.setProperty('--mouse-y', `${y}%`)
-  }
-
-  document.addEventListener('mousemove', handleMouseMove)
-
-  // 清理事件监听器
-  return () => {
-    document.removeEventListener('mousemove', handleMouseMove)
+// 卸载时真正清理监听器,避免路由切走后仍消耗 CPU 处理事件
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', handleMouseMove)
+  if (mouseRafId !== null) {
+    cancelAnimationFrame(mouseRafId)
+    mouseRafId = null
   }
 })
 </script>
@@ -175,9 +183,19 @@ onMounted(() => {
           class="prompt-input"
         />
         <div class="input-actions">
-          <a-button type="primary" size="large" @click="createApp" :loading="creating">
+          <a-button
+            type="primary"
+            size="large"
+            @click="createApp"
+            :loading="creating"
+            class="send-btn"
+            aria-label="创建应用"
+          >
             <template #icon>
-              <span>↑</span>
+              <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="12" y1="19" x2="12" y2="5" />
+                <polyline points="5 12 12 5 19 12" />
+              </svg>
             </template>
           </a-button>
         </div>
@@ -282,9 +300,9 @@ onMounted(() => {
   padding: 0;
   min-height: 100vh;
   background:
-    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 8%, #e2e8f0 20%, #cbd5e1 100%),
-    radial-gradient(circle at 20% 80%, rgba(59, 130, 246, 0.15) 0%, transparent 50%),
-    radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.12) 0%, transparent 50%),
+    linear-gradient(180deg, var(--bg-base) 0%, var(--bg-soft) 12%, var(--bg-mute) 28%, #e2e8f0 100%),
+    radial-gradient(circle at 20% 80%, rgba(59, 130, 246, 0.18) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.14) 0%, transparent 50%),
     radial-gradient(circle at 40% 40%, rgba(16, 185, 129, 0.08) 0%, transparent 50%);
   position: relative;
   overflow: hidden;
@@ -309,7 +327,10 @@ onMounted(() => {
     20px 20px,
     20px 20px;
   pointer-events: none;
-  animation: gridFloat 20s ease-in-out infinite;
+  /* 提升为独立合成层,把网格平移动画交给 GPU,
+     避免滚动时被卷入主线程 paint */
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 /* 动态光效 */
@@ -323,32 +344,36 @@ onMounted(() => {
   background:
     radial-gradient(
       600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
-      rgba(59, 130, 246, 0.08) 0%,
-      rgba(139, 92, 246, 0.06) 40%,
+      rgba(59, 130, 246, 0.10) 0%,
+      rgba(139, 92, 246, 0.07) 40%,
       transparent 80%
     ),
     linear-gradient(45deg, transparent 30%, rgba(59, 130, 246, 0.04) 50%, transparent 70%),
     linear-gradient(-45deg, transparent 30%, rgba(139, 92, 246, 0.04) 50%, transparent 70%);
   pointer-events: none;
-  animation: lightPulse 8s ease-in-out infinite alternate;
+  opacity: 0.5;
+  /* mousemove 仅改 --mouse-x/y,在合成层内重绘 background,不触发回流 */
+  will-change: background-position, opacity;
+  transform: translateZ(0);
 }
 
 @keyframes gridFloat {
-  0%,
-  100% {
-    transform: translate(0, 0);
-  }
-  50% {
-    transform: translate(5px, 5px);
-  }
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(5px, 5px); }
 }
 
 @keyframes lightPulse {
-  0% {
-    opacity: 0.3;
+  0% { opacity: 0.3; }
+  100% { opacity: 0.7; }
+}
+
+/* 装饰性循环动画仅在用户允许时启用 */
+@media (prefers-reduced-motion: no-preference) {
+  #homePage::before {
+    animation: gridFloat 20s ease-in-out infinite;
   }
-  100% {
-    opacity: 0.7;
+  #homePage::after {
+    animation: lightPulse 8s ease-in-out infinite alternate;
   }
 }
 
@@ -362,14 +387,12 @@ onMounted(() => {
   box-sizing: border-box;
 }
 
-/* 移除居中光束效果 */
-
 /* 英雄区域 */
 .hero-section {
   text-align: center;
   padding: 80px 0 60px;
   margin-bottom: 28px;
-  color: #1e293b;
+  color: var(--text-primary);
   position: relative;
   overflow: hidden;
 }
@@ -385,26 +408,28 @@ onMounted(() => {
     radial-gradient(ellipse 800px 400px at center, rgba(59, 130, 246, 0.12) 0%, transparent 70%),
     linear-gradient(45deg, transparent 30%, rgba(139, 92, 246, 0.05) 50%, transparent 70%),
     linear-gradient(-45deg, transparent 30%, rgba(16, 185, 129, 0.04) 50%, transparent 70%);
-  animation: heroGlow 10s ease-in-out infinite alternate;
+  opacity: 0.7;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transform: translateZ(0);
 }
 
 @keyframes heroGlow {
-  0% {
-    opacity: 0.6;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1.02);
-  }
+  0% { opacity: 0.6; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1.02); }
 }
 
-@keyframes rotate {
-  0% {
-    transform: translate(-50%, -50%) rotate(0deg);
+@keyframes titleShimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-section::before {
+    animation: heroGlow 10s ease-in-out infinite alternate;
   }
-  100% {
-    transform: translate(-50%, -50%) rotate(360deg);
+  .hero-title {
+    animation: titleShimmer 3s ease-in-out infinite;
   }
 }
 
@@ -413,31 +438,21 @@ onMounted(() => {
   font-weight: 700;
   margin: 0 0 20px;
   line-height: 1.2;
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #10b981 100%);
+  background: var(--brand-gradient);
+  background-size: 200% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  color: transparent;
   letter-spacing: -1px;
   position: relative;
   z-index: 2;
-  animation: titleShimmer 3s ease-in-out infinite;
-}
-
-@keyframes titleShimmer {
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
 }
 
 .hero-description {
   font-size: 20px;
   margin: 0;
-  opacity: 0.8;
-  color: #64748b;
+  color: var(--text-tertiary);
   position: relative;
   z-index: 2;
 }
@@ -450,18 +465,23 @@ onMounted(() => {
 }
 
 .prompt-input {
-  border-radius: 16px;
-  border: none;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
   font-size: 16px;
   padding: 20px 60px 20px 20px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(20px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  background: #ffffff;
+  box-shadow: var(--shadow-md);
+  transition: box-shadow var(--transition-slow), transform var(--transition-slow), border-color var(--transition-slow);
+}
+
+.prompt-input:hover {
+  border-color: var(--border-default);
 }
 
 .prompt-input:focus {
-  background: rgba(255, 255, 255, 1);
-  box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3);
+  background: var(--bg-base);
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.14), var(--shadow-lg);
   transform: translateY(-2px);
 }
 
@@ -474,6 +494,24 @@ onMounted(() => {
   align-items: center;
 }
 
+.send-btn {
+  border: none;
+  background: var(--brand-gradient-pure);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.3);
+  cursor: pointer;
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+}
+
+.send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(59, 130, 246, 0.42);
+}
+
+.send-icon {
+  width: 18px;
+  height: 18px;
+}
+
 /* 快捷按钮 */
 .quick-actions {
   display: flex;
@@ -484,14 +522,14 @@ onMounted(() => {
 }
 
 .quick-actions .ant-btn {
-  border-radius: 25px;
+  border-radius: var(--radius-pill);
   padding: 8px 20px;
   height: auto;
-  background: rgba(255, 255, 255, 0.8);
+  background: #ffffff;
   border: 1px solid rgba(59, 130, 246, 0.2);
-  color: #475569;
-  backdrop-filter: blur(15px);
-  transition: all 0.3s;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-slow);
   position: relative;
   overflow: hidden;
 }
@@ -512,11 +550,11 @@ onMounted(() => {
 }
 
 .quick-actions .ant-btn:hover {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: rgba(59, 130, 246, 0.4);
-  color: #3b82f6;
+  background: rgba(255, 255, 255, 0.95);
+  border-color: var(--brand-primary);
+  color: var(--brand-primary);
   transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 8px 22px rgba(59, 130, 246, 0.18);
 }
 
 /* 区域标题 */
@@ -528,7 +566,8 @@ onMounted(() => {
   font-size: 32px;
   font-weight: 600;
   margin-bottom: 32px;
-  color: #1e293b;
+  color: var(--text-primary);
+  letter-spacing: -0.5px;
 }
 
 /* 我的作品网格 */

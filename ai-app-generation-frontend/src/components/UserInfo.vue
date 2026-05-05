@@ -29,6 +29,6 @@ withDefaults(defineProps<Props>(), {
 
 .user-name {
   font-size: 14px;
-  color: #1a1a1a;
+  color: var(--text-primary);
 }
 </style>

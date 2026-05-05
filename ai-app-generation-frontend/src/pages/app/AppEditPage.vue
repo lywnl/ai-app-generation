@@ -276,7 +276,12 @@ onMounted(() => {
 
 <style scoped>
 #appEditPage {
-  padding: 24px;
+  min-height: calc(100vh - 64px);
+  padding: 32px 24px;
+  background: var(--bg-soft);
+}
+
+.edit-container {
   max-width: 1000px;
   margin: 0 auto;
 }
@@ -290,34 +295,44 @@ onMounted(() => {
 
 .page-header h1 {
   margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.edit-container {
-  border-radius: 8px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  background: var(--brand-gradient-pure);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 .cover-preview {
   margin-top: 12px;
   padding: 12px;
-  border: 1px solid #e8e8e8;
-  border-radius: 6px;
-  background: #fafafa;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
 }
 
 .form-tip {
   font-size: 12px;
-  color: #999;
+  color: var(--text-muted);
   margin-top: 4px;
 }
 
+:deep(.ant-card) {
+  border-radius: var(--radius-md);
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-sm);
+}
+
 :deep(.ant-card-head) {
-  background: #fafafa;
+  background: var(--bg-soft);
+  border-bottom-color: var(--border-light);
 }
 
 :deep(.ant-descriptions-item-label) {
-  background: #fafafa;
+  background: var(--bg-soft);
   font-weight: 500;
+  color: var(--text-secondary);
 }
 </style>

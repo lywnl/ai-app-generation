@@ -1,90 +1,93 @@
 <template>
   <div id="appManagePage">
-    <!-- 搜索表单 -->
-    <a-form layout="inline" :model="searchParams" @finish="doSearch">
-      <a-form-item label="应用名称">
-        <a-input v-model:value="searchParams.appName" placeholder="输入应用名称" />
-      </a-form-item>
-      <a-form-item label="创建者">
-        <a-input v-model:value="searchParams.userId" placeholder="输入用户ID" />
-      </a-form-item>
-      <a-form-item label="生成类型">
-        <a-select
-          v-model:value="searchParams.codeGenType"
-          placeholder="选择生成类型"
-          style="width: 150px"
-        >
-          <a-select-option value="">全部</a-select-option>
-          <a-select-option
-            v-for="option in CODE_GEN_TYPE_OPTIONS"
-            :key="option.value"
-            :value="option.value"
+    <div class="page-card">
+      <h2 class="page-title">应用管理</h2>
+      <!-- 搜索表单 -->
+      <a-form layout="inline" :model="searchParams" @finish="doSearch" class="search-form">
+        <a-form-item label="应用名称">
+          <a-input v-model:value="searchParams.appName" placeholder="输入应用名称" />
+        </a-form-item>
+        <a-form-item label="创建者">
+          <a-input v-model:value="searchParams.userId" placeholder="输入用户ID" />
+        </a-form-item>
+        <a-form-item label="生成类型">
+          <a-select
+            v-model:value="searchParams.codeGenType"
+            placeholder="选择生成类型"
+            style="width: 150px"
           >
-            {{ option.label }}
-          </a-select-option>
-        </a-select>
-      </a-form-item>
-      <a-form-item>
-        <a-button type="primary" html-type="submit">搜索</a-button>
-      </a-form-item>
-    </a-form>
-    <a-divider />
-
-    <!-- 表格 -->
-    <a-table
-      :columns="columns"
-      :data-source="data"
-      :pagination="pagination"
-      @change="doTableChange"
-      :scroll="{ x: 1200 }"
-    >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.dataIndex === 'cover'">
-          <a-image v-if="record.cover" :src="record.cover" :width="80" :height="60" />
-          <div v-else class="no-cover">无封面</div>
-        </template>
-        <template v-else-if="column.dataIndex === 'initPrompt'">
-          <a-tooltip :title="record.initPrompt">
-            <div class="prompt-text">{{ record.initPrompt }}</div>
-          </a-tooltip>
-        </template>
-        <template v-else-if="column.dataIndex === 'codeGenType'">
-          {{ formatCodeGenType(record.codeGenType) }}
-        </template>
-        <template v-else-if="column.dataIndex === 'priority'">
-          <a-tag v-if="record.priority === 99" color="gold">精选</a-tag>
-          <span v-else>{{ record.priority || 0 }}</span>
-        </template>
-        <template v-else-if="column.dataIndex === 'deployedTime'">
-          <span v-if="record.deployedTime">
-            {{ formatTime(record.deployedTime) }}
-          </span>
-          <span v-else class="text-gray">未部署</span>
-        </template>
-        <template v-else-if="column.dataIndex === 'createTime'">
-          {{ formatTime(record.createTime) }}
-        </template>
-        <template v-else-if="column.dataIndex === 'user'">
-          <UserInfo :user="record.user" size="small" />
-        </template>
-        <template v-else-if="column.key === 'action'">
-          <a-space>
-            <a-button type="primary" size="small" @click="editApp(record)"> 编辑 </a-button>
-            <a-button
-              type="default"
-              size="small"
-              @click="toggleFeatured(record)"
-              :class="{ 'featured-btn': record.priority === 99 }"
+            <a-select-option value="">全部</a-select-option>
+            <a-select-option
+              v-for="option in CODE_GEN_TYPE_OPTIONS"
+              :key="option.value"
+              :value="option.value"
             >
-              {{ record.priority === 99 ? '取消精选' : '精选' }}
-            </a-button>
-            <a-popconfirm title="确定要删除这个应用吗？" @confirm="deleteApp(record.id)">
-              <a-button danger size="small">删除</a-button>
-            </a-popconfirm>
-          </a-space>
+              {{ option.label }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item>
+          <a-button type="primary" html-type="submit">搜索</a-button>
+        </a-form-item>
+      </a-form>
+      <a-divider />
+
+      <!-- 表格 -->
+      <a-table
+        :columns="columns"
+        :data-source="data"
+        :pagination="pagination"
+        @change="doTableChange"
+        :scroll="{ x: 1200 }"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.dataIndex === 'cover'">
+            <a-image v-if="record.cover" :src="record.cover" :width="80" :height="60" />
+            <div v-else class="no-cover">无封面</div>
+          </template>
+          <template v-else-if="column.dataIndex === 'initPrompt'">
+            <a-tooltip :title="record.initPrompt">
+              <div class="prompt-text">{{ record.initPrompt }}</div>
+            </a-tooltip>
+          </template>
+          <template v-else-if="column.dataIndex === 'codeGenType'">
+            {{ formatCodeGenType(record.codeGenType) }}
+          </template>
+          <template v-else-if="column.dataIndex === 'priority'">
+            <a-tag v-if="record.priority === 99" color="gold">精选</a-tag>
+            <span v-else>{{ record.priority || 0 }}</span>
+          </template>
+          <template v-else-if="column.dataIndex === 'deployedTime'">
+            <span v-if="record.deployedTime">
+              {{ formatTime(record.deployedTime) }}
+            </span>
+            <span v-else class="text-gray">未部署</span>
+          </template>
+          <template v-else-if="column.dataIndex === 'createTime'">
+            {{ formatTime(record.createTime) }}
+          </template>
+          <template v-else-if="column.dataIndex === 'user'">
+            <UserInfo :user="record.user" size="small" />
+          </template>
+          <template v-else-if="column.key === 'action'">
+            <a-space>
+              <a-button type="primary" size="small" @click="editApp(record)"> 编辑 </a-button>
+              <a-button
+                type="default"
+                size="small"
+                @click="toggleFeatured(record)"
+                :class="{ 'featured-btn': record.priority === 99 }"
+              >
+                {{ record.priority === 99 ? '取消精选' : '精选' }}
+              </a-button>
+              <a-popconfirm title="确定要删除这个应用吗？" @confirm="deleteApp(record.id)">
+                <a-button danger size="small">删除</a-button>
+              </a-popconfirm>
+            </a-space>
+          </template>
         </template>
-      </template>
-    </a-table>
+      </a-table>
+    </div>
   </div>
 </template>
 
@@ -264,19 +267,45 @@ const deleteApp = async (id: number | undefined) => {
 
 <style scoped>
 #appManagePage {
+  min-height: calc(100vh - 64px);
   padding: 24px;
-  background: white;
-  margin-top: 16px;
+  background: var(--bg-soft);
+}
+
+.page-card {
+  max-width: 1400px;
+  margin: 0 auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-sm);
+}
+
+.page-title {
+  margin: 0 0 20px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  background: var(--brand-gradient-pure);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.search-form :deep(.ant-form-item) {
+  margin-bottom: 12px;
 }
 
 .no-cover {
   width: 80px;
   height: 60px;
-  background: #f5f5f5;
+  background: var(--bg-mute);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
   border-radius: 4px;
 }
@@ -289,18 +318,18 @@ const deleteApp = async (id: number | undefined) => {
 }
 
 .text-gray {
-  color: #999;
+  color: var(--text-muted);
 }
 
 .featured-btn {
-  background: #faad14;
-  border-color: #faad14;
-  color: white;
+  background: var(--brand-gradient-pure);
+  border: none;
+  color: var(--text-inverse);
 }
 
 .featured-btn:hover {
-  background: #d48806;
-  border-color: #d48806;
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  color: var(--text-inverse);
 }
 
 :deep(.ant-table-tbody > tr > td) {
