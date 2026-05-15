@@ -55,13 +55,34 @@
       </div>
     </div>
     <div class="footer-bottom">
-      <p class="copyright">© AI 应用生成平台 · Made with ♥ by lywynl</p>
+      <div class="beian">
+        <span class="beian-item">
+          ICP备案/许可证号：
+          <a
+            href="https://beian.miit.gov.cn/"
+            target="_blank"
+            rel="noopener"
+            class="beian-link"
+          >
+            鲁ICP备2026024359号
+          </a>
+        </span>
+        <a
+          href="https://beian.mps.gov.cn/#/query/webSearch?code=37010302001772"
+          target="_blank"
+          rel="noopener"
+          class="beian-link beian-gov"
+        >
+          <img :src="beianIcon" alt="公网安备" class="beian-icon" />
+          鲁公网安备37010302001772号
+        </a>
+      </div>
     </div>
   </a-layout-footer>
 </template>
 
 <script setup lang="ts">
-// 无需额外的响应式数据
+import beianIcon from '@/assets/beian.jpg'
 </script>
 
 <style scoped>
@@ -169,11 +190,41 @@
   text-align: center;
 }
 
-.copyright {
+.beian {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
   letter-spacing: 0.3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.beian-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.beian-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color var(--transition-base);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.beian-link:hover {
+  color: var(--brand-primary);
+}
+
+.beian-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  object-fit: contain;
 }
 
 @media (max-width: 768px) {
