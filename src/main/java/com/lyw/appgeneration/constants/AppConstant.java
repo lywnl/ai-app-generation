@@ -27,7 +27,7 @@ public interface AppConstant {
      */
     String CODE_DEPLOY_HOST = System.getProperty(
             "app.code.deploy.host",
-            System.getenv().getOrDefault("APP_CODE_DEPLOY_HOST", "http://localhost:100")
+            System.getenv().getOrDefault("APP_CODE_DEPLOY_HOST", "http://lllyw.cn")
     );
 
 }
