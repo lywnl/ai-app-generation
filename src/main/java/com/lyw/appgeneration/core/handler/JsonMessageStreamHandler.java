@@ -16,6 +16,7 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.UserMemoryService;
 import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
@@ -72,7 +73,8 @@ public class JsonMessageStreamHandler {
     public Flux<String> handle(Flux<String> originFlux,
                                ChatHistoryService chatHistoryService,
                                long appId, User loginUser,
-                               MemorySummaryService memorySummaryService) {
+                               MemorySummaryService memorySummaryService,
+                               UserMemoryService userMemoryService) {
         // 收集数据用于生成后端记忆格式
         StringBuilder chatHistoryStringBuilder = new StringBuilder();
         // 用于跟踪已经见过的工具ID，判断是否是第一次调用
@@ -90,6 +92,8 @@ public class JsonMessageStreamHandler {
                     chatHistoryService.addChatMessage(appId, aiResponse, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
                     // 对话结束钩子：异步触发 L1 摘要提炼（best-effort，不阻塞 Vue 构建与流返回）
                     memorySummaryService.triggerSummarizationAsync(appId);
+                    // 对话结束钩子：异步触发 L2 跨 app 用户偏好抽取（best-effort，不阻塞 Vue 构建与流返回）
+                    userMemoryService.triggerPreferenceExtractionAsync(loginUser.getId(), appId);
                     String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + appId;
                     if (shouldRunPreBuildCheck) {
                         runVuePreBuildCheck(appId);

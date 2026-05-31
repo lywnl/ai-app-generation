@@ -10,6 +10,7 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.UserMemoryService;
 import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
@@ -56,6 +57,9 @@ class JsonMessageStreamHandlerTest {
     @Mock
     private MemorySummaryService memorySummaryService;
 
+    @Mock
+    private UserMemoryService userMemoryService;
+
     @InjectMocks
     private JsonMessageStreamHandler handler;
 
@@ -88,7 +92,8 @@ class JsonMessageStreamHandlerTest {
                 chatHistoryService,
                 APP_ID,
                 loginUser,
-                memorySummaryService
+                memorySummaryService,
+                userMemoryService
         ).collectList().block();
 
         assertEquals(List.of("ok"), output);
@@ -126,7 +131,8 @@ class JsonMessageStreamHandlerTest {
                 chatHistoryService,
                 APP_ID,
                 loginUser,
-                memorySummaryService
+                memorySummaryService,
+                userMemoryService
         ).collectList().block();
 
         assertEquals(List.of("ok"), output);

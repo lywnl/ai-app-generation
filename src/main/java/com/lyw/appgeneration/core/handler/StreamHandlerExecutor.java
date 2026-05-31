@@ -4,6 +4,7 @@ import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.UserMemoryService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,9 @@ public class StreamHandlerExecutor {
     @Resource
     private MemorySummaryService memorySummaryService;
 
+    @Resource
+    private UserMemoryService userMemoryService;
+
     /**
      * 创建流处理器并处理聊天历史记录
      *
@@ -40,9 +44,9 @@ public class StreamHandlerExecutor {
                                   long appId, User loginUser, CodeGenTypeEnum codeGenType) {
         return switch (codeGenType) {
             case VUE_PROJECT -> // 使用注入的组件实例
-                    jsonMessageStreamHandler.handle(originFlux, chatHistoryService, appId, loginUser, memorySummaryService);
+                    jsonMessageStreamHandler.handle(originFlux, chatHistoryService, appId, loginUser, memorySummaryService, userMemoryService);
             case HTML, MULTI_FILE -> // 简单文本处理器不需要依赖注入
-                    new SimpleTextStreamHandler().handle(originFlux, chatHistoryService, appId, loginUser, memorySummaryService);
+                    new SimpleTextStreamHandler().handle(originFlux, chatHistoryService, appId, loginUser, memorySummaryService, userMemoryService);
         };
     }
 }
