@@ -120,4 +120,47 @@ class UserMemoryServiceImplTest {
                 ((com.lyw.appgeneration.model.entity.AppMemoryExtractCursor) c).getFailCount() == 1
                 && ((com.lyw.appgeneration.model.entity.AppMemoryExtractCursor) c).getLastExtractedId() == 0L));
     }
+
+    // ---- 召回(recallByApp):反查 userId + top-N + 缓存 cache-aside ----
+
+    @Test
+    void recallReversesAppIdToUserIdAndReturnsTopN() {
+        when(appMapper.selectOneById(APP)).thenReturn(
+                com.lyw.appgeneration.model.entity.App.builder().id(APP).userId(USER).build());
+        when(valueOps.get(PREF_CACHE_KEY())).thenReturn(null); // 缓存未命中
+        when(appMemoryMapper.selectListByQuery(any())).thenReturn(List.of(
+                AppMemory.builder().name("语言偏好").content("简体中文").build(),
+                AppMemory.builder().name("视觉风格").content("扁平极简").build()));
+
+        String text = service.recallByApp(APP);
+
+        assertTrue(text.contains("语言偏好:简体中文"));
+        assertTrue(text.contains("视觉风格:扁平极简"));
+        verify(valueOps).set(eq(PREF_CACHE_KEY()), anyString(), any()); // 回填缓存
+    }
+
+    @Test
+    void recallHitsCacheWithoutQueryingDb() {
+        when(appMapper.selectOneById(APP)).thenReturn(
+                com.lyw.appgeneration.model.entity.App.builder().id(APP).userId(USER).build());
+        when(valueOps.get(PREF_CACHE_KEY())).thenReturn("- 语言偏好:简体中文"); // 命中
+
+        String text = service.recallByApp(APP);
+
+        assertEquals("- 语言偏好:简体中文", text);
+        verify(appMemoryMapper, never()).selectListByQuery(any()); // 不查 DB
+    }
+
+    @Test
+    void recallReturnsEmptyWhenAppNotFound() {
+        when(appMapper.selectOneById(APP)).thenReturn(null); // app 不存在
+
+        assertEquals("", service.recallByApp(APP));
+        verify(appMemoryMapper, never()).selectListByQuery(any());
+    }
+
+    /** 测试辅助:与实现中 PREF_CACHE_PREFIX 对齐。 */
+    private String PREF_CACHE_KEY() {
+        return "mem:pref:" + USER;
+    }
 }
