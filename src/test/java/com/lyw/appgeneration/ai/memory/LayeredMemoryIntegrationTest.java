@@ -14,6 +14,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -53,6 +55,10 @@ class LayeredMemoryIntegrationTest {
     AppMemorySummaryMapper summaryMapper;
     @Mock
     ChatModel summarizationModel;
+    @Mock
+    StringRedisTemplate redisTemplate;
+    @Mock
+    ValueOperations<String, String> valueOps;
 
     private MemorySummaryServiceImpl summaryService;
     /** 内存 store 模拟 app_memory_summary 单行持久化。 */
@@ -70,9 +76,10 @@ class LayeredMemoryIntegrationTest {
             store.set(inv.getArgument(0));
             return 1;
         });
-        // 4 参生产构造器(默认阈值 8);直接 new 时 @Qualifier 被忽略,按位置绑定 mock
+        when(redisTemplate.opsForValue()).thenReturn(valueOps); // 缓存未命中(get→null)→回退 store(MySQL mock)
+        // 5 参生产构造器(默认阈值 8);直接 new 时 @Qualifier 被忽略,按位置绑定 mock
         summaryService = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper, summarizationModel,
-                Executors.newSingleThreadExecutor());
+                Executors.newSingleThreadExecutor(), redisTemplate);
     }
 
     private ChatHistory msg(long id, String type, String text) {
