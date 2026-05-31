@@ -14,8 +14,10 @@ import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -41,11 +43,16 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private static final int DEFAULT_MIN_NEW_MESSAGES_TO_SUMMARIZE = 8;
     /** circuit breaker:连续失败上限。 */
     private static final int MAX_FAIL = 3;
+    /** L1 摘要缓存键前缀:mem:summary:{appId}。 */
+    private static final String CACHE_KEY_PREFIX = "mem:summary:";
+    /** L1 摘要缓存 TTL:与 L0 热窗口对齐(application.yml spring.data.redis.ttl=3600=1h)。 */
+    private static final Duration CACHE_TTL = Duration.ofHours(1);
 
     private final ChatHistoryService chatHistoryService;
     private final AppMemorySummaryMapper summaryMapper;
     private final ChatModel summarizationModel;
     private final ExecutorService executor;
+    private final StringRedisTemplate redisTemplate;
     private final int minNewMessagesToSummarize;
     private final int maxMessagesPerRun;
 
@@ -60,8 +67,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     public MemorySummaryServiceImpl(ChatHistoryService chatHistoryService,
                                     AppMemorySummaryMapper summaryMapper,
                                     @Qualifier("openAiChatModel") ChatModel summarizationModel,
-                                    @Qualifier("memorySummarizationExecutor") ExecutorService executor) {
-        this(chatHistoryService, summaryMapper, summarizationModel, executor,
+                                    @Qualifier("memorySummarizationExecutor") ExecutorService executor,
+                                    StringRedisTemplate redisTemplate) {
+        this(chatHistoryService, summaryMapper, summarizationModel, executor, redisTemplate,
                 DEFAULT_MIN_NEW_MESSAGES_TO_SUMMARIZE, DEFAULT_MAX_MESSAGES_PER_RUN);
     }
 
@@ -70,12 +78,14 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                              AppMemorySummaryMapper summaryMapper,
                              ChatModel summarizationModel,
                              ExecutorService executor,
+                             StringRedisTemplate redisTemplate,
                              int minNewMessagesToSummarize,
                              int maxMessagesPerRun) {
         this.chatHistoryService = chatHistoryService;
         this.summaryMapper = summaryMapper;
         this.summarizationModel = summarizationModel;
         this.executor = executor;
+        this.redisTemplate = redisTemplate;
         this.minNewMessagesToSummarize = minNewMessagesToSummarize;
         this.maxMessagesPerRun = maxMessagesPerRun;
     }
@@ -140,12 +150,36 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
 
     @Override
     public String getCurrentSummary(Long appId) {
+        String cacheKey = CACHE_KEY_PREFIX + appId;
+        // 1) 先读 Redis 缓存:命中(含空串)直接返回,堵住工具循环内的 N+1 MySQL 读
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+        } catch (Exception e) {
+            log.warn("读取摘要缓存失败 appId={}: {}", appId, e.getMessage()); // 降级:继续查 MySQL
+        }
+        // 2) 未命中:查 MySQL
+        String summary;
         try {
             AppMemorySummary s = summaryMapper.selectOneByQuery(QueryWrapper.create().eq("appId", appId));
-            return s == null ? "" : StrUtil.nullToEmpty(s.getSummary());
+            summary = s == null ? "" : StrUtil.nullToEmpty(s.getSummary());
         } catch (Exception e) {
             log.warn("读取摘要失败 appId={}: {}", appId, e.getMessage());
             return ""; // 降级:无摘要,只用 L0
+        }
+        // 3) 回填缓存(含空串),best-effort
+        writeCache(cacheKey, summary);
+        return summary;
+    }
+
+    /** write-through / 回填缓存,best-effort,失败不影响主流程。 */
+    private void writeCache(String cacheKey, String summary) {
+        try {
+            redisTemplate.opsForValue().set(cacheKey, summary, CACHE_TTL);
+        } catch (Exception e) {
+            log.warn("写摘要缓存失败 key={}: {}", cacheKey, e.getMessage());
         }
     }
 
@@ -175,6 +209,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             current.setUpdateTime(LocalDateTime.now());
             summaryMapper.update(current);
         }
+        // write-through:摘要已落库,同步刷新缓存(best-effort,不影响主流程)
+        writeCache(CACHE_KEY_PREFIX + appId, StrUtil.nullToEmpty(summary));
     }
 
     private void bumpFail(Long appId, AppMemorySummary current) {

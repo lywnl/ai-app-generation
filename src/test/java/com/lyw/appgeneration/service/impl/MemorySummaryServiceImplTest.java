@@ -10,7 +10,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.Executors;
 
@@ -32,14 +35,19 @@ class MemorySummaryServiceImplTest {
     AppMemorySummaryMapper summaryMapper;
     @Mock
     ChatModel summarizationModel;
+    @Mock
+    StringRedisTemplate redisTemplate;
+    @Mock
+    ValueOperations<String, String> valueOps;
     MemorySummaryServiceImpl service;
 
     @BeforeEach
     void setup() {
         MockitoAnnotations.openMocks(this);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
         // 测试构造器:minNewMessages=1、maxPerRun=60;同步单线程池便于断言
         service = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper, summarizationModel,
-                Executors.newSingleThreadExecutor(), 1, 60);
+                Executors.newSingleThreadExecutor(), redisTemplate, 1, 60);
     }
 
     private ChatHistory msg(long id, String type, String text) {
@@ -94,5 +102,57 @@ class MemorySummaryServiceImplTest {
     void getCurrentSummaryReturnsEmptyWhenAbsent() {
         when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
         assertEquals("", service.getCurrentSummary(1L));
+    }
+
+    @Test
+    void getCurrentSummaryReturnsCachedAndSkipsDb() {
+        when(valueOps.get("mem:summary:1")).thenReturn("# 应用目标\n缓存命中");
+        assertEquals("# 应用目标\n缓存命中", service.getCurrentSummary(1L));
+        verify(summaryMapper, never()).selectOneByQuery(any()); // 命中即不查库
+    }
+
+    @Test
+    void getCurrentSummaryMissQueriesDbAndPopulatesCache() {
+        when(valueOps.get("mem:summary:1")).thenReturn(null); // 未命中
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(
+                AppMemorySummary.builder().appId(1L).summary("# 应用目标\n来自DB").build());
+        assertEquals("# 应用目标\n来自DB", service.getCurrentSummary(1L));
+        verify(valueOps).set(eq("mem:summary:1"), eq("# 应用目标\n来自DB"), any(Duration.class)); // 回填
+    }
+
+    @Test
+    void getCurrentSummaryRedisDownFallsBackToDb() {
+        when(valueOps.get(anyString())).thenThrow(new RuntimeException("redis down"));
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(
+                AppMemorySummary.builder().appId(1L).summary("# 应用目标\n降级读DB").build());
+        String result = assertDoesNotThrow(() -> service.getCurrentSummary(1L));
+        assertEquals("# 应用目标\n降级读DB", result); // Redis 挂了照样回退 MySQL
+    }
+
+    @Test
+    void summarizeWritesThroughToCache() {
+        when(valueOps.get(anyString())).thenReturn(null);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(1L), any(), anyInt()))
+                .thenReturn(List.of(msg(10, "user", "做个待办App"), msg(11, "ai", "已生成")));
+        when(summarizationModel.chat(anyString())).thenReturn("# 应用目标与定位\n待办App");
+
+        service.summarizeNow(1L);
+
+        // 摘要落库后,write-through 同步刷新缓存
+        verify(valueOps).set(eq("mem:summary:1"), eq("# 应用目标与定位\n待办App"), any(Duration.class));
+    }
+
+    @Test
+    void redisWriteFailureDoesNotBreakSummarize() {
+        when(valueOps.get(anyString())).thenReturn(null);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(1L), any(), anyInt()))
+                .thenReturn(List.of(msg(10, "user", "x"), msg(11, "ai", "y")));
+        when(summarizationModel.chat(anyString())).thenReturn("# 应用目标\nX");
+        doThrow(new RuntimeException("redis down")).when(valueOps).set(anyString(), anyString(), any(Duration.class));
+
+        assertDoesNotThrow(() -> service.summarizeNow(1L));
+        verify(summaryMapper).insert(any()); // Redis 写挂了,摘要仍落库
     }
 }
