@@ -161,9 +161,12 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private void upsert(Long appId, AppMemorySummary current, String summary, long newCursor) {
         int tokens = summary == null ? 0 : summary.length() / 4;
         if (current == null) {
+            // 显式补时间戳:BaseMapper.insert 为全列插入,不补则写入 NULL 触发 NOT NULL 约束
+            LocalDateTime now = LocalDateTime.now();
             summaryMapper.insert(AppMemorySummary.builder()
                     .appId(appId).summary(summary).lastSummarizedId(newCursor)
-                    .summaryTokens(tokens).failCount(0).build());
+                    .summaryTokens(tokens).failCount(0)
+                    .createTime(now).updateTime(now).build());
         } else {
             current.setSummary(summary);
             current.setLastSummarizedId(newCursor);
@@ -176,8 +179,10 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
 
     private void bumpFail(Long appId, AppMemorySummary current) {
         if (current == null) { // 首次就失败:插一行只记 failCount
+            LocalDateTime now = LocalDateTime.now();
             summaryMapper.insert(AppMemorySummary.builder()
-                    .appId(appId).summary("").lastSummarizedId(0L).summaryTokens(0).failCount(1).build());
+                    .appId(appId).summary("").lastSummarizedId(0L).summaryTokens(0).failCount(1)
+                    .createTime(now).updateTime(now).build());
         } else {
             current.setFailCount((current.getFailCount() == null ? 0 : current.getFailCount()) + 1);
             current.setUpdateTime(LocalDateTime.now());

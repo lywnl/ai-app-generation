@@ -59,6 +59,7 @@ class MemorySummaryServiceImplTest {
         verify(summaryMapper).insert(cap.capture());
         assertEquals(11L, cap.getValue().getLastSummarizedId(), "游标应推进到最新消息id");
         assertTrue(cap.getValue().getSummary().contains("待办App"));
+        assertNotNull(cap.getValue().getCreateTime(), "insert 必须带 createTime,否则真实DB触发 NOT NULL 约束");
     }
 
     @Test
