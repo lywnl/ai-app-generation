@@ -76,3 +76,31 @@ create table if not exists app_memory_summary
     isDelete         tinyint  default 0                 not null comment '是否删除',
     UNIQUE KEY uk_appId (appId) -- 每个应用仅一行摘要
 ) comment 'L1 滚动摘要（每app一行）' collate = utf8mb4_unicode_ci;
+
+
+-- L2 用户偏好:结构化离散条目,每条一行
+CREATE TABLE IF NOT EXISTS app_memory (
+    id          BIGINT       NOT NULL COMMENT '主键(snowflake)' PRIMARY KEY,
+    userId      BIGINT       NOT NULL COMMENT '用户id',
+    appId       BIGINT       NULL     COMMENT '来源app溯源(USER_PREFERENCE可空)',
+    type        VARCHAR(32)  NOT NULL DEFAULT 'USER_PREFERENCE' COMMENT '记忆类型(二期固定USER_PREFERENCE)',
+    name        VARCHAR(128) NOT NULL COMMENT '偏好类别(去重键):语言偏好/视觉风格/技术栈倾向/交互习惯/其他',
+    content     TEXT         NOT NULL COMMENT '偏好内容',
+    createTime  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updateTime  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    isDelete    TINYINT      NOT NULL DEFAULT 0 COMMENT '是否删除',
+    UNIQUE KEY uk_userId_type_name (userId, type, name)
+) COMMENT 'L2 跨app用户长期记忆' COLLATE = utf8mb4_unicode_ci;
+
+-- L2 抽取游标:per-app 一行
+CREATE TABLE IF NOT EXISTS app_memory_extract_cursor (
+    id              BIGINT   NOT NULL COMMENT '主键(snowflake)' PRIMARY KEY,
+    appId           BIGINT   NOT NULL COMMENT '应用id',
+    userId          BIGINT   NOT NULL COMMENT '用户id',
+    lastExtractedId BIGINT   NOT NULL DEFAULT 0 COMMENT 'L2已抽取到的chat_history.id游标',
+    failCount       INT      NOT NULL DEFAULT 0 COMMENT '连续失败计数(circuit breaker)',
+    createTime      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updateTime      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    isDelete        TINYINT  NOT NULL DEFAULT 0 COMMENT '是否删除',
+    UNIQUE KEY uk_appId (appId)
+) COMMENT 'L2抽取游标(每app一行)' COLLATE = utf8mb4_unicode_ci;
