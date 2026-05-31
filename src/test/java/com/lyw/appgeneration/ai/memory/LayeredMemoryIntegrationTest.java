@@ -4,6 +4,7 @@ import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.impl.MemorySummaryServiceImpl;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -59,6 +60,8 @@ class LayeredMemoryIntegrationTest {
     StringRedisTemplate redisTemplate;
     @Mock
     ValueOperations<String, String> valueOps;
+    @Mock
+    UserMemoryService userMemoryService; // L1 集成测试不验 L2,未表态(recallByApp→null)→L2 层跳过
 
     private MemorySummaryServiceImpl summaryService;
     /** 内存 store 模拟 app_memory_summary 单行持久化。 */
@@ -107,7 +110,7 @@ class LayeredMemoryIntegrationTest {
         MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(APP_ID).maxMessages(100).build();
         delegate.add(UserMessage.from("继续:加个搜索框"));   // 模拟 loadChatHistoryToMemory 回填的最近原文
         delegate.add(AiMessage.from("已添加搜索框"));
-        LayeredChatMemory mem = new LayeredChatMemory(delegate, summaryService);
+        LayeredChatMemory mem = new LayeredChatMemory(delegate, summaryService, userMemoryService);
 
         // 4. messages() = [摘要User, 确认Ai, 回填原文...];第0条含摘要,且全程无连续同角色
         List<ChatMessage> msgs = mem.messages();
