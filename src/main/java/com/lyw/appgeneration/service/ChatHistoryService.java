@@ -10,6 +10,7 @@ import com.mybatisflex.core.service.IService;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 对话历史 服务层。
@@ -67,4 +68,15 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      * @return 已有记录返回 true
      */
     boolean existsByAppId(Long appId);
+
+    /**
+     * 查询 appId 下 id 大于 cursorId 的消息，按 id 正序，最多 limit 条。
+     * <p>供 L1 滚动摘要增量提炼：游标之后、热窗口之前的「待折叠」消息。
+     *
+     * @param appId    应用 ID
+     * @param cursorId 游标（已摘要覆盖到的 chat_history.id），null 视为 0
+     * @param limit    最多返回条数
+     * @return 按 id 正序的消息列表
+     */
+    List<ChatHistory> listMessagesAfterCursor(Long appId, Long cursorId, int limit);
 }

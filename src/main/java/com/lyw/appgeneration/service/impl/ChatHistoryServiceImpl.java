@@ -169,4 +169,15 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
 
     }
 
+    @Override
+    public List<ChatHistory> listMessagesAfterCursor(Long appId, Long cursorId, int limit) {
+        // 游标用 chat_history.id（snowflake，单实例近似单调）；id > cursor 即「游标之后」的新消息
+        QueryWrapper queryWrapper = QueryWrapper.create()
+                .eq("appId", appId)
+                .gt("id", cursorId == null ? 0L : cursorId)
+                .orderBy("id", true)   // 正序：id 单调近似时间序
+                .limit(limit);
+        return this.list(queryWrapper);
+    }
+
 }
