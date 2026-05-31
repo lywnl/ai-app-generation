@@ -7,7 +7,7 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.memory.ChatMemory;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -60,7 +60,7 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      * @param maxCount
      * @return
      */
-    int loadChatHistoryToMemory(Long appId, MessageWindowChatMemory chatMemory, int maxCount);
+    int loadChatHistoryToMemory(Long appId, ChatMemory chatMemory, int maxCount);
 
     /**
      * 判断指定应用是否已存在任何对话记录（用于「是否首次对话」判定）
