@@ -128,4 +128,31 @@ class MemorySummaryServiceImplTest {
         String result = assertDoesNotThrow(() -> service.getCurrentSummary(1L));
         assertEquals("# 应用目标\n降级读DB", result); // Redis 挂了照样回退 MySQL
     }
+
+    @Test
+    void summarizeWritesThroughToCache() {
+        when(valueOps.get(anyString())).thenReturn(null);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(1L), any(), anyInt()))
+                .thenReturn(List.of(msg(10, "user", "做个待办App"), msg(11, "ai", "已生成")));
+        when(summarizationModel.chat(anyString())).thenReturn("# 应用目标与定位\n待办App");
+
+        service.summarizeNow(1L);
+
+        // 摘要落库后,write-through 同步刷新缓存
+        verify(valueOps).set(eq("mem:summary:1"), eq("# 应用目标与定位\n待办App"), any(Duration.class));
+    }
+
+    @Test
+    void redisWriteFailureDoesNotBreakSummarize() {
+        when(valueOps.get(anyString())).thenReturn(null);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(1L), any(), anyInt()))
+                .thenReturn(List.of(msg(10, "user", "x"), msg(11, "ai", "y")));
+        when(summarizationModel.chat(anyString())).thenReturn("# 应用目标\nX");
+        doThrow(new RuntimeException("redis down")).when(valueOps).set(anyString(), anyString(), any(Duration.class));
+
+        assertDoesNotThrow(() -> service.summarizeNow(1L));
+        verify(summaryMapper).insert(any()); // Redis 写挂了,摘要仍落库
+    }
 }

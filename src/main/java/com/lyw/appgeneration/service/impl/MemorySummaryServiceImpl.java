@@ -209,6 +209,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             current.setUpdateTime(LocalDateTime.now());
             summaryMapper.update(current);
         }
+        // write-through:摘要已落库,同步刷新缓存(best-effort,不影响主流程)
+        writeCache(CACHE_KEY_PREFIX + appId, StrUtil.nullToEmpty(summary));
     }
 
     private void bumpFail(Long appId, AppMemorySummary current) {
