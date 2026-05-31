@@ -3,12 +3,14 @@ package com.lyw.appgeneration.ai;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.lyw.appgeneration.ai.guardrail.PromptSafetyInputGuardrail;
+import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
 import com.lyw.appgeneration.ai.tools.*;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.utils.SpringContextUtil;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
@@ -42,6 +44,9 @@ public class AiGeneratorServiceFactory {
     private ChatHistoryService chatHistoryService;
 
     @Resource
+    private MemorySummaryService memorySummaryService;
+
+    @Resource
     private ToolManager toolManager;
 
     /**
@@ -72,15 +77,17 @@ public class AiGeneratorServiceFactory {
      * 创建新的 AI 服务实例
      */
     private AiCodeGeneratorService createAiCodeGeneratorService(long appId, CodeGenTypeEnum codeGenType) {
-        // 根据 appId 构建独立的对话记忆
-        MessageWindowChatMemory chatMemory = MessageWindowChatMemory
+        // L0 热窗口:委托给 MessageWindowChatMemory(Redis 持久化 + 窗口裁剪 + tool 对成对驱逐由其内置负责)
+        MessageWindowChatMemory delegate = MessageWindowChatMemory
                 .builder()
                 .id(appId)
                 .chatMemoryStore(redisChatMemoryStore)
                 .maxMessages(100)
                 .build();
-        // 从数据库加载历史对话到记忆中
-        chatHistoryService.loadChatHistoryToMemory(appId, chatMemory, 20);
+        // 冷启动重建:回填最近原文到 delegate(L1 摘要由 LayeredChatMemory.messages() 在拼装时注入)
+        chatHistoryService.loadChatHistoryToMemory(appId, delegate, 20);
+        // 分层装饰器:messages() 返回前前置 L1 摘要;add/clear/id 全部委托 delegate
+        LayeredChatMemory chatMemory = new LayeredChatMemory(delegate, memorySummaryService);
         // 根据代码生成类型选择不同的模型配置
         return switch (codeGenType) {
             // Vue 项目生成使用推理模型

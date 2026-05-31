@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.MemorySummaryService;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 
@@ -25,7 +26,8 @@ public class SimpleTextStreamHandler {
      */
     public Flux<String> handle(Flux<String> originFlux,
                                ChatHistoryService chatHistoryService,
-                               long appId, User loginUser) {
+                               long appId, User loginUser,
+                               MemorySummaryService memorySummaryService) {
         StringBuilder aiResponseBuilder = new StringBuilder();
         return originFlux
                 .map(chunk -> {
@@ -37,6 +39,8 @@ public class SimpleTextStreamHandler {
                     // 流式响应完成后，添加AI消息到对话历史
                     String aiResponse = aiResponseBuilder.toString();
                     chatHistoryService.addChatMessage(appId, aiResponse, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
+                    // 对话结束钩子：异步触发 L1 摘要提炼（best-effort，不阻塞流返回）
+                    memorySummaryService.triggerSummarizationAsync(appId);
                 })
                 .doOnError(error -> {
                     // 如果AI回复失败，也要记录错误消息

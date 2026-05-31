@@ -18,7 +18,7 @@ import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.memory.ChatMemory;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
@@ -136,7 +136,7 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     @Override
-    public int loadChatHistoryToMemory(Long appId, MessageWindowChatMemory chatMemory, int maxCount) {
+    public int loadChatHistoryToMemory(Long appId, ChatMemory chatMemory, int maxCount) {
         try {
             QueryWrapper queryWrapper = QueryWrapper.create()
                     .eq("appId", appId)
@@ -167,6 +167,17 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             return 0;
         }
 
+    }
+
+    @Override
+    public List<ChatHistory> listMessagesAfterCursor(Long appId, Long cursorId, int limit) {
+        // 游标用 chat_history.id（snowflake，单实例近似单调）；id > cursor 即「游标之后」的新消息
+        QueryWrapper queryWrapper = QueryWrapper.create()
+                .eq("appId", appId)
+                .gt("id", cursorId == null ? 0L : cursorId)
+                .orderBy("id", true)   // 正序：id 单调近似时间序
+                .limit(limit);
+        return this.list(queryWrapper);
     }
 
 }
