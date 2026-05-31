@@ -60,3 +60,19 @@ create table chat_history
     INDEX idx_createTime (createTime),             -- 提升基于时间的查询性能
     INDEX idx_appId_createTime (appId, createTime) -- 游标查询核心索引
 ) comment '对话历史' collate = utf8mb4_unicode_ci;
+
+
+-- L1 滚动摘要表（分层记忆一期，每 app 一行）
+create table if not exists app_memory_summary
+(
+    id               bigint                             not null comment '主键（snowflake）' primary key,
+    appId            bigint                             not null comment '应用id',
+    summary          MEDIUMTEXT                         null comment '5段模板摘要内容',
+    lastSummarizedId bigint   default 0                 not null comment '已覆盖到的 chat_history.id 游标',
+    summaryTokens    int      default 0                 not null comment '摘要估算token',
+    failCount        int      default 0                 not null comment '连续失败计数（circuit breaker）',
+    createTime       datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime       datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete         tinyint  default 0                 not null comment '是否删除',
+    UNIQUE KEY uk_appId (appId) -- 每个应用仅一行摘要
+) comment 'L1 滚动摘要（每app一行）' collate = utf8mb4_unicode_ci;
