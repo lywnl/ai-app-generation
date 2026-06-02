@@ -47,6 +47,7 @@
 | 代码下载 | 生成目录打包为 ZIP，支持完整工程导出 |
 | 网页截图 | Selenium + Chromium + WebDriverManager 容器内自动截屏，封面同步上传腾讯云 COS |
 | 应用市场 | 精选作品（priority 排序）+ 我的应用 + 管理员后台，分页缓存 + 游标查询 |
+| 分层对话记忆 | L0 Redis 热窗口（100 条 + tool 对成对驱逐）· L1 App 级 5 段滚动摘要 · L2 跨 App 用户偏好抽取，三层 best-effort 降级 |
 | 对话历史 | 按 `appId + createTime` 联合索引的游标分页 |
 | 双层缓存 | Caffeine 本地缓存 + Redis 分布式缓存 + Spring `@Cacheable` 自动失效 |
 | 可观测 | Spring Actuator + Micrometer + Prometheus + Grafana AI 模型可观测看板 |
@@ -72,7 +73,7 @@
 │ │  ├─ AiCodeGeneratorFacade  │
 │ │  │   ├─ RAG Retrieval      │──── PgVector + Rerank
 │ │  │   ├─ Image Collection   │──── DashScope + Pexels（并行 Agent）
-│ │  │   └─ Code Generator     │──── DeepSeek-Chat（主生成）
+│ │  │   └─ Code Generator     │──── DeepSeek-V4-Flash（主生成）
 │ │  ├─ ScreenshotService      │──── Selenium + Chromium
 │ │  └─ ProjectDownload        │──── Hutool ZipUtil
 │ ├────────────────────────────┤ │
@@ -286,12 +287,16 @@ ai-app-generation/
 │   │   │   │   ├── MermaidDiagramTool.java     # mmdc CLI 渲染流程图
 │   │   │   │   └── UndrawIllustrationTool.java # unDraw 插画
 │   │   │   └── model/                          # ImageCategoryEnum / ImageCollectionPlan / ImageResource
-│   │   └── guardrail/                          # Prompt 安全护栏
-│   │       ├── PromptSafetyValidator.java
-│   │       ├── PromptSafetyRules.java
-│   │       ├── PromptSafetyInputGuardrail.java # LangChain4j InputGuardrail
-│   │       ├── annotation/PromptSafetyCheck.java
-│   │       └── aspect/PromptSafetyAspect.java  # AOP 切面
+│   │   ├── guardrail/                          # Prompt 安全护栏
+│   │   │   ├── PromptSafetyValidator.java
+│   │   │   ├── PromptSafetyRules.java
+│   │   │   ├── PromptSafetyInputGuardrail.java # LangChain4j InputGuardrail
+│   │   │   ├── annotation/PromptSafetyCheck.java
+│   │   │   └── aspect/PromptSafetyAspect.java  # AOP 切面
+│   │   └── memory/                             # 分层对话记忆（L0/L1/L2）
+│   │       ├── LayeredChatMemory.java          # 装饰器：messages() 拼三层，add/clear/id 委托 delegate
+│   │       ├── MemorySummaryPromptBuilder.java # L1 五段摘要 Prompt
+│   │       └── UserPreferencePromptBuilder.java # L2 偏好抽取 Prompt
 │   │
 │   ├── core/                           # 代码生成核心引擎
 │   │   ├── AiCodeGeneratorFacade.java          # 统一门面（同步 + 流式）
@@ -311,6 +316,8 @@ ai-app-generation/
 │   │   ├── AppService / UserService / ChatHistoryService
 │   │   ├── ScreenshotService                   # Selenium 截屏
 │   │   ├── ProjectDownloadService              # ZIP 下载
+│   │   ├── MemorySummaryService                # L1 App 级滚动摘要（抽取 + 召回）
+│   │   ├── UserMemoryService                   # L2 跨 App 用户偏好（抽取 + 召回）
 │   │   └── rag/                                # RAG 检索增强
 │   │       ├── RagRetrievalService.java        # 向量召回（带降级）
 │   │       ├── RagRerankService.java           # gte-rerank-v2 二次重排
@@ -324,7 +331,8 @@ ai-app-generation/
 │   │   ├── RoutingAiModelConfig                # 多 AI 模型 Bean 装配
 │   │   ├── StreamingChatModelConfig
 │   │   ├── ReasoningStreamingChatModelConfig
-│   │   ├── RedisChatMemoryStoreConfig          # 对话记忆存储
+│   │   ├── RedisChatMemoryStoreConfig          # L0 对话记忆 Redis 存储
+│   │   ├── MemorySummarizationExecutorConfig   # L1/L2 记忆后台线程池（DiscardPolicy）
 │   │   ├── RedisCacheManagerConfig             # Redis Cache
 │   │   ├── RagConfig + RagProperties           # RAG 配置类
 │   │   └── ...
@@ -490,7 +498,52 @@ data:
 - `business-error` 事件统一承载业务异常（含错误码）
 - Reactor `Flux.create` + `onErrorResume` 保证流不中断
 
-### 7. 数据库设计
+### 7. 分层对话记忆（L0 / L1 / L2）
+
+**模块**：`ai/memory/`（`LayeredChatMemory` / `MemorySummaryPromptBuilder` / `UserPreferencePromptBuilder`）、`service/{MemorySummaryService, UserMemoryService}`、`config/{RedisChatMemoryStoreConfig, MemorySummarizationExecutorConfig}`
+
+零代码生成是**多轮、长周期**的：用户会反复说"换个配色""刚才那版不要了""我习惯用 Vue3 + TS"。每轮都把全部历史塞给模型会让 Token 爆掉；只留最近几条又会丢掉早期的关键约束。为此项目实现了一套**三层记忆**，在"上下文完整"与"Token 可控"之间取平衡 —— 设计参考了 Claude Code 的会话记忆机制（`sessionMemory.ts` 的衰减分层、`extractMemories.ts` 的游标抽取、5 段摘要模板、连续失败熔断阈值）。
+
+```
+LayeredChatMemory.messages() 每轮拼装后送入大模型：
+
+  ┌─ L2 跨 App 用户偏好 ──────┐  "该用户的通用偏好"（语言 / 视觉风格 / 技术栈 / 交互习惯）
+  │   (UserMessage, AiMessage) │   ← 跨应用，源自 app_memory
+  ├─ L1 本 App 滚动摘要 ──────┤  "本应用早期对话的 5 段摘要"
+  │   (UserMessage, AiMessage) │   ← 单应用，源自 app_memory_summary
+  ├─ L0 原始热窗口 ───────────┤  最近 100 条原文（user / ai / tool）
+  │   delegate.messages()      │   ← Redis，MessageWindowChatMemory
+  └────────────────────────────┘
+```
+
+**L0 · 原始热窗口**（`RedisChatMemoryStore` + LangChain4j `MessageWindowChatMemory`）
+
+- 按 `appId` 持久化到 Redis（TTL `3600s`），窗口上限 **100 条消息**，满后由 `MessageWindowChatMemory` 内置逻辑裁剪，并保证 **tool 调用 / 结果成对驱逐**（不留孤儿 tool 消息把模型搞崩）
+- 冷启动（应用重启 / 缓存过期）时，`loadChatHistoryToMemory(appId, delegate, 20)` 从 MySQL 回填最近 20 条原文重建窗口
+
+**L1 · App 级滚动摘要**（`MemorySummaryService` + `app_memory_summary`，每 App 一行）
+
+- **何时**：对话结束钩子异步触发，新增满 **8 条** 才提炼（避免高频小提炼），单次最多并入 60 条
+- **摘要什么**：`MemorySummaryPromptBuilder` 用 **5 段固定模板**（应用目标与定位 / 用户偏好与硬约束 / 已否决的方案 / 关键设计决策与理由 / 当前进度速览），预算约 1800 token。铁律是**只摘"从当前代码状态推导不出来"的信息** —— 已生成的代码持久在 `vue_project_<appId>` 可随时读取，绝不复述进摘要
+- **怎么滚动**：`lastSummarizedId` 游标（指向 `chat_history.id`）+ 旧摘要增量合并，**成功才推进游标**
+- **读取**：`getCurrentSummary` 先查 Redis 缓存（`mem:summary:{appId}`，堵住工具循环里的 N+1 次 MySQL 读），未命中回查 MySQL 并 write-through 回填
+
+**L2 · 跨 App 用户偏好**（`UserMemoryService` + `app_memory` / `app_memory_extract_cursor`）
+
+- **解决什么**：L1 只在单个应用内有效；但"喜欢深色极简""技术栈用 Vue3 + TS"这类偏好，对该用户的**每个**应用都成立。L2 把它们抽出来，在用户新建 / 打开任意应用时带出
+- **抽取**：对话结束异步触发，模型输出**结构化 JSON 偏好数组**，按半封闭类别（语言偏好 / 视觉风格 / 技术栈倾向 / 交互习惯 / 其他）归类，按 `(userId, type, name)` **去重 upsert**（同类只更新内容）。Prompt 明确**排除"应用特有需求"**，杜绝与 L1 重叠
+- **召回**：`recallByApp(appId)` → `appId → userId` 反查（进程内 `ConcurrentHashMap` 缓存，归属永不变）→ 取 top-10 最新偏好 → Redis 缓存（`mem:pref:{userId}`），偏好变更时主动失效
+
+**装饰器，而非文本切片**：`LayeredChatMemory implements ChatMemory`，**包裹** `MessageWindowChatMemory`，只重写 `messages()` 做三层拼接，`add / clear / id` 全部委托 delegate。这样 L0 的 Redis 持久化、窗口裁剪、tool 对成对驱逐全部复用，装饰器自身不存储、不裁剪。每层在 `messages()` 里各自前置一对 `(UserMessage, AiMessage)`，既给摘要 / 偏好加上"这是背景、不是新指令"的引导语，又保证 user / ai 严格交替（LangChain4j 的硬约束）。
+
+**关键决策与权衡**：
+
+- **全链路 best-effort**：L1 / L2 的提炼跑在共享后台线程池（core 5 / max 10 / queue 200，**队列满直接 `DiscardPolicy` 丢弃**），失败则 `failCount++` 且游标不前进，连续失败 ≥ 3 触发 **circuit breaker** 暂停 —— 任意一层挂掉都自动降级回纯 L0，绝不阻塞或拖慢主对话流
+- **零竞态**：异步线程只读 `chat_history`、只写各自的记忆表（L1 写 `app_memory_summary`，L2 写 `app_memory` / 游标表），不碰 delegate 与 Redis 窗口；L1 按 `appId`、L2 按 `userId` 各自 single-flight 去重
+- **摘要 ≠ 压缩**：L1 在第 4 轮（满 8 条）就可能生成，但 L0 要累计到 100 条才真正驱逐。早期摘要与原文**双重存在**是有意的安全冗余 —— 等窗口满时，L1 的价值才从"冗余"变成"唯一上下文来源"
+- **当前按消息条数（100）而非 token 裁剪**：HTML / 多文件无工具循环、每轮约 +2 条（100 条 ≈ 50 轮，偏宽松），Vue 工程含工具循环、每轮可达几十条（偏紧）。这是已知权衡，后续可演进为 token 感知或按 `CodeGenType` 分档
+
+### 8. 数据库设计
 
 **MySQL 业务库** `ai_app_generation`：
 
@@ -499,6 +552,11 @@ data:
 | `user` | userAccount(uk) / userRole / userAvatar | `uk_userAccount` 唯一，`idx_userName` 提速搜索 |
 | `app` | initPrompt / codeGenType / deployKey(uk) / priority / userId | `uk_deployKey` 保证部署标识唯一，`idx_userId` 加速我的列表 |
 | `chat_history` | message / messageType (user/ai) / appId / userId | **`idx_appId_createTime` 联合索引** —— 游标分页核心 |
+| `app_memory_summary` | summary(MEDIUMTEXT 5 段) / lastSummarizedId(游标) / summaryTokens / failCount | `uk_appId` 每应用一行 —— **L1 滚动摘要** |
+| `app_memory` | userId / type(USER_PREFERENCE) / name(类别) / content / appId(溯源) | `uk_userId_type_name` 偏好去重键 —— **L2 跨 App 偏好** |
+| `app_memory_extract_cursor` | appId / userId / lastExtractedId(游标) / failCount | `uk_appId` 每应用一行 —— **L2 抽取游标** |
+
+> **记忆存储分工**：L0 热窗口存于 **Redis**（`MessageWindowChatMemory`，不落 MySQL）；L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:{userId}`，TTL 1h）堵住工具循环内的高频读。
 
 **PostgreSQL 向量库** `ai_codegen_rag`：
 
@@ -547,7 +605,7 @@ langchain4j:
   open-ai:
     chat-model:                       # 主生成
       base-url: https://api.deepseek.com
-      model-name: deepseek-chat
+      model-name: deepseek-v4-flash
     streaming-chat-model:             # 流式生成
     reasoning-streaming-chat-model:   # 推理任务
     routing-chat-model:               # 路由分类（Qwen-Turbo）
@@ -631,6 +689,7 @@ curl http://localhost:9025/api/actuator/health
 - [x] 流式 SSE + 工具调用流解析
 - [x] 图片采集 Agent（4 工具并行）
 - [x] Prompt 安全护栏
+- [x] 分层对话记忆（L0 Redis 热窗口 / L1 App 级摘要 / L2 跨 App 用户偏好）
 - [x] 一键部署 + 代码下载
 - [x] Docker Compose 全栈部署 + Grafana 监控
 - [ ] 多模型支持（接入 Claude、GPT-4、月之暗面等）
