@@ -14,7 +14,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -157,6 +159,25 @@ class UserMemoryServiceImplTest {
 
         assertEquals("", service.recallByApp(APP));
         verify(appMemoryMapper, never()).selectListByQuery(any());
+    }
+
+    @Test
+    void rejectedSubmitReleasesInFlightLockSoNextTriggerResubmits() {
+        // 模拟 AbortPolicy:executor 拒绝时抛 RejectedExecutionException(而非静默丢弃)
+        ExecutorService rejecting = mock(ExecutorService.class);
+        when(rejecting.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"))
+                .thenReturn(null);
+        UserMemoryServiceImpl s = new UserMemoryServiceImpl(chatHistoryService, appMemoryMapper,
+                cursorMapper, appMapper, model, rejecting, redisTemplate, 1, 60);
+
+        // 第一次:提交被拒 → catch 清理 inFlightUserIds 锁(且不抛)
+        assertDoesNotThrow(() -> s.triggerPreferenceExtractionAsync(USER, APP));
+        // 第二次:锁已释放,single-flight 不再阻塞,可再次提交
+        s.triggerPreferenceExtractionAsync(USER, APP);
+
+        // 提交两次 == 拒绝后 inFlight 锁被正确释放(否则第二次被 single-flight 永久挡住,仅 1 次)
+        verify(rejecting, times(2)).submit(any(Runnable.class));
     }
 
     /** 测试辅助:与实现中 PREF_CACHE_PREFIX 对齐。 */

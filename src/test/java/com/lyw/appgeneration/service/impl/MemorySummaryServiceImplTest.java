@@ -15,7 +15,9 @@ import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -154,5 +156,24 @@ class MemorySummaryServiceImplTest {
 
         assertDoesNotThrow(() -> service.summarizeNow(1L));
         verify(summaryMapper).insert(any()); // Redis 写挂了,摘要仍落库
+    }
+
+    @Test
+    void rejectedSubmitReleasesInFlightLockSoNextTriggerResubmits() {
+        // 模拟 AbortPolicy:executor 拒绝时抛 RejectedExecutionException(而非静默丢弃)
+        ExecutorService rejecting = mock(ExecutorService.class);
+        when(rejecting.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"))
+                .thenReturn(null);
+        MemorySummaryServiceImpl s = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper,
+                summarizationModel, rejecting, redisTemplate, 1, 60);
+
+        // 第一次:提交被拒 → catch 清理 inFlight 锁(且不抛)
+        assertDoesNotThrow(() -> s.triggerSummarizationAsync(1L));
+        // 第二次:锁已释放,single-flight 不再阻塞,可再次提交
+        s.triggerSummarizationAsync(1L);
+
+        // 提交两次 == 拒绝后 inFlight 锁被正确释放(否则第二次被 single-flight 永久挡住,仅 1 次)
+        verify(rejecting, times(2)).submit(any(Runnable.class));
     }
 }
