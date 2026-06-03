@@ -6,6 +6,7 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.ai.model.message.*;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.constants.AppConstant;
@@ -18,6 +19,7 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.mybatisflex.core.query.QueryWrapper;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import jakarta.annotation.Resource;
@@ -60,6 +62,9 @@ public class JsonMessageStreamHandler {
     @Resource
     private AiGeneratorServiceFactory aiGeneratorServiceFactory;
 
+    @Resource
+    private ToolMessageCollapser toolMessageCollapser;
+
     /**
      * 处理 TokenStream（VUE_PROJECT）
      * 解析 JSON 消息并重组为完整的响应格式
@@ -90,6 +95,9 @@ public class JsonMessageStreamHandler {
                     boolean shouldRunPreBuildCheck = shouldRunPreBuildCheck(chatHistoryService, appId);
                     String aiResponse = chatHistoryStringBuilder.toString();
                     chatHistoryService.addChatMessage(appId, aiResponse, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
+                    // 把本轮 AI 的多条工具消息在 L0 窗口折叠为一条(复用上面同一 aiResponse,与 MySQL/冷启动逐字一致,真正释放窗口槽位)。
+                    // 必须在 runVuePreBuildCheck 之前:否则"最后一条 UserMessage"会变成自检 prompt,折叠定界错乱。
+                    List<ChatMessage> collapsedWindow = toolMessageCollapser.collapseLastTurn(appId, aiResponse);
                     // 对话结束钩子：异步触发 L1 摘要提炼（best-effort，不阻塞 Vue 构建与流返回）
                     memorySummaryService.triggerSummarizationAsync(appId);
                     // 对话结束钩子：异步触发 L2 跨 app 用户偏好抽取（best-effort，不阻塞 Vue 构建与流返回）
@@ -97,6 +105,8 @@ public class JsonMessageStreamHandler {
                     String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + appId;
                     if (shouldRunPreBuildCheck) {
                         runVuePreBuildCheck(appId);
+                        // 自检轮往窗口追加的消息本就不入 MySQL/冷启动,折叠快照恢复后丢弃它们,使实时窗口 == 冷启动形态
+                        toolMessageCollapser.restore(appId, collapsedWindow);
                     } else {
                         log.info("非首轮对话，跳过构建前代码自检: appId={}", appId);
                     }
