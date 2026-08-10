@@ -6,14 +6,22 @@ import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import com.lyw.appgeneration.service.rag.support.TemplateTestData;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.BoostQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TermQuery;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class Bm25RetrieverTest {
@@ -61,7 +69,48 @@ class Bm25RetrieverTest {
     }
 
     @Test
-    void boostsMultiWordTechnologyLabelsWithTheSameNormalization(@TempDir Path tempDir) throws IOException {
+    void createsOneExactTermForSingleWordQuery(@TempDir Path tempDir) throws IOException {
+        writeSkeleton(tempDir, "skeleton-basic", "基础工程", "基础描述", false);
+        TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
+
+        try (Bm25Retriever retriever = new Bm25Retriever(catalog)) {
+            Query query = retriever.createQuery("Vue", RagDocumentKind.PROJECT_SKELETON);
+
+            assertEquals(List.of("vue"), exactQueryClauses(query).stream()
+                    .map(this::exactTerm)
+                    .toList());
+        }
+    }
+
+    @Test
+    void createsWholePhraseAndWhitespaceTokensForMultiWordQuery(@TempDir Path tempDir) throws IOException {
+        writeSkeleton(tempDir, "skeleton-basic", "基础工程", "基础描述", false);
+        TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
+
+        try (Bm25Retriever retriever = new Bm25Retriever(catalog)) {
+            Query query = retriever.createQuery("Aurora Router", RagDocumentKind.PROJECT_SKELETON);
+
+            assertEquals(Set.of("aurora router", "aurora", "router"), exactQueryClauses(query).stream()
+                    .map(this::exactTerm)
+                    .collect(Collectors.toSet()));
+        }
+    }
+
+    @Test
+    void boostsEveryExactTermByExactlyTwo(@TempDir Path tempDir) throws IOException {
+        writeSkeleton(tempDir, "skeleton-basic", "基础工程", "基础描述", false);
+        TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
+
+        try (Bm25Retriever retriever = new Bm25Retriever(catalog)) {
+            Query query = retriever.createQuery("Aurora Router", RagDocumentKind.PROJECT_SKELETON);
+            assertEquals(List.of(2.0f, 2.0f, 2.0f), exactQueryClauses(query).stream()
+                    .map(BoostQuery::getBoost)
+                    .toList());
+        }
+    }
+
+    @Test
+    void ranksExactTechnologyFieldAheadOfEquivalentTextField(@TempDir Path tempDir) throws IOException {
         ObjectNode matched = TemplateTestData.skeletonDocument("skeleton-z-matched");
         matched.put("title", "统一工程");
         matched.put("embedText", "统一工程描述");
@@ -129,6 +178,24 @@ class Bm25RetrieverTest {
                     RagDocumentKind.FEATURE_SNIPPET, 5).isEmpty());
             assertEquals(catalog.getCatalogVersion(), retriever.getCatalogVersion());
         }
+    }
+
+    private List<BoostQuery> exactQueryClauses(Query query) {
+        BooleanQuery booleanQuery = assertInstanceOf(BooleanQuery.class, query);
+        return booleanQuery.clauses().stream()
+                .filter(clause -> clause.occur() == BooleanClause.Occur.SHOULD)
+                .map(BooleanClause::query)
+                .filter(BoostQuery.class::isInstance)
+                .map(BoostQuery.class::cast)
+                .filter(clause -> clause.getQuery() instanceof TermQuery termQuery
+                        && "exact".equals(termQuery.getTerm().field()))
+                .toList();
+    }
+
+    private String exactTerm(BoostQuery query) {
+        TermQuery termQuery = assertInstanceOf(TermQuery.class, query.getQuery());
+        assertEquals("exact", termQuery.getTerm().field());
+        return termQuery.getTerm().text();
     }
 
     private void writeFeature(Path root,

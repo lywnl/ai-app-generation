@@ -152,7 +152,7 @@ public class Bm25Retriever implements AutoCloseable {
         }
     }
 
-    private Query createQuery(String rawQuery, RagDocumentKind documentKind) throws IOException {
+    Query createQuery(String rawQuery, RagDocumentKind documentKind) throws IOException {
         BooleanQuery.Builder query = new BooleanQuery.Builder();
         for (String token : analyze(rawQuery)) {
             query.add(new TermQuery(new Term(FIELD_TEXT, token)), BooleanClause.Occur.SHOULD);
