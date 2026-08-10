@@ -4,6 +4,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 策展模板文档(JSON 反序列化目标)
@@ -14,11 +15,35 @@ import java.util.List;
 @NoArgsConstructor
 public class TemplateDoc {
 
+    /** 知识文档结构版本 */
+    private Integer schemaVersion;
+
     /** 唯一 ID,用于向量库 upsert */
     private String id;
 
+    /** 父文档类型 */
+    private RagDocumentKind documentKind;
+
     /** 类型:html / multi-file / vue-project,由目录推导 */
     private String type;
+
+    /** 模板自身版本 */
+    private String version;
+
+    /** 前端框架 */
+    private String framework;
+
+    /** 编程语言 */
+    private String language;
+
+    /** 构建工具 */
+    private String buildTool;
+
+    /** 运行时依赖声明 */
+    private Map<String, String> dependencies;
+
+    /** 开发依赖声明 */
+    private Map<String, String> devDependencies;
 
     /** 业务分类:auth / dashboard / landing / form / ecom 等 */
     private String category;
