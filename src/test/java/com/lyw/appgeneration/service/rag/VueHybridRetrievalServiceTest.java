@@ -311,6 +311,56 @@ class VueHybridRetrievalServiceTest {
     }
 
     @Test
+    void skipsRerankAndMetricsWhenRerankIsDisabled() {
+        TemplateDoc skeleton = compatibleSkeleton("rrf-skeleton");
+        List<TemplateDoc> features = new ArrayList<>();
+        for (int index = 1; index <= 7; index++) {
+            TemplateDoc incompatible = compatibleFeature("incompatible-" + index);
+            incompatible.setFramework("vue@2.7.16");
+            features.add(incompatible);
+        }
+        features.add(compatibleFeature("feature-within-top-n"));
+        features.add(compatibleFeature("feature-after-top-n"));
+        Harness harness = harness(join(List.of(skeleton), features));
+        harness.properties.getRerank().setEnabled(false);
+        stubSuccessfulRecall(harness, List.of(skeleton), features);
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals("rrf-skeleton", context.skeleton().getId());
+        assertEquals(List.of("feature-within-top-n"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+        verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+        verify(harness.metrics, never()).recordRerankCandidates(anyInt());
+        verify(harness.metrics, never())
+                .recordDegradation(VueRagDegradationReason.RERANK_FAILED);
+    }
+
+    @Test
+    void doesNotRecordRerankCandidatesWhenRrfOrParentDocumentsAreEmpty() {
+        TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
+        Harness harness = harness(List.of(basic));
+        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(List.of());
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(List.of());
+        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of(new RankedCandidate(
+                        "missing-feature", RagDocumentKind.FEATURE_SNIPPET, 1, 1.0)));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of());
+
+        harness.service.retrieve(QUERY);
+
+        verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+        verify(harness.metrics, never()).recordRerankCandidates(anyInt());
+        verify(harness.metrics, never())
+                .recordDegradation(VueRagDegradationReason.RERANK_FAILED);
+    }
+
+    @Test
     void fallsBackToBasicSkeletonWhenBothChannelsHaveNoResults() {
         TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
         Harness harness = harness(List.of(basic));
@@ -381,7 +431,7 @@ class VueHybridRetrievalServiceTest {
         VueRagMetricsCollector metrics = mock(VueRagMetricsCollector.class);
         VueHybridRetrievalService service = new VueHybridRetrievalService(
                 provider, mock(DenseRetriever.class), mock(RrfFusionService.class),
-                mock(RagRerankService.class), metrics);
+                mock(RagRerankService.class), metrics, new RagProperties());
 
         VueRagContext context = service.retrieve(QUERY);
 
@@ -460,6 +510,7 @@ class VueHybridRetrievalServiceTest {
         RrfFusionService fusion = spy(new RrfFusionService());
         RagRerankService rerank = mock(RagRerankService.class);
         VueRagMetricsCollector metrics = mock(VueRagMetricsCollector.class);
+        RagProperties properties = new RagProperties();
         when(rerank.rerankVue(any(), anyList(), anyInt())).thenAnswer(invocation -> {
             List<TemplateDoc> candidates = invocation.getArgument(1);
             int topK = invocation.getArgument(2);
@@ -468,8 +519,8 @@ class VueHybridRetrievalServiceTest {
         VueRetrievalResourceProvider provider = mock(VueRetrievalResourceProvider.class);
         when(provider.current()).thenReturn(Optional.of(new VueRetrievalResources(catalog, bm25)));
         VueHybridRetrievalService service = new VueHybridRetrievalService(
-                provider, dense, fusion, rerank, metrics);
-        return new Harness(service, bm25, dense, fusion, rerank, metrics);
+                provider, dense, fusion, rerank, metrics, properties);
+        return new Harness(service, bm25, dense, fusion, rerank, metrics, properties);
     }
 
     private List<RankedCandidate> candidates(List<TemplateDoc> documents, RagDocumentKind kind) {
@@ -546,7 +597,8 @@ class VueHybridRetrievalServiceTest {
             DenseRetriever dense,
             RrfFusionService fusion,
             RagRerankService rerank,
-            VueRagMetricsCollector metrics
+            VueRagMetricsCollector metrics,
+            RagProperties properties
     ) {
     }
 }

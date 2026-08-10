@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.rag;
 
+import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
@@ -55,17 +56,20 @@ public class VueHybridRetrievalService {
     private final RrfFusionService fusionService;
     private final RagRerankService rerankService;
     private final VueRagMetricsCollector metricsCollector;
+    private final RagProperties properties;
 
     public VueHybridRetrievalService(VueRetrievalResourceProvider resourceProvider,
                                      DenseRetriever denseRetriever,
                                      RrfFusionService fusionService,
                                      RagRerankService rerankService,
-                                     VueRagMetricsCollector metricsCollector) {
+                                     VueRagMetricsCollector metricsCollector,
+                                     RagProperties properties) {
         this.resourceProvider = resourceProvider;
         this.denseRetriever = denseRetriever;
         this.fusionService = fusionService;
         this.rerankService = rerankService;
         this.metricsCollector = metricsCollector;
+        this.properties = properties;
     }
 
     /**
@@ -149,14 +153,15 @@ public class VueHybridRetrievalService {
                 VueRagLogSanitizer.queryHash(rawQuery), resources.catalog().getCatalogVersion(),
                 VueRagLogSanitizer.candidateIds(fused), fused.size());
         if (fused.isEmpty()) {
-            metricsCollector.recordRerankCandidates(0);
             return new ChainResult(List.of(), true);
         }
         List<TemplateDoc> parentDocuments = resolveParents(
                 fused, documentKind, resources.catalog());
         if (parentDocuments.isEmpty()) {
-            metricsCollector.recordRerankCandidates(0);
             return new ChainResult(List.of(), true);
+        }
+        if (!properties.getRerank().isEnabled()) {
+            return new ChainResult(parentDocuments.stream().limit(rerankTopK).toList(), degraded);
         }
         try {
             List<TemplateDoc> reranked = rerankService.rerankVue(

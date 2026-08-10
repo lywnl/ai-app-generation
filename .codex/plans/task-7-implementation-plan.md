@@ -73,3 +73,17 @@
 - [ ] 按正确性、可读性、架构、安全、性能五轴自审。
 - [ ] 更新 `.codex/sdd/task-7-report.md`，写入 RED/GREEN、参数捕获、开关、降级、指标、脱敏、验证、文件及最终 SHA。
 - [ ] 使用固定信息 `重构: 修正Vue RAG检索与图片增强顺序` 提交，不 push。
+
+## Task 5：独立审查修复——精排开关与指标执行语义
+
+**文件：**
+
+- 修改 `src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java`
+- 修改 `src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java`
+
+- [x] 先写失败测试，证明 `rag.rerank.enabled=false` 时仍错误调用 Vue 精排；保存 `task-7-rerank-disabled-red.log`。
+- [x] 先写失败测试，证明 RRF 或父文档为空、精排未执行时仍错误记录 0 候选；保存 `task-7-rerank-empty-red.log`。
+- [x] 最小注入 `RagProperties`：关闭精排时按 RRF 父文档顺序和既定链路 TopN 截断，空候选直接返回。
+- [x] 仅在真实精排成功时记录实际数量；仅在真实调用抛 `RerankException` 时记录 0 和 `rerank_failed`，其他异常边界不变。
+- [x] 运行两个新增测试、定向服务测试、任务 7 目标集、任务 1–7 回归、既定纯单元回归和 `git diff --check`。
+- [x] 更新任务 7 报告，使用 `修复: 遵循Vue精排开关与指标语义` 提交，不 push。
