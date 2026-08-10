@@ -7,6 +7,7 @@ import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -22,6 +23,7 @@ public class VueRetrievalResourceProvider {
 
     private final VueRetrievalResources resources;
 
+    @Autowired
     public VueRetrievalResourceProvider(RagProperties properties, ObjectMapper objectMapper) {
         this(properties, objectMapper, Bm25Retriever::new);
     }
