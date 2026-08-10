@@ -39,6 +39,19 @@
 - 原 Important-2 已关闭：`rag.enabled` 在 Facade 与 Service 层优先于 Hybrid 开关，关闭时不执行任何 Vue RAG。
 - 代码可以进入全范围验证；外部真实检索、10 条真实生成构建和完整 Maven 门禁仍需按实际结果单独审计，不能由本次代码复审替代。
 
+## 修复后全范围验证结果
+
+- 任务 1～8 目标回归：176 项，0 failure、0 error、1 skipped；跳过项是默认门控的真实骨架联网构建。
+- 纯单元回归：266 项，0 failure、0 error、0 skipped。
+- 完整 `mvn test`：278 项，0 failure、10 error、2 skipped，`BUILD FAILURE`。10 个错误与修复前集合一致：
+  - 8 个 Spring 上下文测试因未配置 `DEEPSEEK_API_KEY` 失败；
+  - 2 个 `JsonMessageStreamHandlerTest` 因既有测试夹具未注入 `ToolMessageCollapser` 失败。
+- 显式 `RAG_EVAL=true`：门禁入口 1/1 通过，报告状态为“未执行”，缺少 `DASHSCOPE_API_KEY`、`SPRING_DATASOURCE_PASSWORD`；没有真实 Hit@1、Recall@4 或相对 Dense 指标。
+- 显式 `RAG_BUILD_EVAL=true`：门禁入口 1/1 通过，报告状态为“未执行”，缺少 `DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`、`SPRING_DATASOURCE_PASSWORD`；没有 10/10 真实生成构建成绩。
+- `git diff --check`：通过。
+
+结论：代码目标回归与纯单元回归通过，且修复未扩大完整 Maven 的既有错误集合；但计划要求的完整 Maven 成功和两个真实外部门禁仍未达成，因此只能认定“代码实现可复审”，不能认定“发布门禁完成”。
+
 ## 历史审查记录（修复前，已被上述结论替代）
 
 - 审查范围：`5850ef9f4ffb50d58839245c3cd4dfaf4bad67a8..b2be84e1f2dcd3f0409a8724c7dc5dddf49e1680`

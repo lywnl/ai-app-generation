@@ -7,6 +7,15 @@
 - 跨层验收已串联同一 InMemory 存储、真实当前摄取、真实 Dense、父文档与 Hybrid 关闭 Facade，证明旧 schema/旧目录版本不可见、当前完整源码可用。
 - 验证：指定覆盖 52/52，纯单元 265/265，均为 0 failure、0 error、0 skipped；`git diff --check` 通过。
 
+## 修复后全范围验证
+
+- 任务 1～8 目标回归：176 项，0 failure、0 error、1 skipped；跳过项为默认门控的真实骨架联网构建。
+- 纯单元回归：266 项，0 failure、0 error、0 skipped。
+- 完整 `mvn test`：278 项，0 failure、10 error、2 skipped，未通过；错误集合与修复前基线一致：8 个 Spring 上下文测试因缺少 `DEEPSEEK_API_KEY`，2 个 `JsonMessageStreamHandlerTest` 因既有测试未注入 `ToolMessageCollapser`。
+- 真实检索门禁报告：状态“未执行”，缺少 `DASHSCOPE_API_KEY`、`SPRING_DATASOURCE_PASSWORD`，未取得 Hit@1、Recall@4 或 Dense 相对退化指标。
+- 十条真实生成构建报告：状态“未执行”，缺少 `DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`、`SPRING_DATASOURCE_PASSWORD`，未取得 10/10 构建结果。
+- `git diff --check`：通过；未推送远程。
+
 - 任务 1：完成（提交 `f32d576..ac2bca9`，独立审查通过）
 - 任务 2：完成（提交 `ac2bca9..8aead1b`，独立审查通过）
 - 任务 3：完成（提交 `8aead1b..e4ce5fe`，独立审查通过）
@@ -15,4 +24,4 @@
 - 任务 6：完成（提交 `ede5a53..12c5d61`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
 - 任务 7：完成（提交 `12c5d61..579e686`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
 - 任务 8：代码实现完成（提交 `579e686..b2be84e`，定向复审通过；真实外部门禁仍未执行）
-- 全分支独立审查：首轮发现 2 个 Important；修复提交 `65e1e68` 已通过独立复审，Critical/Important 均为 0；待完成全范围验证与外部门禁审计
+- 全分支独立审查：首轮发现 2 个 Important；修复提交 `65e1e68` 已通过独立复审，Critical/Important 均为 0；全范围验证已完成，待修复后全分支最终复审
