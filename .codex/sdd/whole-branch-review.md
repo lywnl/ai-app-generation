@@ -1,5 +1,18 @@
 # Vue RAG 混合检索全分支最终审查
 
+## Maven 门禁最终收敛（2026-08-11，替代此前失败状态）
+
+- 根因一：`JsonMessageStreamHandlerTest` 使用 `@InjectMocks`，但没有提供生产类新增的 `ToolMessageCollapser`。测试已补齐 mock，并用包含 `UserMessage`、`AiMessage` 的非空快照配合 `same(snapshot)`，验证自检后恢复的是折叠方法返回的同一对象。
+- 根因二：多个旧 `@SpringBootTest` 混合了纯逻辑、真实模型/网页调用和完整生产外部依赖。纯解析测试已去除无用 Spring 上下文；真实模型、网页测试改为 `EXTERNAL_INTEGRATION_TESTS=true` 显式执行。
+- `contextLoads()` 没有被跳过。测试层只替换 Mapper、Redis/Redisson、COS、模型、Embedding/向量库、Pexels/DashScope 图片工具和 LangChain4j 运行时代理等外部或数据访问边界；`AppService`、记忆 Service、RAG 编排、`RagRerankService`、`AiCodeGeneratorFacade` 等业务 Bean 保持真实装配。
+- 测试代码没有提交真实或虚假凭据。`dashscope.api-key=` 是空测试配置，仅使真实 `RagRerankService` 构造不发请求的 `RestClient`；运行进程同时显式清空所有相关环境变量。
+- 主代理最终定向验证：`AiAppGenerationApplicationTests,JsonMessageStreamHandlerTest` 共 3 项，0 failure、0 error、0 skipped；日志明确出现 `Started AiAppGenerationApplicationTests`。
+- 主代理最终完整验证：278 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。七项均是显式外部门控的真实模型、网页、旧 RAG 联网评测或真实 npm 构建测试。
+- 独立最终复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0，Ready to merge 为 Yes，所有历史 finding 已关闭。
+- 对应提交：`427fb16`、`25b83cc`、`a5c09b8`。未修改 `src/main/**`，未推送远程。
+
+当前结论：默认 Maven 门禁已完成，代码仍可合并；真实 Vue Hybrid/Dense 检索指标与十条真实生成构建仍因缺少凭据和 PGVector 基础设施未执行，所以发布结论仍为不可发布。
+
 ## 最终审查 Important 修复（2026-08-10）
 
 ### RED 证据
@@ -27,7 +40,7 @@
 ### 提交与遗留
 
 - 提交 SHA：`65e1e6881aab8bccd4b3b42b5c2da15f71104d77`（`修复: 统一Vue RAG开关与新版回退链`）。
-- 未解决事项：完整 Maven 仍有简报明确排除的既有密钥注入与测试夹具问题；本次未运行真实外部 Vue 检索评测或十条生成构建门禁，也未修改其逻辑。
+- 截至该提交的遗留：完整 Maven 当时仍有密钥注入与测试夹具问题；这部分已由 2026-08-11 的三个 Maven 门禁提交关闭。真实外部 Vue 检索评测和十条生成构建门禁仍未执行。
 
 ## 修复后独立复审结论
 
@@ -37,20 +50,20 @@
 - Critical：0；Important：0；Minor：0（本段已修正原报告状态冲突）。
 - 原 Important-1 已关闭：Hybrid 关闭时使用新版生产 Dense-only、当前 `catalogVersion + documentKind` 和父文档回查，不再读取旧 Vue metadata 协议。
 - 原 Important-2 已关闭：`rag.enabled` 在 Facade 与 Service 层优先于 Hybrid 开关，关闭时不执行任何 Vue RAG。
-- 代码可以进入全范围验证；外部真实检索、10 条真实生成构建和完整 Maven 门禁仍需按实际结果单独审计，不能由本次代码复审替代。
+- 代码可以进入全范围验证；在该次复审时，外部真实检索、10 条真实生成构建和完整 Maven 门禁仍需单独审计。完整 Maven 后续已通过，两个外部门禁仍未执行。
 
-## 修复后全范围验证结果
+## 2026-08-10 全范围验证历史结果（已由顶部新结果替代）
 
 - 任务 1～8 目标回归：176 项，0 failure、0 error、1 skipped；跳过项是默认门控的真实骨架联网构建。
 - 纯单元回归：266 项，0 failure、0 error、0 skipped。
-- 完整 `mvn test`：278 项，0 failure、10 error、2 skipped，`BUILD FAILURE`。10 个错误与修复前集合一致：
+- 当时的完整 `mvn test`：278 项，0 failure、10 error、2 skipped，`BUILD FAILURE`。该历史错误集合为：
   - 8 个 Spring 上下文测试因未配置 `DEEPSEEK_API_KEY` 失败；
   - 2 个 `JsonMessageStreamHandlerTest` 因既有测试夹具未注入 `ToolMessageCollapser` 失败。
 - 显式 `RAG_EVAL=true`：门禁入口 1/1 通过，报告状态为“未执行”，缺少 `DASHSCOPE_API_KEY`、`SPRING_DATASOURCE_PASSWORD`；没有真实 Hit@1、Recall@4 或相对 Dense 指标。
 - 显式 `RAG_BUILD_EVAL=true`：门禁入口 1/1 通过，报告状态为“未执行”，缺少 `DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`、`SPRING_DATASOURCE_PASSWORD`；没有 10/10 真实生成构建成绩。
 - `git diff --check`：通过。
 
-结论：代码目标回归与纯单元回归通过，且修复未扩大完整 Maven 的既有错误集合；但计划要求的完整 Maven 成功和两个真实外部门禁仍未达成，因此只能认定“代码实现可复审”，不能认定“发布门禁完成”。
+当时结论：代码目标回归与纯单元回归通过，但完整 Maven 和两个真实外部门禁尚未达成。完整 Maven 已在 2026-08-11 关闭；两个真实外部门禁仍未达成。
 
 ## 修复后全分支最终复审
 
@@ -59,7 +72,7 @@
 - Task quality：通过。
 - Critical：0；Important：0；Minor：0。
 - 代码合并结论：可以合并。
-- 发布结论：不可发布。发布前必须解决完整 Maven 的 10 个错误，并取得真实检索指标及 10/10 真实生成构建成绩。
+- 当时发布结论：不可发布。完整 Maven 的 10 个错误已在 2026-08-11 关闭；当前不可发布的剩余原因只有真实检索指标和 10/10 真实生成构建没有成绩。
 - 本轮未合并、未推送、未删除分支或工作树。
 
 ## 历史审查记录（修复前，已被上述结论替代）
@@ -67,6 +80,8 @@
 - 审查范围：`5850ef9f4ffb50d58839245c3cd4dfaf4bad67a8..b2be84e1f2dcd3f0409a8724c7dc5dddf49e1680`
 - 审查性质：最终只读代码审查；未修改生产代码，未运行全量测试
 - 历史总结：未发现 Critical；发现 2 项 Important；无 Minor。当时不应合并或发布；两项 Important 均已由 `65e1e68` 关闭。
+
+以下 `Plan compliance`、`Issues` 和 `Assessment` 是 `b2be84e` 阶段的修复前审查明细，仅为保留审计链；其中两项 Important 已由 `65e1e68` 关闭，完整 Maven 已由 `a5c09b8` 关闭。当前结论以文档顶部为准。
 
 ## Plan compliance
 
@@ -80,14 +95,14 @@
 
 ### Partially achieved
 
-- 任务 7 的 Hybrid 开启链已接通，但“关闭 Hybrid 回退旧 Dense”与任务 3 的新版 Vue 摄取 schema 跨任务不兼容，见 Important-1。
-- `rag.enabled` 被声明为 RAG 总开关，但 Vue Hybrid 分支没有消费它，见 Important-2。
+- 历史 Important-1：任务 7 的 Hybrid 开启链已接通，但“关闭 Hybrid 回退旧 Dense”与任务 3 的新版 Vue 摄取 schema 跨任务不兼容；已由 `65e1e68` 关闭。
+- 历史 Important-2：`rag.enabled` 被声明为 RAG 总开关，但 Vue Hybrid 分支没有消费它；已由 `65e1e68` 关闭。
 - 任务 8 已建立真实门禁代码和数据，但门禁结果尚未取得：真实 Hybrid/Dense 检索没有执行，10 条真实生成构建没有执行。
 
 ### Needs fixes
 
-- 修复下述 2 项 Important，并增加覆盖“真实新版摄取数据 + Hybrid 关闭”和“总开关关闭 + Hybrid 开启”的跨层测试。
-- 发布门禁尚未达成：计划要求的 `Skeleton Hit@1 >= 0.90`、`Feature Recall@4 >= 0.85`、相对 Dense 基线退化不超过 `0.05` 没有真实结果；10/10 真实生成的 `npm install` 与 `npm run build` 没有执行；完整 `mvn test` 当前为 252 项、10 errors、2 skipped，而不是计划要求的通过。以上是发布状态，不另计代码 finding。
+- 历史两项 Important 和对应跨层测试均已由 `65e1e68` 关闭。
+- 当前发布门禁尚未达成：计划要求的 `Skeleton Hit@1 >= 0.90`、`Feature Recall@4 >= 0.85`、相对 Dense 基线退化不超过 `0.05` 没有真实结果；10/10 真实生成的 `npm install` 与 `npm run build` 没有执行。完整 `mvn test` 已通过，不再是待修项。
 
 ## Strengths
 
@@ -106,7 +121,7 @@
 
 ### Important
 
-#### Important-1：Hybrid 关闭的旧 Dense 回退无法消费新版 Vue 摄取数据，发布顺序会产生错误/陈旧上下文
+#### Important-1（历史，已由 `65e1e68` 关闭）：Hybrid 关闭的旧 Dense 回退无法消费新版 Vue 摄取数据
 
 - 位置：
   - `src/main/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestor.java:62`
@@ -122,7 +137,7 @@
 - 修法：不要让 Hybrid 开关控制新旧 metadata schema。Vue 在新版摄取后即使关闭 BM25/RRF，也应走当前 `catalogVersion` 的新版 Dense 父文档链和 `assembleVueProject`；或者使用物理隔离的旧表并明确迁移/清理策略。不能通过把完整源码重新写回 PGVector metadata 来规避，否则违反任务 3 的源码隔离要求。
 - 验收条件：用同一个测试存储先放入旧版/已删除行，再通过 `VueKnowledgeIngestor` 摄取当前目录；在 `rag.hybrid.enabled=false` 下走真实 Vue 生成增强入口，断言仅当前目录父文档可见、拼装上下文含有效父文档源码、无旧行或空 metadata 候选；随后切换开关时生成语义保持可用。
 
-#### Important-2：`rag.enabled` 总开关不能关闭 Vue Hybrid 检索
+#### Important-2（历史，已由 `65e1e68` 关闭）：`rag.enabled` 总开关不能关闭 Vue Hybrid 检索
 
 - 位置：
   - `src/main/java/com/lyw/appgeneration/config/RagProperties.java:17`
@@ -143,10 +158,10 @@
 
 Hybrid 开启时，从目录/BM25/Dense 到 RRF、Rerank、兼容筛选、Prompt 和 Vue Agent 的主链总体一致；资源生命周期、固定参数、降级协议、Prompt 隔离和构建结果模型没有发现其他高确信跨任务断点。
 
-但部署/回滚链不一致：任务 3 改变了 Vue 向量表 schema，任务 7 的关闭开关路径仍消费旧 schema；同时总开关未覆盖 Vue 新链。因此单任务测试可以全部通过，而按计划真实部署后仍会在 Hybrid 关闭窗口产生错误上下文。再叠加任务 8 的外部门禁未完成，当前集成状态不满足发布条件。
+历史判断中的部署/回滚链问题和总开关问题均已由 `65e1e68` 关闭。当前集成状态不满足发布条件的唯一原因是任务 8 的两个真实外部门禁尚未执行。
 
 ## Assessment
 
-**Ready to merge：No。**
+**历史 Ready to merge：No；当前 Ready to merge：Yes。**
 
-合并前至少需要修复两项 Important 并通过相应跨层回归；发布前还必须取得真实 30 条检索门槛、10/10 真实生成构建以及完整 `mvn test` 成功证据。
+两项历史 Important、跨层回归和完整 Maven 均已关闭。发布前仍必须取得真实 30 条检索门槛及 10/10 真实生成构建成绩。

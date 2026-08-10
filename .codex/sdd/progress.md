@@ -11,7 +11,9 @@
 
 - 任务 1～8 目标回归：176 项，0 failure、0 error、1 skipped；跳过项为默认门控的真实骨架联网构建。
 - 纯单元回归：266 项，0 failure、0 error、0 skipped。
-- 完整 `mvn test`：278 项，0 failure、10 error、2 skipped，未通过；错误集合与修复前基线一致：8 个 Spring 上下文测试因缺少 `DEEPSEEK_API_KEY`，2 个 `JsonMessageStreamHandlerTest` 因既有测试未注入 `ToolMessageCollapser`。
+- 完整 `mvn test`：278 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。运行进程显式清空模型、Pexels、COS、数据库及外部门控变量；`AiAppGenerationApplicationTests.contextLoads` 实际启动 Spring 上下文并通过，不在跳过项中。
+- 七个跳过项均为显式外部测试：真实 npm 骨架构建 1 项、旧 RAG 联网评测 1 项、真实模型/网页外部集成 5 项。`CodeParserTest` 已移除无用 Spring 上下文，`JsonMessageStreamHandlerTest` 已补齐 `ToolMessageCollapser` 并验证非空折叠快照原样恢复。
+- Maven 门禁独立最终复审：Spec Compliance 与 Task quality 均通过，Critical/Important/Minor 均为 0；所有历史 finding 已关闭。
 - 真实检索门禁报告：状态“未执行”，缺少 `DASHSCOPE_API_KEY`、`SPRING_DATASOURCE_PASSWORD`，未取得 Hit@1、Recall@4 或 Dense 相对退化指标。
 - 十条真实生成构建报告：状态“未执行”，缺少 `DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`、`SPRING_DATASOURCE_PASSWORD`，未取得 10/10 构建结果。
 - `git diff --check`：通过；未推送远程。
@@ -23,5 +25,5 @@
 - 任务 5：完成（提交 `b2a2db6..ede5a53`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
 - 任务 6：完成（提交 `ede5a53..12c5d61`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
 - 任务 7：完成（提交 `12c5d61..579e686`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
-- 任务 8：代码实现完成（提交 `579e686..b2be84e`，定向复审通过；真实外部门禁仍未执行）
-- 全分支独立审查：最终 Spec Compliance 与 Task quality 均通过，Critical/Important/Minor 均为 0；代码可合并，但完整 Maven 与两个真实外部门禁未通过，当前不可发布
+- 任务 8：代码与默认 Maven 门禁完成（提交 `579e686..a5c09b8`，定向复审和 Maven 门禁复审均通过；真实外部门禁仍未执行）
+- 全分支独立审查：最终 Spec Compliance 与 Task quality 均通过，Critical/Important/Minor 均为 0；代码可合并，默认 Maven 已通过，但两个真实外部门禁没有成绩，当前仍不可发布
