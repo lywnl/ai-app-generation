@@ -16,8 +16,10 @@ import org.springframework.web.client.RestClientResponseException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -75,7 +77,7 @@ public class RagRerankService {
 
         List<RetrievedSnippet> reranked = new ArrayList<>(results.size());
         for (RerankResult result : results) {
-            validateIndex(result.index(), n);
+            validateResult(result, n);
             RetrievedSnippet origin = candidates.get(result.index());
             origin.setRerankScore(result.relevanceScore());
             reranked.add(origin);
@@ -95,9 +97,9 @@ public class RagRerankService {
         int candidateCount = candidates.size();
         List<String> documents = candidates.stream().map(this::buildVueDocumentText).toList();
         List<RerankResult> results = requestRerank(query, documents, topK);
+        validateVueResults(results, candidateCount, Math.min(topK, candidateCount));
         List<VueRerankResult> reranked = new ArrayList<>(results.size());
         for (RerankResult result : results) {
-            validateIndex(result.index(), candidateCount);
             reranked.add(new VueRerankResult(
                     candidates.get(result.index()), result.relevanceScore()));
         }
@@ -154,6 +156,32 @@ public class RagRerankService {
             throw new RerankException("DashScope 响应为空或无 results");
         }
         return resp.output().results();
+    }
+
+    private void validateVueResults(List<RerankResult> results,
+                                    int candidateCount,
+                                    int expectedResultCount) {
+        if (results.size() != expectedResultCount) {
+            throw new RerankException("Vue Rerank 结果数量非法: expected="
+                    + expectedResultCount + ", actual=" + results.size());
+        }
+        Set<Integer> indexes = new HashSet<>();
+        for (RerankResult result : results) {
+            validateResult(result, candidateCount);
+            if (!indexes.add(result.index())) {
+                throw new RerankException("Vue Rerank index 重复: " + result.index());
+            }
+        }
+    }
+
+    private void validateResult(RerankResult result, int candidateCount) {
+        if (result == null || result.index() == null) {
+            throw new RerankException("Rerank 结果缺少 index");
+        }
+        validateIndex(result.index(), candidateCount);
+        if (result.relevanceScore() == null || !Double.isFinite(result.relevanceScore())) {
+            throw new RerankException("Rerank relevance_score 缺失或不是有限数");
+        }
     }
 
     private void validateIndex(int index, int candidateCount) {
@@ -230,8 +258,8 @@ public class RagRerankService {
     private record Output(List<RerankResult> results) {}
 
     private record RerankResult(
-            int index,
-            @JsonProperty("relevance_score") double relevanceScore
+            Integer index,
+            @JsonProperty("relevance_score") Double relevanceScore
     ) {}
 
     private record Usage(@JsonProperty("total_tokens") int totalTokens) {}

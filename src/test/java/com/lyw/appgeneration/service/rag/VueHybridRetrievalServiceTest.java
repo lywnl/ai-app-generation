@@ -146,6 +146,105 @@ class VueHybridRetrievalServiceTest {
     }
 
     @Test
+    void acceptsCaretAndTildeDependencyRangesWithSameMajor() {
+        TemplateDoc skeleton = compatibleSkeleton("skeleton-ranges");
+        skeleton.getDependencies().put("shared-package", "4.2.4");
+        TemplateDoc caret = compatibleFeature("caret-range");
+        caret.getDependencies().put("shared-package", "^4.x");
+        TemplateDoc tilde = compatibleFeature("tilde-range");
+        tilde.getDependencies().put("shared-package", "~4.1.0");
+        Harness harness = harness(List.of(skeleton, caret, tilde));
+        stubSuccessfulRecall(harness, List.of(skeleton), List.of(caret, tilde));
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals(List.of("caret-range", "tilde-range"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+    }
+
+    @Test
+    void acceptsFixedDependencyAboveMinimumMajor() {
+        TemplateDoc skeleton = compatibleSkeleton("skeleton-minimum");
+        skeleton.getDependencies().put("shared-package", "4.2.4");
+        TemplateDoc feature = compatibleFeature("minimum-range");
+        feature.getDependencies().put("shared-package", ">=3.0.0");
+        Harness harness = harness(List.of(skeleton, feature));
+        stubSuccessfulRecall(harness, List.of(skeleton), List.of(feature));
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals(List.of("minimum-range"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+    }
+
+    @Test
+    void treatsUnboundedDependencyRangesAsCompatible() {
+        TemplateDoc skeleton = compatibleSkeleton("skeleton-unbounded");
+        skeleton.getDependencies().put("shared-package", "4.2.4");
+        TemplateDoc wildcard = compatibleFeature("wildcard-range");
+        wildcard.getDependencies().put("shared-package", "*");
+        TemplateDoc latest = compatibleFeature("latest-range");
+        latest.getDependencies().put("shared-package", "latest");
+        Harness harness = harness(List.of(skeleton, wildcard, latest));
+        stubSuccessfulRecall(harness, List.of(skeleton), List.of(wildcard, latest));
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals(List.of("wildcard-range", "latest-range"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+    }
+
+    @Test
+    void unboundedDependencyDoesNotConflictWithUnsupportedOtherDeclaration() {
+        TemplateDoc skeleton = compatibleSkeleton("skeleton-complex-range");
+        skeleton.getDependencies().put("shared-package", ">=3 <5");
+        TemplateDoc feature = compatibleFeature("unbounded-feature");
+        feature.getDependencies().put("shared-package", "*");
+        Harness harness = harness(List.of(skeleton, feature));
+        stubSuccessfulRecall(harness, List.of(skeleton), List.of(feature));
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals(List.of("unbounded-feature"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+    }
+
+    @Test
+    void conservativelyRejectsUnsupportedComplexDependencyRanges() {
+        TemplateDoc skeleton = compatibleSkeleton("skeleton-complex");
+        skeleton.getDependencies().put("shared-package", "4.2.4");
+        TemplateDoc comparatorSet = compatibleFeature("comparator-set");
+        comparatorSet.getDependencies().put("shared-package", ">=3 <5");
+        TemplateDoc union = compatibleFeature("range-union");
+        union.getDependencies().put("shared-package", "^3 || ^4");
+        TemplateDoc compatible = compatibleFeature("fixed-compatible");
+        compatible.getDependencies().put("shared-package", "4.9.0");
+        List<TemplateDoc> features = List.of(comparatorSet, union, compatible);
+        Harness harness = harness(join(List.of(skeleton), features));
+        stubSuccessfulRecall(harness, List.of(skeleton), features);
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals(List.of("fixed-compatible"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+    }
+
+    @Test
+    void marksDegradedWhenDenseReturnsEmptyButBm25KeepsBothChainsAvailable() {
+        TemplateDoc skeleton = compatibleSkeleton("bm25-only-skeleton");
+        TemplateDoc feature = compatibleFeature("bm25-only-feature");
+        Harness harness = harness(List.of(skeleton, feature));
+        stubSuccessfulRecall(harness, List.of(skeleton), List.of(feature));
+
+        VueRagContext context = harness.service.retrieve(QUERY);
+
+        assertEquals("bm25-only-skeleton", context.skeleton().getId());
+        assertEquals(List.of("bm25-only-feature"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+        assertTrue(context.degraded());
+    }
+
+    @Test
     void degradesToDenseWhenBm25Fails() {
         TemplateDoc skeleton = compatibleSkeleton("dense-skeleton");
         Harness harness = harness(List.of(skeleton));

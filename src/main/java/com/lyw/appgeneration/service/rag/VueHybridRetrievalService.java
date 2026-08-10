@@ -39,6 +39,12 @@ public class VueHybridRetrievalService {
     static final String BASIC_SKELETON_ID = "vue-skeleton-basic-001";
 
     private static final Pattern VERSION_NUMBER = Pattern.compile("(?<!\\d)(\\d+)(?:\\.\\d+)*");
+    private static final Pattern FIXED_DEPENDENCY_VERSION =
+            Pattern.compile("^(\\d+)(?:\\.\\d+){0,2}$");
+    private static final Pattern SINGLE_MAJOR_DEPENDENCY_RANGE =
+            Pattern.compile("^[\\^~]\\s*(\\d+)(?:\\.(?:\\d+|[xX*])){0,2}$");
+    private static final Pattern MINIMUM_DEPENDENCY_VERSION =
+            Pattern.compile("^>=\\s*(\\d+)(?:\\.\\d+){0,2}$");
 
     private final VueRetrievalResourceProvider resourceProvider;
     private final DenseRetriever denseRetriever;
@@ -106,7 +112,8 @@ public class VueHybridRetrievalService {
         ChannelResult dense = recall("Dense", documentKind,
                 () -> denseRetriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
                         documentKind, CHANNEL_TOP_K));
-        boolean degraded = bm25.failed() || dense.failed();
+        boolean degraded = bm25.failed() || bm25.candidates().isEmpty()
+                || dense.failed() || dense.candidates().isEmpty();
 
         List<RankedCandidate> fused = fusionService.fuse(
                 bm25.candidates(), dense.candidates(), qualityScores, FUSION_TOP_K);
@@ -202,12 +209,60 @@ public class VueHybridRetrievalService {
         Set<String> sharedNames = new java.util.HashSet<>(skeletonDependencies.keySet());
         sharedNames.retainAll(featureDependencies.keySet());
         for (String dependency : sharedNames) {
-            if (!hasSameMajorVersion(
+            if (!dependencyVersionsCompatible(
                     skeletonDependencies.get(dependency), featureDependencies.get(dependency))) {
                 return false;
             }
         }
         return true;
+    }
+
+    private boolean dependencyVersionsCompatible(String left, String right) {
+        DependencyVersionRange leftRange = dependencyVersionRange(left);
+        DependencyVersionRange rightRange = dependencyVersionRange(right);
+        if (leftRange.kind() == DependencyRangeKind.UNBOUNDED
+                || rightRange.kind() == DependencyRangeKind.UNBOUNDED) {
+            return true;
+        }
+        if (leftRange.kind() == DependencyRangeKind.UNSUPPORTED
+                || rightRange.kind() == DependencyRangeKind.UNSUPPORTED) {
+            return false;
+        }
+        if (leftRange.kind() == DependencyRangeKind.MINIMUM
+                && rightRange.kind() == DependencyRangeKind.MINIMUM) {
+            return true;
+        }
+        if (leftRange.kind() == DependencyRangeKind.MINIMUM) {
+            return rightRange.major() >= leftRange.major();
+        }
+        if (rightRange.kind() == DependencyRangeKind.MINIMUM) {
+            return leftRange.major() >= rightRange.major();
+        }
+        return leftRange.major() == rightRange.major();
+    }
+
+    private DependencyVersionRange dependencyVersionRange(String value) {
+        String normalized = normalize(value);
+        if (normalized.equals("*") || normalized.equals("latest")) {
+            return new DependencyVersionRange(DependencyRangeKind.UNBOUNDED, -1);
+        }
+        Matcher minimumMatcher = MINIMUM_DEPENDENCY_VERSION.matcher(normalized);
+        if (minimumMatcher.matches()) {
+            return new DependencyVersionRange(
+                    DependencyRangeKind.MINIMUM, Integer.parseInt(minimumMatcher.group(1)));
+        }
+        Matcher fixedMatcher = FIXED_DEPENDENCY_VERSION.matcher(normalized);
+        if (fixedMatcher.matches()) {
+            return new DependencyVersionRange(
+                    DependencyRangeKind.SINGLE_MAJOR, Integer.parseInt(fixedMatcher.group(1)));
+        }
+        Matcher rangeMatcher = SINGLE_MAJOR_DEPENDENCY_RANGE.matcher(normalized);
+        if (rangeMatcher.matches()) {
+            return new DependencyVersionRange(
+                    DependencyRangeKind.SINGLE_MAJOR, Integer.parseInt(rangeMatcher.group(1)));
+        }
+        // 这里只实现任务所需的 npm 版本子集，复杂比较符集合和并集必须保守拒绝。
+        return new DependencyVersionRange(DependencyRangeKind.UNSUPPORTED, -1);
     }
 
     private Map<String, String> allDependencies(TemplateDoc document) {
@@ -263,5 +318,15 @@ public class VueHybridRetrievalService {
     }
 
     private record ChainResult(List<TemplateDoc> documents, boolean degraded) {
+    }
+
+    private record DependencyVersionRange(DependencyRangeKind kind, int major) {
+    }
+
+    private enum DependencyRangeKind {
+        SINGLE_MAJOR,
+        MINIMUM,
+        UNBOUNDED,
+        UNSUPPORTED
     }
 }
