@@ -112,3 +112,55 @@ sh ./mvnw test
 ## 提交
 
 提交 SHA：见本报告所属的 Git 提交；最终交付中以 `git rev-parse HEAD` 的输出为准。报告与提交不能同时固定自身哈希（将 SHA 写入提交内容会改变提交 SHA）。
+
+## 独立审查整改（2026-08-11）
+
+独立审查指出两项 Important：默认跳过 `contextLoads()` 会丢失应用装配门禁；Handler 首轮用例未验证恢复操作获得折叠返回的同一快照对象。本节记录整改后的 RED → GREEN 证据。
+
+### 默认 Spring 上下文依赖图与三次最小假设
+
+根因追踪显示：生产 `@SpringBootApplication` 的 Mapper 扫描和组件扫描会在上下文创建期构造模型、Redis、Redisson、COS、PGVector 与 MyBatis Mapper。此前补充临时密钥后依次出现 `PEXELS_API_KEY` 占位解析、Redis 连接及 PGVector 连接失败，说明不能靠长期假值让完整生产依赖图运行。
+
+测试层修复保留 `@SpringBootTest`，在注解中：
+
+- 排除 JDBC、Redis、Cache、Session 与 MyBatis-Flex 数据访问自动配置；
+- 使用仅测试注解属性提供非敏感占位文本，以满足 `@Value` 解析；不会用于网络调用；
+- 使用 `@MockitoBean` 替换模型、Redis memory store、Redisson、COS、Embedding、RAG rerank、数据访问 Mapper 及依赖数据访问/外部客户端的服务边界。
+
+每次只验证一个假设（命令均先清空 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`PEXELS_API_KEY`、COS 参数和 `EXTERNAL_INTEGRATION_TESTS`）：
+
+1. 初始隔离：失败。`RagRerankService` 仍会创建，而整体 mock `RagProperties` 使其嵌套 `Rerank` 配置为 null。
+2. 保留真实 `RagProperties`、单独 mock `RagRerankService`：失败。应用类自身的 Mapper 扫描仍注册 `appMapper`，但被排除的数据访问自动配置未提供 `SqlSessionFactory`。
+3. 仅追加全部六个项目 Mapper 的 `@MockitoBean`：通过。上下文日志出现 `Started AiAppGenerationApplicationTests`，没有外部变量，也没有外部连接。
+
+定向命令：
+
+```bash
+env -u DEEPSEEK_API_KEY -u DASHSCOPE_API_KEY -u PEXELS_API_KEY \
+  -u COS_HOST -u TEN_SERCET_ID -u TEN_SECRET_KEY -u EXTERNAL_INTEGRATION_TESTS \
+  JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" \
+  PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" \
+  sh ./mvnw -Dtest=AiAppGenerationApplicationTests,JsonMessageStreamHandlerTest test
+```
+
+结果：3 项、0 failure、0 error、0 skipped、退出码 0。
+
+### Handler 快照对象身份验证
+
+RED：首轮测试先构造包含 `UserMessage` 与 `AiMessage` 的非空 snapshot，但保留旧的 `collapseLastTurn(...).thenReturn(List.of())`。`restore(eq(APP_ID), same(snapshot))` 失败，证明断言能够识别生产代码未透传折叠返回值的回归。
+
+GREEN：将 mock 返回改为该 `snapshot` 对象；在既有 `InOrder` 中使用 `same(snapshot)` 验证 `restore` 接收完全相同对象。定向 `JsonMessageStreamHandlerTest`：2 项、0 failure、0 error、0 skipped、退出码 0。
+
+### 最终完整回归与自审
+
+```bash
+env -u DEEPSEEK_API_KEY -u DASHSCOPE_API_KEY -u PEXELS_API_KEY \
+  -u COS_HOST -u TEN_SERCET_ID -u TEN_SECRET_KEY -u EXTERNAL_INTEGRATION_TESTS \
+  JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" \
+  PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" \
+  sh ./mvnw test
+```
+
+结果：278 项、0 failure、0 error、7 skipped、退出码 0。七项跳过均为保留的显式外部评测/真实模型、网页或构建测试；`AiAppGenerationApplicationTests.contextLoads` 不再跳过。
+
+`git diff --check` 通过。新增改动仅在 `src/test/java/**` 与本报告，`src/main/**` 无改动；未修改独立审查文件、未 push。

@@ -13,6 +13,9 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.mybatisflex.core.query.QueryWrapper;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import org.junit.jupiter.api.Test;
@@ -71,6 +74,10 @@ class JsonMessageStreamHandlerTest {
     @Test
     void handle_shouldCheckWithAiBeforeBuild() {
         AtomicReference<Consumer<ChatResponse>> onComplete = new AtomicReference<>();
+        List<ChatMessage> snapshot = List.of(
+                UserMessage.from("生成一个待办应用"),
+                AiMessage.from("已生成待办应用")
+        );
 
         when(aiGeneratorServiceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
                 .thenReturn(aiCodeGeneratorService);
@@ -82,7 +89,7 @@ class JsonMessageStreamHandlerTest {
             return tokenStream;
         });
         when(tokenStream.onError(any())).thenReturn(tokenStream);
-        when(toolMessageCollapser.collapseLastTurn(APP_ID, "ok")).thenReturn(List.of());
+        when(toolMessageCollapser.collapseLastTurn(APP_ID, "ok")).thenReturn(snapshot);
         doAnswer(invocation -> {
             Consumer<ChatResponse> callback = onComplete.get();
             if (callback != null) {
@@ -125,7 +132,7 @@ class JsonMessageStreamHandlerTest {
                 .generateVueProjectCodeStream(eq(APP_ID), contains("构建前代码自检"));
         inOrder.verify(tokenStream).onPartialResponse(any());
         inOrder.verify(tokenStream).start();
-        inOrder.verify(toolMessageCollapser).restore(APP_ID, List.of());
+        inOrder.verify(toolMessageCollapser).restore(eq(APP_ID), same(snapshot));
         inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
     }
 
