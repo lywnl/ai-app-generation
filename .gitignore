@@ -19,6 +19,7 @@ target/
 *.iml
 *.ipr
 .claude
+.worktrees/
 
 ### NetBeans ###
 /nbproject/private/
