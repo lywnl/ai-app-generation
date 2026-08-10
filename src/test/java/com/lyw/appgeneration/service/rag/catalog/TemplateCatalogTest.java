@@ -217,4 +217,38 @@ class TemplateCatalogTest {
         assertTrue(exception.getMessage().contains("dependency-mismatch.json"));
         assertTrue(exception.getMessage().contains("dependencies 声明不一致"));
     }
+
+    @Test
+    void rejectsSkeletonBeyondDerivedFileLimit(@TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.skeletonDocument("oversized-skeleton");
+        for (int index = 5; index < 11; index++) {
+            TemplateTestData.addFile(document, "src/extra-" + index + ".vue", "<template />");
+        }
+        TemplateTestData.write(tempDir.resolve("oversized-skeleton.json"), document);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> new TemplateCatalog(tempDir, objectMapper));
+
+        assertTrue(exception.getMessage().contains("oversized-skeleton.json"));
+        assertTrue(exception.getMessage().contains("PROJECT_SKELETON"));
+        assertTrue(exception.getMessage().contains("实际 11"));
+        assertTrue(exception.getMessage().contains("上限 10"));
+    }
+
+    @Test
+    void rejectsFeatureBeyondDerivedFileLimit(@TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.featureDocument("oversized-feature");
+        for (int index = 1; index < 6; index++) {
+            TemplateTestData.addFile(document, "src/extra-" + index + ".vue", "<template />");
+        }
+        TemplateTestData.write(tempDir.resolve("oversized-feature.json"), document);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> new TemplateCatalog(tempDir, objectMapper));
+
+        assertTrue(exception.getMessage().contains("oversized-feature.json"));
+        assertTrue(exception.getMessage().contains("FEATURE_SNIPPET"));
+        assertTrue(exception.getMessage().contains("实际 6"));
+        assertTrue(exception.getMessage().contains("上限 5"));
+    }
 }

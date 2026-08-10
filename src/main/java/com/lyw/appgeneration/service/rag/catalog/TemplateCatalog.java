@@ -7,6 +7,7 @@ import com.lyw.appgeneration.service.rag.chunk.KnowledgeChunkFactory;
 import com.lyw.appgeneration.service.rag.model.KnowledgeChunk;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
+import com.lyw.appgeneration.service.rag.VueRagBudgetPolicy;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -154,10 +155,20 @@ public class TemplateCatalog {
         if (document.getFiles() == null || document.getFiles().isEmpty()) {
             throw invalidFile(sourcePath, "files 为空");
         }
+        validateFileCount(document, sourcePath);
         validateQualityScore(document.getQualityScore(), sourcePath);
         validateFilePaths(document.getFiles(), sourcePath);
         if (document.getDocumentKind() == RagDocumentKind.PROJECT_SKELETON) {
             validateSkeleton(document, sourcePath, objectMapper);
+        }
+    }
+
+    private void validateFileCount(TemplateDoc document, String sourcePath) {
+        int actualCount = document.getFiles().size();
+        int maxCount = VueRagBudgetPolicy.maxFiles(document.getDocumentKind());
+        if (actualCount > maxCount) {
+            throw invalidFile(sourcePath, "%s 文件数量超限: 实际 %d，上限 %d"
+                    .formatted(document.getDocumentKind(), actualCount, maxCount));
         }
     }
 

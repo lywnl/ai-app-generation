@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.AbstractList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -285,6 +286,94 @@ class RagPromptAssemblerTest {
     }
 
     @Test
+    void keepsEveryMinimumFileRepresentationAtCatalogLimits() {
+        TemplateDoc skeleton = worstCaseDocument("上限骨架", RagDocumentKind.PROJECT_SKELETON,
+                filesWithLargeContent("skeleton", 10));
+        List<TemplateDoc> features = new ArrayList<>();
+        for (int index = 0; index < 4; index++) {
+            features.add(worstCaseDocument("上限片段-" + index, RagDocumentKind.FEATURE_SNIPPET,
+                    filesWithLargeContent("feature-" + index, 5)));
+        }
+
+        String result = assembler.assembleVueProject(
+                "生产上限需求",
+                new VueRagContext(skeleton, features, "catalog-v1", false));
+        String skeletonSection = between(result, SKELETON_HEADER, FEATURE_HEADER);
+        String featureSection = between(result, FEATURE_HEADER, REQUEST_HEADER);
+
+        assertTrue(skeletonSection.length() <= 4000);
+        assertEquals(10, countOccurrences(skeletonSection, "因预算未附完整内容"));
+        assertEquals(10, countOccurrences(skeletonSection, "--- 文件结束 ---"));
+        assertTrue(featureSection.length() <= 8000);
+        assertEquals(20, countOccurrences(featureSection, "因预算未附完整内容"));
+        assertEquals(20, countOccurrences(featureSection, "--- 文件结束 ---"));
+        assertTrue(result.endsWith("生产上限需求"));
+    }
+
+    @Test
+    void transparentlyAggregatesManualContextsBeyondCatalogLimitsAndContinues() {
+        TemplateDoc oversizedSkeleton = worstCaseDocument(
+                "超限骨架", RagDocumentKind.PROJECT_SKELETON, filesWithLargeContent("skeleton", 22));
+        TemplateDoc oversizedFeature = worstCaseDocument(
+                "超限片段", RagDocumentKind.FEATURE_SNIPPET, filesWithLargeContent("feature", 7));
+        TemplateDoc laterSmallFeature = document("后续小片段", RagDocumentKind.FEATURE_SNIPPET,
+                file("src/LaterSmall.vue", "LATER_SMALL_COMPLETE"));
+
+        String result = assembler.assembleVueProject(
+                "超限上下文后的真实需求",
+                new VueRagContext(
+                        oversizedSkeleton,
+                        List.of(oversizedFeature, laterSmallFeature),
+                        "catalog-v1",
+                        false));
+        String skeletonSection = between(result, SKELETON_HEADER, FEATURE_HEADER);
+        String featureSection = between(result, FEATURE_HEADER, REQUEST_HEADER);
+
+        assertTrue(skeletonSection.length() <= 4000);
+        assertTrue(skeletonSection.contains("骨架文件聚合摘要（超出安全上限）"));
+        assertFalse(skeletonSection.contains("骨架完整文件清单"));
+        assertTrue(skeletonSection.contains("文件总数：22"));
+        assertTrue(skeletonSection.contains("展示数：3"));
+        assertTrue(skeletonSection.contains("未展示数：19"));
+        assertTrue(featureSection.length() <= 8000);
+        assertTrue(featureSection.contains("片段文件聚合摘要（超出安全上限）"));
+        assertTrue(featureSection.contains("文件总数：7"));
+        assertTrue(featureSection.contains("展示数：3"));
+        assertTrue(featureSection.contains("未展示数：4"));
+        assertTrue(featureSection.contains("LATER_SMALL_COMPLETE"));
+        assertTrue(result.endsWith("超限上下文后的真实需求"));
+    }
+
+    @Test
+    void readsOnlyDisplayedPathsFromOversizedManualCollection() {
+        TemplateDoc oversizedSkeleton = worstCaseDocument(
+                "惰性超限骨架", RagDocumentKind.PROJECT_SKELETON, List.of());
+        oversizedSkeleton.setFiles(new AbstractList<>() {
+            @Override
+            public TemplateDoc.TemplateFile get(int index) {
+                if (index >= 3) {
+                    throw new AssertionError("聚合摘要不应遍历未展示文件");
+                }
+                return file("src/displayed-" + index + ".vue", "CONTENT_" + index);
+            }
+
+            @Override
+            public int size() {
+                return 22;
+            }
+        });
+
+        String result = assembler.assembleVueProject(
+                "惰性集合需求",
+                new VueRagContext(oversizedSkeleton, List.of(), "catalog-v1", false));
+
+        assertTrue(result.contains("文件总数：22"));
+        assertTrue(result.contains("展示数：3"));
+        assertTrue(result.contains("未展示数：19"));
+        assertTrue(result.endsWith("惰性集合需求"));
+    }
+
+    @Test
     void keepsLegacyHtmlAndMultiFileAssemblySemantics() {
         RetrievedSnippet snippet = RetrievedSnippet.builder()
                 .title("HTML模板")
@@ -331,6 +420,35 @@ class RagPromptAssemblerTest {
         file.setPath(path);
         file.setContent(content);
         return file;
+    }
+
+    private TemplateDoc worstCaseDocument(String title,
+                                          RagDocumentKind kind,
+                                          List<TemplateDoc.TemplateFile> files) {
+        TemplateDoc document = document(title, kind);
+        document.setTitle(title + "题".repeat(1000));
+        document.setDescription("用途".repeat(1000));
+        document.setFramework("框".repeat(1000));
+        document.setLanguage("语".repeat(1000));
+        document.setBuildTool("构".repeat(1000));
+        Map<String, String> dependencies = new LinkedHashMap<>();
+        for (int index = 0; index < 20; index++) {
+            dependencies.put("依赖-" + index + "-" + "名".repeat(80), "版本".repeat(80));
+        }
+        document.setDependencies(dependencies);
+        document.setDevDependencies(dependencies);
+        document.setFiles(files);
+        return document;
+    }
+
+    private List<TemplateDoc.TemplateFile> filesWithLargeContent(String prefix, int count) {
+        List<TemplateDoc.TemplateFile> files = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            files.add(file(
+                    "src/" + prefix + "-" + index + "-" + "长路径".repeat(40) + ".vue",
+                    "大段源码-" + index + "-" + "源".repeat(10000)));
+        }
+        return files;
     }
 
     private String between(String text, String startMarker, String endMarker) {
