@@ -44,6 +44,7 @@ public class TemplateIngestService {
     private final EmbeddingModel ragEmbeddingModel;
     private final Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> embeddingStoreByType;
     private final RagProperties props;
+    private final VueKnowledgeIngestor vueKnowledgeIngestor;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostConstruct
@@ -75,7 +76,11 @@ public class TemplateIngestService {
                 log.warn("[RAG Ingest] 未找到 type={} 对应的向量存储,跳过", type);
                 continue;
             }
-            total += ingestDir(typeDir, type, store);
+            if (type == CodeGenTypeEnum.VUE_PROJECT) {
+                total += vueKnowledgeIngestor.ingest(typeDir, store).chunkCount();
+            } else {
+                total += ingestDir(typeDir, type, store);
+            }
         }
 
         log.info("[RAG Ingest] 摄取完成,共 {} 条,耗时 {}ms",
