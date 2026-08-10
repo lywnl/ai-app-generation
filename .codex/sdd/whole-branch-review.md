@@ -1,5 +1,15 @@
 # Vue RAG 混合检索全分支最终审查
 
+## 五骨架真实构建门禁补强复核（2026-08-11）
+
+- 完成度审计确认历史 5/5 构建日志存在，但受控测试只覆盖基础骨架，不能持续证明任务 2 的 5/5 要求。现已将该测试改为“默认校验五个固定来源 + 显式动态构建五个真实工程”。
+- TDD 证据完整：RED 为 `expected 5 but was 1`；最终显式门禁执行 6 项、0 failure、0 error、0 skipped、`BUILD SUCCESS`，其中五项分别对应基础工程、管理后台、商城、内容门户和 ECharts 看板。
+- 每个动态测试都读取真实模板 JSON、写入独立 `target/rag-eval/skeleton-build/<id>`、调用真实 `VueProjectBuilder` 完成 `npm install` 和 `npm run build`，并同时断言 `BuildResult.success()` 与 `dist` 目录存在。报告按骨架隔离，不会被后一个结果覆盖。
+- 默认模式只门控高成本动态构建，五个来源的数量和固定文件集合始终执行。最终完整 Maven 为 279 项、0 failure、0 error、7 skipped，Spring `contextLoads` 实际启动，`BUILD SUCCESS`。
+- 五轴复核：正确性、可读性、架构、安全和性能均未发现 Critical/Important/Minor 问题。改动只在测试层，不含密钥、mock、新依赖或生产行为变化；路径同时防御骨架 ID 与模板内嵌文件逃逸。
+
+当前结论：代码、默认 Maven、PGVector 协议和 5/5 策展骨架真实构建均已取得可重复证据；发布状态仍不变。正式 `templates_vue` 尚未由 `text-embedding-v4` 摄取，真实检索指标与十条首次生成 10/10 仍因模型凭据缺失没有成绩。
+
 ## 真实外部门禁基础设施补验（2026-08-11）
 
 - 临时 PGVector 已在项目忽略目录 `.codex/runtime/pgvector-data` 中运行，容器 `ai-codegen-rag-eval-pg` 为 `running/healthy`，`127.0.0.1:5432` 可达，数据库 `ai_codegen_rag` 已启用 `vector 0.8.6`。
@@ -18,7 +28,7 @@
 - `contextLoads()` 没有被跳过。测试层只替换 Mapper、Redis/Redisson、COS、模型、Embedding/向量库、Pexels/DashScope 图片工具和 LangChain4j 运行时代理等外部或数据访问边界；`AppService`、记忆 Service、RAG 编排、`RagRerankService`、`AiCodeGeneratorFacade` 等业务 Bean 保持真实装配。
 - 测试代码没有提交真实或虚假凭据。`dashscope.api-key=` 是空测试配置，仅使真实 `RagRerankService` 构造不发请求的 `RestClient`；运行进程同时显式清空所有相关环境变量。
 - 主代理最终定向验证：`AiAppGenerationApplicationTests,JsonMessageStreamHandlerTest` 共 3 项，0 failure、0 error、0 skipped；日志明确出现 `Started AiAppGenerationApplicationTests`。
-- 主代理最终完整验证：278 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。七项均是显式外部门控的真实模型、网页、旧 RAG 联网评测或真实 npm 构建测试。
+- 主代理补强五骨架门禁后的最终完整验证：279 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。七项均是显式外部门控的真实模型、网页、旧 RAG 联网评测或真实 npm 构建测试。
 - 独立最终复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0，Ready to merge 为 Yes，所有历史 finding 已关闭。
 - 对应提交：`427fb16`、`25b83cc`、`a5c09b8`。未修改 `src/main/**`，未推送远程。
 

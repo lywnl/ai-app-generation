@@ -1,5 +1,15 @@
 # Vue RAG 混合检索执行进度
 
+## 五骨架真实构建门禁补强（2026-08-11）
+
+- 完成度审计发现：历史任务 2 曾手工验证 5/5 骨架，但永久测试 `VueSkeletonRealBuildTest` 只构建 `vue-skeleton-basic-001`，无法在后续回归中证明计划要求的 5/5。该问题是门禁覆盖不足，不是骨架实现失败。
+- TDD RED：先增加“五个来源”断言并保留原单一来源，定向测试按预期失败，结果为 1 项、1 failure，错误为 `expected: <5> but was: <1>`。
+- GREEN：测试现在固定校验五个计划骨架文件，使用动态测试从唯一知识源 JSON 提取工程，逐个调用真实 `VueProjectBuilder.buildProjectDetailed`，分别检查构建成功与 `dist` 目录存在；骨架 ID 和内嵌文件路径均不得逃逸各自构建目录。
+- 离线默认模式：`VueSkeletonRealBuildTest` 共发现 2 项，来源完整性测试实际执行并通过，真实 npm 动态测试工厂按 `RAG_SKELETON_BUILD` 跳过 1 项。来源数量与固定 ID 不再因未设置外部开关而完全跳过。
+- 显式真实模式：`RAG_SKELETON_BUILD=true` 执行 1 个来源断言和 5 个动态真实构建，共 6 项，0 failure、0 error、0 skipped，`BUILD SUCCESS`；五个独立结果均为 `success=true`、`stage=SUCCESS`、`exitCode=0`、`timedOut=false`，且 `dist` 全部存在。
+- 最终完整 Maven：显式清空模型、图片、COS、外部集成和三类 RAG 门控变量，以项目 JDK 25 执行；279 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。日志明确包含 `Started AiAppGenerationApplicationTests`，Spring 上下文门禁未跳过。
+- 本轮只修改测试门禁和审计文档，不修改 `src/main/**`、模板数据、依赖或生产配置。
+
 ## 真实外部门禁基础设施补验（2026-08-11）
 
 - 已在项目忽略目录 `.codex/runtime/pgvector-data` 准备临时 PGVector，容器 `ai-codegen-rag-eval-pg` 状态为 `running/healthy`，仅映射 `127.0.0.1:5432`，数据库 `ai_codegen_rag` 的 `vector` 扩展版本为 `0.8.6`。
@@ -21,7 +31,7 @@
 
 - 任务 1～8 目标回归：176 项，0 failure、0 error、1 skipped；跳过项为默认门控的真实骨架联网构建。
 - 纯单元回归：266 项，0 failure、0 error、0 skipped。
-- 完整 `mvn test`：278 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。运行进程显式清空模型、Pexels、COS、数据库及外部门控变量；`AiAppGenerationApplicationTests.contextLoads` 实际启动 Spring 上下文并通过，不在跳过项中。
+- 完整 `mvn test`：补强五骨架门禁后为 279 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。运行进程显式清空模型、Pexels、COS、数据库及外部门控变量；`AiAppGenerationApplicationTests.contextLoads` 实际启动 Spring 上下文并通过，不在跳过项中。
 - 七个跳过项均为显式外部测试：真实 npm 骨架构建 1 项、旧 RAG 联网评测 1 项、真实模型/网页外部集成 5 项。`CodeParserTest` 已移除无用 Spring 上下文，`JsonMessageStreamHandlerTest` 已补齐 `ToolMessageCollapser` 并验证非空折叠快照原样恢复。
 - Maven 门禁独立最终复审：Spec Compliance 与 Task quality 均通过，Critical/Important/Minor 均为 0；所有历史 finding 已关闭。
 - 真实检索门禁报告：状态“未执行”；数据库前置条件已补齐，当前只缺少 `DASHSCOPE_API_KEY`，未取得 Hit@1、Recall@4 或 Dense 相对退化指标。
