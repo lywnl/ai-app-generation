@@ -12,6 +12,7 @@ import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
 import com.lyw.appgeneration.ai.parser.ToolRequestStreamParser;
+import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
@@ -20,6 +21,8 @@ import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
+import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.ToolExecution;
@@ -53,6 +56,9 @@ public class AiCodeGeneratorFacade {
 
     @Resource
     private RagPromptAssembler ragPromptAssembler;
+
+    @Resource
+    private RagProperties ragProperties;
 
     /**
      * 生成并保存代码
@@ -111,8 +117,9 @@ public class AiCodeGeneratorFacade {
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
-                String enhancedPrompt = isFirstMessage ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
-                String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.VUE_PROJECT);
+                String augmentedMessage = ragProperties.getHybrid().isEnabled()
+                        ? hybridVueAugment(userMessage, isFirstMessage)
+                        : legacyVueAugment(userMessage, isFirstMessage);
                 TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, augmentedMessage);
                 yield processTokenStream(tokenStream);
             }
@@ -130,6 +137,31 @@ public class AiCodeGeneratorFacade {
     private String ragAugment(String userMessage, CodeGenTypeEnum type) {
         List<RetrievedSnippet> snippets = ragRetrievalService.retrieve(userMessage, type);
         return ragPromptAssembler.assemble(userMessage, snippets);
+    }
+
+    private String hybridVueAugment(String userMessage, boolean isFirstMessage) {
+        VueRagContext context = retrieveVueContext(userMessage);
+        String generationRequest = isFirstMessage
+                ? imageCollectionService.enhancePrompt(userMessage)
+                : userMessage;
+        return ragPromptAssembler.assembleVueProject(generationRequest, context);
+    }
+
+    private VueRagContext retrieveVueContext(String userMessage) {
+        try {
+            return ragRetrievalService.retrieveVueProject(userMessage);
+        } catch (Exception exception) {
+            log.warn("[Vue RAG] 混合检索异常,使用空上下文继续生成,queryHash={},candidateCount=0",
+                    VueRagLogSanitizer.queryHash(userMessage));
+            return VueRagContext.unavailable();
+        }
+    }
+
+    private String legacyVueAugment(String userMessage, boolean isFirstMessage) {
+        String generationRequest = isFirstMessage
+                ? imageCollectionService.enhancePrompt(userMessage)
+                : userMessage;
+        return ragAugment(generationRequest, CodeGenTypeEnum.VUE_PROJECT);
     }
 
     /**

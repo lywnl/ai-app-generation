@@ -6,6 +6,9 @@ import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
+import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
+import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
@@ -14,6 +17,7 @@ import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -50,54 +54,77 @@ public class VueHybridRetrievalService {
     private final DenseRetriever denseRetriever;
     private final RrfFusionService fusionService;
     private final RagRerankService rerankService;
+    private final VueRagMetricsCollector metricsCollector;
 
     public VueHybridRetrievalService(VueRetrievalResourceProvider resourceProvider,
                                      DenseRetriever denseRetriever,
                                      RrfFusionService fusionService,
-                                     RagRerankService rerankService) {
+                                     RagRerankService rerankService,
+                                     VueRagMetricsCollector metricsCollector) {
         this.resourceProvider = resourceProvider;
         this.denseRetriever = denseRetriever;
         this.fusionService = fusionService;
         this.rerankService = rerankService;
+        this.metricsCollector = metricsCollector;
     }
 
     /**
      * 使用原始需求执行两条完全分池的 Vue 混合检索链。
      */
     public VueRagContext retrieve(String rawQuery) {
-        VueRetrievalResources resources = resourceProvider.current().orElse(null);
-        if (resources == null) {
-            log.error("[Vue RAG] 目录不可用,返回无 RAG");
-            return VueRagContext.unavailable();
-        }
-
-        TemplateCatalog catalog = resources.catalog();
-        Map<String, Double> qualityScores = qualityScores(catalog);
-        ChainResult skeletonChain = retrieveChain(
-                rawQuery, RagDocumentKind.PROJECT_SKELETON, SKELETON_RERANK_TOP_K,
-                resources, qualityScores);
-        ChainResult featureChain = retrieveChain(
-                rawQuery, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K,
-                resources, qualityScores);
-        boolean degraded = skeletonChain.degraded() || featureChain.degraded();
-
-        TemplateDoc skeleton = firstOfKind(skeletonChain.documents(), RagDocumentKind.PROJECT_SKELETON);
-        if (skeleton == null) {
-            skeleton = catalog.findDocumentById(BASIC_SKELETON_ID)
-                    .filter(document -> document.getDocumentKind() == RagDocumentKind.PROJECT_SKELETON)
-                    .orElse(null);
-            degraded = true;
-            if (skeleton == null) {
-                log.error("[Vue RAG] 骨架双通道无结果且固定基础骨架不存在,catalogVersion={}",
-                        catalog.getCatalogVersion());
-                return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+        long startNanos = System.nanoTime();
+        String queryHash = VueRagLogSanitizer.queryHash(rawQuery);
+        try {
+            VueRetrievalResources resources = resourceProvider.current().orElse(null);
+            if (resources == null) {
+                log.error("[Vue RAG] 目录不可用,返回无 RAG,queryHash={},candidateCount=0",
+                        queryHash);
+                metricsCollector.recordDegradation(VueRagDegradationReason.CATALOG_UNAVAILABLE);
+                metricsCollector.recordFinalSelection(0, 0);
+                return VueRagContext.unavailable();
             }
-        }
 
-        List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
-                skeleton, featureChain.documents(), FINAL_FEATURE_TOP_K);
-        return new VueRagContext(
-                skeleton, compatibleFeatures, catalog.getCatalogVersion(), degraded);
+            TemplateCatalog catalog = resources.catalog();
+            Map<String, Double> qualityScores = qualityScores(catalog);
+            ChainResult skeletonChain = retrieveChain(
+                    rawQuery, RagDocumentKind.PROJECT_SKELETON, SKELETON_RERANK_TOP_K,
+                    resources, qualityScores);
+            ChainResult featureChain = retrieveChain(
+                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K,
+                    resources, qualityScores);
+            boolean degraded = skeletonChain.degraded() || featureChain.degraded();
+
+            TemplateDoc skeleton = firstOfKind(
+                    skeletonChain.documents(), RagDocumentKind.PROJECT_SKELETON);
+            if (skeleton == null) {
+                skeleton = catalog.findDocumentById(BASIC_SKELETON_ID)
+                        .filter(document -> document.getDocumentKind() == RagDocumentKind.PROJECT_SKELETON)
+                        .orElse(null);
+                degraded = true;
+                metricsCollector.recordDegradation(VueRagDegradationReason.FALLBACK_SKELETON);
+                if (skeleton == null) {
+                    log.error("[Vue RAG] 固定基础骨架不存在,queryHash={},catalogVersion={},"
+                                    + "skeletonId={},skeletonCount=0",
+                            queryHash, catalog.getCatalogVersion(), BASIC_SKELETON_ID);
+                    metricsCollector.recordFinalSelection(0, 0);
+                    return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+                }
+            }
+
+            List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
+                    skeleton, featureChain.documents(), FINAL_FEATURE_TOP_K);
+            metricsCollector.recordFinalSelection(1, compatibleFeatures.size());
+            log.info("[Vue RAG] 检索完成,queryHash={},catalogVersion={},skeletonId={},featureIds={},"
+                            + "skeletonCount=1,featureCount={},elapsedMs={}",
+                    queryHash, catalog.getCatalogVersion(), skeleton.getId(),
+                    compatibleFeatures.stream().map(TemplateDoc::getId).toList(),
+                    compatibleFeatures.size(), elapsedMillis(startNanos));
+            return new VueRagContext(
+                    skeleton, compatibleFeatures, catalog.getCatalogVersion(), degraded);
+        } finally {
+            metricsCollector.recordRetrievalDuration(
+                    Duration.ofNanos(System.nanoTime() - startNanos));
+        }
     }
 
     private ChainResult retrieveChain(String rawQuery,
@@ -105,11 +132,11 @@ public class VueHybridRetrievalService {
                                       int rerankTopK,
                                       VueRetrievalResources resources,
                                       Map<String, Double> qualityScores) {
-        ChannelResult bm25 = recall("BM25", documentKind,
+        ChannelResult bm25 = recall(VueRagDegradationReason.BM25_FAILED,
                 () -> resources.bm25Retriever()
                         .orElseThrow(() -> new IllegalStateException("BM25 索引不可用"))
                         .retrieve(rawQuery, documentKind, CHANNEL_TOP_K));
-        ChannelResult dense = recall("Dense", documentKind,
+        ChannelResult dense = recall(VueRagDegradationReason.DENSE_FAILED,
                 () -> denseRetriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
                         documentKind, CHANNEL_TOP_K));
         boolean degraded = bm25.failed() || bm25.candidates().isEmpty()
@@ -117,37 +144,62 @@ public class VueHybridRetrievalService {
 
         List<RankedCandidate> fused = fusionService.fuse(
                 bm25.candidates(), dense.candidates(), qualityScores, FUSION_TOP_K);
+        metricsCollector.recordRrfCandidates(fused.size());
+        log.debug("[Vue RAG] RRF融合完成,queryHash={},catalogVersion={},candidateIds={},candidateCount={}",
+                VueRagLogSanitizer.queryHash(rawQuery), resources.catalog().getCatalogVersion(),
+                VueRagLogSanitizer.candidateIds(fused), fused.size());
         if (fused.isEmpty()) {
+            metricsCollector.recordRerankCandidates(0);
             return new ChainResult(List.of(), true);
         }
         List<TemplateDoc> parentDocuments = resolveParents(
                 fused, documentKind, resources.catalog());
         if (parentDocuments.isEmpty()) {
+            metricsCollector.recordRerankCandidates(0);
             return new ChainResult(List.of(), true);
         }
         try {
             List<TemplateDoc> reranked = rerankService.rerankVue(
                     rawQuery, parentDocuments, rerankTopK);
+            metricsCollector.recordRerankCandidates(reranked.size());
             return new ChainResult(reranked, degraded);
         } catch (RerankException exception) {
-            log.warn("[Vue RAG][Rerank] 失败,按 RRF 顺序降级,documentKind={},candidateCount={},reason={}",
-                    documentKind, parentDocuments.size(), exception.getMessage());
+            log.warn("[Vue RAG][Rerank] 失败,按 RRF 顺序降级,queryHash={},catalogVersion={},"
+                            + "candidateIds={},candidateCount={}",
+                    VueRagLogSanitizer.queryHash(rawQuery),
+                    resources.catalog().getCatalogVersion(),
+                    parentDocuments.stream().map(TemplateDoc::getId).toList(), parentDocuments.size());
+            metricsCollector.recordRerankCandidates(0);
+            metricsCollector.recordDegradation(VueRagDegradationReason.RERANK_FAILED);
             return new ChainResult(
                     parentDocuments.stream().limit(rerankTopK).toList(), true);
         }
     }
 
-    private ChannelResult recall(String channel,
-                                 RagDocumentKind documentKind,
+    private ChannelResult recall(VueRagDegradationReason failureReason,
                                  Supplier<List<RankedCandidate>> retrieval) {
         try {
             List<RankedCandidate> candidates = retrieval.get();
-            return new ChannelResult(candidates == null ? List.of() : candidates, false);
+            List<RankedCandidate> safeCandidates = candidates == null ? List.of() : candidates;
+            recordChannelCandidates(failureReason, safeCandidates.size());
+            return new ChannelResult(safeCandidates, false);
         } catch (Exception exception) {
-            log.warn("[Vue RAG] 召回通道失败,channel={},documentKind={},exceptionType={},按另一通道降级",
-                    channel, documentKind, exception.getClass().getSimpleName());
+            recordChannelCandidates(failureReason, 0);
+            metricsCollector.recordDegradation(failureReason);
             return new ChannelResult(List.of(), true);
         }
+    }
+
+    private void recordChannelCandidates(VueRagDegradationReason channel, int count) {
+        if (channel == VueRagDegradationReason.BM25_FAILED) {
+            metricsCollector.recordBm25Candidates(count);
+        } else {
+            metricsCollector.recordDenseCandidates(count);
+        }
+    }
+
+    private long elapsedMillis(long startNanos) {
+        return Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
     }
 
     private List<TemplateDoc> resolveParents(List<RankedCandidate> candidates,

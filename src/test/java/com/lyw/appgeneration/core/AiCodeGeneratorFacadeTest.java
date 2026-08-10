@@ -1,53 +1,220 @@
 package com.lyw.appgeneration.core;
 
+import com.lyw.appgeneration.ai.AiCodeGeneratorService;
+import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.image.ImageCollectionService;
+import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
-import jakarta.annotation.Resource;
-import org.junit.jupiter.api.Assertions;
+import com.lyw.appgeneration.service.rag.RagPromptAssembler;
+import com.lyw.appgeneration.service.rag.RagRetrievalService;
+import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
+import com.lyw.appgeneration.service.rag.model.TemplateDoc;
+import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import dev.langchain4j.service.TokenStream;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 
-import java.io.File;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-@SpringBootTest
+@ExtendWith(MockitoExtension.class)
 class AiCodeGeneratorFacadeTest {
 
-    @Resource
-    private AiCodeGeneratorFacade aiCodeGeneratorFacade;
+    private static final long APP_ID = 7L;
+    private static final String RAW_QUERY = "生成一个带数据看板的 Vue 后台";
+    private static final String ENHANCED_QUERY = RAW_QUERY + "\n图片资源";
+    private static final String AUGMENTED_QUERY = "RAG 上下文\n" + ENHANCED_QUERY;
 
-    @Test
-    void generateAndSaveCode() {
-//        File file = aiCodeGeneratorFacade.generateAndSaveCode("给我生成一个博客网站20行以内", CodeGenTypeEnum.HTML);
-        File file = aiCodeGeneratorFacade.generateAndSaveCode("给我生成一个博客网站20行以内", CodeGenTypeEnum.MULTI_FILE, 1L);
-        assertNotNull(file);
+    @Mock
+    private AiGeneratorServiceFactory serviceFactory;
+
+    @Mock
+    private AiCodeGeneratorService generatorService;
+
+    @Mock
+    private ImageCollectionService imageCollectionService;
+
+    @Mock
+    private RagRetrievalService retrievalService;
+
+    @Mock
+    private RagPromptAssembler promptAssembler;
+
+    @Mock
+    private TokenStream tokenStream;
+
+    private RagProperties properties;
+    private AiCodeGeneratorFacade facade;
+
+    @BeforeEach
+    void setUp() {
+        properties = new RagProperties();
+        facade = new AiCodeGeneratorFacade();
+        ReflectionTestUtils.setField(facade, "aiGeneratorServiceFactory", serviceFactory);
+        ReflectionTestUtils.setField(facade, "imageCollectionService", imageCollectionService);
+        ReflectionTestUtils.setField(facade, "ragRetrievalService", retrievalService);
+        ReflectionTestUtils.setField(facade, "ragPromptAssembler", promptAssembler);
+        ReflectionTestUtils.setField(facade, "ragProperties", properties);
     }
 
     @Test
-    void generateAndSaveCodeStream() {
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("给我生成一个博客网站20行以内", CodeGenTypeEnum.MULTI_FILE, 1L, true);
-        //阻塞等待所有数据收集完成
-        List<String> result = codeStream.collectList().block();
-        //验证结果
-        Assertions.assertNotNull(result);
-        //拼接字符串 得到完整数据
-        String fullCode = String.join("", result);
-        Assertions.assertFalse(fullCode.isEmpty());
+    void hybridFirstVueRetrievesRawQueryThenEnhancesGenerationRequest() {
+        stubVueGenerator();
+        properties.getHybrid().setEnabled(true);
+        VueRagContext context = context("vue-skeleton");
+        when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
+        when(promptAssembler.assembleVueProject(ENHANCED_QUERY, context)).thenReturn(AUGMENTED_QUERY);
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+
+        InOrder order = inOrder(retrievalService, imageCollectionService, promptAssembler, generatorService);
+        order.verify(retrievalService).retrieveVueProject(RAW_QUERY);
+        order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, context);
+        order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
+        verify(retrievalService, never()).retrieve(any(), any());
+        verify(promptAssembler, never()).assemble(any(), anyList());
     }
 
     @Test
-    void generateVueProjectCodeStream() {
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(
-                "简单的任务记录网站，总代码量不超过 200 行",
-                CodeGenTypeEnum.VUE_PROJECT, 1L, true);
-        // 阻塞等待所有数据收集完成
-        List<String> result = codeStream.collectList().block();
-        // 验证结果
-        Assertions.assertNotNull(result);
-        String completeContent = String.join("", result);
-        Assertions.assertNotNull(completeContent);
+    void hybridNonFirstVueSkipsImagesAndStillRetrievesRawQuery() {
+        stubVueGenerator();
+        properties.getHybrid().setEnabled(true);
+        VueRagContext context = context("vue-skeleton");
+        when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
+        when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("专用拼装");
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false);
+
+        verify(retrievalService).retrieveVueProject(RAW_QUERY);
+        verify(imageCollectionService, never()).enhancePrompt(any());
+        verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, "专用拼装");
     }
 
+    @Test
+    void disabledHybridUsesOnlyLegacyDenseAndAssembler() {
+        stubVueGenerator();
+        properties.getHybrid().setEnabled(false);
+        List<RetrievedSnippet> snippets = List.of(snippet("legacy-vue"));
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
+        when(retrievalService.retrieve(ENHANCED_QUERY, CodeGenTypeEnum.VUE_PROJECT))
+                .thenReturn(snippets);
+        when(promptAssembler.assemble(ENHANCED_QUERY, snippets)).thenReturn("旧链拼装");
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+
+        InOrder order = inOrder(imageCollectionService, retrievalService, promptAssembler);
+        order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(retrievalService).retrieve(ENHANCED_QUERY, CodeGenTypeEnum.VUE_PROJECT);
+        order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
+        verify(retrievalService, never()).retrieveVueProject(any());
+        verify(promptAssembler, never()).assembleVueProject(any(), any());
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, "旧链拼装");
+    }
+
+    @Test
+    void hybridRetrievalFailureStillEnhancesAndGeneratesWithEmptyContext() {
+        stubVueGenerator();
+        properties.getHybrid().setEnabled(true);
+        when(retrievalService.retrieveVueProject(RAW_QUERY))
+                .thenThrow(new IllegalStateException("检索依赖失败"));
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
+        when(promptAssembler.assembleVueProject(ENHANCED_QUERY, VueRagContext.unavailable()))
+                .thenReturn("无 RAG 拼装");
+
+        assertDoesNotThrow(() -> facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true));
+
+        verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, VueRagContext.unavailable());
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, "无 RAG 拼装");
+    }
+
+    @Test
+    void imageServiceFallbackKeepsRawGenerationRequest() {
+        stubVueGenerator();
+        properties.getHybrid().setEnabled(true);
+        VueRagContext context = context("vue-skeleton");
+        when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(RAW_QUERY);
+        when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("原消息拼装");
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+
+        verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, "原消息拼装");
+    }
+
+    @Test
+    void htmlKeepsLegacyOrderWithoutImageEnhancement() {
+        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.HTML))
+                .thenReturn(generatorService);
+        List<RetrievedSnippet> snippets = List.of(snippet("html"));
+        when(retrievalService.retrieve(RAW_QUERY, CodeGenTypeEnum.HTML)).thenReturn(snippets);
+        when(promptAssembler.assemble(RAW_QUERY, snippets)).thenReturn("HTML 拼装");
+        when(generatorService.generateHtmlCodeStream("HTML 拼装")).thenReturn(Flux.empty());
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, true);
+
+        InOrder order = inOrder(retrievalService, promptAssembler, generatorService);
+        order.verify(retrievalService).retrieve(RAW_QUERY, CodeGenTypeEnum.HTML);
+        order.verify(promptAssembler).assemble(RAW_QUERY, snippets);
+        order.verify(generatorService).generateHtmlCodeStream("HTML 拼装");
+        verify(imageCollectionService, never()).enhancePrompt(any());
+        verify(retrievalService, never()).retrieveVueProject(any());
+    }
+
+    @Test
+    void multiFileKeepsImageThenLegacyRetrievalOrder() {
+        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.MULTI_FILE))
+                .thenReturn(generatorService);
+        List<RetrievedSnippet> snippets = List.of(snippet("multi"));
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
+        when(retrievalService.retrieve(ENHANCED_QUERY, CodeGenTypeEnum.MULTI_FILE))
+                .thenReturn(snippets);
+        when(promptAssembler.assemble(ENHANCED_QUERY, snippets)).thenReturn("多文件拼装");
+        when(generatorService.generateMultiFileCodeStream("多文件拼装")).thenReturn(Flux.empty());
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, true);
+
+        InOrder order = inOrder(imageCollectionService, retrievalService, promptAssembler, generatorService);
+        order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(retrievalService).retrieve(ENHANCED_QUERY, CodeGenTypeEnum.MULTI_FILE);
+        order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
+        order.verify(generatorService).generateMultiFileCodeStream("多文件拼装");
+        verify(retrievalService, never()).retrieveVueProject(any());
+    }
+
+    private VueRagContext context(String skeletonId) {
+        TemplateDoc skeleton = new TemplateDoc();
+        skeleton.setId(skeletonId);
+        return new VueRagContext(skeleton, List.of(), "catalog-v7", false);
+    }
+
+    private void stubVueGenerator() {
+        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
+                .thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(eq(APP_ID), any()))
+                .thenReturn(tokenStream);
+    }
+
+    private RetrievedSnippet snippet(String id) {
+        return RetrievedSnippet.builder().id(id).title(id).code("示例代码").score(0.9).build();
+    }
 }

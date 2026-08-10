@@ -23,6 +23,9 @@ public class RagProperties {
     /** 摄取开关 */
     private Ingest ingest = new Ingest();
 
+    /** Vue 混合检索灰度开关 */
+    private Hybrid hybrid = new Hybrid();
+
     /** PGVector 连接配置 */
     private PgVector pgvector = new PgVector();
 
@@ -40,6 +43,11 @@ public class RagProperties {
 
     @Data
     public static class Ingest {
+        private boolean enabled = false;
+    }
+
+    @Data
+    public static class Hybrid {
         private boolean enabled = false;
     }
 

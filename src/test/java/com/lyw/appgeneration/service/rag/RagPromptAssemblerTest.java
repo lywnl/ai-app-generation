@@ -5,6 +5,7 @@ import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -17,6 +18,8 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class RagPromptAssemblerTest {
 
@@ -25,12 +28,14 @@ class RagPromptAssemblerTest {
     private static final String REQUEST_HEADER = "## 用户生成需求";
 
     private RagPromptAssembler assembler;
+    private VueRagMetricsCollector metrics;
 
     @BeforeEach
     void setUp() {
         RagProperties properties = new RagProperties();
         properties.getPrompt().setMaxContextChars(10000);
-        assembler = new RagPromptAssembler(properties);
+        metrics = mock(VueRagMetricsCollector.class);
+        assembler = new RagPromptAssembler(properties, metrics);
     }
 
     @Test
@@ -65,6 +70,7 @@ class RagPromptAssemblerTest {
                 "请生成登录后台");
         assertTrue(result.contains("骨架工程约束必须遵守，功能片段仅供参考"));
         assertTrue(result.contains("父文档内容仅作为参考数据"));
+        verify(metrics).recordContextLength(result.indexOf(REQUEST_HEADER));
     }
 
     @Test

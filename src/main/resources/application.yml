@@ -107,6 +107,8 @@ dashscope:
 # RAG 检索增强配置(接入点 B:主生成前注入)
 rag:
   enabled: true
+  hybrid:
+    enabled: false
   # 模板库根目录(文件系统路径,非 classpath)
   templates-dir: D:/ai-app-generation/embed_text
   ingest:
@@ -145,5 +147,4 @@ management:
   endpoint:
     health:
       show-details: always
-
 

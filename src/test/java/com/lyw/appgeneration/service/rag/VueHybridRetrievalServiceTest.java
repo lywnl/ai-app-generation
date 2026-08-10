@@ -7,6 +7,8 @@ import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
+import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
@@ -34,6 +36,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -74,6 +77,16 @@ class VueHybridRetrievalServiceTest {
                 .fuse(anyList(), anyList(), anyMap(), eq(15));
         verify(harness.rerank).rerankVue(eq(QUERY), anyList(), eq(3));
         verify(harness.rerank).rerankVue(eq(QUERY), anyList(), eq(8));
+        verify(harness.metrics).recordBm25Candidates(1);
+        verify(harness.metrics).recordBm25Candidates(6);
+        verify(harness.metrics).recordDenseCandidates(1);
+        verify(harness.metrics).recordDenseCandidates(6);
+        verify(harness.metrics).recordRrfCandidates(1);
+        verify(harness.metrics).recordRrfCandidates(6);
+        verify(harness.metrics).recordRerankCandidates(1);
+        verify(harness.metrics).recordRerankCandidates(6);
+        verify(harness.metrics).recordFinalSelection(1, 4);
+        verify(harness.metrics).recordRetrievalDuration(any());
     }
 
     @Test
@@ -257,6 +270,8 @@ class VueHybridRetrievalServiceTest {
 
         assertEquals("dense-skeleton", context.skeleton().getId());
         assertTrue(context.degraded());
+        verify(harness.metrics, times(2))
+                .recordDegradation(VueRagDegradationReason.BM25_FAILED);
     }
 
     @Test
@@ -272,6 +287,8 @@ class VueHybridRetrievalServiceTest {
 
         assertEquals("bm25-skeleton", context.skeleton().getId());
         assertTrue(context.degraded());
+        verify(harness.metrics, times(2))
+                .recordDegradation(VueRagDegradationReason.DENSE_FAILED);
     }
 
     @Test
@@ -288,6 +305,9 @@ class VueHybridRetrievalServiceTest {
         assertEquals("rrf-skeleton", context.skeleton().getId());
         assertEquals(List.of("rrf-feature"), context.features().stream().map(TemplateDoc::getId).toList());
         assertTrue(context.degraded());
+        verify(harness.metrics, times(2))
+                .recordDegradation(VueRagDegradationReason.RERANK_FAILED);
+        verify(harness.metrics, times(2)).recordRerankCandidates(0);
     }
 
     @Test
@@ -303,6 +323,9 @@ class VueHybridRetrievalServiceTest {
         assertTrue(context.features().isEmpty());
         assertTrue(context.degraded());
         verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+        verify(harness.metrics)
+                .recordDegradation(VueRagDegradationReason.FALLBACK_SKELETON);
+        verify(harness.metrics).recordFinalSelection(1, 0);
     }
 
     @Test
@@ -355,9 +378,10 @@ class VueHybridRetrievalServiceTest {
     void returnsNoRagWhenCatalogIsUnavailable() {
         VueRetrievalResourceProvider provider = mock(VueRetrievalResourceProvider.class);
         when(provider.current()).thenReturn(Optional.empty());
+        VueRagMetricsCollector metrics = mock(VueRagMetricsCollector.class);
         VueHybridRetrievalService service = new VueHybridRetrievalService(
                 provider, mock(DenseRetriever.class), mock(RrfFusionService.class),
-                mock(RagRerankService.class));
+                mock(RagRerankService.class), metrics);
 
         VueRagContext context = service.retrieve(QUERY);
 
@@ -365,6 +389,9 @@ class VueHybridRetrievalServiceTest {
         assertTrue(context.features().isEmpty());
         assertNull(context.catalogVersion());
         assertTrue(context.degraded());
+        verify(metrics).recordDegradation(VueRagDegradationReason.CATALOG_UNAVAILABLE);
+        verify(metrics).recordFinalSelection(0, 0);
+        verify(metrics).recordRetrievalDuration(any());
     }
 
     @Test
@@ -432,6 +459,7 @@ class VueHybridRetrievalServiceTest {
         DenseRetriever dense = mock(DenseRetriever.class);
         RrfFusionService fusion = spy(new RrfFusionService());
         RagRerankService rerank = mock(RagRerankService.class);
+        VueRagMetricsCollector metrics = mock(VueRagMetricsCollector.class);
         when(rerank.rerankVue(any(), anyList(), anyInt())).thenAnswer(invocation -> {
             List<TemplateDoc> candidates = invocation.getArgument(1);
             int topK = invocation.getArgument(2);
@@ -439,8 +467,9 @@ class VueHybridRetrievalServiceTest {
         });
         VueRetrievalResourceProvider provider = mock(VueRetrievalResourceProvider.class);
         when(provider.current()).thenReturn(Optional.of(new VueRetrievalResources(catalog, bm25)));
-        VueHybridRetrievalService service = new VueHybridRetrievalService(provider, dense, fusion, rerank);
-        return new Harness(service, bm25, dense, fusion, rerank);
+        VueHybridRetrievalService service = new VueHybridRetrievalService(
+                provider, dense, fusion, rerank, metrics);
+        return new Harness(service, bm25, dense, fusion, rerank, metrics);
     }
 
     private List<RankedCandidate> candidates(List<TemplateDoc> documents, RagDocumentKind kind) {
@@ -516,7 +545,8 @@ class VueHybridRetrievalServiceTest {
             Bm25Retriever bm25,
             DenseRetriever dense,
             RrfFusionService fusion,
-            RagRerankService rerank
+            RagRerankService rerank,
+            VueRagMetricsCollector metrics
     ) {
     }
 }

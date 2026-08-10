@@ -5,7 +5,7 @@ import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
-import lombok.RequiredArgsConstructor;
+import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -22,7 +22,6 @@ import java.util.StringJoiner;
  * @author lyw
  */
 @Component
-@RequiredArgsConstructor
 public class RagPromptAssembler {
 
     private static final int MAX_CONTRACT_FIELD_LENGTH = 80;
@@ -33,6 +32,12 @@ public class RagPromptAssembler {
     private static final int AGGREGATE_DISPLAY_FILE_COUNT = 3;
 
     private final RagProperties props;
+    private final VueRagMetricsCollector metricsCollector;
+
+    public RagPromptAssembler(RagProperties props, VueRagMetricsCollector metricsCollector) {
+        this.props = props;
+        this.metricsCollector = metricsCollector;
+    }
 
     private static final String HEADER = """
             ## 参考模板(借鉴风格与实现思路,不要整段照抄;如与用户需求冲突以用户需求为准)
@@ -87,8 +92,11 @@ public class RagPromptAssembler {
     public String assembleVueProject(String generationRequest, VueRagContext context) {
         TemplateDoc skeleton = context == null ? null : context.skeleton();
         List<TemplateDoc> features = context == null ? List.of() : context.features();
-        return renderSkeletonSection(skeleton)
-                + renderFeatureSection(features)
+        String skeletonSection = renderSkeletonSection(skeleton);
+        String featureSection = renderFeatureSection(features);
+        metricsCollector.recordContextLength(skeletonSection.length() + featureSection.length());
+        return skeletonSection
+                + featureSection
                 + "## 用户生成需求\n"
                 + (generationRequest == null ? "" : generationRequest);
     }

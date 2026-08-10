@@ -107,8 +107,8 @@ public class DenseRetriever {
             maxScores.merge(denseMatch.documentId(), denseMatch.score(), Math::max);
         }
         if (invalidMetadataCount > 0) {
-            log.warn("[Vue RAG][Dense] 跳过非法 metadata 候选,documentKind={},catalogVersion={},count={}",
-                    documentKind, catalogVersion, invalidMetadataCount);
+            log.warn("[Vue RAG][Dense] 跳过非法 metadata 候选,catalogVersion={},count={}",
+                    catalogVersion, invalidMetadataCount);
         }
         return toRankedCandidates(maxScores, documentKind, topK);
     }

@@ -52,8 +52,7 @@ public class VueRetrievalResourceProvider {
             TemplateCatalog catalog = new TemplateCatalog(vueRoot, objectMapper);
             return resourcesWithOptionalBm25(catalog, bm25RetrieverFactory);
         } catch (Exception exception) {
-            log.error("[Vue RAG] 目录不可用,exceptionType={},Vue 检索将返回无 RAG",
-                    exception.getClass().getSimpleName());
+            log.error("[Vue RAG] 目录不可用,Vue 检索将返回无 RAG,candidateCount=0");
             return null;
         }
     }
@@ -64,8 +63,7 @@ public class VueRetrievalResourceProvider {
         try {
             return new VueRetrievalResources(catalog, bm25RetrieverFactory.create(catalog));
         } catch (Exception exception) {
-            log.warn("[Vue RAG] BM25 索引不可用,exceptionType={},将使用 Dense 单通道",
-                    exception.getClass().getSimpleName());
+            log.warn("[Vue RAG] BM25 索引不可用,将使用 Dense 单通道,candidateCount=0");
             return new VueRetrievalResources(catalog, Optional.empty());
         }
     }
@@ -82,7 +80,7 @@ public class VueRetrievalResourceProvider {
         try {
             bm25Retriever.close();
         } catch (IOException exception) {
-            log.warn("[Vue RAG] 关闭 BM25 索引失败", exception);
+            log.warn("[Vue RAG] 关闭 BM25 索引失败,candidateCount=0");
         }
     }
 
