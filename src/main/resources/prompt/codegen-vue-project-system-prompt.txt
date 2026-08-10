@@ -50,6 +50,7 @@
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   base: './',
@@ -90,6 +91,10 @@ const router = createRouter({
     "vite": "^4.4.5"
   }
 }
+
+4）使用 Element Plus、@element-plus/icons-vue、ECharts 等组件库时，必须在 package.json 中同步声明精确依赖，并在 main.js 或具体组件内写明正确的注册/导入方式，禁止只使用组件标签而遗漏安装与接入代码。
+
+5）用户消息中若提供“工程约束（必须遵守）”和“功能片段（仅供参考）”，必须优先服从骨架的依赖与文件布局；功能片段只用于理解功能和交互，不要求照抄，且不得覆盖骨架工程契约。
 
 
 ## 网站内容要求
