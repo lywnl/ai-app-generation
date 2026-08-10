@@ -25,7 +25,7 @@ class VueGenerationBuildReportTest {
     @Test
     void executedReportRendersEveryDiagnosticAndSanitizesSecretsAndUserPaths() {
         VueGenerationBuildCase testCase = new VueGenerationBuildCase(
-                "case-01", 1L, "基础站点", "需求");
+                "case-01", "基础站点", "需求");
         String sensitiveOutput = """
                 /Users/example/private/project
                 api-key=abcd1234
@@ -37,6 +37,7 @@ class VueGenerationBuildReportTest {
                 false, BuildStage.NPM_BUILD, 2, false, sensitiveOutput, 250L);
         VueGenerationBuildRow row = new VueGenerationBuildRow(
                 testCase,
+                7001L,
                 true,
                 "vue-skeleton-basic-001",
                 List.of("vue-login-form-001"),
@@ -47,6 +48,7 @@ class VueGenerationBuildReportTest {
 
         assertTrue(markdown.contains("状态：未通过"));
         assertTrue(markdown.contains("case-01"));
+        assertTrue(markdown.contains("7001"));
         assertTrue(markdown.contains("vue-skeleton-basic-001"));
         assertTrue(markdown.contains("vue-login-form-001"));
         assertTrue(markdown.contains("NPM_BUILD"));
@@ -67,9 +69,10 @@ class VueGenerationBuildReportTest {
                 "检查 /home/alice/private 失败，Authorization: Bearer reason-secret"))
                 .renderMarkdown();
         VueGenerationBuildCase testCase = new VueGenerationBuildCase(
-                "case-token=case-secret", 1L, "password: category-secret", "需求");
+                "case-token=case-secret", "password: category-secret", "需求");
         VueGenerationBuildRow row = new VueGenerationBuildRow(
                 testCase,
+                7002L,
                 false,
                 "secret=skeleton-secret",
                 List.of("api-key=feature-secret"),

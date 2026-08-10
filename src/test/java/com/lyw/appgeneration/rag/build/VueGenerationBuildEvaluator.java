@@ -14,18 +14,23 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 十条真实 Vue 生成与首次构建编排器。
  */
 public final class VueGenerationBuildEvaluator {
 
+    private static final int MAX_APP_ID_ALLOCATION_ATTEMPTS = 1_000;
+
     private final AiCodeGeneratorFacade facade;
     private final VueProjectBuilder projectBuilder;
     private final Path generatedSourceRoot;
     private final Path reportGeneratedRoot;
     private final Duration generationTimeout;
+    private final VueGenerationAppIdAllocator appIdAllocator;
 
     public VueGenerationBuildEvaluator(
             AiCodeGeneratorFacade facade,
@@ -33,30 +38,61 @@ public final class VueGenerationBuildEvaluator {
             Path generatedSourceRoot,
             Path reportGeneratedRoot,
             Duration generationTimeout) {
+        this(facade, projectBuilder, generatedSourceRoot, reportGeneratedRoot,
+                generationTimeout, new AtomicVueGenerationAppIdAllocator());
+    }
+
+    VueGenerationBuildEvaluator(
+            AiCodeGeneratorFacade facade,
+            VueProjectBuilder projectBuilder,
+            Path generatedSourceRoot,
+            Path reportGeneratedRoot,
+            Duration generationTimeout,
+            VueGenerationAppIdAllocator appIdAllocator) {
         this.facade = facade;
         this.projectBuilder = projectBuilder;
         this.generatedSourceRoot = generatedSourceRoot;
         this.reportGeneratedRoot = reportGeneratedRoot;
         this.generationTimeout = generationTimeout;
+        this.appIdAllocator = appIdAllocator;
     }
 
     public VueGenerationBuildReport evaluate(List<VueGenerationBuildCase> cases) {
         List<VueGenerationBuildRow> rows = new ArrayList<>();
+        Set<Long> allocatedAppIds = new HashSet<>();
         for (VueGenerationBuildCase testCase : cases) {
-            rows.add(evaluateOne(testCase));
+            long executionAppId = allocateUniqueAppId(allocatedAppIds);
+            rows.add(evaluateOne(testCase, executionAppId));
         }
         return VueGenerationBuildReport.executed(rows);
     }
 
-    private VueGenerationBuildRow evaluateOne(VueGenerationBuildCase testCase) {
+    private long allocateUniqueAppId(Set<Long> allocatedAppIds) {
+        for (int attempt = 0; attempt < MAX_APP_ID_ALLOCATION_ATTEMPTS; attempt++) {
+            long appId = appIdAllocator.nextAppId();
+            if (appId <= 0) {
+                throw new IllegalStateException("分配器返回的 appId 必须是正数: " + appId);
+            }
+            if (allocatedAppIds.contains(appId)
+                    || Files.exists(sourcePath(appId))
+                    || Files.exists(targetPath(appId))) {
+                continue;
+            }
+            allocatedAppIds.add(appId);
+            return appId;
+        }
+        throw new IllegalStateException("无法分配无碰撞的评测 appId");
+    }
+
+    private VueGenerationBuildRow evaluateOne(
+            VueGenerationBuildCase testCase,
+            long executionAppId) {
         VueRagContext context = VueRagContext.unavailable();
         try {
-            Path source = generatedSourceRoot.resolve("vue_project_" + testCase.appId());
-            Path target = reportGeneratedRoot.resolve(testCase.caseId());
-            deleteRecursively(source);
-            deleteRecursively(target);
+            Path source = sourcePath(executionAppId);
+            Path target = targetPath(executionAppId);
             AiCodeGeneratorFacade.VueProjectGeneration generation =
-                    facade.generateVueProjectForEvaluation(testCase.prompt(), testCase.appId());
+                    facade.generateVueProjectForEvaluation(testCase.prompt(), executionAppId);
             context = generation.context();
             generation.stream().then().block(generationTimeout);
             if (!Files.isDirectory(source)) {
@@ -64,14 +100,23 @@ public final class VueGenerationBuildEvaluator {
             }
             moveGeneratedProject(source, target);
             BuildResult buildResult = projectBuilder.buildProjectDetailed(target.toString());
-            return row(testCase, true, context, buildResult, null);
+            return row(testCase, executionAppId, true, context, buildResult, null);
         } catch (Exception exception) {
-            return row(testCase, false, context, null, safeError(exception));
+            return row(testCase, executionAppId, false, context, null, safeError(exception));
         }
+    }
+
+    private Path sourcePath(long executionAppId) {
+        return generatedSourceRoot.resolve("vue_project_" + executionAppId);
+    }
+
+    private Path targetPath(long executionAppId) {
+        return reportGeneratedRoot.resolve("vue_project_" + executionAppId);
     }
 
     private VueGenerationBuildRow row(
             VueGenerationBuildCase testCase,
+            long executionAppId,
             boolean generationCompleted,
             VueRagContext context,
             BuildResult buildResult,
@@ -83,7 +128,8 @@ public final class VueGenerationBuildEvaluator {
                 ? List.of()
                 : context.features().stream().map(TemplateDoc::getId).toList();
         return new VueGenerationBuildRow(
-                testCase, generationCompleted, skeletonId, featureIds, buildResult, error);
+                testCase, executionAppId, generationCompleted,
+                skeletonId, featureIds, buildResult, error);
     }
 
     private void moveGeneratedProject(Path source, Path target) throws IOException {
@@ -130,4 +176,5 @@ public final class VueGenerationBuildEvaluator {
         return cause.getClass().getSimpleName()
                 + (message == null || message.isBlank() ? "" : ": " + message);
     }
+
 }

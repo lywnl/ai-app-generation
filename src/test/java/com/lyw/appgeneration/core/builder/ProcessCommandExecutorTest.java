@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.builder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProcessCommandExecutorTest {
@@ -114,6 +116,45 @@ class ProcessCommandExecutorTest {
         }
     }
 
+    @Test
+    void timeoutTracksAndCleansDescendantSpawnedWhileParentIsTerminating() throws Exception {
+        Path childPidFile = tempDir.resolve("late-child.pid");
+        long childPid = -1;
+
+        try {
+            CommandResult result = executeWithTestBound(
+                    javaCommand("late-spawn-parent", childPidFile.toString()),
+                    Duration.ofMillis(150));
+
+            childPid = awaitPid(childPidFile);
+            assertTrue(result.timedOut());
+            assertFalse(isAlive(childPid), "清理快照后新派生的后代也必须死亡");
+            assertNoProcessMonitorThreadLeak();
+        } finally {
+            terminateFixture(childPid);
+        }
+    }
+
+    @Test
+    void successfulParentWithPipeHoldingDescendantFailsBoundedlyAndCleansDescendant()
+            throws Exception {
+        Path childPidFile = tempDir.resolve("detached-child.pid");
+        long childPid = -1;
+
+        try {
+            IOException exception = assertThrows(IOException.class, () -> executeWithTestBound(
+                    javaCommand("exiting-parent", childPidFile.toString()),
+                    Duration.ofSeconds(5)));
+
+            childPid = awaitPid(childPidFile);
+            assertTrue(exception.getMessage().contains("读取命令输出超时"));
+            assertFalse(isAlive(childPid), "父进程正常退出后，已登记的管道持有者也必须死亡");
+            assertNoProcessMonitorThreadLeak();
+        } finally {
+            terminateFixture(childPid);
+        }
+    }
+
     private CommandResult executeWithTestBound(List<String> command, Duration timeout)
             throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -153,8 +194,28 @@ class ProcessCommandExecutorTest {
     }
 
     private void terminateFixture(long pid) {
+        if (pid <= 0) {
+            return;
+        }
         ProcessHandle.of(pid).filter(ProcessHandle::isAlive)
                 .ifPresent(ProcessHandle::destroyForcibly);
+    }
+
+    private void assertNoProcessMonitorThreadLeak() throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            boolean monitorAlive = Thread.getAllStackTraces().keySet().stream()
+                    .anyMatch(thread -> thread.isAlive()
+                            && thread.getName().startsWith("process-command-monitor-"));
+            if (!monitorAlive) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        assertFalse(Thread.getAllStackTraces().keySet().stream()
+                        .anyMatch(thread -> thread.isAlive()
+                                && thread.getName().startsWith("process-command-monitor-")),
+                "进程监控线程必须有界终止");
     }
 
     private List<String> javaCommand(String mode, String... additionalArguments) {
@@ -169,6 +230,39 @@ class ProcessCommandExecutorTest {
     public static final class ProcessFixture {
 
         public static void main(String[] args) throws Exception {
+            if ("late-spawn-parent".equals(args[0])) {
+                Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> {
+                    try {
+                        Process child = new ProcessBuilder(javaCommandForFixture(
+                                "tree-child", args[1]))
+                                .inheritIO()
+                                .start();
+                        java.nio.file.Files.writeString(Path.of(args[1]),
+                                Long.toString(child.pid()));
+                        System.out.println("父进程终止期间启动后代:" + child.pid());
+                        System.out.flush();
+                        Thread.sleep(200);
+                    } catch (Exception exception) {
+                        throw new IllegalStateException(exception);
+                    }
+                }));
+                System.out.println("等待超时触发父进程清理");
+                System.out.flush();
+                Thread.sleep(15_000);
+                return;
+            }
+            if ("exiting-parent".equals(args[0])) {
+                Process child = new ProcessBuilder(javaCommandForFixture(
+                        "tree-child", args[1]))
+                        .inheritIO()
+                        .start();
+                java.nio.file.Files.writeString(Path.of(args[1]),
+                        Long.toString(child.pid()));
+                System.out.println("父进程正常退出，后代继续持有管道:" + child.pid());
+                System.out.flush();
+                Thread.sleep(200);
+                return;
+            }
             if ("tree-parent".equals(args[0])) {
                 java.nio.file.Files.writeString(Path.of(args[1]),
                         Long.toString(ProcessHandle.current().pid()));

@@ -31,8 +31,9 @@ class VueGenerationBuildDatasetTest {
         assertEquals(10, dataset.cases().size());
         assertEquals(10, dataset.cases().stream()
                 .map(VueGenerationBuildCase::caseId).distinct().count());
-        assertEquals(10, dataset.cases().stream()
-                .map(VueGenerationBuildCase::appId).distinct().count());
+        VueGenerationBuildDataset reloaded = VueGenerationBuildDataset.load(
+                "rag/vue-generation-build-cases.json", new ObjectMapper());
+        assertEquals(dataset.cases(), reloaded.cases(), "固定 caseId 与需求不得随运行变化");
         assertEquals(REQUIRED_CATEGORIES, dataset.cases().stream()
                 .map(VueGenerationBuildCase::category).collect(Collectors.toSet()));
         assertTrue(dataset.cases().stream().allMatch(testCase -> !testCase.prompt().isBlank()));

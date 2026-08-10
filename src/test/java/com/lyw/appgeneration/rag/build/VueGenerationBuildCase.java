@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.rag.build;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -7,8 +8,16 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public record VueGenerationBuildCase(
         @JsonProperty("caseId") String caseId,
-        @JsonProperty("appId") long appId,
         @JsonProperty("category") String category,
         @JsonProperty("prompt") String prompt
 ) {
+
+    @JsonCreator
+    public static VueGenerationBuildCase fromJson(
+            @JsonProperty("caseId") String caseId,
+            @JsonProperty("appId") Long ignoredAppId,
+            @JsonProperty("category") String category,
+            @JsonProperty("prompt") String prompt) {
+        return new VueGenerationBuildCase(caseId, category, prompt);
+    }
 }

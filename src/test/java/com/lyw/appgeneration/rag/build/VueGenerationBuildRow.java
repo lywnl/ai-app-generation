@@ -9,6 +9,7 @@ import java.util.List;
  */
 public record VueGenerationBuildRow(
         VueGenerationBuildCase testCase,
+        long appId,
         boolean generationCompleted,
         String selectedSkeletonId,
         List<String> selectedFeatureIds,
@@ -17,6 +18,9 @@ public record VueGenerationBuildRow(
 ) {
 
     public VueGenerationBuildRow {
+        if (appId <= 0) {
+            throw new IllegalArgumentException("appId 必须是正数");
+        }
         selectedFeatureIds = selectedFeatureIds == null
                 ? List.of()
                 : List.copyOf(selectedFeatureIds);

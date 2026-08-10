@@ -6,7 +6,10 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -85,6 +88,12 @@ public class VueProjectBuilder {
             return installResult;
         }
 
+        BuildResult distCleanupResult = cleanPreviousDist(
+                projectDirectory, output, startNanos);
+        if (distCleanupResult != null) {
+            return distCleanupResult;
+        }
+
         BuildResult buildResult = runCommand(
                 projectDirectory,
                 List.of(npmExecutable, "run", "build"),
@@ -102,6 +111,57 @@ public class VueProjectBuilder {
             return result(false, BuildStage.DIST_CHECK, 0, false, output.toString(), startNanos);
         }
         return result(true, BuildStage.SUCCESS, 0, false, output.toString(), startNanos);
+    }
+
+    private BuildResult cleanPreviousDist(Path projectDirectory,
+                                          StringBuilder output,
+                                          long startNanos) {
+        try {
+            deleteDistDirectory(projectDirectory);
+            return null;
+        } catch (IOException | RuntimeException exception) {
+            appendOutput(output, "清理旧 dist 目录失败: " + safeMessage(exception));
+            return result(false, BuildStage.NPM_BUILD, null, false,
+                    output.toString(), startNanos);
+        }
+    }
+
+    private void deleteDistDirectory(Path projectDirectory) throws IOException {
+        Path projectRoot = projectDirectory.toRealPath();
+        Path distDirectory = projectRoot.resolve("dist").normalize();
+        if (!projectRoot.equals(distDirectory.getParent())) {
+            throw new IOException("dist 目录超出项目根目录");
+        }
+        if (!Files.exists(distDirectory, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+
+        Files.walkFileTree(distDirectory, new SimpleFileVisitor<>() {
+            @Override
+            public java.nio.file.FileVisitResult visitFile(
+                    Path file, BasicFileAttributes attributes) throws IOException {
+                deleteWithinDist(distDirectory, file);
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public java.nio.file.FileVisitResult postVisitDirectory(
+                    Path directory, IOException exception) throws IOException {
+                if (exception != null) {
+                    throw exception;
+                }
+                deleteWithinDist(distDirectory, directory);
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private void deleteWithinDist(Path distDirectory, Path path) throws IOException {
+        Path normalizedPath = path.toAbsolutePath().normalize();
+        if (!normalizedPath.startsWith(distDirectory)) {
+            throw new IOException("拒绝删除 dist 目录之外的路径");
+        }
+        Files.delete(path);
     }
 
     static String npmExecutable(String operatingSystemName) {

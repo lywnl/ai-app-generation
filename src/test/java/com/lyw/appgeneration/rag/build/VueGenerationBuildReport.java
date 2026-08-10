@@ -59,8 +59,8 @@ public final class VueGenerationBuildReport {
         output.append("状态：").append(passed() ? "通过" : "未通过").append("\n\n");
         output.append("构建成功数：").append(successCount).append('/').append(rows.size()).append("\n\n");
         output.append("首版不做模型二次修复；以下均为首次生成结果。\n\n");
-        output.append("| Case | 类别 | 生成完成 | 骨架 | 功能片段 | 阶段 | 退出码 | 超时 | 尾部/错误 |\n");
-        output.append("|---|---|---|---|---|---|---:|---|---|\n");
+        output.append("| Case | 运行 AppId | 类别 | 生成完成 | 骨架 | 功能片段 | 阶段 | 退出码 | 超时 | 尾部/错误 |\n");
+        output.append("|---|---:|---|---|---|---|---|---:|---|---|\n");
         rows.forEach(row -> appendRow(output, row));
         return EvaluationReportSanitizer.sanitize(output.toString());
     }
@@ -68,6 +68,7 @@ public final class VueGenerationBuildReport {
     private void appendRow(StringBuilder output, VueGenerationBuildRow row) {
         BuildResult result = row.buildResult();
         output.append("| ").append(escape(row.testCase().caseId()))
+                .append(" | ").append(row.appId())
                 .append(" | ").append(escape(row.testCase().category()))
                 .append(" | ").append(row.generationCompleted())
                 .append(" | ").append(escape(row.selectedSkeletonId()))

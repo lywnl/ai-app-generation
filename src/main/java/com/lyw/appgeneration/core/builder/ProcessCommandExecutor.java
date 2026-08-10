@@ -7,14 +7,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 使用真实 {@link ProcessBuilder} 执行构建命令。
@@ -24,8 +29,10 @@ final class ProcessCommandExecutor implements CommandExecutor {
     private static final Duration GRACEFUL_TERMINATION_WAIT = Duration.ofMillis(500);
     private static final Duration FORCED_TERMINATION_WAIT = Duration.ofMillis(500);
     private static final Duration OUTPUT_DRAIN_WAIT = Duration.ofMillis(750);
-    private static final Duration READER_TERMINATION_WAIT = Duration.ofMillis(250);
+    private static final Duration TASK_TERMINATION_WAIT = Duration.ofMillis(250);
     private static final Duration PROCESS_POLL_INTERVAL = Duration.ofMillis(10);
+    private static final Duration MONITOR_POLL_INTERVAL = Duration.ofMillis(5);
+    private static final int CLEANUP_SCAN_ROUNDS = 4;
     private static final int READ_BUFFER_CHARS = 2_048;
 
     @Override
@@ -35,39 +42,37 @@ final class ProcessCommandExecutor implements CommandExecutor {
                 .directory(workingDirectory.toFile())
                 .redirectErrorStream(true)
                 .start();
-        ExecutorService readerExecutor = null;
-        Future<?> outputReader = null;
+        ProcessTracker tracker = new ProcessTracker(process.toHandle());
         CharacterTailBuffer outputTail = new CharacterTailBuffer(
                 BuildResult.MAX_OUTPUT_TAIL_CHARS);
+        TaskResources tasks = startTasks(process, tracker, outputTail);
         try {
-            readerExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
-            outputReader = readerExecutor.submit(() -> {
-                readOutput(process, outputTail);
-                return null;
-            });
             boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
             if (!finished) {
-                CleanupResult cleanup = cleanup(process, outputReader, readerExecutor, outputTail);
+                CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
                 throwIfCleanupInterrupted(cleanup, null);
                 throwIfCleanupFailed(cleanup, null);
                 return new CommandResult(null, true, cleanup.outputTail());
             }
-            awaitOutput(outputReader);
-            shutdownReaderExecutor(readerExecutor);
+            awaitOutput(tasks.outputReader());
+            stopMonitor(tasks, tracker);
+            shutdownTasks(tasks.executor());
             return new CommandResult(process.exitValue(), false, outputTail.toString());
         } catch (InterruptedException exception) {
-            CleanupResult cleanup = cleanup(process, outputReader, readerExecutor, outputTail);
+            CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
             InterruptedException interrupted = interruptedException(
                     "命令执行被中断，已完成有界进程清理", exception, cleanup.failure());
             Thread.currentThread().interrupt();
             throw interrupted;
         } catch (IOException exception) {
-            CleanupResult cleanup = cleanup(process, outputReader, readerExecutor, outputTail);
+            CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
             throwIfCleanupInterrupted(cleanup, exception);
-            throwIfCleanupFailed(cleanup, exception);
+            if (cleanup.failure() != null) {
+                exception.addSuppressed(cleanup.failure());
+            }
             throw exception;
         } catch (RuntimeException exception) {
-            CleanupResult cleanup = cleanup(process, outputReader, readerExecutor, outputTail);
+            CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
             throwIfCleanupInterrupted(cleanup, exception);
             if (cleanup.failure() != null) {
                 exception.addSuppressed(cleanup.failure());
@@ -76,66 +81,102 @@ final class ProcessCommandExecutor implements CommandExecutor {
         }
     }
 
+    private TaskResources startTasks(Process process,
+                                     ProcessTracker tracker,
+                                     CharacterTailBuffer outputTail) {
+        ExecutorService executor = Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("process-command-monitor-", 0).factory());
+        Future<?> outputReader = executor.submit(() -> {
+            readOutput(process, outputTail);
+            return null;
+        });
+        Future<?> monitor = executor.submit(() -> monitorDescendants(tracker));
+        return new TaskResources(executor, outputReader, monitor);
+    }
+
+    private void monitorDescendants(ProcessTracker tracker) {
+        while (!tracker.stopRequested()) {
+            tracker.scanDescendants();
+            try {
+                Thread.sleep(MONITOR_POLL_INTERVAL);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        tracker.scanDescendants();
+    }
+
     private CleanupResult cleanup(Process process,
-                                  Future<?> outputReader,
-                                  ExecutorService readerExecutor,
+                                  ProcessTracker tracker,
+                                  TaskResources tasks,
                                   CharacterTailBuffer outputTail) {
         CleanupState state = new CleanupState(Thread.interrupted());
-        List<ProcessHandle> processTree = snapshotProcessTree(process, state);
-        terminateProcessTree(processTree, state);
-        awaitOutputDuringCleanup(process, outputReader, state);
-        shutdownReaderExecutorDuringCleanup(readerExecutor, state);
+        terminateProcessTree(tracker, state);
+        awaitOutputDuringCleanup(process, tasks.outputReader(), state);
+        stopMonitorDuringCleanup(tasks, tracker, state);
+        shutdownTasksDuringCleanup(tasks.executor(), state);
         return new CleanupResult(outputTail.toString(), state.interrupted, state.failure);
     }
 
-    private List<ProcessHandle> snapshotProcessTree(Process process, CleanupState state) {
-        ProcessHandle root = process.toHandle();
-        List<ProcessHandle> processTree = new ArrayList<>();
-        try {
-            processTree.addAll(root.descendants().toList());
-            Collections.reverse(processTree);
-        } catch (RuntimeException exception) {
-            state.recordFailure(exception);
+    private void terminateProcessTree(ProcessTracker tracker, CleanupState state) {
+        tracker.scanDescendants(state);
+        signalRoot(tracker.root(), false, state);
+        for (int round = 0; round < CLEANUP_SCAN_ROUNDS; round++) {
+            tracker.scanDescendants(state);
+            signalTrackedDescendants(tracker, false, state);
+            awaitTrackedExit(tracker, GRACEFUL_TERMINATION_WAIT, state);
+            tracker.scanDescendants(state);
+            signalTrackedDescendants(tracker, true, state);
+            signalRoot(tracker.root(), true, state);
+            awaitTrackedExit(tracker, FORCED_TERMINATION_WAIT, state);
+            tracker.scanDescendants(state);
+            if (aliveProcessIds(tracker, state).isEmpty()) {
+                return;
+            }
         }
-        processTree.add(root);
-        return processTree;
-    }
-
-    private void terminateProcessTree(List<ProcessHandle> processTree, CleanupState state) {
-        signalProcessTree(processTree, false, state);
-        awaitProcessTreeExit(processTree, GRACEFUL_TERMINATION_WAIT, state);
-        signalProcessTree(processTree, true, state);
-        awaitProcessTreeExit(processTree, FORCED_TERMINATION_WAIT, state);
-        List<Long> aliveProcessIds = aliveProcessIds(processTree, state);
+        List<Long> aliveProcessIds = aliveProcessIds(tracker, state);
         if (!aliveProcessIds.isEmpty()) {
             state.recordFailure(new IOException("命令进程树未能在期限内终止: " + aliveProcessIds));
         }
     }
 
-    private void signalProcessTree(List<ProcessHandle> processTree,
-                                   boolean forcibly,
-                                   CleanupState state) {
-        for (ProcessHandle processHandle : processTree) {
-            try {
-                if (!processHandle.isAlive()) {
-                    continue;
-                }
-                if (forcibly) {
-                    processHandle.destroyForcibly();
-                } else {
-                    processHandle.destroy();
-                }
-            } catch (RuntimeException exception) {
-                state.recordFailure(exception);
+    private void signalTrackedDescendants(ProcessTracker tracker,
+                                          boolean forcibly,
+                                          CleanupState state) {
+        List<ProcessHandle> descendants = tracker.trackedDescendants().stream()
+                .sorted(Comparator.comparingLong(ProcessHandle::pid).reversed())
+                .toList();
+        descendants.forEach(processHandle -> signal(processHandle, forcibly, state));
+    }
+
+    private void signalRoot(ProcessHandle root, boolean forcibly, CleanupState state) {
+        signal(root, forcibly, state);
+    }
+
+    private void signal(ProcessHandle processHandle,
+                        boolean forcibly,
+                        CleanupState state) {
+        try {
+            if (!processHandle.isAlive()) {
+                return;
             }
+            if (forcibly) {
+                processHandle.destroyForcibly();
+            } else {
+                processHandle.destroy();
+            }
+        } catch (RuntimeException exception) {
+            state.recordFailure(exception);
         }
     }
 
-    private void awaitProcessTreeExit(List<ProcessHandle> processTree,
-                                      Duration wait,
-                                      CleanupState state) {
+    private void awaitTrackedExit(ProcessTracker tracker,
+                                  Duration wait,
+                                  CleanupState state) {
         long deadlineNanos = System.nanoTime() + wait.toNanos();
-        while (!aliveProcessIds(processTree, state).isEmpty()) {
+        while (!aliveProcessIds(tracker, state).isEmpty()) {
+            tracker.scanDescendants(state);
             long remainingNanos = deadlineNanos - System.nanoTime();
             if (remainingNanos <= 0) {
                 return;
@@ -150,7 +191,9 @@ final class ProcessCommandExecutor implements CommandExecutor {
         }
     }
 
-    private List<Long> aliveProcessIds(List<ProcessHandle> processTree, CleanupState state) {
+    private List<Long> aliveProcessIds(ProcessTracker tracker, CleanupState state) {
+        Set<ProcessHandle> processTree = new LinkedHashSet<>(tracker.trackedDescendants());
+        processTree.add(tracker.root());
         List<Long> aliveProcessIds = new ArrayList<>();
         for (ProcessHandle processHandle : processTree) {
             try {
@@ -191,10 +234,6 @@ final class ProcessCommandExecutor implements CommandExecutor {
     private void awaitOutputDuringCleanup(Process process,
                                           Future<?> outputReader,
                                           CleanupState state) {
-        if (outputReader == null) {
-            closeProcessOutput(process, state);
-            return;
-        }
         long deadlineNanos = System.nanoTime() + OUTPUT_DRAIN_WAIT.toNanos();
         while (true) {
             long remainingNanos = deadlineNanos - System.nanoTime();
@@ -229,30 +268,73 @@ final class ProcessCommandExecutor implements CommandExecutor {
         }
     }
 
-    private void shutdownReaderExecutor(ExecutorService readerExecutor)
+    private void stopMonitor(TaskResources tasks, ProcessTracker tracker)
             throws IOException, InterruptedException {
-        readerExecutor.shutdownNow();
-        if (!readerExecutor.awaitTermination(
-                READER_TERMINATION_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
-            throw new IOException("命令输出读取线程未在期限内终止");
+        tracker.requestStop();
+        try {
+            tasks.monitor().get(TASK_TERMINATION_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            tasks.monitor().cancel(true);
+            throw new IOException("命令进程监控任务未在期限内终止", exception);
+        } catch (ExecutionException exception) {
+            throw new IOException("命令进程监控失败", exception.getCause());
         }
     }
 
-    private void shutdownReaderExecutorDuringCleanup(ExecutorService readerExecutor,
-                                                     CleanupState state) {
-        if (readerExecutor == null) {
-            return;
-        }
-        readerExecutor.shutdownNow();
-        long deadlineNanos = System.nanoTime() + READER_TERMINATION_WAIT.toNanos();
-        while (!readerExecutor.isTerminated()) {
+    private void stopMonitorDuringCleanup(TaskResources tasks,
+                                          ProcessTracker tracker,
+                                          CleanupState state) {
+        tracker.requestStop();
+        tasks.monitor().cancel(true);
+        awaitTaskDuringCleanup(tasks.monitor(), "命令进程监控任务未在期限内终止", state);
+    }
+
+    private void awaitTaskDuringCleanup(Future<?> task,
+                                        String timeoutMessage,
+                                        CleanupState state) {
+        long deadlineNanos = System.nanoTime() + TASK_TERMINATION_WAIT.toNanos();
+        while (true) {
             long remainingNanos = deadlineNanos - System.nanoTime();
             if (remainingNanos <= 0) {
-                state.recordFailure(new IOException("命令输出读取线程未在期限内终止"));
+                state.recordFailure(new IOException(timeoutMessage));
                 return;
             }
             try {
-                readerExecutor.awaitTermination(remainingNanos, TimeUnit.NANOSECONDS);
+                task.get(remainingNanos, TimeUnit.NANOSECONDS);
+                return;
+            } catch (InterruptedException exception) {
+                state.interrupted = true;
+            } catch (CancellationException exception) {
+                return;
+            } catch (ExecutionException exception) {
+                state.recordFailure(exception.getCause());
+                return;
+            } catch (TimeoutException exception) {
+                state.recordFailure(new IOException(timeoutMessage, exception));
+                return;
+            }
+        }
+    }
+
+    private void shutdownTasks(ExecutorService executor)
+            throws IOException, InterruptedException {
+        executor.shutdownNow();
+        if (!executor.awaitTermination(TASK_TERMINATION_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
+            throw new IOException("命令后台任务未在期限内终止");
+        }
+    }
+
+    private void shutdownTasksDuringCleanup(ExecutorService executor, CleanupState state) {
+        executor.shutdownNow();
+        long deadlineNanos = System.nanoTime() + TASK_TERMINATION_WAIT.toNanos();
+        while (!executor.isTerminated()) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                state.recordFailure(new IOException("命令后台任务未在期限内终止"));
+                return;
+            }
+            try {
+                executor.awaitTermination(remainingNanos, TimeUnit.NANOSECONDS);
             } catch (InterruptedException exception) {
                 state.interrupted = true;
             }
@@ -282,8 +364,8 @@ final class ProcessCommandExecutor implements CommandExecutor {
     }
 
     private InterruptedException interruptedException(String message,
-                                                      Throwable cause,
-                                                      Throwable cleanupFailure) {
+                                                       Throwable cause,
+                                                       Throwable cleanupFailure) {
         InterruptedException exception = new InterruptedException(message);
         if (cause != null) {
             exception.initCause(cause);
@@ -292,6 +374,76 @@ final class ProcessCommandExecutor implements CommandExecutor {
             exception.addSuppressed(cleanupFailure);
         }
         return exception;
+    }
+
+    private record TaskResources(ExecutorService executor,
+                                 Future<?> outputReader,
+                                 Future<?> monitor) {
+    }
+
+    private record CleanupResult(String outputTail, boolean interrupted, Throwable failure) {
+    }
+
+    private static final class ProcessTracker {
+
+        private final ProcessHandle root;
+        private final Set<ProcessHandle> descendants = ConcurrentHashMap.newKeySet();
+        private final AtomicBoolean stopRequested = new AtomicBoolean();
+
+        private ProcessTracker(ProcessHandle root) {
+            this.root = root;
+            scanDescendants();
+        }
+
+        private ProcessHandle root() {
+            return root;
+        }
+
+        private Set<ProcessHandle> trackedDescendants() {
+            return Set.copyOf(descendants);
+        }
+
+        private boolean stopRequested() {
+            return stopRequested.get();
+        }
+
+        private void requestStop() {
+            stopRequested.set(true);
+        }
+
+        private void scanDescendants() {
+            try {
+                descendants.addAll(root.descendants().toList());
+            } catch (RuntimeException ignored) {
+                // 监控任务只做尽力登记；清理路径会记录扫描异常。
+            }
+        }
+
+        private void scanDescendants(CleanupState state) {
+            try {
+                descendants.addAll(root.descendants().toList());
+            } catch (RuntimeException exception) {
+                state.recordFailure(exception);
+            }
+        }
+    }
+
+    private static final class CleanupState {
+
+        private boolean interrupted;
+        private Throwable failure;
+
+        private CleanupState(boolean interrupted) {
+            this.interrupted = interrupted;
+        }
+
+        private void recordFailure(Throwable newFailure) {
+            if (failure == null) {
+                failure = newFailure;
+                return;
+            }
+            failure.addSuppressed(newFailure);
+        }
     }
 
     private static final class CharacterTailBuffer {
@@ -323,27 +475,6 @@ final class ProcessCommandExecutor implements CommandExecutor {
                 output.append(chars[(start + index) % chars.length]);
             }
             return output.toString();
-        }
-    }
-
-    private record CleanupResult(String outputTail, boolean interrupted, Throwable failure) {
-    }
-
-    private static final class CleanupState {
-
-        private boolean interrupted;
-        private Throwable failure;
-
-        private CleanupState(boolean interrupted) {
-            this.interrupted = interrupted;
-        }
-
-        private void recordFailure(Throwable newFailure) {
-            if (failure == null) {
-                failure = newFailure;
-                return;
-            }
-            failure.addSuppressed(newFailure);
         }
     }
 }
