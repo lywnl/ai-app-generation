@@ -1,5 +1,16 @@
 # Vue RAG 混合检索全分支最终审查
 
+## 真实外部门禁基础设施补验（2026-08-11）
+
+- 临时 PGVector 已在项目忽略目录 `.codex/runtime/pgvector-data` 中运行，容器 `ai-codegen-rag-eval-pg` 为 `running/healthy`，`127.0.0.1:5432` 可达，数据库 `ai_codegen_rag` 已启用 `vector 0.8.6`。
+- Java 协议不是阻断：使用项目 JDK 25、`langchain4j-pgvector 1.1.0-beta7` 和独立探针表实际完成 1024 维向量批量写入、相似检索、ID/文本/metadata 读回，SQL 侧结果为 1 条、1024 维、`documentId=probe-document`；验证后探针表已删除。
+- 本机 JVM 的 SOCKS 代理会错误接管回环地址数据库连接。评测 JVM 增加 `-DsocksNonProxyHosts=localhost|127.*|[::1]` 后验证通过；这是本机运行参数问题，不是项目 PGVector 配置或代码缺陷。
+- 正式 `templates_vue` 表仍不存在，因为正式摄取需要 `text-embedding-v4` 为当前 23 个 `KnowledgeChunk` 生成真实稠密向量。空表、探针向量或本地假 Embedding 都不能替代计划指定的真实摄取。
+- 在数据库前置条件已满足的情况下，`VueRetrievalQualityGateTest` 与 `VueGenerationBuildQualityGateTest` 均以项目 JDK 25 重新执行，各 1/1、0 failure、0 error、0 skipped、`BUILD SUCCESS`。两项成功只证明门控和未执行报告正常，不代表真实门槛通过。
+- 最新真实检索报告只剩 `DASHSCOPE_API_KEY` 缺失；最新真实生成构建报告只剩 `DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY` 缺失。前者阻断正式摄取、Dense、Rerank 与检索指标，后者额外阻断十条真实生成。
+
+当前结论：默认 Maven 门禁、PGVector 基础设施和 Java 协议均已验证；代码仍可合并，但真实 Skeleton Hit@1、Feature Recall@4、Dense 相对退化与 10/10 构建没有成绩，所以仍不可发布。取得两个模型凭据后，应先摄取并核对 `templates_vue` 的当前目录版本与 23 条可见数据，再顺序运行两个真实门禁。
+
 ## Maven 门禁最终收敛（2026-08-11，替代此前失败状态）
 
 - 根因一：`JsonMessageStreamHandlerTest` 使用 `@InjectMocks`，但没有提供生产类新增的 `ToolMessageCollapser`。测试已补齐 mock，并用包含 `UserMessage`、`AiMessage` 的非空快照配合 `same(snapshot)`，验证自检后恢复的是折叠方法返回的同一对象。
@@ -11,7 +22,7 @@
 - 独立最终复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0，Ready to merge 为 Yes，所有历史 finding 已关闭。
 - 对应提交：`427fb16`、`25b83cc`、`a5c09b8`。未修改 `src/main/**`，未推送远程。
 
-当前结论：默认 Maven 门禁已完成，代码仍可合并；真实 Vue Hybrid/Dense 检索指标与十条真实生成构建仍因缺少凭据和 PGVector 基础设施未执行，所以发布结论仍为不可发布。
+当前结论：默认 Maven 门禁已完成，代码仍可合并；PGVector 基础设施后来已补齐并通过 Java 协议探针，真实 Vue Hybrid/Dense 检索指标与十条真实生成构建当前只因缺少模型凭据未执行，所以发布结论仍为不可发布。
 
 ## 最终审查 Important 修复（2026-08-10）
 
