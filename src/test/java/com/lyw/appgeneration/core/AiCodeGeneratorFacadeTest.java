@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -110,24 +111,39 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void disabledHybridUsesOnlyLegacyDenseAndAssembler() {
+    void disabledHybridUsesNewDenseOnlyWithRawQueryThenEnhancesGenerationRequest() {
         stubVueGenerator();
+        properties.setEnabled(true);
         properties.getHybrid().setEnabled(false);
-        List<RetrievedSnippet> snippets = List.of(snippet("legacy-vue"));
+        VueRagContext context = context("dense-skeleton");
+        when(retrievalService.retrieveVueProjectDenseOnly(RAW_QUERY)).thenReturn(context);
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
-        when(retrievalService.retrieve(ENHANCED_QUERY, CodeGenTypeEnum.VUE_PROJECT))
-                .thenReturn(snippets);
-        when(promptAssembler.assemble(ENHANCED_QUERY, snippets)).thenReturn("旧链拼装");
+        when(promptAssembler.assembleVueProject(ENHANCED_QUERY, context)).thenReturn(AUGMENTED_QUERY);
 
         facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
 
-        InOrder order = inOrder(imageCollectionService, retrievalService, promptAssembler);
+        InOrder order = inOrder(retrievalService, imageCollectionService, promptAssembler, generatorService);
+        order.verify(retrievalService).retrieveVueProjectDenseOnly(RAW_QUERY);
         order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
-        order.verify(retrievalService).retrieve(ENHANCED_QUERY, CodeGenTypeEnum.VUE_PROJECT);
-        order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
+        order.verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, context);
+        order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
+        verify(retrievalService, never()).retrieve(any(), any());
         verify(retrievalService, never()).retrieveVueProject(any());
-        verify(promptAssembler, never()).assembleVueProject(any(), any());
-        verify(generatorService).generateVueProjectCodeStream(APP_ID, "旧链拼装");
+        verify(promptAssembler, never()).assemble(any(), anyList());
+    }
+
+    @Test
+    void disabledRagSkipsEveryVueRagStageEvenWhenHybridIsEnabled() {
+        stubVueGenerator();
+        properties.setEnabled(false);
+        properties.getHybrid().setEnabled(true);
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
+
+        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+
+        verifyNoInteractions(retrievalService, promptAssembler);
+        verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, ENHANCED_QUERY);
     }
 
     @Test
@@ -221,12 +237,25 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void evaluationEntryRejectsDisabledHybridInsteadOfSilentlyUsingLegacyChain() {
+        properties.setEnabled(true);
         properties.getHybrid().setEnabled(false);
 
         assertThrows(IllegalStateException.class,
                 () -> facade.generateVueProjectForEvaluation(RAW_QUERY, APP_ID));
 
         verify(serviceFactory, never()).getAiCodeGeneratorService(any(Long.class), any());
+    }
+
+    @Test
+    void evaluationEntryRejectsDisabledRagBeforeObtainingGeneratorService() {
+        properties.setEnabled(false);
+        properties.getHybrid().setEnabled(true);
+
+        assertThrows(IllegalStateException.class,
+                () -> facade.generateVueProjectForEvaluation(RAW_QUERY, APP_ID));
+
+        verify(serviceFactory, never()).getAiCodeGeneratorService(any(Long.class), any());
+        verifyNoInteractions(retrievalService, promptAssembler, imageCollectionService);
     }
 
     private VueRagContext context(String skeletonId) {

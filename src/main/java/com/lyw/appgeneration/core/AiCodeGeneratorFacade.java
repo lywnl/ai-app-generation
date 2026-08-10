@@ -117,14 +117,17 @@ public class AiCodeGeneratorFacade {
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
-                if (ragProperties.getHybrid().isEnabled()) {
-                    yield prepareHybridVueGeneration(
-                            userMessage, appId, isFirstMessage, aiCodeGeneratorService).stream();
+                if (!ragProperties.isEnabled()) {
+                    String generationRequest = isFirstMessage
+                            ? imageCollectionService.enhancePrompt(userMessage)
+                            : userMessage;
+                    TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(
+                            appId, generationRequest);
+                    yield processTokenStream(tokenStream);
                 }
-                String augmentedMessage = legacyVueAugment(userMessage, isFirstMessage);
-                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(
-                        appId, augmentedMessage);
-                yield processTokenStream(tokenStream);
+                yield prepareVueGeneration(
+                        userMessage, appId, isFirstMessage, aiCodeGeneratorService,
+                        ragProperties.getHybrid().isEnabled()).stream();
             }
             default -> {
                 String errorMsg = "不支持的生成类型: " + codeGenTypeEnum.getValue();
@@ -144,20 +147,21 @@ public class AiCodeGeneratorFacade {
      * @return 本次真实检索上下文与真实生成流
      */
     public VueProjectGeneration generateVueProjectForEvaluation(String userMessage, long appId) {
-        if (!ragProperties.getHybrid().isEnabled()) {
-            throw new IllegalStateException("真实 Vue 生成评测必须显式开启 hybrid");
+        if (!ragProperties.isEnabled() || !ragProperties.getHybrid().isEnabled()) {
+            throw new IllegalStateException("真实 Vue 生成评测必须显式开启 RAG 与 hybrid");
         }
         AiCodeGeneratorService generatorService = aiGeneratorServiceFactory
                 .getAiCodeGeneratorService(appId, CodeGenTypeEnum.VUE_PROJECT);
-        return prepareHybridVueGeneration(userMessage, appId, false, generatorService);
+        return prepareVueGeneration(userMessage, appId, false, generatorService, true);
     }
 
-    private VueProjectGeneration prepareHybridVueGeneration(
+    private VueProjectGeneration prepareVueGeneration(
             String userMessage,
             long appId,
             boolean isFirstMessage,
-            AiCodeGeneratorService generatorService) {
-        VueRagContext context = retrieveVueContext(userMessage);
+            AiCodeGeneratorService generatorService,
+            boolean hybridEnabled) {
+        VueRagContext context = retrieveVueContext(userMessage, hybridEnabled);
         String generationRequest = isFirstMessage
                 ? imageCollectionService.enhancePrompt(userMessage)
                 : userMessage;
@@ -181,21 +185,16 @@ public class AiCodeGeneratorFacade {
     public record VueProjectGeneration(VueRagContext context, Flux<String> stream) {
     }
 
-    private VueRagContext retrieveVueContext(String userMessage) {
+    private VueRagContext retrieveVueContext(String userMessage, boolean hybridEnabled) {
         try {
-            return ragRetrievalService.retrieveVueProject(userMessage);
+            return hybridEnabled
+                    ? ragRetrievalService.retrieveVueProject(userMessage)
+                    : ragRetrievalService.retrieveVueProjectDenseOnly(userMessage);
         } catch (Exception exception) {
-            log.warn("[Vue RAG] 混合检索异常,使用空上下文继续生成,queryHash={},candidateCount=0",
+            log.warn("[Vue RAG] 检索异常,使用空上下文继续生成,queryHash={},candidateCount=0",
                     VueRagLogSanitizer.queryHash(userMessage));
             return VueRagContext.unavailable();
         }
-    }
-
-    private String legacyVueAugment(String userMessage, boolean isFirstMessage) {
-        String generationRequest = isFirstMessage
-                ? imageCollectionService.enhancePrompt(userMessage)
-                : userMessage;
-        return ragAugment(generationRequest, CodeGenTypeEnum.VUE_PROJECT);
     }
 
     /**

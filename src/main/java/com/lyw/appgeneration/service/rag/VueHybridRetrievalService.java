@@ -170,6 +170,80 @@ public class VueHybridRetrievalService {
         }
     }
 
+    /**
+     * 使用当前目录和新版短块 metadata 执行生产 Dense-only 检索。
+     *
+     * <p>该入口只关闭 BM25、RRF 与 Rerank，仍按目录版本、文档类型回查完整父文档，
+     * 并在 Dense 无结果或失败时使用固定基础骨架保证生产生成可用。
+     */
+    public VueRagContext retrieveDenseOnly(String rawQuery) {
+        long startNanos = System.nanoTime();
+        String queryHash = VueRagLogSanitizer.queryHash(rawQuery);
+        try {
+            VueRetrievalResources resources = resourceProvider.current().orElse(null);
+            if (resources == null) {
+                log.error("[Vue RAG][Dense] 目录不可用,返回无 RAG,queryHash={},candidateCount=0",
+                        queryHash);
+                metricsCollector.recordDegradation(VueRagDegradationReason.CATALOG_UNAVAILABLE);
+                metricsCollector.recordFinalSelection(0, 0);
+                return VueRagContext.unavailable();
+            }
+            TemplateCatalog catalog = resources.catalog();
+            DenseResult skeletonResult = retrieveDenseParents(
+                    rawQuery, RagDocumentKind.PROJECT_SKELETON, catalog);
+            DenseResult featureResult = retrieveDenseParents(
+                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, catalog);
+            boolean degraded = skeletonResult.failed() || skeletonResult.documents().isEmpty()
+                    || featureResult.failed() || featureResult.documents().isEmpty();
+
+            TemplateDoc skeleton = firstOfKind(
+                    skeletonResult.documents(), RagDocumentKind.PROJECT_SKELETON);
+            if (skeleton == null) {
+                skeleton = basicSkeleton(catalog);
+                degraded = true;
+                metricsCollector.recordDegradation(VueRagDegradationReason.FALLBACK_SKELETON);
+            }
+            if (skeleton == null) {
+                metricsCollector.recordFinalSelection(0, 0);
+                return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+            }
+
+            List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
+                    skeleton, featureResult.documents(), FINAL_FEATURE_TOP_K);
+            metricsCollector.recordFinalSelection(1, compatibleFeatures.size());
+            return new VueRagContext(
+                    skeleton, compatibleFeatures, catalog.getCatalogVersion(), degraded);
+        } finally {
+            metricsCollector.recordRetrievalDuration(
+                    Duration.ofNanos(System.nanoTime() - startNanos));
+        }
+    }
+
+    private DenseResult retrieveDenseParents(String rawQuery,
+                                             RagDocumentKind documentKind,
+                                             TemplateCatalog catalog) {
+        try {
+            List<RankedCandidate> candidates = denseRetriever.retrieve(
+                    rawQuery, catalog.getCatalogVersion(), documentKind, CHANNEL_TOP_K);
+            List<RankedCandidate> safeCandidates = candidates == null ? List.of() : candidates;
+            metricsCollector.recordDenseCandidates(safeCandidates.size());
+            return new DenseResult(resolveParents(safeCandidates, documentKind, catalog), false);
+        } catch (Exception exception) {
+            log.warn("[Vue RAG][Dense] 检索失败,queryHash={},catalogVersion={},documentKind={},"
+                            + "candidateCount=0",
+                    VueRagLogSanitizer.queryHash(rawQuery), catalog.getCatalogVersion(), documentKind);
+            metricsCollector.recordDenseCandidates(0);
+            metricsCollector.recordDegradation(VueRagDegradationReason.DENSE_FAILED);
+            return new DenseResult(List.of(), true);
+        }
+    }
+
+    private TemplateDoc basicSkeleton(TemplateCatalog catalog) {
+        return catalog.findDocumentById(BASIC_SKELETON_ID)
+                .filter(document -> document.getDocumentKind() == RagDocumentKind.PROJECT_SKELETON)
+                .orElse(null);
+    }
+
     private ChainResult retrieveChain(String rawQuery,
                                       RagDocumentKind documentKind,
                                       int rerankTopK,
@@ -411,6 +485,9 @@ public class VueHybridRetrievalService {
     }
 
     private record ChannelResult(List<RankedCandidate> candidates, boolean failed) {
+    }
+
+    private record DenseResult(List<TemplateDoc> documents, boolean failed) {
     }
 
     private record ChainResult(List<TemplateDoc> documents, boolean degraded) {

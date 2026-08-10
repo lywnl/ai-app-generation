@@ -26,6 +26,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -505,6 +506,89 @@ class VueHybridRetrievalServiceTest {
         verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
         verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
         verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+    }
+
+    @Test
+    void productionDenseOnlyUsesCurrentCatalogParentsAndSkipsHybridStages() {
+        TemplateDoc skeleton = compatibleSkeleton("dense-production-skeleton");
+        TemplateDoc incompatible = compatibleFeature("dense-production-incompatible");
+        incompatible.setFramework("vue@2.7.16");
+        TemplateDoc compatible = compatibleFeature("dense-production-compatible");
+        Harness harness = harness(List.of(skeleton, incompatible, compatible));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(candidates(
+                        List.of(incompatible, compatible), RagDocumentKind.FEATURE_SNIPPET));
+
+        VueRagContext context = harness.service.retrieveDenseOnly(QUERY);
+
+        assertSame(skeleton, context.skeleton());
+        assertEquals(List.of(compatible), context.features());
+        assertEquals(CATALOG_VERSION, context.catalogVersion());
+        assertFalse(context.degraded());
+        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
+        verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+    }
+
+    @Test
+    void productionDenseOnlyFallsBackToBasicSkeletonButEvaluationDoesNot() {
+        TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
+        Harness harness = harness(List.of(basic));
+        when(harness.dense.retrieve(any(), eq(CATALOG_VERSION), any(), anyInt()))
+                .thenReturn(List.of());
+
+        VueRagContext production = harness.service.retrieveDenseOnly(QUERY);
+        VueRagContext evaluation = harness.service.retrieveDenseOnlyForEvaluation(QUERY);
+
+        assertSame(basic, production.skeleton());
+        assertTrue(production.features().isEmpty());
+        assertEquals(CATALOG_VERSION, production.catalogVersion());
+        assertTrue(production.degraded());
+        assertNull(evaluation.skeleton());
+        assertTrue(evaluation.features().isEmpty());
+        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
+        verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+    }
+
+    @Test
+    void productionDenseOnlyFallsBackToBasicSkeletonWhenDenseFails() {
+        TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
+        Harness harness = harness(List.of(basic));
+        when(harness.dense.retrieve(any(), any(), any(), anyInt()))
+                .thenThrow(new IllegalStateException("dense unavailable"));
+
+        VueRagContext context = harness.service.retrieveDenseOnly(QUERY);
+
+        assertSame(basic, context.skeleton());
+        assertTrue(context.features().isEmpty());
+        assertEquals(CATALOG_VERSION, context.catalogVersion());
+        assertTrue(context.degraded());
+        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
+        verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+    }
+
+    @Test
+    void productionDenseOnlyMarksDegradedWhenFeatureCandidatesAreEmpty() {
+        TemplateDoc skeleton = compatibleSkeleton("dense-skeleton-only");
+        Harness harness = harness(List.of(skeleton));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of());
+
+        VueRagContext context = harness.service.retrieveDenseOnly(QUERY);
+
+        assertEquals("dense-skeleton-only", context.skeleton().getId());
+        assertTrue(context.features().isEmpty());
+        assertTrue(context.degraded());
     }
 
     @Test

@@ -2,10 +2,28 @@ package com.lyw.appgeneration.service.rag.ingest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.ai.AiCodeGeneratorService;
+import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.image.ImageCollectionService;
+import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
+import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.service.rag.RagPromptAssembler;
+import com.lyw.appgeneration.service.rag.RagRerankService;
+import com.lyw.appgeneration.service.rag.RagRetrievalService;
+import com.lyw.appgeneration.service.rag.VueHybridRetrievalService;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.model.KnowledgeChunk;
+import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
+import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
+import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
+import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
+import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
+import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
 import com.lyw.appgeneration.service.rag.support.TemplateTestData;
+import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -13,8 +31,12 @@ import dev.langchain4j.model.output.Response;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+import dev.langchain4j.service.TokenStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +52,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class VueKnowledgeIngestorTest {
 
@@ -119,6 +146,122 @@ class VueKnowledgeIngestorTest {
         assertEquals(0, store.visibleSegments.size());
     }
 
+    @Test
+    void productionDenseOnlyIgnoresLegacyRowsAndAssemblesCurrentParentSource() {
+        TemplateCatalog catalog = new TemplateCatalog(DATASET_ROOT, objectMapper);
+        DeterministicEmbeddingModel embeddingModel = new DeterministicEmbeddingModel();
+        InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
+        addLegacyRows(store);
+        new VueKnowledgeIngestor(embeddingModel, objectMapper).ingest(DATASET_ROOT, store);
+        RagProperties properties = new RagProperties();
+        properties.setEnabled(true);
+        properties.getRetrieval().setMinScore(0.0);
+        DenseRetriever denseRetriever = new DenseRetriever(
+                embeddingModel, Map.of(CodeGenTypeEnum.VUE_PROJECT, store), properties);
+
+        List<RankedCandidate> denseCandidates = denseRetriever.retrieve(
+                "Vue3 基础工程 登录表单", catalog.getCatalogVersion(),
+                com.lyw.appgeneration.service.rag.model.RagDocumentKind.PROJECT_SKELETON, 10);
+        ProductionRetrievalHarness retrievalHarness = productionRetrievalService(
+                catalog, denseRetriever, embeddingModel, store, properties);
+        String prompt = generateWithDisabledHybrid(retrievalHarness.service(), properties);
+        VueRagContext context = retrievalHarness.service()
+                .retrieveVueProjectDenseOnly("Vue3 基础工程 登录表单");
+
+        assertFalse(denseCandidates.isEmpty());
+        assertTrue(denseCandidates.stream().allMatch(candidate ->
+                catalog.findDocumentById(candidate.documentId()).isPresent()));
+        assertFalse(denseCandidates.stream().map(RankedCandidate::documentId).toList()
+                .contains("legacy-schema-document"));
+        assertFalse(denseCandidates.stream().map(RankedCandidate::documentId).toList()
+                .contains("old-version-document"));
+        assertEquals(catalog.getCatalogVersion(), context.catalogVersion());
+        assertTrue(context.skeleton() != null);
+        String parentSource = context.skeleton().getFiles().stream()
+                .filter(file -> "src/App.vue".equals(file.getPath()))
+                .findFirst()
+                .orElseThrow()
+                .getContent();
+        assertTrue(prompt.contains("│ " + parentSource.lines().findFirst().orElseThrow()));
+        assertFalse(prompt.contains("LEGACY_SCHEMA_SOURCE"));
+        assertFalse(prompt.contains("OLD_CATALOG_SOURCE"));
+        verify(retrievalHarness.fusion(), never()).fuse(
+                org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.anyInt());
+        verify(retrievalHarness.rerank(), never()).rerankVue(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    private String generateWithDisabledHybrid(
+            RagRetrievalService retrievalService,
+            RagProperties properties) {
+        properties.getHybrid().setEnabled(false);
+        AiGeneratorServiceFactory factory = mock(AiGeneratorServiceFactory.class);
+        AiCodeGeneratorService generator = mock(AiCodeGeneratorService.class);
+        ImageCollectionService imageService = mock(ImageCollectionService.class);
+        when(factory.getAiCodeGeneratorService(9L, CodeGenTypeEnum.VUE_PROJECT))
+                .thenReturn(generator);
+        when(imageService.enhancePrompt("Vue3 基础工程 登录表单"))
+                .thenReturn("Vue3 基础工程 登录表单\n图片增强信息");
+        when(generator.generateVueProjectCodeStream(
+                org.mockito.ArgumentMatchers.eq(9L), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(mock(TokenStream.class));
+        AiCodeGeneratorFacade facade = new AiCodeGeneratorFacade();
+        ReflectionTestUtils.setField(facade, "aiGeneratorServiceFactory", factory);
+        ReflectionTestUtils.setField(facade, "imageCollectionService", imageService);
+        ReflectionTestUtils.setField(facade, "ragRetrievalService", retrievalService);
+        ReflectionTestUtils.setField(facade, "ragPromptAssembler",
+                new RagPromptAssembler(properties, mock(VueRagMetricsCollector.class)));
+        ReflectionTestUtils.setField(facade, "ragProperties", properties);
+
+        facade.generateAndSaveCodeStream(
+                "Vue3 基础工程 登录表单", CodeGenTypeEnum.VUE_PROJECT, 9L, true);
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(generator).generateVueProjectCodeStream(
+                org.mockito.ArgumentMatchers.eq(9L), promptCaptor.capture());
+        verify(imageService).enhancePrompt("Vue3 基础工程 登录表单");
+        return promptCaptor.getValue();
+    }
+
+    private ProductionRetrievalHarness productionRetrievalService(
+            TemplateCatalog catalog,
+            DenseRetriever denseRetriever,
+            EmbeddingModel embeddingModel,
+            EmbeddingStore<TextSegment> store,
+            RagProperties properties) {
+        VueRetrievalResourceProvider provider = mock(VueRetrievalResourceProvider.class);
+        when(provider.current()).thenReturn(java.util.Optional.of(
+                new VueRetrievalResources(catalog, java.util.Optional.empty())));
+        RrfFusionService fusion = mock(RrfFusionService.class);
+        RagRerankService rerank = mock(RagRerankService.class);
+        VueHybridRetrievalService vueService = new VueHybridRetrievalService(
+                provider, denseRetriever, fusion, rerank,
+                mock(VueRagMetricsCollector.class), properties);
+        RagRetrievalService retrievalService = new RagRetrievalService(
+                embeddingModel, Map.of(CodeGenTypeEnum.VUE_PROJECT, store),
+                properties, rerank, vueService);
+        return new ProductionRetrievalHarness(retrievalService, fusion, rerank);
+    }
+
+    private void addLegacyRows(InMemoryEmbeddingStore<TextSegment> store) {
+        store.add("legacy-schema-row", Embedding.from(new float[]{1.0f, 0.0f}), TextSegment.from(
+                "旧 Vue 模板", Metadata.from(Map.of(
+                        "id", "legacy-schema-document",
+                        "title", "旧模板",
+                        "category", "legacy",
+                        "code", "LEGACY_SCHEMA_SOURCE"))));
+        store.add("old-version-row", Embedding.from(new float[]{1.0f, 0.0f}), TextSegment.from(
+                "旧目录 Vue 模板", Metadata.from(Map.of(
+                        "chunkId", "old-version:overview",
+                        "documentId", "old-version-document",
+                        "documentKind", "PROJECT_SKELETON",
+                        "chunkKind", "OVERVIEW",
+                        "catalogVersion", "catalog-old",
+                        "code", "OLD_CATALOG_SOURCE"))));
+    }
+
     private VueKnowledgeIngestor ingestor(EmbeddingModel embeddingModel) {
         return new VueKnowledgeIngestor(embeddingModel, objectMapper);
     }
@@ -155,6 +298,25 @@ class VueKnowledgeIngestorTest {
                     .toList();
             return Response.from(embeddings);
         }
+    }
+
+    private static final class DeterministicEmbeddingModel implements EmbeddingModel {
+
+        @Override
+        public Response<List<Embedding>> embedAll(List<TextSegment> segments) {
+            boolean query = segments.size() == 1;
+            return Response.from(segments.stream()
+                    .map(segment -> query
+                            ? Embedding.from(new float[]{1.0f, 0.0f})
+                            : Embedding.from(new float[]{0.8f, 0.2f}))
+                    .toList());
+        }
+    }
+
+    private record ProductionRetrievalHarness(
+            RagRetrievalService service,
+            RrfFusionService fusion,
+            RagRerankService rerank) {
     }
 
     private static final class RecordingEmbeddingStore implements EmbeddingStore<TextSegment> {

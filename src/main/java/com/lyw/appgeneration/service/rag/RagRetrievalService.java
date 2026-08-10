@@ -47,7 +47,23 @@ public class RagRetrievalService {
      * @return Vue 工程 RAG 上下文
      */
     public VueRagContext retrieveVueProject(String rawQuery) {
+        if (!props.isEnabled()) {
+            return VueRagContext.unavailable();
+        }
         return vueHybridRetrievalService.retrieve(rawQuery);
+    }
+
+    /**
+     * 使用新版 Vue 摄取协议执行生产 Dense-only 检索。
+     *
+     * @param rawQuery 未经过图片增强或 Prompt 拼装的原始需求
+     * @return 带基础骨架兜底的 Vue 工程 RAG 上下文
+     */
+    public VueRagContext retrieveVueProjectDenseOnly(String rawQuery) {
+        if (!props.isEnabled()) {
+            return VueRagContext.unavailable();
+        }
+        return vueHybridRetrievalService.retrieveDenseOnly(rawQuery);
     }
 
     /**

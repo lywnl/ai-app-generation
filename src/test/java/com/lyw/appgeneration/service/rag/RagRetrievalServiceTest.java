@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class RagRetrievalServiceTest {
@@ -66,14 +67,52 @@ class RagRetrievalServiceTest {
         skeleton.setId("vue-skeleton");
         VueRagContext expected = new VueRagContext(skeleton, List.of(), "catalog", false);
         when(vueService.retrieve("原始 Vue 需求")).thenReturn(expected);
+        RagProperties properties = new RagProperties();
+        properties.setEnabled(true);
         RagRetrievalService service = new RagRetrievalService(
-                mock(EmbeddingModel.class), Map.of(), new RagProperties(),
+                mock(EmbeddingModel.class), Map.of(), properties,
                 mock(RagRerankService.class), vueService);
 
         VueRagContext actual = service.retrieveVueProject("原始 Vue 需求");
 
         assertEquals(expected, actual);
         verify(vueService).retrieve("原始 Vue 需求");
+    }
+
+    @Test
+    void disabledRagBlocksHybridAndProductionDenseOnlyDelegation() {
+        VueHybridRetrievalService vueService = mock(VueHybridRetrievalService.class);
+        RagProperties properties = new RagProperties();
+        properties.setEnabled(false);
+        RagRetrievalService service = new RagRetrievalService(
+                mock(EmbeddingModel.class), Map.of(), properties,
+                mock(RagRerankService.class), vueService);
+
+        VueRagContext hybrid = service.retrieveVueProject("Hybrid 需求");
+        VueRagContext denseOnly = service.retrieveVueProjectDenseOnly("Dense 需求");
+
+        assertEquals(VueRagContext.unavailable(), hybrid);
+        assertEquals(VueRagContext.unavailable(), denseOnly);
+        verifyNoInteractions(vueService);
+    }
+
+    @Test
+    void delegatesRawQueryToVueProductionDenseOnlyWhenRagIsEnabled() {
+        VueHybridRetrievalService vueService = mock(VueHybridRetrievalService.class);
+        when(vueService.retrieveDenseOnly("生产 Dense 需求"))
+                .thenReturn(VueRagContext.unavailable());
+        RagProperties properties = new RagProperties();
+        properties.setEnabled(true);
+        RagRetrievalService service = new RagRetrievalService(
+                mock(EmbeddingModel.class), Map.of(), properties,
+                mock(RagRerankService.class), vueService);
+
+        VueRagContext actual = service.retrieveVueProjectDenseOnly("生产 Dense 需求");
+
+        assertEquals(VueRagContext.unavailable(), actual);
+        verify(vueService).retrieveDenseOnly("生产 Dense 需求");
+        verify(vueService, never()).retrieve(any());
+        verify(vueService, never()).retrieveDenseOnlyForEvaluation(any());
     }
 
     @Test
