@@ -61,6 +61,33 @@ class Bm25RetrieverTest {
     }
 
     @Test
+    void boostsMultiWordTechnologyLabelsWithTheSameNormalization(@TempDir Path tempDir) throws IOException {
+        ObjectNode matched = TemplateTestData.skeletonDocument("skeleton-z-matched");
+        matched.put("title", "统一工程");
+        matched.put("embedText", "统一工程描述");
+        matched.put("description", "Legacy Navigation");
+        matched.withArray("tech").removeAll().add("Aurora Router");
+        TemplateTestData.write(tempDir.resolve("skeletons/matched.json"), matched);
+
+        ObjectNode unmatched = TemplateTestData.skeletonDocument("skeleton-a-unmatched");
+        unmatched.put("title", "统一工程");
+        unmatched.put("embedText", "统一工程描述");
+        unmatched.put("description", "Aurora Router");
+        unmatched.withArray("tech").removeAll().add("Legacy Navigation");
+        TemplateTestData.write(tempDir.resolve("skeletons/unmatched.json"), unmatched);
+        TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
+
+        try (Bm25Retriever retriever = new Bm25Retriever(catalog)) {
+            List<RankedCandidate> candidates = retriever.retrieve(
+                    "aurora router", RagDocumentKind.PROJECT_SKELETON, 2);
+
+            assertEquals(2, candidates.size());
+            assertEquals("skeleton-z-matched", candidates.getFirst().documentId());
+            assertTrue(candidates.getFirst().score() > candidates.getLast().score());
+        }
+    }
+
+    @Test
     void aggregatesChunksAppliesTopKAndProducesStableRanks(@TempDir Path tempDir) throws IOException {
         writeSkeleton(tempDir, "skeleton-b", "管理工程", "数据管理工程", true);
         writeSkeleton(tempDir, "skeleton-a", "管理工程", "数据管理工程", true);

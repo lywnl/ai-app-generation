@@ -148,7 +148,7 @@ public class Bm25Retriever implements AutoCloseable {
 
     private void addTerm(Set<String> terms, String value) {
         if (value != null && !value.isBlank()) {
-            terms.add(value.toLowerCase(Locale.ROOT));
+            terms.addAll(normalizeExactTerms(value));
         }
     }
 
@@ -181,11 +181,17 @@ public class Bm25Retriever implements AutoCloseable {
     }
 
     private Set<String> exactQueryTerms(String query) {
+        return normalizeExactTerms(query);
+    }
+
+    private Set<String> normalizeExactTerms(String value) {
         Set<String> terms = new LinkedHashSet<>();
-        for (String token : query.toLowerCase(Locale.ROOT).split("\\s+")) {
-            if (!token.isBlank()) {
-                terms.add(token);
-            }
+        String normalized = value.strip()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("\\s+", " ");
+        terms.add(normalized);
+        if (normalized.contains(" ")) {
+            terms.addAll(List.of(normalized.split(" ")));
         }
         return terms;
     }
