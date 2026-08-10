@@ -20,6 +20,8 @@ target/
 *.ipr
 .claude
 .worktrees/
+.codex/runtime/
+.codex/sdd/
 
 ### NetBeans ###
 /nbproject/private/
