@@ -23,6 +23,8 @@ import reactor.core.publisher.Flux;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
@@ -199,6 +201,32 @@ class AiCodeGeneratorFacadeTest {
         order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
         order.verify(generatorService).generateMultiFileCodeStream("多文件拼装");
         verify(retrievalService, never()).retrieveVueProject(any());
+    }
+
+    @Test
+    void evaluationEntryReturnsTheExactContextUsedByRealVueGeneration() {
+        stubVueGenerator();
+        properties.getHybrid().setEnabled(true);
+        VueRagContext context = context("selected-skeleton");
+        when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
+        when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("评测生成提示词");
+
+        AiCodeGeneratorFacade.VueProjectGeneration generation =
+                facade.generateVueProjectForEvaluation(RAW_QUERY, APP_ID);
+
+        assertEquals(context, generation.context());
+        verify(imageCollectionService, never()).enhancePrompt(any());
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, "评测生成提示词");
+    }
+
+    @Test
+    void evaluationEntryRejectsDisabledHybridInsteadOfSilentlyUsingLegacyChain() {
+        properties.getHybrid().setEnabled(false);
+
+        assertThrows(IllegalStateException.class,
+                () -> facade.generateVueProjectForEvaluation(RAW_QUERY, APP_ID));
+
+        verify(serviceFactory, never()).getAiCodeGeneratorService(any(Long.class), any());
     }
 
     private VueRagContext context(String skeletonId) {

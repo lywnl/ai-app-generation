@@ -131,6 +131,45 @@ public class VueHybridRetrievalService {
         }
     }
 
+    /**
+     * 使用同一目录、Embedding 与兼容性规则执行 Dense-only 离线评测基线。
+     *
+     * <p>该方法不会被生产生成链调用，也不会做基础骨架兜底；Dense 失败必须体现为 miss，
+     * 避免基线被固定兜底结果抬高。
+     */
+    public VueRagContext retrieveDenseOnlyForEvaluation(String rawQuery) {
+        VueRetrievalResources resources = resourceProvider.current().orElse(null);
+        if (resources == null) {
+            return VueRagContext.unavailable();
+        }
+        TemplateCatalog catalog = resources.catalog();
+        try {
+            List<TemplateDoc> skeletonCandidates = resolveParents(
+                    denseRetriever.retrieve(rawQuery, catalog.getCatalogVersion(),
+                            RagDocumentKind.PROJECT_SKELETON, CHANNEL_TOP_K),
+                    RagDocumentKind.PROJECT_SKELETON,
+                    catalog);
+            TemplateDoc skeleton = firstOfKind(
+                    skeletonCandidates, RagDocumentKind.PROJECT_SKELETON);
+            if (skeleton == null) {
+                return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+            }
+            List<TemplateDoc> featureCandidates = resolveParents(
+                    denseRetriever.retrieve(rawQuery, catalog.getCatalogVersion(),
+                            RagDocumentKind.FEATURE_SNIPPET, CHANNEL_TOP_K),
+                    RagDocumentKind.FEATURE_SNIPPET,
+                    catalog);
+            List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
+                    skeleton, featureCandidates, FINAL_FEATURE_TOP_K);
+            return new VueRagContext(
+                    skeleton, compatibleFeatures, catalog.getCatalogVersion(), false);
+        } catch (Exception exception) {
+            log.warn("[Vue RAG][Dense Baseline] 检索失败,queryHash={},catalogVersion={},candidateCount=0",
+                    VueRagLogSanitizer.queryHash(rawQuery), catalog.getCatalogVersion());
+            return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+        }
+    }
+
     private ChainResult retrieveChain(String rawQuery,
                                       RagDocumentKind documentKind,
                                       int rerankTopK,

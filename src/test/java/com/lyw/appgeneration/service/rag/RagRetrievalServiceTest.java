@@ -76,6 +76,22 @@ class RagRetrievalServiceTest {
         verify(vueService).retrieve("原始 Vue 需求");
     }
 
+    @Test
+    void delegatesDenseOnlyEvaluationWithoutChangingProductionEntry() {
+        VueHybridRetrievalService vueService = mock(VueHybridRetrievalService.class);
+        VueRagContext expected = VueRagContext.unavailable();
+        when(vueService.retrieveDenseOnlyForEvaluation("基线需求")).thenReturn(expected);
+        RagRetrievalService service = new RagRetrievalService(
+                mock(EmbeddingModel.class), Map.of(), new RagProperties(),
+                mock(RagRerankService.class), vueService);
+
+        VueRagContext actual = service.retrieveVueProjectDenseOnlyForEvaluation("基线需求");
+
+        assertEquals(expected, actual);
+        verify(vueService).retrieveDenseOnlyForEvaluation("基线需求");
+        verify(vueService, never()).retrieve(any());
+    }
+
     @SuppressWarnings("unchecked")
     private EmbeddingStore<TextSegment> storeWith(String id, String title, String code) {
         EmbeddingStore<TextSegment> store = mock(EmbeddingStore.class);

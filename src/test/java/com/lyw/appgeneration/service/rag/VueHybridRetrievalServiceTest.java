@@ -481,6 +481,48 @@ class VueHybridRetrievalServiceTest {
         assertThrowsUnsupported(() -> context.features().add(compatibleFeature("f6")));
     }
 
+    @Test
+    void denseOnlyEvaluationUsesOnlyDenseCandidatesAndPreservesCompatibilityFiltering() {
+        TemplateDoc skeleton = compatibleSkeleton("dense-skeleton");
+        TemplateDoc incompatible = compatibleFeature("dense-incompatible");
+        incompatible.setFramework("vue@2.7.16");
+        TemplateDoc compatible = compatibleFeature("dense-compatible");
+        Harness harness = harness(List.of(skeleton, incompatible, compatible));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
+        when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(candidates(
+                        List.of(incompatible, compatible), RagDocumentKind.FEATURE_SNIPPET));
+
+        VueRagContext context = harness.service.retrieveDenseOnlyForEvaluation(QUERY);
+
+        assertEquals("dense-skeleton", context.skeleton().getId());
+        assertEquals(List.of("dense-compatible"), context.features().stream()
+                .map(TemplateDoc::getId).toList());
+        assertFalse(context.degraded());
+        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
+        verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
+    }
+
+    @Test
+    void denseOnlyEvaluationReturnsUnavailableInsteadOfBasicFallbackWhenDenseFails() {
+        TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
+        Harness harness = harness(List.of(basic));
+        when(harness.dense.retrieve(any(), any(), any(), anyInt()))
+                .thenThrow(new IllegalStateException("dense unavailable"));
+
+        VueRagContext context = harness.service.retrieveDenseOnlyForEvaluation(QUERY);
+
+        assertNull(context.skeleton());
+        assertTrue(context.features().isEmpty());
+        assertEquals(CATALOG_VERSION, context.catalogVersion());
+        assertTrue(context.degraded());
+        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+    }
+
     private void stubSuccessfulRecall(Harness harness,
                                       List<TemplateDoc> skeletons,
                                       List<TemplateDoc> features) {

@@ -117,10 +117,13 @@ public class AiCodeGeneratorFacade {
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
-                String augmentedMessage = ragProperties.getHybrid().isEnabled()
-                        ? hybridVueAugment(userMessage, isFirstMessage)
-                        : legacyVueAugment(userMessage, isFirstMessage);
-                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, augmentedMessage);
+                if (ragProperties.getHybrid().isEnabled()) {
+                    yield prepareHybridVueGeneration(
+                            userMessage, appId, isFirstMessage, aiCodeGeneratorService).stream();
+                }
+                String augmentedMessage = legacyVueAugment(userMessage, isFirstMessage);
+                TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(
+                        appId, augmentedMessage);
                 yield processTokenStream(tokenStream);
             }
             default -> {
@@ -128,6 +131,39 @@ public class AiCodeGeneratorFacade {
                 throw new BusinessException(ErrorCode.SYSTEM_ERROR, errorMsg);
             }
         };
+    }
+
+    /**
+     * 高成本离线质量门禁的真实 Vue 生成入口。
+     *
+     * <p>返回的检索上下文与生成流来自同一次准备过程，避免报告通过二次检索猜测选中 ID。
+     * 评测固定跳过图片增强，以免引入与生成可构建性无关的额外外部调用。
+     *
+     * @param userMessage 原始生成需求
+     * @param appId 独立评测应用 ID
+     * @return 本次真实检索上下文与真实生成流
+     */
+    public VueProjectGeneration generateVueProjectForEvaluation(String userMessage, long appId) {
+        if (!ragProperties.getHybrid().isEnabled()) {
+            throw new IllegalStateException("真实 Vue 生成评测必须显式开启 hybrid");
+        }
+        AiCodeGeneratorService generatorService = aiGeneratorServiceFactory
+                .getAiCodeGeneratorService(appId, CodeGenTypeEnum.VUE_PROJECT);
+        return prepareHybridVueGeneration(userMessage, appId, false, generatorService);
+    }
+
+    private VueProjectGeneration prepareHybridVueGeneration(
+            String userMessage,
+            long appId,
+            boolean isFirstMessage,
+            AiCodeGeneratorService generatorService) {
+        VueRagContext context = retrieveVueContext(userMessage);
+        String generationRequest = isFirstMessage
+                ? imageCollectionService.enhancePrompt(userMessage)
+                : userMessage;
+        String augmentedMessage = ragPromptAssembler.assembleVueProject(generationRequest, context);
+        TokenStream tokenStream = generatorService.generateVueProjectCodeStream(appId, augmentedMessage);
+        return new VueProjectGeneration(context, processTokenStream(tokenStream));
     }
 
     /**
@@ -139,12 +175,10 @@ public class AiCodeGeneratorFacade {
         return ragPromptAssembler.assemble(userMessage, snippets);
     }
 
-    private String hybridVueAugment(String userMessage, boolean isFirstMessage) {
-        VueRagContext context = retrieveVueContext(userMessage);
-        String generationRequest = isFirstMessage
-                ? imageCollectionService.enhancePrompt(userMessage)
-                : userMessage;
-        return ragPromptAssembler.assembleVueProject(generationRequest, context);
+    /**
+     * 同一次真实 Vue 生成准备产生的检索上下文与输出流。
+     */
+    public record VueProjectGeneration(VueRagContext context, Flux<String> stream) {
     }
 
     private VueRagContext retrieveVueContext(String userMessage) {

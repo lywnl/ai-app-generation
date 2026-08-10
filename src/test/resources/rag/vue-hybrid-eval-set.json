@@ -1,0 +1,219 @@
+{
+  "version": "1.0",
+  "queries": [
+    {
+      "queryId": "VUE-EVAL-001",
+      "query": "用 Vue3、Vite 和 package.json 创建一个不依赖组件库的基础站点",
+      "queryStyle": "精确技术词",
+      "expectedSkeletonIds": ["vue-skeleton-basic-001"],
+      "expectedFeatureIds": []
+    },
+    {
+      "queryId": "VUE-EVAL-002",
+      "query": "做一个轻量的公司介绍网站，有首页和关于我们页面",
+      "queryStyle": "同义",
+      "expectedSkeletonIds": ["vue-skeleton-basic-001"],
+      "expectedFeatureIds": []
+    },
+    {
+      "queryId": "VUE-EVAL-003",
+      "query": "请做一个简洁响应式企业官网，使用 Vue3 与原生 CSS，包含首页导航、品牌介绍、服务说明和关于我们页面，移动端也要清晰易读",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-basic-001"],
+      "expectedFeatureIds": []
+    },
+    {
+      "queryId": "VUE-EVAL-004",
+      "query": "基础官网同时需要个人资料卡和找不到页面时的返回首页提示",
+      "queryStyle": "多功能",
+      "expectedSkeletonIds": ["vue-skeleton-basic-001"],
+      "expectedFeatureIds": ["vue-profile-page-001", "vue-404-page-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-005",
+      "query": "就做一个普通网站，不要后台、商城、文章门户或图表大屏",
+      "queryStyle": "陷阱",
+      "expectedSkeletonIds": ["vue-skeleton-basic-001"],
+      "expectedFeatureIds": []
+    },
+    {
+      "queryId": "VUE-EVAL-006",
+      "query": "基础 Vue 工程必须使用 vue-router hash 模式并兼容静态目录部署",
+      "queryStyle": "精确技术词",
+      "expectedSkeletonIds": ["vue-skeleton-basic-001"],
+      "expectedFeatureIds": ["vue-404-page-001"]
+    },
+
+    {
+      "queryId": "VUE-EVAL-007",
+      "query": "用 Vue3 和 Element Plus 创建企业管理后台，包含侧边栏",
+      "queryStyle": "精确技术词",
+      "expectedSkeletonIds": ["vue-skeleton-admin-001"],
+      "expectedFeatureIds": ["vue-dashboard-layout-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-008",
+      "query": "做一个内部运营中台，左边菜单，右边处理业务数据",
+      "queryStyle": "同义",
+      "expectedSkeletonIds": ["vue-skeleton-admin-001"],
+      "expectedFeatureIds": ["vue-dashboard-layout-001", "vue-data-table-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-009",
+      "query": "需要一套企业级管理系统，左侧导航和顶部用户区保持固定，正文提供用户列表的搜索分页排序、账号资料查看以及通知和安全偏好设置",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-admin-001"],
+      "expectedFeatureIds": ["vue-dashboard-layout-001", "vue-data-table-001", "vue-profile-page-001", "vue-settings-page-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-010",
+      "query": "管理后台要同时有表格、设置和个人资料页面",
+      "queryStyle": "多功能",
+      "expectedSkeletonIds": ["vue-skeleton-admin-001"],
+      "expectedFeatureIds": ["vue-data-table-001", "vue-settings-page-001", "vue-profile-page-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-011",
+      "query": "用户表单",
+      "queryStyle": "陷阱",
+      "expectedSkeletonIds": ["vue-skeleton-admin-001"],
+      "expectedFeatureIds": ["vue-login-form-001", "vue-register-form-001", "vue-settings-page-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-012",
+      "query": "管理系统需要完整登录和注册流程，登录支持邮箱密码与记住我，注册包含确认密码、强度提示和协议勾选，进入系统后显示后台导航",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-admin-001"],
+      "expectedFeatureIds": ["vue-login-form-001", "vue-register-form-001", "vue-dashboard-layout-001"]
+    },
+
+    {
+      "queryId": "VUE-EVAL-013",
+      "query": "用 Vue3、Element Plus 做商品卡片列表和购物分类筛选",
+      "queryStyle": "精确技术词",
+      "expectedSkeletonIds": ["vue-skeleton-shop-001"],
+      "expectedFeatureIds": ["vue-product-list-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-014",
+      "query": "做一个生活方式品牌的线上零售陈列店",
+      "queryStyle": "同义",
+      "expectedSkeletonIds": ["vue-skeleton-shop-001"],
+      "expectedFeatureIds": ["vue-product-list-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-015",
+      "query": "请创建温暖风格的电商站点，首页展示商品图片、名称、价格和热卖标签，可以按分类筛选并加入购物车，还要查看订单状态、收货地址和支付信息",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-shop-001"],
+      "expectedFeatureIds": ["vue-product-list-001", "vue-order-detail-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-016",
+      "query": "电商需要商品列表和订单详情两个页面",
+      "queryStyle": "多功能",
+      "expectedSkeletonIds": ["vue-skeleton-shop-001"],
+      "expectedFeatureIds": ["vue-product-list-001", "vue-order-detail-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-017",
+      "query": "卡片网格，要展示图片和价格",
+      "queryStyle": "陷阱",
+      "expectedSkeletonIds": ["vue-skeleton-shop-001"],
+      "expectedFeatureIds": ["vue-product-list-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-018",
+      "query": "商品详情之外还要显示订单商品清单、物流、发票、售后和再次购买操作，并保留商城分类导航与购物入口",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-shop-001"],
+      "expectedFeatureIds": ["vue-order-detail-001", "vue-product-list-001"]
+    },
+
+    {
+      "queryId": "VUE-EVAL-019",
+      "query": "用 Vue3 创建中文内容门户和文章阅读页面",
+      "queryStyle": "精确技术词",
+      "expectedSkeletonIds": ["vue-skeleton-content-001"],
+      "expectedFeatureIds": ["vue-article-detail-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-020",
+      "query": "做一个杂志感的资讯站，有专栏和编辑精选",
+      "queryStyle": "同义",
+      "expectedSkeletonIds": ["vue-skeleton-content-001"],
+      "expectedFeatureIds": ["vue-article-detail-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-021",
+      "query": "需要面向中文读者的新闻资讯门户，首页有分类导航与编辑精选，文章页突出标题、作者、发布时间和正文阅读，并提供评论与相关文章推荐",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-content-001"],
+      "expectedFeatureIds": ["vue-article-detail-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-022",
+      "query": "内容门户要有文章正文、作者资料、评论区和相关推荐",
+      "queryStyle": "多功能",
+      "expectedSkeletonIds": ["vue-skeleton-content-001"],
+      "expectedFeatureIds": ["vue-article-detail-001", "vue-profile-page-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-023",
+      "query": "信息展示页面，重点是让人安静阅读而不是看表格或图表",
+      "queryStyle": "陷阱",
+      "expectedSkeletonIds": ["vue-skeleton-content-001"],
+      "expectedFeatureIds": ["vue-article-detail-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-024",
+      "query": "内容与文章系统需要杂志式首页、文章详情、作者信息、阅读量、点赞、评论输入和推荐文章，整体采用清晰的中文排版与阅读聚焦布局",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-content-001"],
+      "expectedFeatureIds": ["vue-article-detail-001", "vue-profile-page-001"]
+    },
+
+    {
+      "queryId": "VUE-EVAL-025",
+      "query": "用 Vue3、Element Plus 和 ECharts 创建深色实时数据看板",
+      "queryStyle": "精确技术词",
+      "expectedSkeletonIds": ["vue-skeleton-dashboard-001"],
+      "expectedFeatureIds": ["vue-stats-dashboard-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-026",
+      "query": "做一个运营驾驶舱，展示核心指标、趋势和渠道占比",
+      "queryStyle": "同义",
+      "expectedSkeletonIds": ["vue-skeleton-dashboard-001"],
+      "expectedFeatureIds": ["vue-stats-dashboard-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-027",
+      "query": "需要一个深色监控大屏，顶部展示多个 KPI 和同比环比，中间用趋势折线与渠道环形图呈现变化，右侧列出实时告警和处理状态",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-dashboard-001"],
+      "expectedFeatureIds": ["vue-stats-dashboard-001", "vue-data-table-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-028",
+      "query": "看板同时要统计卡片、趋势图、告警表格和设置入口",
+      "queryStyle": "多功能",
+      "expectedSkeletonIds": ["vue-skeleton-dashboard-001"],
+      "expectedFeatureIds": ["vue-stats-dashboard-001", "vue-data-table-001", "vue-settings-page-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-029",
+      "query": "数据展示",
+      "queryStyle": "陷阱",
+      "expectedSkeletonIds": ["vue-skeleton-dashboard-001"],
+      "expectedFeatureIds": ["vue-stats-dashboard-001", "vue-data-table-001"]
+    },
+    {
+      "queryId": "VUE-EVAL-030",
+      "query": "实时业务看板需要总量、转化率和增长率卡片，使用 ECharts 绘制折线与环形图，并配套进度条、迷你柱状图、告警列表和深色大屏布局",
+      "queryStyle": "长需求",
+      "expectedSkeletonIds": ["vue-skeleton-dashboard-001"],
+      "expectedFeatureIds": ["vue-stats-dashboard-001", "vue-data-table-001"]
+    }
+  ]
+}

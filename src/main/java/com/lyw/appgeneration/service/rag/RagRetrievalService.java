@@ -51,6 +51,16 @@ public class RagRetrievalService {
     }
 
     /**
+     * 仅供离线评测建立 Dense-only 基线；生产生成链不得调用此入口。
+     *
+     * @param rawQuery 未经增强的原始需求
+     * @return 与混合链相同结构的 Dense-only 结果
+     */
+    public VueRagContext retrieveVueProjectDenseOnlyForEvaluation(String rawQuery) {
+        return vueHybridRetrievalService.retrieveDenseOnlyForEvaluation(rawQuery);
+    }
+
+    /**
      * 按用户提示词与代码生成类型召回相关模板片段
      *
      * @param userPrompt 用户原始提示词

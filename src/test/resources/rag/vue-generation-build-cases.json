@@ -1,0 +1,65 @@
+{
+  "version": "1.0",
+  "cases": [
+    {
+      "caseId": "vue-build-01-basic",
+      "appId": 880001,
+      "category": "基础站点",
+      "prompt": "生成一个简体中文 Vue3 基础站点，包含首页、关于我们、响应式导航和 404 页面，使用 Hash 路由与 Vite 构建。"
+    },
+    {
+      "caseId": "vue-build-02-auth",
+      "appId": 880002,
+      "category": "登录注册",
+      "prompt": "生成一个 Vue3 + Element Plus 用户认证站点，包含登录、注册、邮箱密码校验、确认密码、记住我和用户协议。"
+    },
+    {
+      "caseId": "vue-build-03-admin",
+      "appId": 880003,
+      "category": "管理后台",
+      "prompt": "生成一个企业管理后台，包含固定侧边栏、顶部导航、面包屑、数据概览和个人资料入口，使用 Element Plus。"
+    },
+    {
+      "caseId": "vue-build-04-table-settings",
+      "appId": 880004,
+      "category": "表格设置",
+      "prompt": "生成一个后台业务页面，包含可搜索、排序、分页的数据表格，以及账号、通知和安全设置表单。"
+    },
+    {
+      "caseId": "vue-build-05-shop",
+      "appId": 880005,
+      "category": "电商列表详情",
+      "prompt": "生成一个生活方式商城，包含商品卡片列表、分类筛选、价格和加入购物车按钮，并提供订单详情、收货地址与物流信息。"
+    },
+    {
+      "caseId": "vue-build-06-content",
+      "appId": 880006,
+      "category": "内容门户文章",
+      "prompt": "生成一个中文内容资讯门户，包含分类导航、编辑精选、文章详情、作者信息、评论区和相关推荐。"
+    },
+    {
+      "caseId": "vue-build-07-dashboard",
+      "appId": 880007,
+      "category": "ECharts看板",
+      "prompt": "生成一个深色数据看板，使用 Element Plus 和 ECharts，展示 KPI 卡片、趋势折线图、渠道环形图和实时告警。"
+    },
+    {
+      "caseId": "vue-build-08-upload",
+      "appId": 880008,
+      "category": "文件上传",
+      "prompt": "生成一个文件管理站点，支持拖拽上传、多文件队列、进度条、文件列表预览与删除操作。"
+    },
+    {
+      "caseId": "vue-build-09-chat",
+      "appId": 880009,
+      "category": "聊天界面",
+      "prompt": "生成一个即时通讯界面，左侧显示联系人、在线状态和未读数，右侧显示消息气泡、时间与底部输入发送区。"
+    },
+    {
+      "caseId": "vue-build-10-composite",
+      "appId": 880010,
+      "category": "复合长需求",
+      "prompt": "生成一套简体中文企业运营平台：先提供邮箱密码登录和注册校验，进入后使用侧边栏与顶部导航组织页面；首页显示 KPI、同比环比和 ECharts 趋势图；用户管理使用可搜索、排序、分页的表格；设置页包含账号、通知和安全表单；还要提供文件拖拽上传、联系人聊天窗口和找不到页面时的返回首页入口。所有依赖必须在 package.json 精确声明，使用 Vue3、Vite、Element Plus、Hash 路由并确保 npm run build 可直接通过。"
+    }
+  ]
+}

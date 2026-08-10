@@ -1,133 +1,198 @@
 package com.lyw.appgeneration.core.builder;
 
-import cn.hutool.core.util.RuntimeUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.io.File;
-import java.util.concurrent.TimeUnit;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
+import java.util.Locale;
 
+/**
+ * Vue 工程 npm 构建器。
+ */
 @Slf4j
 @Component
 public class VueProjectBuilder {
 
+    private static final Duration NPM_INSTALL_TIMEOUT = Duration.ofSeconds(300);
+    private static final Duration NPM_BUILD_TIMEOUT = Duration.ofSeconds(180);
+
+    private final CommandExecutor commandExecutor;
+    private final String npmExecutable;
+
     /**
-     * 异步构建 Vue 项目(不阻塞主流程)
-     * @param projectPath
+     * 生产环境始终使用真实 ProcessBuilder 命令执行器。
+     */
+    @Autowired
+    public VueProjectBuilder() {
+        this(new ProcessCommandExecutor(), npmExecutable(System.getProperty("os.name")));
+    }
+
+    VueProjectBuilder(CommandExecutor commandExecutor, String npmExecutable) {
+        this.commandExecutor = commandExecutor;
+        this.npmExecutable = npmExecutable;
+    }
+
+    /**
+     * 异步构建 Vue 项目，不阻塞调用线程。
+     *
+     * @param projectPath 项目根目录路径
      */
     public void buildProjectAsync(String projectPath) {
-        Thread.ofVirtual().name("vue_builder" + System.currentTimeMillis())
-                .start(() -> {
-                    try {
-                        buildProject(projectPath);
-                    } catch (Exception e) {
-                        log.error("构建 Vue 项目时出错: {}", projectPath, e);
-                    }
-                });
+        Thread.ofVirtual()
+                .name("vue-builder-" + System.currentTimeMillis())
+                .start(() -> logAsyncResult(projectPath, buildProjectDetailed(projectPath)));
     }
+
     /**
-     * 构建 Vue 项目
+     * 保留旧布尔接口，结果语义完全委托给详细构建接口。
      *
      * @param projectPath 项目根目录路径
      * @return 是否构建成功
      */
     public boolean buildProject(String projectPath) {
-        File projectDir = new File(projectPath);
-        if (!projectDir.exists() || !projectDir.isDirectory()) {
-            log.error("项目目录不存在: {}", projectPath);
-            return false;
-        }
-        // 检查 package.json 是否存在
-        File packageJson = new File(projectDir, "package.json");
-        if (!packageJson.exists()) {
-            log.error("package.json 文件不存在: {}", packageJson.getAbsolutePath());
-            return false;
-        }
-        log.info("开始构建 Vue 项目: {}", projectPath);
-        // 执行 npm install
-        if (!executeNpmInstall(projectDir)) {
-            log.error("npm install 执行失败");
-            return false;
-        }
-        // 执行 npm run build
-        if (!executeNpmBuild(projectDir)) {
-            log.error("npm run build 执行失败");
-            return false;
-        }
-        // 验证 dist 目录是否生成
-        File distDir = new File(projectDir, "dist");
-        if (!distDir.exists()) {
-            log.error("构建完成但 dist 目录未生成: {}", distDir.getAbsolutePath());
-            return false;
-        }
-        log.info("Vue 项目构建成功，dist 目录: {}", distDir.getAbsolutePath());
-        return true;
+        return buildProjectDetailed(projectPath).success();
     }
 
     /**
-     * 执行 npm install 命令
-     */
-    private boolean executeNpmInstall(File projectDir) {
-        log.info("执行 npm install...");
-        String command = String.format("%s install", buildCommand("npm"));
-        return executeCommand(projectDir, command, 300); // 5分钟超时
-    }
-
-    /**
-     * 执行 npm run build 命令
-     */
-    private boolean executeNpmBuild(File projectDir) {
-        log.info("执行 npm run build...");
-        String command = String.format("%s run build", buildCommand("npm"));
-        return executeCommand(projectDir, command, 180); // 3分钟超时
-    }
-
-    private boolean isWindows() {
-        return System.getProperty("os.name").toLowerCase().contains("windows");
-    }
-
-    private String buildCommand(String baseCommand) {
-        if (isWindows()) {
-            return baseCommand + ".cmd";
-        }
-        return baseCommand;
-    }
-
-    /**
-     * 执行命令
+     * 执行 npm install、npm build 与 dist 验证并返回有界诊断结果。
      *
-     * @param workingDir     工作目录
-     * @param command        命令字符串
-     * @param timeoutSeconds 超时时间（秒）
-     * @return 是否执行成功
+     * @param projectPath 项目根目录路径
+     * @return 不会抛出命令异常的结构化结果
      */
-    private boolean executeCommand(File workingDir, String command, int timeoutSeconds) {
+    public BuildResult buildProjectDetailed(String projectPath) {
+        long startNanos = System.nanoTime();
+        Path projectDirectory = toProjectDirectory(projectPath);
+        String validationError = validate(projectDirectory);
+        if (validationError != null) {
+            return result(false, BuildStage.VALIDATION, null, false,
+                    validationError, startNanos);
+        }
+
+        StringBuilder output = new StringBuilder();
+        BuildResult installResult = runCommand(
+                projectDirectory,
+                List.of(npmExecutable, "install", "--ignore-scripts", "--no-audit", "--no-fund"),
+                NPM_INSTALL_TIMEOUT,
+                BuildStage.NPM_INSTALL,
+                output,
+                startNanos);
+        if (installResult != null) {
+            return installResult;
+        }
+
+        BuildResult buildResult = runCommand(
+                projectDirectory,
+                List.of(npmExecutable, "run", "build"),
+                NPM_BUILD_TIMEOUT,
+                BuildStage.NPM_BUILD,
+                output,
+                startNanos);
+        if (buildResult != null) {
+            return buildResult;
+        }
+
+        Path distDirectory = projectDirectory.resolve("dist");
+        if (!Files.isDirectory(distDirectory)) {
+            appendOutput(output, "构建命令成功，但 dist 目录未生成");
+            return result(false, BuildStage.DIST_CHECK, 0, false, output.toString(), startNanos);
+        }
+        return result(true, BuildStage.SUCCESS, 0, false, output.toString(), startNanos);
+    }
+
+    static String npmExecutable(String operatingSystemName) {
+        String normalized = operatingSystemName == null
+                ? ""
+                : operatingSystemName.toLowerCase(Locale.ROOT);
+        return normalized.contains("windows") ? "npm.cmd" : "npm";
+    }
+
+    private Path toProjectDirectory(String projectPath) {
+        if (projectPath == null || projectPath.isBlank()) {
+            return null;
+        }
         try {
-            log.info("在目录 {} 中执行命令: {}", workingDir.getAbsolutePath(), command);
-            Process process = RuntimeUtil.exec(
-                    null,
-                    workingDir,
-                    command.split("\\s+") // 命令分割为数组
-            );
-            // 等待进程完成，设置超时
-            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
-            if (!finished) {
-                log.error("命令执行超时（{}秒），强制终止进程", timeoutSeconds);
-                process.destroyForcibly();
-                return false;
-            }
-            int exitCode = process.exitValue();
-            if (exitCode == 0) {
-                log.info("命令执行成功: {}", command);
-                return true;
-            } else {
-                log.error("命令执行失败，退出码: {}", exitCode);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("执行命令失败: {}, 错误信息: {}", command, e.getMessage());
-            return false;
+            return Path.of(projectPath);
+        } catch (RuntimeException exception) {
+            return null;
         }
     }
 
+    private String validate(Path projectDirectory) {
+        if (projectDirectory == null || !Files.isDirectory(projectDirectory)) {
+            return "项目目录不存在或不是目录";
+        }
+        if (!Files.isRegularFile(projectDirectory.resolve("package.json"))) {
+            return "package.json 文件不存在或不是普通文件";
+        }
+        return null;
+    }
+
+    private BuildResult runCommand(Path projectDirectory,
+                                   List<String> command,
+                                   Duration timeout,
+                                   BuildStage failureStage,
+                                   StringBuilder output,
+                                   long startNanos) {
+        try {
+            CommandResult commandResult = commandExecutor.execute(projectDirectory, command, timeout);
+            appendOutput(output, commandResult.outputTail());
+            if (commandResult.timedOut() || !Integer.valueOf(0).equals(commandResult.exitCode())) {
+                return result(false, failureStage, commandResult.exitCode(), commandResult.timedOut(),
+                        output.toString(), startNanos);
+            }
+            return null;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            appendOutput(output, "构建命令等待被中断");
+            return result(false, failureStage, null, false, output.toString(), startNanos);
+        } catch (IOException | RuntimeException exception) {
+            appendOutput(output, "构建命令启动或执行失败: " + safeMessage(exception));
+            return result(false, failureStage, null, false, output.toString(), startNanos);
+        }
+    }
+
+    private void appendOutput(StringBuilder output, String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        if (!output.isEmpty()) {
+            output.append(System.lineSeparator());
+        }
+        output.append(text);
+        if (output.length() > BuildResult.MAX_OUTPUT_TAIL_CHARS) {
+            output.delete(0, output.length() - BuildResult.MAX_OUTPUT_TAIL_CHARS);
+        }
+    }
+
+    private String safeMessage(Exception exception) {
+        String message = exception.getMessage();
+        return message == null || message.isBlank()
+                ? exception.getClass().getSimpleName()
+                : message;
+    }
+
+    private BuildResult result(boolean success,
+                               BuildStage stage,
+                               Integer exitCode,
+                               boolean timedOut,
+                               String output,
+                               long startNanos) {
+        long durationMillis = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+        return new BuildResult(success, stage, exitCode, timedOut, output, durationMillis);
+    }
+
+    private void logAsyncResult(String projectPath, BuildResult result) {
+        if (result.success()) {
+            log.info("Vue 项目异步构建成功: projectPath={},stage={},exitCode={},durationMs={}",
+                    projectPath, result.stage(), result.exitCode(), result.durationMillis());
+            return;
+        }
+        log.error("Vue 项目异步构建失败: projectPath={},stage={},exitCode={},timedOut={},durationMs={}",
+                projectPath, result.stage(), result.exitCode(), result.timedOut(), result.durationMillis());
+    }
 }
