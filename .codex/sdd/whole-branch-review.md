@@ -26,12 +26,24 @@
 
 ### 提交与遗留
 
-- 提交 SHA：见本节下方最终补记。
+- 提交 SHA：`65e1e6881aab8bccd4b3b42b5c2da15f71104d77`（`修复: 统一Vue RAG开关与新版回退链`）。
 - 未解决事项：完整 Maven 仍有简报明确排除的既有密钥注入与测试夹具问题；本次未运行真实外部 Vue 检索评测或十条生成构建门禁，也未修改其逻辑。
+
+## 修复后独立复审结论
+
+- 审查范围：`b2be84e1f2dcd3f0409a8724c7dc5dddf49e1680..65e1e6881aab8bccd4b3b42b5c2da15f71104d77`。
+- Spec Compliance：通过。
+- Task quality：通过。
+- Critical：0；Important：0；Minor：0（本段已修正原报告状态冲突）。
+- 原 Important-1 已关闭：Hybrid 关闭时使用新版生产 Dense-only、当前 `catalogVersion + documentKind` 和父文档回查，不再读取旧 Vue metadata 协议。
+- 原 Important-2 已关闭：`rag.enabled` 在 Facade 与 Service 层优先于 Hybrid 开关，关闭时不执行任何 Vue RAG。
+- 代码可以进入全范围验证；外部真实检索、10 条真实生成构建和完整 Maven 门禁仍需按实际结果单独审计，不能由本次代码复审替代。
+
+## 历史审查记录（修复前，已被上述结论替代）
 
 - 审查范围：`5850ef9f4ffb50d58839245c3cd4dfaf4bad67a8..b2be84e1f2dcd3f0409a8724c7dc5dddf49e1680`
 - 审查性质：最终只读代码审查；未修改生产代码，未运行全量测试
-- 总结：未发现 Critical；发现 2 项 Important；无 Minor。当前不应合并或发布。
+- 历史总结：未发现 Critical；发现 2 项 Important；无 Minor。当时不应合并或发布；两项 Important 均已由 `65e1e68` 关闭。
 
 ## Plan compliance
 
