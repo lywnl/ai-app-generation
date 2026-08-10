@@ -2,10 +2,11 @@
 
 ## 结论
 
-默认 Maven 测试已在不提供模型密钥、数据库、Redis、PGVector 或远程服务的条件下通过。
+默认 Maven 测试已在不提供模型密钥、数据库、Redis、PGVector 或远程服务的条件下通过；真实业务 Bean 保持装配，外部和数据访问边界仅在测试层隔离。
 
-- 命令：`JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" sh ./mvnw test`
-- 结果：278 项、0 failure、0 error、8 skipped、退出码 0。
+- 命令：清空 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`PEXELS_API_KEY`、COS 参数和 `EXTERNAL_INTEGRATION_TESTS` 后，以工作树 JDK 25 执行 `sh ./mvnw test`。
+- 整改前历史结果：278 项、0 failure、0 error、8 skipped、退出码 0。
+- 最终结果：278 项、0 failure、0 error、7 skipped、退出码 0；其中“8 skipped”仅是整改前历史证据，包含当时被跳过的 `contextLoads()`。
 - 运行环境：项目要求 Java 25；系统默认 Java 17 会在 Surefire 加载已有 Java 25 类文件前失败（class file version 69），故验证显式使用工作树提供的 JDK 25。
 
 ## RED 复现与根因
@@ -151,7 +152,7 @@ RED：首轮测试先构造包含 `UserMessage` 与 `AiMessage` 的非空 snapsh
 
 GREEN：将 mock 返回改为该 `snapshot` 对象；在既有 `InOrder` 中使用 `same(snapshot)` 验证 `restore` 接收完全相同对象。定向 `JsonMessageStreamHandlerTest`：2 项、0 failure、0 error、0 skipped、退出码 0。
 
-### 最终完整回归与自审
+### 整改前完整回归与自审
 
 ```bash
 env -u DEEPSEEK_API_KEY -u DASHSCOPE_API_KEY -u PEXELS_API_KEY \
@@ -161,6 +162,29 @@ env -u DEEPSEEK_API_KEY -u DASHSCOPE_API_KEY -u PEXELS_API_KEY \
   sh ./mvnw test
 ```
 
-结果：278 项、0 failure、0 error、7 skipped、退出码 0。七项跳过均为保留的显式外部评测/真实模型、网页或构建测试；`AiAppGenerationApplicationTests.contextLoads` 不再跳过。
+结果：278 项、0 failure、0 error、7 skipped、退出码 0。七项跳过均为保留的显式外部评测/真实模型、网页或构建测试；`AiAppGenerationApplicationTests.contextLoads` 不再跳过。这是本轮业务 mock 收敛前的历史证据。
 
 `git diff --check` 通过。新增改动仅在 `src/test/java/**` 与本报告，`src/main/**` 无改动；未修改独立审查文件、未 push。
+
+### 复审后第二轮：真实业务 Bean 装配（最终 GREEN）
+
+复审要求删除业务 Bean mock 后，本轮仅保留真实外部/数据边界 mock：六个 Mapper、Redis 连接与 `StringRedisTemplate`、Redis memory store、Redisson、COS、Embedding、命名 OpenAI chat model 以及三类 LangChain4j 生成代理；未保留 `AppService`、`UserService`、`ChatHistoryService`、`ProjectDownloadService`、`ScreenshotService`、`MemorySummaryService`、`UserMemoryService`、`RagRetrievalService`、`RagRerankService`、`AiCodeGeneratorFacade` 的 mock，也没有写入任何伪凭据。
+
+测试命令始终清空模型、Pexels、COS 与外部集成环境变量，并使用 JDK 25。每次只验证一个假设：
+
+1. 排除 `dev.langchain4j.openai.spring.AutoConfig`：消除其在 Mockito 覆盖前解析 `${DEEPSEEK_API_KEY}` 的失败；随后暴露 prototype `routingChatModelPrototype` 无法由 `@MockitoBean` 覆盖。
+2. 删除三个 prototype 模型的 `@MockitoBean`：Spring Test 仅支持覆盖 singleton，且它们仅在被 mock 的生成代理运行时按需获取；随后真实 `MemorySummaryServiceImpl` 暴露缺失的 Redis 数据边界 `StringRedisTemplate`。
+3. 新增 `StringRedisTemplate` mock：真实内存服务完成装配，随后真实 `ImageCollectionService` 依赖的外部 HTTP 工具 `ImageSearchTool` 在字段注入阶段解析 `${PEXELS_API_KEY}` 失败。
+
+第三步的实际结果为：`AiAppGenerationApplicationTests` 1 项、0 failure、1 error、0 skipped。根因不是网络请求，而是生产组件 `ImageSearchTool` 的 `@Value("${pexels.api-key}")` 强制占位解析；测试没有提供假密钥，符合禁令。
+
+复审方随后确认 `ImageSearchTool` 是 Pexels HTTP 外部适配器、`LogoGeneratorTool` 在方法内直接调用 DashScope 图像生成，两者均可隔离。新增这两个工具 mock 后，Pexels 与 DashScope 图像工具不会实例化真实调用链或发起请求。为保留真实 `RagRerankService`，测试属性设置 `dashscope.api-key=`：这是空值而非密钥，只满足其构造 `RestClient` 时的占位解析；该服务在上下文加载期间不发请求。
+
+最终边界清单如下：
+
+- 数据访问与缓存：六个 Mapper、`RedisConnectionFactory`、`StringRedisTemplate`、`RedisChatMemoryStore`、`RedissonClient`；
+- 外部客户端：`COSClient`、`ragEmbeddingModel`、`embeddingStoreByType`、`openAiChatModel`、`ImageSearchTool`、`LogoGeneratorTool`；
+- LangChain4j 运行时代理：`AiCodeGeneratorService`、`AiCodeGenTypeRoutingService`、`ImageCollectionPlanService`；
+- 自动配置：排除 JDBC、Redis、Cache、Session、MyBatis-Flex 与 LangChain4j OpenAI 自动配置，避免其在 mock 之前解析生产环境变量。
+
+业务 Bean 仍保持真实，包括 `AppService`、`UserService`、`ChatHistoryService`、`ProjectDownloadService`、`ScreenshotService`、`MemorySummaryService`、`UserMemoryService`、`RagRetrievalService`、`RagRerankService` 与 `AiCodeGeneratorFacade`；测试代码没有伪凭据。清空外部环境变量后，`AiAppGenerationApplicationTests` 通过（1 / 0 / 0 / 0），与 `JsonMessageStreamHandlerTest` 联合通过（3 / 0 / 0 / 0），完整 `mvnw test` 通过（278 / 0 / 0 / 7）。
