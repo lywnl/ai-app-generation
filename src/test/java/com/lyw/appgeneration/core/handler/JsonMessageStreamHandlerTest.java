@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.manger.ToolManager;
@@ -60,6 +61,9 @@ class JsonMessageStreamHandlerTest {
     @Mock
     private UserMemoryService userMemoryService;
 
+    @Mock
+    private ToolMessageCollapser toolMessageCollapser;
+
     @InjectMocks
     private JsonMessageStreamHandler handler;
 
@@ -78,6 +82,7 @@ class JsonMessageStreamHandlerTest {
             return tokenStream;
         });
         when(tokenStream.onError(any())).thenReturn(tokenStream);
+        when(toolMessageCollapser.collapseLastTurn(APP_ID, "ok")).thenReturn(List.of());
         doAnswer(invocation -> {
             Consumer<ChatResponse> callback = onComplete.get();
             if (callback != null) {
@@ -104,6 +109,7 @@ class JsonMessageStreamHandlerTest {
                 aiGeneratorServiceFactory,
                 aiCodeGeneratorService,
                 tokenStream,
+                toolMessageCollapser,
                 vueProjectBuilder
         );
         inOrder.verify(chatHistoryService).addChatMessage(
@@ -112,12 +118,14 @@ class JsonMessageStreamHandlerTest {
                 eq(ChatHistoryMessageTypeEnum.AI.getValue()),
                 eq(USER_ID)
         );
+        inOrder.verify(toolMessageCollapser).collapseLastTurn(APP_ID, "ok");
         inOrder.verify(aiGeneratorServiceFactory)
                 .getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         inOrder.verify(aiCodeGeneratorService)
                 .generateVueProjectCodeStream(eq(APP_ID), contains("构建前代码自检"));
         inOrder.verify(tokenStream).onPartialResponse(any());
         inOrder.verify(tokenStream).start();
+        inOrder.verify(toolMessageCollapser).restore(APP_ID, List.of());
         inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
     }
 
@@ -149,6 +157,15 @@ class JsonMessageStreamHandlerTest {
         verify(aiCodeGeneratorService, never())
                 .generateVueProjectCodeStream(anyLong(), anyString());
         verify(tokenStream, never()).start();
-        verify(vueProjectBuilder).buildProjectAsync(projectPath);
+        verify(toolMessageCollapser, never()).restore(anyLong(), anyList());
+        InOrder inOrder = inOrder(chatHistoryService, toolMessageCollapser, vueProjectBuilder);
+        inOrder.verify(chatHistoryService).addChatMessage(
+                eq(APP_ID),
+                eq("ok"),
+                eq(ChatHistoryMessageTypeEnum.AI.getValue()),
+                eq(USER_ID)
+        );
+        inOrder.verify(toolMessageCollapser).collapseLastTurn(APP_ID, "ok");
+        inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
     }
 }

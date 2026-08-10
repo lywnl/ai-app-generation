@@ -5,10 +5,12 @@ import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingServiceFactory;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @Slf4j
 @SpringBootTest
+@EnabledIfEnvironmentVariable(named = "EXTERNAL_INTEGRATION_TESTS", matches = "true")
 public class AiConcurrentTest {
 
     @Resource
@@ -38,4 +40,3 @@ public class AiConcurrentTest {
         }
     }
 }
-
