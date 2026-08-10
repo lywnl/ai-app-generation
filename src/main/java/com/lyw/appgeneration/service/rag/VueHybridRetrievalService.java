@@ -1,0 +1,267 @@
+package com.lyw.appgeneration.service.rag;
+
+import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
+import com.lyw.appgeneration.service.rag.exception.RerankException;
+import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
+import com.lyw.appgeneration.service.rag.model.RankedCandidate;
+import com.lyw.appgeneration.service.rag.model.TemplateDoc;
+import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
+import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
+import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
+import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
+import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Vue 工程骨架与功能片段双链混合检索编排。
+ */
+@Service
+@Slf4j
+public class VueHybridRetrievalService {
+
+    static final int CHANNEL_TOP_K = 10;
+    static final int FUSION_TOP_K = 15;
+    static final int SKELETON_RERANK_TOP_K = 3;
+    static final int FEATURE_RERANK_TOP_K = 8;
+    static final int FINAL_FEATURE_TOP_K = 4;
+    static final String BASIC_SKELETON_ID = "vue-skeleton-basic-001";
+
+    private static final Pattern VERSION_NUMBER = Pattern.compile("(?<!\\d)(\\d+)(?:\\.\\d+)*");
+
+    private final VueRetrievalResourceProvider resourceProvider;
+    private final DenseRetriever denseRetriever;
+    private final RrfFusionService fusionService;
+    private final RagRerankService rerankService;
+
+    public VueHybridRetrievalService(VueRetrievalResourceProvider resourceProvider,
+                                     DenseRetriever denseRetriever,
+                                     RrfFusionService fusionService,
+                                     RagRerankService rerankService) {
+        this.resourceProvider = resourceProvider;
+        this.denseRetriever = denseRetriever;
+        this.fusionService = fusionService;
+        this.rerankService = rerankService;
+    }
+
+    /**
+     * 使用原始需求执行两条完全分池的 Vue 混合检索链。
+     */
+    public VueRagContext retrieve(String rawQuery) {
+        VueRetrievalResources resources = resourceProvider.current().orElse(null);
+        if (resources == null) {
+            log.error("[Vue RAG] 目录不可用,返回无 RAG");
+            return VueRagContext.unavailable();
+        }
+
+        TemplateCatalog catalog = resources.catalog();
+        Map<String, Double> qualityScores = qualityScores(catalog);
+        ChainResult skeletonChain = retrieveChain(
+                rawQuery, RagDocumentKind.PROJECT_SKELETON, SKELETON_RERANK_TOP_K,
+                resources, qualityScores);
+        ChainResult featureChain = retrieveChain(
+                rawQuery, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K,
+                resources, qualityScores);
+        boolean degraded = skeletonChain.degraded() || featureChain.degraded();
+
+        TemplateDoc skeleton = firstOfKind(skeletonChain.documents(), RagDocumentKind.PROJECT_SKELETON);
+        if (skeleton == null) {
+            skeleton = catalog.findDocumentById(BASIC_SKELETON_ID)
+                    .filter(document -> document.getDocumentKind() == RagDocumentKind.PROJECT_SKELETON)
+                    .orElse(null);
+            degraded = true;
+            if (skeleton == null) {
+                log.error("[Vue RAG] 骨架双通道无结果且固定基础骨架不存在,catalogVersion={}",
+                        catalog.getCatalogVersion());
+                return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+            }
+        }
+
+        List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
+                skeleton, featureChain.documents(), FINAL_FEATURE_TOP_K);
+        return new VueRagContext(
+                skeleton, compatibleFeatures, catalog.getCatalogVersion(), degraded);
+    }
+
+    private ChainResult retrieveChain(String rawQuery,
+                                      RagDocumentKind documentKind,
+                                      int rerankTopK,
+                                      VueRetrievalResources resources,
+                                      Map<String, Double> qualityScores) {
+        ChannelResult bm25 = recall("BM25", documentKind,
+                () -> resources.bm25Retriever()
+                        .orElseThrow(() -> new IllegalStateException("BM25 索引不可用"))
+                        .retrieve(rawQuery, documentKind, CHANNEL_TOP_K));
+        ChannelResult dense = recall("Dense", documentKind,
+                () -> denseRetriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
+                        documentKind, CHANNEL_TOP_K));
+        boolean degraded = bm25.failed() || dense.failed();
+
+        List<RankedCandidate> fused = fusionService.fuse(
+                bm25.candidates(), dense.candidates(), qualityScores, FUSION_TOP_K);
+        if (fused.isEmpty()) {
+            return new ChainResult(List.of(), true);
+        }
+        List<TemplateDoc> parentDocuments = resolveParents(
+                fused, documentKind, resources.catalog());
+        if (parentDocuments.isEmpty()) {
+            return new ChainResult(List.of(), true);
+        }
+        try {
+            List<TemplateDoc> reranked = rerankService.rerankVue(
+                    rawQuery, parentDocuments, rerankTopK);
+            return new ChainResult(reranked, degraded);
+        } catch (RerankException exception) {
+            log.warn("[Vue RAG][Rerank] 失败,按 RRF 顺序降级,documentKind={},candidateCount={},reason={}",
+                    documentKind, parentDocuments.size(), exception.getMessage());
+            return new ChainResult(
+                    parentDocuments.stream().limit(rerankTopK).toList(), true);
+        }
+    }
+
+    private ChannelResult recall(String channel,
+                                 RagDocumentKind documentKind,
+                                 Supplier<List<RankedCandidate>> retrieval) {
+        try {
+            List<RankedCandidate> candidates = retrieval.get();
+            return new ChannelResult(candidates == null ? List.of() : candidates, false);
+        } catch (Exception exception) {
+            log.warn("[Vue RAG] 召回通道失败,channel={},documentKind={},exceptionType={},按另一通道降级",
+                    channel, documentKind, exception.getClass().getSimpleName());
+            return new ChannelResult(List.of(), true);
+        }
+    }
+
+    private List<TemplateDoc> resolveParents(List<RankedCandidate> candidates,
+                                             RagDocumentKind expectedKind,
+                                             TemplateCatalog catalog) {
+        List<TemplateDoc> parents = new ArrayList<>();
+        for (RankedCandidate candidate : candidates) {
+            catalog.findDocumentById(candidate.documentId())
+                    .filter(document -> document.getDocumentKind() == expectedKind)
+                    .ifPresent(parents::add);
+        }
+        return List.copyOf(parents);
+    }
+
+    private TemplateDoc firstOfKind(List<TemplateDoc> documents, RagDocumentKind kind) {
+        return documents.stream()
+                .filter(document -> document.getDocumentKind() == kind)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private List<TemplateDoc> selectCompatibleFeatures(TemplateDoc skeleton,
+                                                        List<TemplateDoc> candidates,
+                                                        int topK) {
+        List<TemplateDoc> selected = new ArrayList<>();
+        for (TemplateDoc candidate : candidates) {
+            if (candidate.getDocumentKind() == RagDocumentKind.FEATURE_SNIPPET
+                    && isCompatible(skeleton, candidate)) {
+                selected.add(candidate);
+                if (selected.size() == topK) {
+                    break;
+                }
+            }
+        }
+        return List.copyOf(selected);
+    }
+
+    private boolean isCompatible(TemplateDoc skeleton, TemplateDoc feature) {
+        return hasSameMajorVersion(skeleton.getFramework(), feature.getFramework())
+                && normalize(skeleton.getLanguage()).equals(normalize(feature.getLanguage()))
+                && hasSameBuildTool(skeleton.getBuildTool(), feature.getBuildTool())
+                && sharedDependenciesCompatible(skeleton, feature);
+    }
+
+    private boolean hasSameBuildTool(String left, String right) {
+        String leftTool = toolName(left);
+        return !leftTool.isBlank() && leftTool.equals(toolName(right));
+    }
+
+    private boolean hasSameMajorVersion(String left, String right) {
+        Integer leftMajor = majorVersion(left);
+        Integer rightMajor = majorVersion(right);
+        return leftMajor != null && leftMajor.equals(rightMajor);
+    }
+
+    private boolean sharedDependenciesCompatible(TemplateDoc skeleton, TemplateDoc feature) {
+        Map<String, String> skeletonDependencies = allDependencies(skeleton);
+        Map<String, String> featureDependencies = allDependencies(feature);
+        Set<String> sharedNames = new java.util.HashSet<>(skeletonDependencies.keySet());
+        sharedNames.retainAll(featureDependencies.keySet());
+        for (String dependency : sharedNames) {
+            if (!hasSameMajorVersion(
+                    skeletonDependencies.get(dependency), featureDependencies.get(dependency))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Map<String, String> allDependencies(TemplateDoc document) {
+        Map<String, String> dependencies = new HashMap<>();
+        addDependencies(dependencies, document.getDependencies());
+        addDependencies(dependencies, document.getDevDependencies());
+        return dependencies;
+    }
+
+    private void addDependencies(Map<String, String> target, Map<String, String> source) {
+        if (source == null) {
+            return;
+        }
+        source.forEach((name, version) -> {
+            if (name != null && !name.isBlank()) {
+                target.put(normalize(name), version);
+            }
+        });
+    }
+
+    private String toolName(String value) {
+        String normalized = normalize(value);
+        int at = normalized.indexOf('@');
+        if (at > 0) {
+            return normalized.substring(0, at);
+        }
+        Matcher matcher = VERSION_NUMBER.matcher(normalized);
+        return matcher.find() ? normalized.substring(0, matcher.start()).strip() : normalized;
+    }
+
+    private Integer majorVersion(String value) {
+        if (value == null) {
+            return null;
+        }
+        Matcher matcher = VERSION_NUMBER.matcher(value);
+        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
+    }
+
+    private Map<String, Double> qualityScores(TemplateCatalog catalog) {
+        Map<String, Double> scores = new HashMap<>();
+        for (TemplateDoc document : catalog.getDocuments()) {
+            Double score = document.getQualityScore();
+            scores.put(document.getId(), score != null && Double.isFinite(score) ? score : 0.0);
+        }
+        return Map.copyOf(scores);
+    }
+
+    private record ChannelResult(List<RankedCandidate> candidates, boolean failed) {
+    }
+
+    private record ChainResult(List<TemplateDoc> documents, boolean degraded) {
+    }
+}

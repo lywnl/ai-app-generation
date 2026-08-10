@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
+import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -17,6 +18,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 /**
  * RAG 精排服务:基于阿里云 DashScope gte-rerank-v2 对粗召回结果做 Cross-Encoder 级别打分
@@ -68,10 +71,69 @@ public class RagRerankService {
         int n = candidates.size();
 
         List<String> docs = candidates.stream().map(this::buildDocText).toList();
+        List<RerankResult> results = requestRerank(query, docs, topK);
+
+        List<RetrievedSnippet> reranked = new ArrayList<>(results.size());
+        for (RerankResult result : results) {
+            validateIndex(result.index(), n);
+            RetrievedSnippet origin = candidates.get(result.index());
+            origin.setRerankScore(result.relevanceScore());
+            reranked.add(origin);
+        }
+        reranked.sort(Comparator.comparingDouble((RetrievedSnippet snippet) ->
+                snippet.getRerankScore() == null ? 0.0 : snippet.getRerankScore()).reversed());
+        return reranked.size() > topK ? reranked.subList(0, topK) : reranked;
+    }
+
+    /**
+     * 对 Vue 父文档候选重排，不修改父文档，也不把源码发送给 Rerank 服务。
+     */
+    public List<TemplateDoc> rerankVue(String query, List<TemplateDoc> candidates, int topK) {
+        if (candidates == null || candidates.isEmpty()) {
+            throw new RerankException("候选列表为空,无需 rerank");
+        }
+        int candidateCount = candidates.size();
+        List<String> documents = candidates.stream().map(this::buildVueDocumentText).toList();
+        List<RerankResult> results = requestRerank(query, documents, topK);
+        List<VueRerankResult> reranked = new ArrayList<>(results.size());
+        for (RerankResult result : results) {
+            validateIndex(result.index(), candidateCount);
+            reranked.add(new VueRerankResult(
+                    candidates.get(result.index()), result.relevanceScore()));
+        }
+        reranked.sort(Comparator.comparingDouble(VueRerankResult::score).reversed()
+                .thenComparing(Comparator.comparingDouble(
+                        (VueRerankResult result) -> qualityScore(result.document())).reversed())
+                .thenComparing(result -> result.document().getId()));
+        return immutableTopK(reranked.stream().map(VueRerankResult::document).toList(), topK);
+    }
+
+    /**
+     * 只拼装父文档检索语义和工程元数据，严禁读取 files[].content。
+     */
+    String buildVueDocumentText(TemplateDoc document) {
+        String dependencies = formatDependencies(document.getDependencies(), document.getDevDependencies());
+        String filePaths = document.getFiles() == null ? "" : document.getFiles().stream()
+                .filter(file -> file != null && file.getPath() != null && !file.getPath().isBlank())
+                .map(TemplateDoc.TemplateFile::getPath)
+                .collect(Collectors.joining(", "));
+        String text = String.join("\n",
+                "标题: " + safeText(document.getTitle()),
+                "描述: " + safeText(document.getDescription()),
+                "意图: " + safeText(document.getEmbedText()),
+                "技术栈: " + formatTechStack(document),
+                "依赖: " + dependencies,
+                "文件路径: " + filePaths);
+        int limit = props.getRerank().getDocCharLimit();
+        return text.length() > limit ? text.substring(0, limit) : text;
+    }
+
+    private List<RerankResult> requestRerank(String query, List<String> documents, int topK) {
+        int candidateCount = documents.size();
         Map<String, Object> body = Map.of(
                 "model", props.getRerank().getModelName(),
-                "input", Map.of("query", query, "documents", docs),
-                "parameters", Map.of("top_n", Math.min(topK, n), "return_documents", false)
+                "input", Map.of("query", query, "documents", documents),
+                "parameters", Map.of("top_n", Math.min(topK, candidateCount), "return_documents", false)
         );
 
         DashScopeRerankResponse resp;
@@ -91,18 +153,57 @@ public class RagRerankService {
         if (resp == null || resp.output() == null || resp.output().results() == null || resp.output().results().isEmpty()) {
             throw new RerankException("DashScope 响应为空或无 results");
         }
+        return resp.output().results();
+    }
 
-        List<RetrievedSnippet> reranked = new ArrayList<>(resp.output().results().size());
-        for (RerankResult r : resp.output().results()) {
-            if (r.index() < 0 || r.index() >= n) {
-                throw new RerankException("index 越界: " + r.index() + ", candidates size=" + n);
-            }
-            RetrievedSnippet origin = candidates.get(r.index());
-            origin.setRerankScore(r.relevanceScore());
-            reranked.add(origin);
+    private void validateIndex(int index, int candidateCount) {
+        if (index < 0 || index >= candidateCount) {
+            throw new RerankException("index 越界: " + index + ", candidates size=" + candidateCount);
         }
-        reranked.sort(Comparator.comparingDouble((RetrievedSnippet s) -> s.getRerankScore() == null ? 0.0 : s.getRerankScore()).reversed());
-        return reranked.size() > topK ? reranked.subList(0, topK) : reranked;
+    }
+
+    private <T> List<T> immutableTopK(List<T> values, int topK) {
+        return List.copyOf(values.stream().limit(Math.max(0, topK)).toList());
+    }
+
+    private double qualityScore(TemplateDoc document) {
+        Double score = document.getQualityScore();
+        return score != null && Double.isFinite(score) ? score : 0.0;
+    }
+
+    private String formatDependencies(Map<String, String> dependencies,
+                                      Map<String, String> devDependencies) {
+        Map<String, String> all = new TreeMap<>();
+        if (dependencies != null) {
+            all.putAll(dependencies);
+        }
+        if (devDependencies != null) {
+            all.putAll(devDependencies);
+        }
+        return all.entrySet().stream()
+                .map(entry -> entry.getKey() + "=" + entry.getValue())
+                .collect(Collectors.joining(", "));
+    }
+
+    private String formatList(List<String> values) {
+        return values == null ? "" : values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .collect(Collectors.joining(", "));
+    }
+
+    private String formatTechStack(TemplateDoc document) {
+        List<String> stack = new ArrayList<>();
+        stack.add(document.getFramework());
+        stack.add(document.getLanguage());
+        stack.add(document.getBuildTool());
+        if (document.getTech() != null) {
+            stack.addAll(document.getTech());
+        }
+        return formatList(stack);
+    }
+
+    private String safeText(String value) {
+        return value == null ? "" : value;
     }
 
     /**
@@ -134,4 +235,6 @@ public class RagRerankService {
     ) {}
 
     private record Usage(@JsonProperty("total_tokens") int totalTokens) {}
+
+    private record VueRerankResult(TemplateDoc document, double score) {}
 }

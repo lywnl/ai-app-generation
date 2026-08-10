@@ -4,6 +4,7 @@ import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
+import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -37,6 +38,17 @@ public class RagRetrievalService {
     private final Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> embeddingStoreByType;
     private final RagProperties props;
     private final RagRerankService rerankService;
+    private final VueHybridRetrievalService vueHybridRetrievalService;
+
+    /**
+     * 使用原始需求执行 Vue 工程双链混合检索。
+     *
+     * @param rawQuery 未经过图片增强或 Prompt 拼装的原始需求
+     * @return Vue 工程 RAG 上下文
+     */
+    public VueRagContext retrieveVueProject(String rawQuery) {
+        return vueHybridRetrievalService.retrieve(rawQuery);
+    }
 
     /**
      * 按用户提示词与代码生成类型召回相关模板片段
