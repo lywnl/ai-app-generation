@@ -25,10 +25,7 @@ public final class VueRetrievalEvaluator {
             hybrid.add(observe(evalCase, true));
             dense.add(observe(evalCase, false));
         }
-        VueRetrievalComparison comparison = VueRetrievalComparison.compare(
-                VueRetrievalMetrics.calculate(hybrid),
-                VueRetrievalMetrics.calculate(dense));
-        return VueRetrievalEvaluationReport.executed(comparison, hybrid, dense);
+        return VueRetrievalEvaluationReport.executed(hybrid, dense);
     }
 
     private VueRetrievalObservation observe(VueEvalCase evalCase, boolean hybrid) {

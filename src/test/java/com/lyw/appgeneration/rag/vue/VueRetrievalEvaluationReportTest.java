@@ -3,7 +3,6 @@ package com.lyw.appgeneration.rag.vue;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,15 +37,6 @@ class VueRetrievalEvaluationReportTest {
 
     @Test
     void executedReportRendersBothMetricsDeltasStylesAndActualRows() {
-        VueRetrievalMetrics hybrid = new VueRetrievalMetrics(
-                0.90, 0.85, 30,
-                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(1.0, 0.9, 6)));
-        VueRetrievalMetrics dense = new VueRetrievalMetrics(
-                0.90, 0.85, 30,
-                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(0.9, 0.8, 6)));
-        VueRetrievalObservation observation = new VueRetrievalObservation(
-                new VueEvalCase("q1", "需求", "精确技术词", List.of("s1"), List.of("f1")),
-                "s1", List.of("f1"), null);
         List<VueRetrievalObservation> rows = java.util.stream.IntStream.range(0, 30)
                 .mapToObj(index -> new VueRetrievalObservation(
                         new VueEvalCase(
@@ -55,10 +45,8 @@ class VueRetrievalEvaluationReportTest {
                         "s1", List.of("f1"), null))
                 .toList();
 
-        String markdown = VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(hybrid, dense),
-                rows,
-                rows).renderMarkdown();
+        String markdown = VueRetrievalEvaluationReport.executed(rows, rows)
+                .renderMarkdown();
 
         assertTrue(markdown.contains("状态：通过"));
         assertTrue(markdown.contains("Skeleton Hit@1"));
@@ -72,11 +60,8 @@ class VueRetrievalEvaluationReportTest {
 
     @Test
     void 少于三十条的完美指标也不得通过() {
-        VueRetrievalMetrics metrics = new VueRetrievalMetrics(
-                1.0, 1.0, 1,
-                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(1.0, 1.0, 1)));
-        VueRetrievalEvaluationReport report = VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(metrics, metrics), List.of(), List.of());
+        VueRetrievalEvaluationReport report =
+                VueRetrievalEvaluationReport.executed(List.of(), List.of());
 
         assertFalse(report.passed());
     }
@@ -89,19 +74,45 @@ class VueRetrievalEvaluationReportTest {
         List<VueRetrievalObservation> duplicates = java.util.Collections.nCopies(
                 30, healthy.getFirst());
         List<VueRetrievalObservation> differentCases = observations("other", 30, false, null);
-        VueRetrievalMetrics perfect = new VueRetrievalMetrics(
-                1.0, 1.0, 30,
-                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(1.0, 1.0, 30)));
-        VueRetrievalComparison comparison = VueRetrievalComparison.compare(perfect, perfect);
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                hybridDegraded, healthy).passed());
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                healthy, denseFailed).passed());
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                duplicates, duplicates).passed());
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                healthy, differentCases).passed());
+    }
 
-        assertFalse(VueRetrievalEvaluationReport.executed(
-                comparison, hybridDegraded, healthy).passed());
-        assertFalse(VueRetrievalEvaluationReport.executed(
-                comparison, healthy, denseFailed).passed());
-        assertFalse(VueRetrievalEvaluationReport.executed(
-                comparison, duplicates, duplicates).passed());
-        assertFalse(VueRetrievalEvaluationReport.executed(
-                comparison, healthy, differentCases).passed());
+    @Test
+    void 外部完美汇总不得掩盖三十条全错明细() {
+        List<VueRetrievalObservation> wrong = java.util.stream.IntStream.range(0, 30)
+                .mapToObj(index -> new VueRetrievalObservation(
+                        new VueEvalCase(
+                                "q" + index, "需求", "精确技术词",
+                                List.of("expected-skeleton"), List.of("expected-feature")),
+                        "wrong-skeleton", List.of("wrong-feature"), null))
+                .toList();
+        VueRetrievalEvaluationReport report =
+                VueRetrievalEvaluationReport.executed(wrong, wrong);
+
+        assertFalse(report.passed());
+    }
+
+    @Test
+    void 双链QueryId相同但完整用例不同不得通过() {
+        List<VueRetrievalObservation> hybrid = observations("q", 30, false, null);
+        List<VueRetrievalObservation> dense = java.util.stream.IntStream.range(0, 30)
+                .mapToObj(index -> new VueRetrievalObservation(
+                        new VueEvalCase(
+                                "q" + index, "不同需求", "不同风格",
+                                List.of("other-skeleton"), List.of("other-feature")),
+                        "other-skeleton", List.of("other-feature"), null))
+                .toList();
+        VueRetrievalEvaluationReport report =
+                VueRetrievalEvaluationReport.executed(hybrid, dense);
+
+        assertFalse(report.passed());
     }
 
     private List<VueRetrievalObservation> observations(
@@ -123,20 +134,16 @@ class VueRetrievalEvaluationReportTest {
         String notExecuted = VueRetrievalEvaluationReport.notExecuted(List.of(
                 "检查 C:\\Users\\alice\\private 失败，Authorization: Bearer reason-secret"))
                 .renderMarkdown();
-        VueRetrievalMetrics metrics = new VueRetrievalMetrics(
-                1.0, 1.0, 1,
-                Map.of("token=style-secret", new VueRetrievalMetrics.StyleSlice(1.0, 1.0, 1)));
         VueRetrievalObservation observation = new VueRetrievalObservation(
                 new VueEvalCase(
-                        "secret=query-secret", "需求", "普通文案", List.of("s1"), List.of()),
+                        "secret=query-secret", "需求", "token=style-secret",
+                        List.of("s1"), List.of()),
                 "password=skeleton-secret",
                 List.of("api_key=feature-secret"),
                 "Bearer error-secret");
 
         String executed = VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(metrics, metrics),
-                List.of(observation),
-                List.of(observation)).renderMarkdown();
+                List.of(observation), List.of(observation)).renderMarkdown();
 
         assertFalse(notExecuted.contains("alice"));
         assertFalse(notExecuted.contains("reason-secret"));

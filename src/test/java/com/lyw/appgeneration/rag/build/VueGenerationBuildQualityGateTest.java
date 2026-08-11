@@ -2,6 +2,7 @@ package com.lyw.appgeneration.rag.build;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.AiAppGenerationApplication;
+import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.MapPropertySource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -91,7 +93,61 @@ class VueGenerationBuildQualityGateTest {
                 Path.of("embed_text/vue-project"), new ObjectMapper());
         Bm25Retriever bm25;
 
-        try (ConfigurableApplicationContext context = startEvaluationApplication(catalog)) {
+        try (ConfigurableApplicationContext context = startEvaluationApplication(
+                catalog, Map.of(), contextTestHostProperties())) {
+            VueRetrievalResourceProvider provider =
+                    context.getBean(VueRetrievalResourceProvider.class);
+            assertSame(catalog, provider.current().orElseThrow().catalog());
+            bm25 = provider.current().orElseThrow().bm25Retriever().orElseThrow();
+        }
+
+        assertThrows(RuntimeException.class, () -> bm25.retrieve(
+                "Vue 基础站点",
+                com.lyw.appgeneration.service.rag.model.RagDocumentKind.PROJECT_SKELETON,
+                1));
+    }
+
+    @Test
+    void 评测强制属性覆盖宿主冲突配置且保持快照生命周期() {
+        TemplateCatalog catalog = new TemplateCatalog(
+                Path.of("embed_text/vue-project"), new ObjectMapper());
+        Map<String, String> evaluationEnvironment = Map.of(
+                "RAG_PGVECTOR_HOST", "evaluation-host",
+                "RAG_PGVECTOR_PORT", "6543",
+                "RAG_PGVECTOR_DATABASE", "evaluation-database",
+                "RAG_PGVECTOR_USER", "evaluation-user",
+                "RAG_PGVECTOR_PASSWORD", "evaluation-password");
+        Map<String, Object> hostProperties = Map.ofEntries(
+                Map.entry("rag.enabled", "false"),
+                Map.entry("rag.hybrid.enabled", "false"),
+                Map.entry("rag.ingest.enabled", "true"),
+                Map.entry("rag.pgvector.host", "host-value"),
+                Map.entry("rag.pgvector.port", "5432"),
+                Map.entry("rag.pgvector.database", "host-database"),
+                Map.entry("rag.pgvector.user", "host-user"),
+                Map.entry("rag.pgvector.password", "host-password"),
+                Map.entry("DEEPSEEK_API_KEY", "host-deepseek-key"),
+                Map.entry("DASHSCOPE_API_KEY", "host-dashscope-key"),
+                Map.entry("PEXELS_API_KEY", "host-pexels-key"));
+        Bm25Retriever bm25;
+
+        try (ConfigurableApplicationContext context = startEvaluationApplication(
+                catalog, evaluationEnvironment, hostProperties)) {
+            RagProperties properties = context.getBean(RagProperties.class);
+            assertTrue(properties.isEnabled());
+            assertTrue(properties.getHybrid().isEnabled());
+            assertFalse(properties.getIngest().isEnabled());
+            assertEquals("evaluation-host", properties.getPgvector().getHost());
+            assertEquals(6543, properties.getPgvector().getPort());
+            assertEquals("evaluation-database", properties.getPgvector().getDatabase());
+            assertEquals("evaluation-user", properties.getPgvector().getUser());
+            assertEquals("evaluation-password", properties.getPgvector().getPassword());
+            assertEquals("host-deepseek-key",
+                    context.getEnvironment().getProperty("DEEPSEEK_API_KEY"));
+            assertEquals("host-dashscope-key",
+                    context.getEnvironment().getProperty("DASHSCOPE_API_KEY"));
+            assertEquals("host-pexels-key",
+                    context.getEnvironment().getProperty("PEXELS_API_KEY"));
             VueRetrievalResourceProvider provider =
                     context.getBean(VueRetrievalResourceProvider.class);
             assertSame(catalog, provider.current().orElseThrow().catalog());
@@ -178,21 +234,33 @@ class VueGenerationBuildQualityGateTest {
     }
 
     private ConfigurableApplicationContext startEvaluationApplication(TemplateCatalog catalog) {
-        Map<String, Object> properties = evaluationProperties(System.getenv());
+        return startEvaluationApplication(catalog, System.getenv(), Map.of());
+    }
+
+    private ConfigurableApplicationContext startEvaluationApplication(
+            TemplateCatalog catalog,
+            Map<String, String> evaluationEnvironment,
+            Map<String, Object> hostProperties) {
+        Map<String, Object> properties = evaluationProperties(evaluationEnvironment);
         return new SpringApplicationBuilder(AiAppGenerationApplication.class)
                 .web(WebApplicationType.NONE)
-                .properties(properties)
-                .initializers(context -> context.addBeanFactoryPostProcessor(
-                        new VueEvaluationCatalogSnapshotConfigurer(catalog)))
+                .lazyInitialization(true)
+                .initializers(context -> {
+                    if (!hostProperties.isEmpty()) {
+                        context.getEnvironment().getPropertySources().addFirst(
+                                new MapPropertySource("simulatedHost", hostProperties));
+                    }
+                    context.getEnvironment().getPropertySources().addFirst(
+                            new MapPropertySource(
+                                    "vueGenerationBuildEvaluation", properties));
+                    context.addBeanFactoryPostProcessor(
+                            new VueEvaluationCatalogSnapshotConfigurer(catalog));
+                })
                 .run();
     }
 
     private Map<String, Object> evaluationProperties(Map<String, String> environment) {
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put("spring.main.lazy-initialization", "true");
-        properties.put("DEEPSEEK_API_KEY", "unused-by-context-lifecycle-test");
-        properties.put("DASHSCOPE_API_KEY", "unused-by-context-lifecycle-test");
-        properties.put("PEXELS_API_KEY", "unused-by-context-lifecycle-test");
         properties.put("rag.enabled", "true");
         properties.put("rag.hybrid.enabled", "true");
         properties.put("rag.ingest.enabled", "false");
@@ -206,8 +274,14 @@ class VueGenerationBuildQualityGateTest {
         properties.put("rag.pgvector.user", valueOrDefault(
                 environment, "RAG_PGVECTOR_USER", "admin"));
         properties.put("rag.pgvector.password", environment.get("RAG_PGVECTOR_PASSWORD"));
-        properties.put("pexels.api-key", "unused-by-vue-generation-build-evaluation");
         return properties;
+    }
+
+    private Map<String, Object> contextTestHostProperties() {
+        return Map.of(
+                "DEEPSEEK_API_KEY", "unused-by-context-lifecycle-test",
+                "DASHSCOPE_API_KEY", "unused-by-context-lifecycle-test",
+                "PEXELS_API_KEY", "unused-by-context-lifecycle-test");
     }
 
     private String valueOrDefault(

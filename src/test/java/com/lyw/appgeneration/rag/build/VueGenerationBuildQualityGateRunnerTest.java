@@ -1,14 +1,11 @@
 package com.lyw.appgeneration.rag.build;
 
 import com.lyw.appgeneration.rag.ingest.VueIngestionVerification;
-import com.lyw.appgeneration.rag.vue.VueRetrievalComparison;
 import com.lyw.appgeneration.rag.vue.VueRetrievalEvaluationReport;
-import com.lyw.appgeneration.rag.vue.VueRetrievalMetrics;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -64,9 +61,8 @@ class VueGenerationBuildQualityGateRunnerTest {
     @Test
     void 检索指标完美但不足三十条时不调用生成() {
         AtomicInteger generationCalls = new AtomicInteger();
-        VueRetrievalMetrics metrics = metrics(1.0, 1.0);
-        VueRetrievalEvaluationReport incomplete = VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(metrics, metrics), List.of(), List.of());
+        VueRetrievalEvaluationReport incomplete =
+                VueRetrievalEvaluationReport.executed(List.of(), List.of());
 
         VueGenerationBuildReport report = runner.evaluate(
                 this::passingIngestion,
@@ -140,7 +136,6 @@ class VueGenerationBuildQualityGateRunnerTest {
     }
 
     private VueRetrievalEvaluationReport passingRetrieval() {
-        VueRetrievalMetrics metrics = metrics(1.0, 1.0);
         List<com.lyw.appgeneration.rag.vue.VueRetrievalObservation> rows =
                 java.util.stream.IntStream.range(0, 30)
                         .mapToObj(index -> new com.lyw.appgeneration.rag.vue.VueRetrievalObservation(
@@ -149,21 +144,18 @@ class VueGenerationBuildQualityGateRunnerTest {
                                         List.of("s"), List.of()),
                                 "s", List.of(), null))
                         .toList();
-        return VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(metrics, metrics), rows, rows);
+        return VueRetrievalEvaluationReport.executed(rows, rows);
     }
 
     private VueRetrievalEvaluationReport failedRetrieval() {
-        VueRetrievalMetrics hybrid = metrics(0.1, 0.1);
-        VueRetrievalMetrics dense = metrics(1.0, 1.0);
-        return VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(hybrid, dense), List.of(), List.of());
-    }
-
-    private VueRetrievalMetrics metrics(double skeleton, double feature) {
-        return new VueRetrievalMetrics(
-                skeleton, feature, 30,
-                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(
-                        skeleton, feature, 30)));
+        List<com.lyw.appgeneration.rag.vue.VueRetrievalObservation> rows =
+                java.util.stream.IntStream.range(0, 30)
+                        .mapToObj(index -> new com.lyw.appgeneration.rag.vue.VueRetrievalObservation(
+                                new com.lyw.appgeneration.rag.vue.VueEvalCase(
+                                        "q-" + index, "需求", "精确技术词",
+                                        List.of("expected"), List.of()),
+                                "wrong", List.of(), null))
+                        .toList();
+        return VueRetrievalEvaluationReport.executed(rows, rows);
     }
 }

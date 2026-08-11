@@ -58,19 +58,23 @@ public final class VueRetrievalEvaluationReport {
     }
 
     public static VueRetrievalEvaluationReport executed(
-            VueRetrievalComparison comparison,
             List<VueRetrievalObservation> hybridRows,
             List<VueRetrievalObservation> denseRows) {
-        return executed(newRunId(), comparison, hybridRows, denseRows);
+        return executed(newRunId(), hybridRows, denseRows);
     }
 
     public static VueRetrievalEvaluationReport executed(
             String runId,
-            VueRetrievalComparison comparison,
             List<VueRetrievalObservation> hybridRows,
             List<VueRetrievalObservation> denseRows) {
+        List<VueRetrievalObservation> safeHybridRows = List.copyOf(hybridRows);
+        List<VueRetrievalObservation> safeDenseRows = List.copyOf(denseRows);
+        VueRetrievalComparison comparison = VueRetrievalComparison.compare(
+                VueRetrievalMetrics.calculate(safeHybridRows),
+                VueRetrievalMetrics.calculate(safeDenseRows));
         return new VueRetrievalEvaluationReport(
-                true, false, runId, List.of(), comparison, hybridRows, denseRows);
+                true, false, runId, List.of(), comparison,
+                safeHybridRows, safeDenseRows);
     }
 
     public boolean executed() {
@@ -87,7 +91,8 @@ public final class VueRetrievalEvaluationReport {
                 && healthyRows(hybridRows)
                 && healthyRows(denseRows)
                 && uniqueQueryIds(hybridRows).size() == REQUIRED_QUERY_COUNT
-                && uniqueQueryIds(hybridRows).equals(uniqueQueryIds(denseRows));
+                && uniqueQueryIds(denseRows).size() == REQUIRED_QUERY_COUNT
+                && correspondingEvalCases(hybridRows, denseRows);
     }
 
     public VueRetrievalComparison comparison() {
@@ -193,6 +198,19 @@ public final class VueRetrievalEvaluationReport {
                 .map(VueRetrievalObservation::evalCase)
                 .map(VueEvalCase::queryId)
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private boolean correspondingEvalCases(
+            List<VueRetrievalObservation> hybrid,
+            List<VueRetrievalObservation> dense) {
+        return evalCasesByQueryId(hybrid).equals(evalCasesByQueryId(dense));
+    }
+
+    private Map<String, VueEvalCase> evalCasesByQueryId(
+            List<VueRetrievalObservation> rows) {
+        return rows.stream().collect(Collectors.toUnmodifiableMap(
+                row -> row.evalCase().queryId(),
+                VueRetrievalObservation::evalCase));
     }
 
     private String format(double value) {

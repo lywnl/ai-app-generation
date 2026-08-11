@@ -40,11 +40,8 @@ class VueRetrievalIngestionPrerequisiteTest {
         AtomicInteger evaluations = new AtomicInteger();
         VueIngestionVerification passed = new VueIngestionVerification(
                 true, "catalog", 23, 23, 2, Set.of(1024), List.of());
-        VueRetrievalMetrics metrics = new VueRetrievalMetrics(
-                1.0, 1.0, 1,
-                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(1.0, 1.0, 1)));
-        VueRetrievalEvaluationReport expected = VueRetrievalEvaluationReport.executed(
-                VueRetrievalComparison.compare(metrics, metrics), List.of(), List.of());
+        VueRetrievalEvaluationReport expected =
+                VueRetrievalEvaluationReport.executed(List.of(), List.of());
 
         VueRetrievalEvaluationReport actual = new VueRetrievalQualityGateRunner()
                 .evaluateWhenIngested(() -> passed, () -> {

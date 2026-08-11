@@ -89,3 +89,37 @@
 - `git diff --check`：通过。
 - 追加独立评审：Critical=0，Important=0；唯一 Minor 为 evaluator 测试只命中 `degraded` 表头，已收紧为直接断言结构化行渲染 `| true |`。
 - 生产语义边界：在线 `VueRetrievalResourceProvider(RagProperties, ObjectMapper)` 的 BM25 失败降级保持不变；fail-closed 只用于离线质量门禁。
+
+## 2026-08-11 第二轮正式复审 Important 修复追加
+
+### Important 1：评测强制属性不再被宿主环境覆盖
+
+- 根因：`SpringApplicationBuilder.properties(...)` 只设置 default properties，优先级低于环境变量和宿主属性源；因此生产 Hybrid 开关为 false 或摄取开关为 true 时，十条生成评测可能绑定到错误语义，PGVector 目标也可能与同轮前置核验不一致。
+- RED 命令：
+  `JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" PATH="$JAVA_HOME/bin:$PATH" env -u RAG_EVAL -u RAG_BUILD_EVAL -u DASHSCOPE_API_KEY -u DEEPSEEK_API_KEY -u RAG_PGVECTOR_PASSWORD bash mvnw -Dtest='VueGenerationBuildQualityGateTest#评测强制属性覆盖宿主冲突配置且保持快照生命周期,VueRetrievalEvaluationReportTest#外部完美汇总不得掩盖三十条全错明细+双链QueryId相同但完整用例不同不得通过' test`
+- RED 结果：3 个测试全部按预期失败。完整 Spring 上下文最终绑定 `rag.enabled=false`，属性覆盖断言失败；30 条全错明细配外部完美汇总错误通过；双链 queryId 相同但完整用例不同也错误通过。
+- GREEN：使用 initializer 将本轮评测 `MapPropertySource` 加到 Environment 最高优先级，并在同一 initializer 保留现有 `BeanFactoryPostProcessor`；启动惰性改用 `SpringApplicationBuilder.lazyInitialization(true)`，不再依赖低优先级 default property。
+- GREEN 结果：扩充正常报告用例后同类定向共 4 个测试全部通过。完整 Spring 最终绑定 `enabled=true`、`hybrid=true`、`ingest=false`，PG host/port/database/user/password 全部来自本轮 evaluation Map；provider 仍 `assertSame` 同一 catalog，关闭上下文后 BM25 访问失败。
+
+### Important 2：报告只以逐行证据计算唯一指标真相
+
+- 根因：公共 `executed(comparison, hybridRows, denseRows)` 同时接收汇总与明细，允许两份事实互相矛盾；`passed()` 又只比较 queryId 集合，无法识别相同 ID 下 query、style、期望骨架或期望功能不同。
+- GREEN：删除所有允许外部传入 comparison 的 `executed(...)` 工厂；报告内部唯一调用 `VueRetrievalMetrics.calculate` 和 `VueRetrievalComparison.compare`。双链分别要求 30 行、30 个唯一 queryId、无 error/degraded，并比较 queryId 到完整 `VueEvalCase` 的映射后再检查内部指标。
+- 新增证明：30 条全错但健康的 rows 不通过；双链 queryId 相同但完整用例不同不通过；30 条完整、健康、对应且真实指标达标的 rows 通过并渲染内部指标。
+
+### 第二轮验证与自审
+
+- 新增定向：4 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`。
+- Task 2 扩大覆盖：43 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`。
+- 默认 unset Vue RAG 回归：125 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`；未运行真实模型、数据库评测、正式摄取或十条 npm 生成。
+- `git diff --check`：通过。
+- 自审：生成评测入口无 `.properties(...)` 低优先级绕过；报告无 comparison 构造绕过；完整用例对应、快照复用、严格 BM25 与 Spring 关闭销毁均有自动化覆盖；生产在线降级代码未修改。
+
+### 第二轮独立复核追加修正
+
+- 首次独立复核发现 1 个 Important：最高优先级 Map 同时包含生命周期测试假 API Key，真实十条生成可能覆盖宿主密钥。
+- 追加 RED：在完整 Spring 宿主模拟源提供真实 DeepSeek、DashScope、Pexels Key，并断言最终 Environment 保留宿主值。结果 1 个测试失败：期望 `host-deepseek-key`，实际为 `unused-by-context-lifecycle-test`。
+- 修复：最高优先级评测 Map 收窄为 `rag.enabled`、`rag.hybrid.enabled`、`rag.ingest.enabled`、`rag.templates-dir` 与 `rag.pgvector.*`；不再包含任何模型或图像 API Key。生命周期占位 Key 只由该测试的模拟宿主属性源提供，不进入正式评测启动路径。
+- 追加 GREEN：原快照生命周期与宿主冲突完整 Spring 测试 2 个全部通过；宿主 DeepSeek、DashScope、Pexels Key 均保持原值，RAG/PG 强制值、同一 catalog 与关闭销毁断言仍通过。
+- 修正后重新验证：Task 2 扩大覆盖 43/43、默认 unset Vue RAG 回归 125/125，均 0 失败、0 错误、0 跳过，`BUILD SUCCESS`。
+- 修正后独立复核：Critical=0，Important=0，Minor=0，可以提交。
