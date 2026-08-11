@@ -11,6 +11,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -112,6 +117,22 @@ class FileToolSecurityTest {
     }
 
     @Test
+    void directoryReadDirectlyTargetingIgnoredDirectoryDoesNotExposeItsContents() throws IOException {
+        Path projectRoot = createProjectRoot();
+        Path hiddenFile = projectRoot.resolve("node_modules/package/secret.txt");
+        Files.createDirectories(hiddenFile.getParent());
+        Files.writeString(hiddenFile, "不应展示");
+        Path externalTarget = Files.writeString(temporaryDirectory.resolve("vite-target"), "外部目标");
+        Path viteLink = projectRoot.resolve("node_modules/.bin/vite");
+        Files.createDirectories(viteLink.getParent());
+        Files.createSymbolicLink(viteLink, externalTarget);
+
+        String result = fileDirReadTool.readDir("node_modules", APP_ID);
+
+        assertEquals("项目目录结构:\n", result);
+    }
+
+    @Test
     void allFileToolsRejectProjectRootThatIsExternalSymbolicLink() throws IOException {
         Path externalProjectRoot = Files.createDirectory(temporaryDirectory.resolve("external-project"));
         Files.writeString(externalProjectRoot.resolve("existing.txt"), "外部项目内容");
@@ -180,6 +201,87 @@ class FileToolSecurityTest {
 
         assertTrue(result.contains("文件写入成功"), result);
         assertTrue(Files.isRegularFile(projectRoot().resolve("src/main.js")));
+    }
+
+    @Test
+    void writeFailureToExistingDirectoryDoesNotPolluteState() throws IOException {
+        Files.createDirectories(projectRoot().resolve("target"));
+
+        String result = fileWriteTool.writeFile("target", "内容", APP_ID);
+
+        assertTrue(result.contains("文件写入失败"), result);
+        assertEquals(0, fileStateManager.fileCount(APP_ID));
+    }
+
+    @Test
+    void nullContentWriteFailureDoesNotPolluteState() {
+        String result = fileWriteTool.writeFile("null-content.txt", null, APP_ID);
+
+        assertTrue(result.contains("文件写入失败"), result);
+        assertEquals(0, fileStateManager.fileCount(APP_ID));
+        assertFalse(Files.exists(projectRoot().resolve("null-content.txt")));
+    }
+
+    @Test
+    void retryAfterWriteFailureWritesFileAndRecordsFirstSuccess() throws IOException {
+        Path target = projectRoot().resolve("retry.txt");
+        Files.createDirectories(target);
+        assertTrue(fileWriteTool.writeFile("retry.txt", "重试内容", APP_ID).contains("文件写入失败"));
+        Files.delete(target);
+
+        String retryResult = fileWriteTool.writeFile("retry.txt", "重试内容", APP_ID);
+
+        assertTrue(retryResult.contains("文件写入成功"), retryResult);
+        assertEquals("重试内容", Files.readString(target));
+        assertEquals(1, fileStateManager.fileCount(APP_ID));
+    }
+
+    @Test
+    void equivalentLexicalPathsShareOneCanonicalStateEntry() throws IOException {
+        String firstResult = fileWriteTool.writeFile("src/../same.txt", "相同内容", APP_ID);
+        String duplicateResult = fileWriteTool.writeFile("./same.txt", "相同内容", APP_ID);
+
+        assertTrue(firstResult.contains("文件写入成功"), firstResult);
+        assertTrue(duplicateResult.contains("跳过"), duplicateResult);
+        assertTrue(duplicateResult.contains("[same.txt]"), duplicateResult);
+        assertFalse(duplicateResult.contains("src/../same.txt"), duplicateResult);
+        assertEquals("相同内容", Files.readString(projectRoot().resolve("same.txt")));
+        assertEquals(1, fileStateManager.fileCount(APP_ID));
+    }
+
+    @Test
+    void successfulDifferentContentRewriteKeepsOverwriteSemantics() throws IOException {
+        assertTrue(fileWriteTool.writeFile("rewrite.txt", "第一版", APP_ID).contains("文件写入成功"));
+
+        String rewriteResult = fileWriteTool.writeFile("rewrite.txt", "第二版", APP_ID);
+
+        assertTrue(rewriteResult.contains("已覆盖已存在文件"), rewriteResult);
+        assertEquals("第二版", Files.readString(projectRoot().resolve("rewrite.txt")));
+        assertEquals(1, fileStateManager.fileCount(APP_ID));
+    }
+
+    @Test
+    void concurrentSameContentWritesHaveOneSuccessAndOneDuplicate() throws Exception {
+        CyclicBarrier startBarrier = new CyclicBarrier(2);
+        List<String> results;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<String> first = executor.submit(() -> {
+                startBarrier.await();
+                return fileWriteTool.writeFile("concurrent.txt", "并发内容", APP_ID);
+            });
+            Future<String> second = executor.submit(() -> {
+                startBarrier.await();
+                return fileWriteTool.writeFile("./concurrent.txt", "并发内容", APP_ID);
+            });
+            results = List.of(
+                    first.get(3, TimeUnit.SECONDS),
+                    second.get(3, TimeUnit.SECONDS));
+        }
+
+        assertEquals(1, results.stream().filter(result -> result.contains("文件写入成功")).count());
+        assertEquals(1, results.stream().filter(result -> result.contains("跳过")).count());
+        assertEquals("并发内容", Files.readString(projectRoot().resolve("concurrent.txt")));
+        assertEquals(1, fileStateManager.fileCount(APP_ID));
     }
 
     @Test

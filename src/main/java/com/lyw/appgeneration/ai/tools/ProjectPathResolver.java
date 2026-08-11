@@ -36,26 +36,31 @@ final class ProjectPathResolver {
         return candidate;
     }
 
-    Path resolveForWrite(Long appId, String relativePath) throws UnsafeProjectPathException {
+    ResolvedProjectPath resolveForWrite(Long appId, String relativePath) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
         Path candidate = resolveRelativePath(projectRoot, relativePath, false);
         Path realProjectRoot = createAndResolveProjectRoot(projectRoot);
         validateExistingParents(candidate, projectRoot, realProjectRoot);
-        return candidate;
+        return new ResolvedProjectPath(candidate, projectRoot.relativize(candidate).toString());
     }
 
     List<Path> collectSafeDirectoryEntries(
             Path directory, Long appId, Predicate<String> shouldIgnore) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
+        Path normalizedDirectory = directory.toAbsolutePath().normalize();
+        if (isIgnoredPath(projectRoot, normalizedDirectory, shouldIgnore)) {
+            return List.of();
+        }
         Path realProjectRoot = requireExistingProjectRoot(projectRoot);
-        requireRealPathWithinRoot(directory, realProjectRoot);
+        requireRealPathWithinRoot(normalizedDirectory, realProjectRoot);
         List<Path> entries = new ArrayList<>();
         try {
-            Files.walkFileTree(directory, new SimpleFileVisitor<>() {
+            Files.walkFileTree(normalizedDirectory, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path current, BasicFileAttributes attributes)
                         throws IOException {
-                    if (!current.equals(directory) && shouldIgnore.test(current.getFileName().toString())) {
+                    if (!current.equals(normalizedDirectory)
+                            && shouldIgnore.test(current.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     rejectSymbolicLink(current);
@@ -77,6 +82,20 @@ final class ProjectPathResolver {
         } catch (IOException exception) {
             throw unsafe("目录包含无法安全读取的符号链接或路径", exception);
         }
+    }
+
+    private boolean isIgnoredPath(
+            Path projectRoot, Path candidate, Predicate<String> shouldIgnore)
+            throws UnsafeProjectPathException {
+        if (!candidate.startsWith(projectRoot)) {
+            throw new UnsafeProjectPathException("目录不能越出项目根目录");
+        }
+        for (Path segment : projectRoot.relativize(candidate)) {
+            if (shouldIgnore.test(segment.toString())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Path projectRoot(Long appId) throws UnsafeProjectPathException {
@@ -208,5 +227,8 @@ final class ProjectPathResolver {
         private UnsafeProjectPathException(String message, Throwable cause) {
             super(message, cause);
         }
+    }
+
+    record ResolvedProjectPath(Path path, String stateKey) {
     }
 }

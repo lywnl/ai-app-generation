@@ -3,10 +3,13 @@ package com.lyw.appgeneration.manger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.security.MessageDigest;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.IntStream;
 
 /**
  * 应用文件写入状态管理器
@@ -21,35 +24,62 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class AppFileStateManager {
 
-    /** appId → (相对路径 → 内容 md5 指纹) */
-    private final Map<Long, Map<String, String>> state = new ConcurrentHashMap<>();
+    private static final int STATE_LOCK_COUNT = 64;
 
-    /** appId → (相对路径 → 被重复写入的次数),用于感知异常循环 */
-    private final Map<Long, Map<String, Integer>> writeCountMap = new ConcurrentHashMap<>();
+    /** appId → 受同一把锁保护的文件指纹和写入次数 */
+    private final Map<Long, AppWriteState> states = new ConcurrentHashMap<>();
 
-    public WriteResult recordWrite(Long appId, String relativePath, String content) {
-        if (appId == null) appId = -1L;
+    /** 固定数量条带锁，避免 appId 动态锁对象被删除后产生脱离状态竞态 */
+    private final List<Object> stateLocks = IntStream.range(0, STATE_LOCK_COUNT)
+            .mapToObj(ignored -> new Object())
+            .toList();
+
+    /**
+     * 在 appId 级锁内分类写入；只有真实写入成功后才提交指纹和次数。
+     */
+    public WriteResult writeAndRecord(
+            Long appId,
+            String relativePath,
+            String content,
+            WriteOperation writeOperation) throws IOException {
+        Long stateAppId = appId == null ? -1L : appId;
         String newHash = md5(content);
-        Map<String, String> files = state.computeIfAbsent(appId, k -> new ConcurrentHashMap<>());
-        Map<String, Integer> counts = writeCountMap.computeIfAbsent(appId, k -> new ConcurrentHashMap<>());
-
-        String oldHash = files.get(relativePath);
-        int newCount = counts.merge(relativePath, 1, Integer::sum);
-
-        WriteResult result = new WriteResult();
-        result.totalFiles = files.size() + (oldHash == null ? 1 : 0);
-        result.writeCount = newCount;
-
-        if (oldHash == null) {
-            result.status = WriteStatus.FIRST_TIME;
-        } else if (oldHash.equals(newHash)) {
-            result.status = WriteStatus.DUPLICATE_SAME_CONTENT;
-        } else {
-            result.status = WriteStatus.DUPLICATE_DIFFERENT_CONTENT;
+        synchronized (stateLock(stateAppId)) {
+            AppWriteState appState = states.get(stateAppId);
+            WriteStatus status = classify(
+                    appState == null ? null : appState.files.get(relativePath), newHash);
+            if (status != WriteStatus.DUPLICATE_SAME_CONTENT) {
+                writeOperation.write();
+            }
+            if (appState == null) {
+                appState = new AppWriteState();
+                states.put(stateAppId, appState);
+            }
+            int writeCount = appState.writeCounts.merge(relativePath, 1, Integer::sum);
+            appState.files.put(relativePath, newHash);
+            return buildResult(appState, status, writeCount);
         }
+    }
 
-        files.put(relativePath, newHash);
-        result.allFiles = List.copyOf(files.keySet());
+    int trackedAppCount() {
+        return states.size();
+    }
+
+    private WriteStatus classify(String oldHash, String newHash) {
+        if (oldHash == null) {
+            return WriteStatus.FIRST_TIME;
+        }
+        return oldHash.equals(newHash)
+                ? WriteStatus.DUPLICATE_SAME_CONTENT
+                : WriteStatus.DUPLICATE_DIFFERENT_CONTENT;
+    }
+
+    private WriteResult buildResult(AppWriteState appState, WriteStatus status, int writeCount) {
+        WriteResult result = new WriteResult();
+        result.status = status;
+        result.totalFiles = appState.files.size();
+        result.writeCount = writeCount;
+        result.allFiles = List.copyOf(appState.files.keySet());
         return result;
     }
 
@@ -58,8 +88,9 @@ public class AppFileStateManager {
      */
     public void reset(Long appId) {
         if (appId == null) return;
-        state.remove(appId);
-        writeCountMap.remove(appId);
+        synchronized (stateLock(appId)) {
+            states.remove(appId);
+        }
     }
 
     /**
@@ -67,8 +98,17 @@ public class AppFileStateManager {
      */
     public int fileCount(Long appId) {
         if (appId == null) return 0;
-        Map<String, String> files = state.get(appId);
-        return files == null ? 0 : files.size();
+        synchronized (stateLock(appId)) {
+            AppWriteState appState = states.get(appId);
+            if (appState == null) {
+                return 0;
+            }
+            return appState.files.size();
+        }
+    }
+
+    private Object stateLock(Long appId) {
+        return stateLocks.get(Math.floorMod(appId.hashCode(), STATE_LOCK_COUNT));
     }
 
     private static String md5(String s) {
@@ -101,4 +141,17 @@ public class AppFileStateManager {
         /** 该路径被写入的次数(本次包含在内) */
         public int writeCount;
     }
+
+    @FunctionalInterface
+    public interface WriteOperation {
+
+        void write() throws IOException;
+    }
+
+    private static final class AppWriteState {
+
+        private final Map<String, String> files = new HashMap<>();
+        private final Map<String, Integer> writeCounts = new HashMap<>();
+    }
+
 }

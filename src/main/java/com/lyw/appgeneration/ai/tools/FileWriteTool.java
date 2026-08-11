@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -41,13 +42,23 @@ public class FileWriteTool extends BaseTool {
             @ToolMemoryId Long appId
     ) {
         try {
-            Path path = projectPathResolver.resolveForWrite(appId, relativeFilePath);
+            ProjectPathResolver.ResolvedProjectPath resolvedPath =
+                    projectPathResolver.resolveForWrite(appId, relativeFilePath);
+            Path path = resolvedPath.path();
             Path parentDir = path.getParent();
             if (parentDir != null) {
                 Files.createDirectories(parentDir);
             }
 
-            WriteResult result = appFileStateManager.recordWrite(appId, relativeFilePath, content);
+            WriteResult result = appFileStateManager.writeAndRecord(
+                    appId,
+                    resolvedPath.stateKey(),
+                    content,
+                    () -> Files.write(
+                            path,
+                            content.getBytes(StandardCharsets.UTF_8),
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.TRUNCATE_EXISTING));
 
             // 情况 1:重复写入相同内容 → 不实际写盘,告知 LLM 跳过
             if (result.status == AppFileStateManager.WriteStatus.DUPLICATE_SAME_CONTENT) {
@@ -61,8 +72,6 @@ public class FileWriteTool extends BaseTool {
 
             // 情况 2:重复写入但内容不同 → 写盘,但强烈警告
             if (result.status == AppFileStateManager.WriteStatus.DUPLICATE_DIFFERENT_CONTENT) {
-                Files.write(path, content.getBytes(),
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
                 log.warn("[FileWrite] 覆盖已存在文件: appId={}, path={}, writeCount={}",
                         appId, relativeFilePath, result.writeCount);
                 return buildResponse(
@@ -72,8 +81,6 @@ public class FileWriteTool extends BaseTool {
             }
 
             // 情况 3:首次写入 → 正常写盘
-            Files.write(path, content.getBytes(),
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             log.info("[FileWrite] 成功写入: appId={}, path={}, 总文件数={}",
                     appId, relativeFilePath, result.totalFiles);
             return buildResponse("✅ 文件写入成功 → " + relativeFilePath, result);
