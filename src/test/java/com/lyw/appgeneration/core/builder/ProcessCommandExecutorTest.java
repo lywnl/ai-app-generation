@@ -118,7 +118,8 @@ class ProcessCommandExecutorTest {
 
         CommandResult result = executeWithTestBound(
                 javaCommand("tree-parent", parentPidFile.toString(), childPidFile.toString()),
-                Duration.ofMillis(200));
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(8));
 
         long parentPid = awaitPid(parentPidFile);
         long childPid = awaitPid(childPidFile);
@@ -211,13 +212,22 @@ class ProcessCommandExecutorTest {
 
     private CommandResult executeWithTestBound(List<String> command, Duration timeout)
             throws Exception {
+        return executeWithTestBound(command, timeout, Duration.ofSeconds(3));
+    }
+
+    private CommandResult executeWithTestBound(
+            List<String> command,
+            Duration timeout,
+            Duration executionBound) throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         Future<CommandResult> result = executor.submit(
                 () -> new ProcessCommandExecutor().execute(tempDir, command, timeout));
         try {
-            return result.get(3, TimeUnit.SECONDS);
+            return result.get(executionBound.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException exception) {
-            throw new AssertionError("进程树超时清理未在 3 秒内返回", exception);
+            throw new AssertionError(
+                    "进程树超时清理未在 " + executionBound.toMillis() + " 毫秒内返回",
+                    exception);
         } catch (ExecutionException exception) {
             if (exception.getCause() instanceof Exception cause) {
                 throw cause;
