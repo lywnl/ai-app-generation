@@ -3,7 +3,6 @@ package com.lyw.appgeneration.ai.tools;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
-import com.lyw.appgeneration.constants.AppConstant;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
@@ -12,7 +11,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
 
@@ -23,6 +21,8 @@ import java.util.Set;
 @Slf4j
 @Component
 public class FileDirReadTool extends BaseTool{
+
+    private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
 
     /**
      * 需要忽略的文件和目录
@@ -46,16 +46,12 @@ public class FileDirReadTool extends BaseTool{
             @ToolMemoryId Long appId
     ) {
         try {
-            Path path = Paths.get(relativeDirPath == null ? "" : relativeDirPath);
-            if (!path.isAbsolute()) {
-                String projectDirName = "vue_project_" + appId;
-                Path projectRoot = Paths.get(AppConstant.CODE_OUTPUT_ROOT_DIR, projectDirName);
-                path = projectRoot.resolve(relativeDirPath == null ? "" : relativeDirPath);
-            }
+            Path path = projectPathResolver.resolveExisting(appId, relativeDirPath, true);
             File targetDir = path.toFile();
             if (!targetDir.exists() || !targetDir.isDirectory()) {
                 return "错误：目录不存在或不是目录 - " + relativeDirPath;
             }
+            projectPathResolver.validateDirectoryTree(path, appId);
             StringBuilder structure = new StringBuilder();
             structure.append("项目目录结构:\n");
             // 使用 Hutool 递归获取所有文件
@@ -77,6 +73,8 @@ public class FileDirReadTool extends BaseTool{
                     });
             return structure.toString();
 
+        } catch (ProjectPathResolver.UnsafeProjectPathException exception) {
+            return "错误：路径不安全 - " + exception.getMessage();
         } catch (Exception e) {
             String errorMessage = "读取目录结构失败: " + relativeDirPath + ", 错误: " + e.getMessage();
             log.error(errorMessage, e);
@@ -125,4 +123,3 @@ public class FileDirReadTool extends BaseTool{
         return String.format("[工具调用] %s %s", getDisplayName(), relativeDirPath);
     }
 }
-

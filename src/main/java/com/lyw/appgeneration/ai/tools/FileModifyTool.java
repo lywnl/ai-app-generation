@@ -1,7 +1,6 @@
 package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
-import com.lyw.appgeneration.constants.AppConstant;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 
 /**
@@ -21,6 +19,8 @@ import java.nio.file.StandardOpenOption;
 @Slf4j
 @Component
 public class FileModifyTool extends BaseTool{
+
+    private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
 
     @Tool("修改文件内容，用新内容替换指定的旧内容")
     public String modifyFile(
@@ -33,12 +33,7 @@ public class FileModifyTool extends BaseTool{
             @ToolMemoryId Long appId
     ) {
         try {
-            Path path = Paths.get(relativeFilePath);
-            if (!path.isAbsolute()) {
-                String projectDirName = "vue_project_" + appId;
-                Path projectRoot = Paths.get(AppConstant.CODE_OUTPUT_ROOT_DIR, projectDirName);
-                path = projectRoot.resolve(relativeFilePath);
-            }
+            Path path = projectPathResolver.resolveExisting(appId, relativeFilePath, false);
             if (!Files.exists(path) || !Files.isRegularFile(path)) {
                 return "错误：文件不存在或不是文件 - " + relativeFilePath;
             }
@@ -53,7 +48,9 @@ public class FileModifyTool extends BaseTool{
             Files.writeString(path, modifiedContent, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             log.info("成功修改文件: {}", path.toAbsolutePath());
             return "文件修改成功: " + relativeFilePath;
-        } catch (IOException e) {
+        } catch (ProjectPathResolver.UnsafeProjectPathException exception) {
+            return "错误：路径不安全 - " + exception.getMessage();
+        } catch (IOException | RuntimeException e) {
             String errorMessage = "修改文件失败: " + relativeFilePath + ", 错误: " + e.getMessage();
             log.error(errorMessage, e);
             return errorMessage;
@@ -91,4 +88,3 @@ public class FileModifyTool extends BaseTool{
                 """, getDisplayName(), relativeFilePath, oldContent, newContent);
     }
 }
-

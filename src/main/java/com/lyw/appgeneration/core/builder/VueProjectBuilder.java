@@ -14,8 +14,8 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,8 +30,6 @@ public class VueProjectBuilder {
     private static final Duration NPM_INSTALL_TIMEOUT = Duration.ofSeconds(300);
     private static final Duration NPM_BUILD_TIMEOUT = Duration.ofSeconds(180);
     private static final String TRUSTED_BUILD_SCRIPT = "vite build";
-    private static final Pattern TRUSTED_DEPENDENCY_VERSION = Pattern.compile(
-            "^[~^]?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$");
     private static final Set<String> FORBIDDEN_PACKAGE_FIELDS = Set.of(
             "overrides",
             "optionalDependencies",
@@ -44,15 +42,15 @@ public class VueProjectBuilder {
             "npm-shrinkwrap.json",
             ".npmrc",
             "node_modules");
-    private static final Set<String> TRUSTED_RUNTIME_DEPENDENCIES = Set.of(
-            "vue",
-            "vue-router",
-            "element-plus",
-            "@element-plus/icons-vue",
-            "echarts");
-    private static final Set<String> TRUSTED_DEVELOPMENT_DEPENDENCIES = Set.of(
-            "vite",
-            "@vitejs/plugin-vue");
+    private static final Map<String, String> TRUSTED_RUNTIME_DEPENDENCIES = Map.of(
+            "vue", "3.3.4",
+            "vue-router", "4.2.4",
+            "element-plus", "2.8.8",
+            "@element-plus/icons-vue", "2.3.1",
+            "echarts", "5.5.1");
+    private static final Map<String, String> TRUSTED_DEVELOPMENT_DEPENDENCIES = Map.of(
+            "vite", "4.4.5",
+            "@vitejs/plugin-vue", "4.2.3");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String TRUSTED_VITE_CONFIG = """
             import { defineConfig } from 'vite'
@@ -315,7 +313,7 @@ public class VueProjectBuilder {
 
     private String validateDependencyNames(
             JsonNode dependencyNode,
-            Set<String> trustedNames,
+            Map<String, String> trustedDependencies,
             String fieldName) {
         if (dependencyNode == null || !dependencyNode.isObject()) {
             return fieldName + " 必须是 JSON 对象";
@@ -323,13 +321,13 @@ public class VueProjectBuilder {
         var names = dependencyNode.fieldNames();
         while (names.hasNext()) {
             String name = names.next();
-            if (!trustedNames.contains(name)) {
+            String trustedVersion = trustedDependencies.get(name);
+            if (trustedVersion == null) {
                 return fieldName + " 包含非受信依赖: " + name;
             }
             JsonNode versionNode = dependencyNode.get(name);
-            if (!versionNode.isTextual()
-                    || !TRUSTED_DEPENDENCY_VERSION.matcher(versionNode.textValue()).matches()) {
-                return fieldName + " 中依赖 " + name + " 的版本不是受控 semver";
+            if (!versionNode.isTextual() || !trustedVersion.equals(versionNode.textValue())) {
+                return fieldName + " 中依赖 " + name + " 的版本必须固定为 " + trustedVersion;
             }
         }
         return null;

@@ -1,7 +1,6 @@
 package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
-import com.lyw.appgeneration.constants.AppConstant;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 /**
  * 文件删除工具
@@ -21,6 +19,8 @@ import java.nio.file.Paths;
 @Component
 public class FileDeleteTool extends BaseTool{
 
+    private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
+
     @Tool("删除指定路径的文件")
     public String deleteFile(
             @P("文件的相对路径")
@@ -28,12 +28,7 @@ public class FileDeleteTool extends BaseTool{
             @ToolMemoryId Long appId
     ) {
         try {
-            Path path = Paths.get(relativeFilePath);
-            if (!path.isAbsolute()) {
-                String projectDirName = "vue_project_" + appId;
-                Path projectRoot = Paths.get(AppConstant.CODE_OUTPUT_ROOT_DIR, projectDirName);
-                path = projectRoot.resolve(relativeFilePath);
-            }
+            Path path = projectPathResolver.resolveExisting(appId, relativeFilePath, false);
             if (!Files.exists(path)) {
                 return "警告：文件不存在，无需删除 - " + relativeFilePath;
             }
@@ -48,7 +43,9 @@ public class FileDeleteTool extends BaseTool{
             Files.delete(path);
             log.info("成功删除文件: {}", path.toAbsolutePath());
             return "文件删除成功: " + relativeFilePath;
-        } catch (IOException e) {
+        } catch (ProjectPathResolver.UnsafeProjectPathException exception) {
+            return "错误：路径不安全 - " + exception.getMessage();
+        } catch (IOException | RuntimeException e) {
             String errorMessage = "删除文件失败: " + relativeFilePath + ", 错误: " + e.getMessage();
             log.error(errorMessage, e);
             return errorMessage;
@@ -89,4 +86,3 @@ public class FileDeleteTool extends BaseTool{
         return String.format("[工具调用] %s %s", getDisplayName(), relativeFilePath);
     }
 }
-

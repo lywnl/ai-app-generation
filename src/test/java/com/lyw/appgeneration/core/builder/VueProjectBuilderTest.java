@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.builder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
@@ -242,6 +243,58 @@ class VueProjectBuilderTest {
         assertFalse(result.success());
         assertEquals(BuildStage.VALIDATION, result.stage());
         assertTrue(result.outputTail().contains(fieldName));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @Test
+    void acceptsEveryApprovedDependencyWithItsExactVersion() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "scripts": {"build": "vite build"},
+                  "dependencies": {
+                    "vue": "3.3.4",
+                    "vue-router": "4.2.4",
+                    "element-plus": "2.8.8",
+                    "@element-plus/icons-vue": "2.3.1",
+                    "echarts": "5.5.1"
+                  },
+                  "devDependencies": {
+                    "vite": "4.4.5",
+                    "@vitejs/plugin-vue": "4.2.3"
+                  }
+                }
+                """);
+        RecordingCommandExecutor executor = successfulExecutorCreatingDist();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertTrue(result.success());
+        assertEquals(2, executor.invocations.size());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "vue, 3.3.4, ^3.3.4",
+            "vue, 3.3.4, ~3.3.4",
+            "vue, 3.3.4, 3.3.4-beta.1",
+            "vue, 3.3.4, 999.0.0",
+            "vite, 4.4.5, 999.0.0",
+            "@vitejs/plugin-vue, 4.2.3, ^4.2.3"
+    })
+    void rejectsUnapprovedDependencyVersionBeforeInstalling(
+            String dependencyName, String approvedVersion, String version) throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), trustedPackageJson()
+                .replace("\"" + dependencyName + "\": \"" + approvedVersion + "\"",
+                        "\"" + dependencyName + "\": \"" + version + "\""));
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains(dependencyName));
         assertTrue(executor.invocations.isEmpty());
     }
 
