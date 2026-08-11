@@ -98,6 +98,99 @@ class TemplateCatalogTest {
         );
     }
 
+    @ParameterizedTest
+    @MethodSource("invalidProjectMetadata")
+    void rejectsInvalidProjectMetadataWithSourcePath(Consumer<ObjectNode> invalidMutation,
+                                                     String expectedField,
+                                                     @TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.featureDocument("feature-login");
+        invalidMutation.accept(document);
+        TemplateTestData.write(tempDir.resolve("invalid-metadata.json"), document);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> new TemplateCatalog(tempDir, objectMapper));
+
+        assertTrue(exception.getMessage().contains("invalid-metadata.json"));
+        assertTrue(exception.getMessage().contains(expectedField));
+    }
+
+    static Stream<Object[]> invalidProjectMetadata() {
+        return Stream.of(
+                new Object[]{(Consumer<ObjectNode>) node -> node.remove("schemaVersion"), "schemaVersion"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.putNull("schemaVersion"), "schemaVersion"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("schemaVersion", 2), "schemaVersion"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("schemaVersion", "1"), "schemaVersion"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("schemaVersion", 1.0), "schemaVersion"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.remove("version"), "version"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.putNull("version"), "version"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("version", "  "), "version"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.remove("framework"), "framework"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.putNull("framework"), "framework"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("framework", "  "), "framework"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.remove("language"), "language"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.putNull("language"), "language"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("language", "  "), "language"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.remove("buildTool"), "buildTool"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.putNull("buildTool"), "buildTool"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.put("buildTool", "  "), "buildTool"}
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidDependencyDeclarations")
+    void rejectsInvalidDependencyDeclarationsWithSourcePath(Consumer<ObjectNode> invalidMutation,
+                                                            String expectedField,
+                                                            @TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.featureDocument("feature-login");
+        invalidMutation.accept(document);
+        TemplateTestData.write(tempDir.resolve("invalid-dependency.json"), document);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> new TemplateCatalog(tempDir, objectMapper));
+
+        assertTrue(exception.getMessage().contains("invalid-dependency.json"));
+        assertTrue(exception.getMessage().contains(expectedField));
+    }
+
+    static Stream<Object[]> invalidDependencyDeclarations() {
+        return Stream.of(
+                new Object[]{(Consumer<ObjectNode>) node -> node.with("dependencies").put("  ", "^1.0.0"),
+                        "dependencies"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.with("dependencies").put("vue", "  "),
+                        "dependencies"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.with("dependencies").putNull("vue"),
+                        "dependencies"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.with("devDependencies").put("  ", "^1.0.0"),
+                        "devDependencies"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.with("devDependencies").put("vite", "  "),
+                        "devDependencies"},
+                new Object[]{(Consumer<ObjectNode>) node -> node.with("devDependencies").putNull("vite"),
+                        "devDependencies"}
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("emptyDependencyDeclarations")
+    void treatsMissingAndNullDependencyDeclarationsAsEmpty(Consumer<ObjectNode> mutation,
+                                                           @TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.featureDocument("feature-login");
+        mutation.accept(document);
+        TemplateTestData.write(tempDir.resolve("empty-dependency.json"), document);
+
+        TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
+
+        assertEquals(1, catalog.getDocuments().size());
+    }
+
+    static Stream<Consumer<ObjectNode>> emptyDependencyDeclarations() {
+        return Stream.of(
+                node -> node.remove("dependencies"),
+                node -> node.putNull("dependencies"),
+                node -> node.remove("devDependencies"),
+                node -> node.putNull("devDependencies")
+        );
+    }
+
     @Test
     void rejectsUnknownDocumentKindWithSourcePath(@TempDir Path tempDir) throws IOException {
         ObjectNode document = TemplateTestData.featureDocument("feature-login");

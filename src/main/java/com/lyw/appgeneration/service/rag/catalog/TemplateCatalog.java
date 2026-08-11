@@ -134,7 +134,9 @@ public class TemplateCatalog {
                     && documentKindNode.textValue().isBlank()) {
                 throw invalidFile(catalogFile.relativePath(), "documentKind 为空");
             }
-            return objectMapper.readValue(catalogFile.content(), TemplateDoc.class);
+            TemplateDoc document = objectMapper.readValue(catalogFile.content(), TemplateDoc.class);
+            validateSchemaVersion(rootNode, catalogFile.relativePath());
+            return document;
         } catch (JsonProcessingException exception) {
             String reason = exception.getOriginalMessage();
             if (reason != null && reason.contains("RagDocumentKind")) {
@@ -151,6 +153,12 @@ public class TemplateCatalog {
         if (document.getDocumentKind() == null) {
             throw invalidFile(sourcePath, "documentKind 为空");
         }
+        requireText(document.getVersion(), sourcePath, "version 为空");
+        requireText(document.getFramework(), sourcePath, "framework 为空");
+        requireText(document.getLanguage(), sourcePath, "language 为空");
+        requireText(document.getBuildTool(), sourcePath, "buildTool 为空");
+        validateDependencies(document.getDependencies(), sourcePath, "dependencies");
+        validateDependencies(document.getDevDependencies(), sourcePath, "devDependencies");
         requireText(document.getEmbedText(), sourcePath, "embedText 为空");
         if (document.getFiles() == null || document.getFiles().isEmpty()) {
             throw invalidFile(sourcePath, "files 为空");
@@ -160,6 +168,28 @@ public class TemplateCatalog {
         validateFilePaths(document.getFiles(), sourcePath);
         if (document.getDocumentKind() == RagDocumentKind.PROJECT_SKELETON) {
             validateSkeleton(document, sourcePath, objectMapper);
+        }
+    }
+
+    private void validateSchemaVersion(JsonNode rootNode, String sourcePath) {
+        JsonNode schemaVersion = rootNode.get("schemaVersion");
+        if (schemaVersion == null || !schemaVersion.isInt() || schemaVersion.intValue() != 1) {
+            throw invalidFile(sourcePath, "schemaVersion 只支持整数 1");
+        }
+    }
+
+    private void validateDependencies(
+            Map<String, String> dependencies,
+            String sourcePath,
+            String fieldName) {
+        if (dependencies == null) {
+            return;
+        }
+        for (Map.Entry<String, String> entry : dependencies.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank()
+                    || entry.getValue() == null || entry.getValue().isBlank()) {
+                throw invalidFile(sourcePath, fieldName + " 包含空白依赖名或版本");
+            }
         }
     }
 

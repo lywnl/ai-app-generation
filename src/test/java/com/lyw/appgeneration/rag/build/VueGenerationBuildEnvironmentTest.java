@@ -14,13 +14,15 @@ class VueGenerationBuildEnvironmentTest {
         VueGenerationBuildEnvironment environment = VueGenerationBuildEnvironment.inspect(Map.of(
                 "DASHSCOPE_API_KEY", "dashscope-secret",
                 "DEEPSEEK_API_KEY", "deepseek-secret",
-                "SPRING_DATASOURCE_PASSWORD", "database-secret"));
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret"));
 
         assertFalse(environment.ready());
         assertTrue(environment.reasons().contains("RAG_BUILD_EVAL 未设置为 true"));
         assertFalse(environment.toString().contains("dashscope-secret"));
         assertFalse(environment.toString().contains("deepseek-secret"));
-        assertFalse(environment.toString().contains("database-secret"));
+        assertFalse(environment.toString().contains("mysql-secret"));
+        assertFalse(environment.toString().contains("pg-secret"));
     }
 
     @Test
@@ -31,16 +33,18 @@ class VueGenerationBuildEnvironmentTest {
                 "RAG_BUILD_EVAL", "TRUE",
                 "DASHSCOPE_API_KEY", "dashscope-secret",
                 "DEEPSEEK_API_KEY", "deepseek-secret",
-                "SPRING_DATASOURCE_PASSWORD", "database-secret"));
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret"));
 
         assertFalse(missing.ready());
         assertTrue(missing.reasons().contains("缺少环境变量 DASHSCOPE_API_KEY"));
         assertTrue(missing.reasons().contains("缺少环境变量 DEEPSEEK_API_KEY"));
-        assertTrue(missing.reasons().contains("缺少环境变量 SPRING_DATASOURCE_PASSWORD"));
+        assertTrue(missing.reasons().contains("缺少环境变量 RAG_PGVECTOR_PASSWORD"));
         assertTrue(ready.ready());
         assertTrue(ready.reasons().isEmpty());
         assertFalse(ready.toString().contains("dashscope-secret"));
         assertFalse(ready.toString().contains("deepseek-secret"));
-        assertFalse(ready.toString().contains("database-secret"));
+        assertFalse(ready.toString().contains("mysql-secret"));
+        assertFalse(ready.toString().contains("pg-secret"));
     }
 }

@@ -33,7 +33,7 @@ public record VueIngestionEnvironment(
 
         List<String> reasons = new ArrayList<>();
         require(environment, "DASHSCOPE_API_KEY", reasons);
-        require(environment, "SPRING_DATASOURCE_PASSWORD", reasons);
+        require(environment, "RAG_PGVECTOR_PASSWORD", reasons);
         if (reasons.isEmpty() && !probe.isReachable(target.host(), target.port())) {
             reasons.add("PGVector 端口不可达: " + target.host() + ":" + target.port());
         }

@@ -59,7 +59,7 @@
 
 - 产出：`VuePgVectorTarget.from(Map<String,String>)`、`jdbcUrl()`、`displayName()`。
 - 产出：`VueIngestionEnvironment.inspectSystemEnvironment()`、包内 `inspect(Map, PortProbe)`。
-- 约束：两个对象均不持有 `DASHSCOPE_API_KEY` 或 `SPRING_DATASOURCE_PASSWORD` 的值。
+- 约束：两个对象均不持有 `DASHSCOPE_API_KEY` 或 `RAG_PGVECTOR_PASSWORD` 的值。
 
 - [ ] **步骤 1：先写环境门禁失败测试**
 
@@ -76,7 +76,7 @@ void 默认关闭或缺少凭据时不探测网络且不泄漏秘密() {
     assertFalse(disabled.ready());
     assertTrue(disabled.reasons().contains("RAG_VUE_INGEST 未设置为 true"));
     assertFalse(missing.ready());
-    assertTrue(missing.reasons().contains("缺少环境变量 SPRING_DATASOURCE_PASSWORD"));
+    assertTrue(missing.reasons().contains("缺少环境变量 RAG_PGVECTOR_PASSWORD"));
     assertEquals(0, disabledProbe.calls);
     assertEquals(0, missingProbe.calls);
     assertFalse(disabled.toString().contains("dashscope-secret"));
@@ -88,7 +88,7 @@ void 凭据存在后检查端口并解析非秘密目标() {
     Map<String, String> environment = Map.of(
             "RAG_VUE_INGEST", "true",
             "DASHSCOPE_API_KEY", "dashscope-secret",
-            "SPRING_DATASOURCE_PASSWORD", "database-secret",
+            "RAG_PGVECTOR_PASSWORD", "database-secret",
             "RAG_PGVECTOR_HOST", "db.internal",
             "RAG_PGVECTOR_PORT", "15432",
             "RAG_PGVECTOR_DATABASE", "rag_test",
@@ -163,7 +163,7 @@ public record VueIngestionEnvironment(
         }
         List<String> reasons = new ArrayList<>();
         require(environment, "DASHSCOPE_API_KEY", reasons);
-        require(environment, "SPRING_DATASOURCE_PASSWORD", reasons);
+        require(environment, "RAG_PGVECTOR_PASSWORD", reasons);
         if (reasons.isEmpty() && !probe.isReachable(target.host(), target.port())) {
             reasons.add("PGVector 端口不可达: " + target.host() + ":" + target.port());
         }
@@ -620,14 +620,14 @@ void 环境显式就绪时摄取并核验真实Vue知识() throws Exception {
     try {
         EmbeddingModel model = createEmbeddingModel(variables.get("DASHSCOPE_API_KEY"));
         EmbeddingStore<TextSegment> store = createVueStore(
-                environment.target(), variables.get("SPRING_DATASOURCE_PASSWORD"));
+                environment.target(), variables.get("RAG_PGVECTOR_PASSWORD"));
         VueKnowledgeIngestor.IngestResult result = new VueKnowledgeIngestor(model, OBJECT_MAPPER)
                 .ingest(DATASET_ROOT, store);
         assertEquals(expected.catalogVersion(), result.catalogVersion());
         assertEquals(23, result.chunkCount());
 
         VueIngestionVerification verification = new VuePgVectorIngestionVerifier(OBJECT_MAPPER)
-                .verify(expected, environment.target(), variables.get("SPRING_DATASOURCE_PASSWORD"));
+                .verify(expected, environment.target(), variables.get("RAG_PGVECTOR_PASSWORD"));
         VueIngestionReport report = VueIngestionReport.verified(
                 environment.target().displayName(), verification);
         writeReport(report);
@@ -646,7 +646,7 @@ void 环境显式就绪时摄取并核验真实Vue知识() throws Exception {
 - [ ] **步骤 6：验证默认路径不访问外部系统**
 
 ```bash
-env -u RAG_VUE_INGEST -u DASHSCOPE_API_KEY -u SPRING_DATASOURCE_PASSWORD \
+env -u RAG_VUE_INGEST -u DASHSCOPE_API_KEY -u RAG_PGVECTOR_PASSWORD \
 JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" \
 PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" \
 bash mvnw -Dtest='VueIngestionReportTest,VueKnowledgeIngestionQualityGateTest' test
@@ -769,7 +769,7 @@ TemplateCatalog catalog = new TemplateCatalog(
 VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
 VueRetrievalEvaluationReport report = new VueRetrievalQualityGateRunner().evaluateWhenIngested(
         () -> new VuePgVectorIngestionVerifier(new ObjectMapper()).verify(
-                expected, target, variables.get("SPRING_DATASOURCE_PASSWORD")),
+                expected, target, variables.get("RAG_PGVECTOR_PASSWORD")),
         () -> evaluateDataset(dataset));
 writeReport(report);
 if (!report.executed()) {
@@ -785,7 +785,7 @@ if (!report.passed()) {
 - [ ] **步骤 4：运行 GREEN 与默认门禁回归**
 
 ```bash
-env -u RAG_EVAL -u DASHSCOPE_API_KEY -u SPRING_DATASOURCE_PASSWORD \
+env -u RAG_EVAL -u DASHSCOPE_API_KEY -u RAG_PGVECTOR_PASSWORD \
 JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" \
 PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" \
 bash mvnw -Dtest='VueRetrievalIngestionPrerequisiteTest,VueRetrievalEvaluationReportTest,VueRetrievalQualityGateTest' test

@@ -140,7 +140,8 @@ class VueRetrievalIngestionPrerequisiteTest {
 
     private void assertTargetMapping(Map<String, String> variables) {
         VuePgVectorTarget target = VuePgVectorTarget.from(variables);
-        var properties = VueRetrievalQualityGateTest.evaluationProperties(target, "password");
+        var properties = VueRetrievalQualityGateTest.evaluationProperties(
+                target, Map.of("RAG_PGVECTOR_PASSWORD", "password"));
 
         assertEquals(target.host(), properties.getPgvector().getHost());
         assertEquals(target.port(), properties.getPgvector().getPort());

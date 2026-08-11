@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * 十条 Vue 首次真实生成与 npm 构建的高成本质量门禁。
@@ -31,6 +32,17 @@ class VueGenerationBuildQualityGateTest {
     private static final Path GENERATED_ROOT = Path.of(
             "target/rag-eval/generated");
     private static final Duration GENERATION_TIMEOUT = Duration.ofMinutes(10);
+
+    @Test
+    void evaluationPropertiesReceivesDedicatedPgVectorPassword() {
+        Map<String, String> environment = Map.of(
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret");
+
+        Map<String, Object> properties = evaluationProperties(environment);
+
+        assertEquals("pg-secret", properties.get("rag.pgvector.password"));
+    }
 
     @Test
     void requiresTenOfTenRealFirstGenerationBuilds() throws Exception {
@@ -82,7 +94,7 @@ class VueGenerationBuildQualityGateTest {
                 environment, "RAG_PGVECTOR_DATABASE", "ai_codegen_rag"));
         properties.put("rag.pgvector.user", valueOrDefault(
                 environment, "RAG_PGVECTOR_USER", "admin"));
-        properties.put("rag.pgvector.password", environment.get("SPRING_DATASOURCE_PASSWORD"));
+        properties.put("rag.pgvector.password", environment.get("RAG_PGVECTOR_PASSWORD"));
         properties.put("pexels.api-key", "unused-by-vue-generation-build-evaluation");
         return properties;
     }

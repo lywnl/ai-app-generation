@@ -121,7 +121,7 @@ public final class VueIngestionReport {
         }
         if (reason.equals("RAG_VUE_INGEST 未设置为 true")
                 || reason.equals("缺少环境变量 DASHSCOPE_API_KEY")
-                || reason.equals("缺少环境变量 SPRING_DATASOURCE_PASSWORD")) {
+                || reason.equals("缺少环境变量 RAG_PGVECTOR_PASSWORD")) {
             return EvaluationReportSanitizer.sanitize(reason);
         }
         if (reason.startsWith("PGVector 端口不可达: ")

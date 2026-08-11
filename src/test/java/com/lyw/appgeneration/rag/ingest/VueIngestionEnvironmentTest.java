@@ -17,12 +17,13 @@ class VueIngestionEnvironmentTest {
         CountingPortProbe missingProbe = new CountingPortProbe(true);
         VueIngestionEnvironment missing = VueIngestionEnvironment.inspect(Map.of(
                 "RAG_VUE_INGEST", "true",
-                "DASHSCOPE_API_KEY", "dashscope-secret"), missingProbe);
+                "DASHSCOPE_API_KEY", "dashscope-secret",
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret"), missingProbe);
 
         assertFalse(disabled.ready());
         assertTrue(disabled.reasons().contains("RAG_VUE_INGEST 未设置为 true"));
         assertFalse(missing.ready());
-        assertTrue(missing.reasons().contains("缺少环境变量 SPRING_DATASOURCE_PASSWORD"));
+        assertTrue(missing.reasons().contains("缺少环境变量 RAG_PGVECTOR_PASSWORD"));
         assertEquals(0, disabledProbe.calls);
         assertEquals(0, missingProbe.calls);
         assertFalse(disabled.toString().contains("dashscope-secret"));
@@ -34,7 +35,8 @@ class VueIngestionEnvironmentTest {
         Map<String, String> environment = Map.of(
                 "RAG_VUE_INGEST", "true",
                 "DASHSCOPE_API_KEY", "dashscope-secret",
-                "SPRING_DATASOURCE_PASSWORD", "database-secret",
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret",
                 "RAG_PGVECTOR_HOST", "db.internal",
                 "RAG_PGVECTOR_PORT", "15432",
                 "RAG_PGVECTOR_DATABASE", "rag_test",
@@ -48,7 +50,8 @@ class VueIngestionEnvironmentTest {
         assertEquals("db.internal:15432/rag_test", result.target().displayName());
         assertEquals("rag_user", result.target().user());
         assertFalse(result.toString().contains("dashscope-secret"));
-        assertFalse(result.toString().contains("database-secret"));
+        assertFalse(result.toString().contains("mysql-secret"));
+        assertFalse(result.toString().contains("pg-secret"));
     }
 
     private static final class CountingPortProbe implements VueIngestionEnvironment.PortProbe {

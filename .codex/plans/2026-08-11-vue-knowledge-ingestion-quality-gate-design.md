@@ -63,14 +63,14 @@
 负责无秘密的前置检查和环境解析：
 
 - 必须满足 `RAG_VUE_INGEST=true`；
-- 必须存在非空 `DASHSCOPE_API_KEY` 和 `SPRING_DATASOURCE_PASSWORD`；
+- 必须存在非空 `DASHSCOPE_API_KEY` 和 `RAG_PGVECTOR_PASSWORD`；
 - PGVector 主机与端口必须可达；
 - 数据库连接参数沿用真实检索门禁约定：
   - `RAG_PGVECTOR_HOST`，默认 `127.0.0.1`；
   - `RAG_PGVECTOR_PORT`，默认 `5432`；
   - `RAG_PGVECTOR_DATABASE`，默认 `ai_codegen_rag`；
   - `RAG_PGVECTOR_USER`，默认 `admin`；
-  - 密码读取 `SPRING_DATASOURCE_PASSWORD`。
+  - 密码读取 `RAG_PGVECTOR_PASSWORD`。
 
 环境对象和错误原因只保存变量名、主机、端口等非秘密信息，不保存 API Key 或密码。开关未启用或凭据缺失时不探测网络。
 
@@ -194,13 +194,13 @@
 ```bash
 RAG_VUE_INGEST=true \
 DASHSCOPE_API_KEY='...' \
-SPRING_DATASOURCE_PASSWORD='...' \
+RAG_PGVECTOR_PASSWORD='...' \
 JAVA_TOOL_OPTIONS='-DsocksNonProxyHosts=localhost|127.*|[::1]' \
 bash mvnw -Dtest=VueKnowledgeIngestionQualityGateTest test
 
 RAG_EVAL=true \
 DASHSCOPE_API_KEY='...' \
-SPRING_DATASOURCE_PASSWORD='...' \
+RAG_PGVECTOR_PASSWORD='...' \
 JAVA_TOOL_OPTIONS='-DsocksNonProxyHosts=localhost|127.*|[::1]' \
 bash mvnw -Dtest=VueRetrievalQualityGateTest test
 ```

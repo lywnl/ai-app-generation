@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Vue Hybrid 与 Dense-only 的高成本真实检索质量门禁。
@@ -39,6 +40,18 @@ class VueRetrievalQualityGateTest {
 
     private static final Path REPORT = Path.of(
             "target/rag-eval/vue-hybrid-retrieval-report.md");
+
+    @Test
+    void evaluationPropertiesReceivesDedicatedPgVectorPassword() {
+        Map<String, String> environment = Map.of(
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret");
+        VuePgVectorTarget target = VuePgVectorTarget.from(environment);
+
+        RagProperties properties = evaluationProperties(target, environment);
+
+        assertEquals("pg-secret", properties.getPgvector().getPassword());
+    }
 
     @Test
     void evaluatesRealRetrievalWhenEnvironmentIsExplicitlyReady() throws Exception {
@@ -69,7 +82,7 @@ class VueRetrievalQualityGateTest {
                 Path.of("embed_text/vue-project"), new ObjectMapper());
         VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
         return new VuePgVectorIngestionVerifier(new ObjectMapper()).verify(
-                expected, target, variables.get("SPRING_DATASOURCE_PASSWORD"));
+                expected, target, variables.get("RAG_PGVECTOR_PASSWORD"));
     }
 
     private VueRetrievalEvaluationReport evaluateDataset(
@@ -90,7 +103,7 @@ class VueRetrievalQualityGateTest {
             VuePgVectorTarget target,
             Map<String, String> variables) {
         RagProperties properties = evaluationProperties(
-                target, variables.get("SPRING_DATASOURCE_PASSWORD"));
+                target, variables);
         String apiKey = variables.get("DASHSCOPE_API_KEY");
         EmbeddingModel embeddingModel = OpenAiEmbeddingModel.builder()
                 .baseUrl(properties.getEmbedding().getBaseUrl())
@@ -119,7 +132,9 @@ class VueRetrievalQualityGateTest {
         return new EvaluationServices(retrievalService, resourceProvider);
     }
 
-    static RagProperties evaluationProperties(VuePgVectorTarget target, String password) {
+    static RagProperties evaluationProperties(
+            VuePgVectorTarget target,
+            Map<String, String> environment) {
         RagProperties properties = new RagProperties();
         properties.setEnabled(true);
         properties.getHybrid().setEnabled(true);
@@ -128,7 +143,7 @@ class VueRetrievalQualityGateTest {
         properties.getPgvector().setPort(target.port());
         properties.getPgvector().setDatabase(target.database());
         properties.getPgvector().setUser(target.user());
-        properties.getPgvector().setPassword(password);
+        properties.getPgvector().setPassword(environment.get("RAG_PGVECTOR_PASSWORD"));
         return properties;
     }
 

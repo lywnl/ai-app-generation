@@ -33,7 +33,7 @@ public record VueEvaluationEnvironment(boolean ready, List<String> reasons) {
             return new VueEvaluationEnvironment(false, reasons);
         }
         requireEnvironment(environment, "DASHSCOPE_API_KEY", reasons);
-        requireEnvironment(environment, "SPRING_DATASOURCE_PASSWORD", reasons);
+        requireEnvironment(environment, "RAG_PGVECTOR_PASSWORD", reasons);
         if (!reasons.isEmpty()) {
             return new VueEvaluationEnvironment(false, reasons);
         }

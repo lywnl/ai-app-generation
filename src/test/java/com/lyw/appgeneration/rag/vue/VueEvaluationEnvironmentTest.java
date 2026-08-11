@@ -16,13 +16,15 @@ class VueEvaluationEnvironmentTest {
                 Map.of(), disabledProbe);
         CountingPortProbe missingProbe = new CountingPortProbe(true);
         VueEvaluationEnvironment missing = VueEvaluationEnvironment.inspect(
-                Map.of("RAG_EVAL", "true"), missingProbe);
+                Map.of(
+                        "RAG_EVAL", "true",
+                        "DASHSCOPE_API_KEY", "dashscope-secret",
+                        "SPRING_DATASOURCE_PASSWORD", "mysql-secret"), missingProbe);
 
         assertFalse(disabled.ready());
         assertTrue(disabled.reasons().contains("RAG_EVAL 未设置为 true"));
         assertFalse(missing.ready());
-        assertTrue(missing.reasons().stream().anyMatch(reason -> reason.contains("DASHSCOPE_API_KEY")));
-        assertTrue(missing.reasons().stream().anyMatch(reason -> reason.contains("SPRING_DATASOURCE_PASSWORD")));
+        assertTrue(missing.reasons().stream().anyMatch(reason -> reason.contains("RAG_PGVECTOR_PASSWORD")));
         assertTrue(disabledProbe.calls == 0);
         assertTrue(missingProbe.calls == 0);
     }
@@ -32,7 +34,8 @@ class VueEvaluationEnvironmentTest {
         Map<String, String> environment = Map.of(
                 "RAG_EVAL", "true",
                 "DASHSCOPE_API_KEY", "secret-not-rendered",
-                "SPRING_DATASOURCE_PASSWORD", "secret-not-rendered");
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret");
 
         VueEvaluationEnvironment unreachable = VueEvaluationEnvironment.inspect(
                 environment, new CountingPortProbe(false));
@@ -45,6 +48,8 @@ class VueEvaluationEnvironmentTest {
         assertTrue(ready.reasons().isEmpty());
         assertFalse(unreachable.toString().contains("secret-not-rendered"));
         assertFalse(ready.toString().contains("secret-not-rendered"));
+        assertFalse(unreachable.toString().contains("mysql-secret"));
+        assertFalse(ready.toString().contains("pg-secret"));
     }
 
     private static final class CountingPortProbe implements VueEvaluationEnvironment.PortProbe {

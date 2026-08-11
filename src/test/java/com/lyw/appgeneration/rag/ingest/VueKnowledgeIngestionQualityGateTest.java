@@ -42,6 +42,15 @@ class VueKnowledgeIngestionQualityGateTest {
     private static final Duration EMBEDDING_TIMEOUT = Duration.ofSeconds(10);
 
     @Test
+    void 摄取门禁将专用PGVector密码传给存储与核验器() {
+        Map<String, String> variables = Map.of(
+                "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
+                "RAG_PGVECTOR_PASSWORD", "pg-secret");
+
+        assertEquals("pg-secret", pgVectorPassword(variables));
+    }
+
+    @Test
     void 环境显式就绪时摄取并核验真实Vue知识() throws Exception {
         VueIngestionEnvironment environment = VueIngestionEnvironment.inspectSystemEnvironment();
         Map<String, String> variables = System.getenv();
@@ -51,14 +60,14 @@ class VueKnowledgeIngestionQualityGateTest {
             execution.setExpected(expected);
             EmbeddingModel model = createEmbeddingModel(variables.get("DASHSCOPE_API_KEY"));
             EmbeddingStore<TextSegment> store = createVueStore(
-                    environment.target(), variables.get("SPRING_DATASOURCE_PASSWORD"));
+                    environment.target(), pgVectorPassword(variables));
             VueKnowledgeIngestor.IngestResult result = new VueKnowledgeIngestor(model, OBJECT_MAPPER)
                     .ingest(DATASET_ROOT, store);
             assertEquals(expected.catalogVersion(), result.catalogVersion());
             assertEquals(23, result.chunkCount());
 
             VueIngestionVerification verification = new VuePgVectorIngestionVerifier(OBJECT_MAPPER)
-                    .verify(expected, environment.target(), variables.get("SPRING_DATASOURCE_PASSWORD"));
+                    .verify(expected, environment.target(), pgVectorPassword(variables));
             VueIngestionReport report = VueIngestionReport.verified(expected, verification);
             assertTrue(report.passed(), "Vue 真实摄取物理核验失败，详见 " + REPORT);
             return report;
@@ -272,6 +281,10 @@ class VueKnowledgeIngestionQualityGateTest {
 
     private static VueIngestionExpectedSnapshot expectedSnapshot() {
         return VueIngestionExpectedSnapshot.from(new TemplateCatalog(DATASET_ROOT, OBJECT_MAPPER));
+    }
+
+    private static String pgVectorPassword(Map<String, String> environment) {
+        return environment.get("RAG_PGVECTOR_PASSWORD");
     }
 
     @FunctionalInterface
