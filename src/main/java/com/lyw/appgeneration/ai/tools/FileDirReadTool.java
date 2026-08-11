@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.ai.tools;
 
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import dev.langchain4j.agent.tool.P;
@@ -9,14 +8,13 @@ import dev.langchain4j.agent.tool.ToolMemoryId;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
 /**
  * 文件目录读取工具
- * 使用 Hutool 简化文件操作
+ * 使用受控路径遍历读取目录结构
  */
 @Slf4j
 @Component
@@ -47,29 +45,27 @@ public class FileDirReadTool extends BaseTool{
     ) {
         try {
             Path path = projectPathResolver.resolveExisting(appId, relativeDirPath, true);
-            File targetDir = path.toFile();
-            if (!targetDir.exists() || !targetDir.isDirectory()) {
+            if (!java.nio.file.Files.isDirectory(path)) {
                 return "错误：目录不存在或不是目录 - " + relativeDirPath;
             }
-            projectPathResolver.validateDirectoryTree(path, appId);
             StringBuilder structure = new StringBuilder();
             structure.append("项目目录结构:\n");
-            // 使用 Hutool 递归获取所有文件
-            List<File> allFiles = FileUtil.loopFiles(targetDir, file -> !shouldIgnore(file.getName()));
+            List<Path> allFiles = projectPathResolver.collectSafeDirectoryEntries(
+                    path, appId, this::shouldIgnore);
             // 按路径深度和名称排序显示
             allFiles.stream()
                     .sorted((f1, f2) -> {
-                        int depth1 = getRelativeDepth(targetDir, f1);
-                        int depth2 = getRelativeDepth(targetDir, f2);
+                        int depth1 = getRelativeDepth(path, f1);
+                        int depth2 = getRelativeDepth(path, f2);
                         if (depth1 != depth2) {
                             return Integer.compare(depth1, depth2);
                         }
-                        return f1.getPath().compareTo(f2.getPath());
+                        return f1.toString().compareTo(f2.toString());
                     })
                     .forEach(file -> {
-                        int depth = getRelativeDepth(targetDir, file);
+                        int depth = getRelativeDepth(path, file);
                         String indent = "  ".repeat(depth);
-                        structure.append(indent).append(file.getName());
+                        structure.append(indent).append(file.getFileName());
                     });
             return structure.toString();
 
@@ -85,10 +81,8 @@ public class FileDirReadTool extends BaseTool{
     /**
      * 计算文件相对于根目录的深度
      */
-    private int getRelativeDepth(File root, File file) {
-        Path rootPath = root.toPath();
-        Path filePath = file.toPath();
-        return rootPath.relativize(filePath).getNameCount() - 1;
+    private int getRelativeDepth(Path root, Path file) {
+        return root.relativize(file).getNameCount() - 1;
     }
 
     /**

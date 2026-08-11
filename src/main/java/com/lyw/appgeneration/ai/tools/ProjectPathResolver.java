@@ -9,6 +9,9 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Vue 工程文件工具的路径边界解析器。
@@ -41,26 +44,36 @@ final class ProjectPathResolver {
         return candidate;
     }
 
-    void validateDirectoryTree(Path directory, Long appId) throws UnsafeProjectPathException {
+    List<Path> collectSafeDirectoryEntries(
+            Path directory, Long appId, Predicate<String> shouldIgnore) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
         Path realProjectRoot = requireExistingProjectRoot(projectRoot);
         requireRealPathWithinRoot(directory, realProjectRoot);
+        List<Path> entries = new ArrayList<>();
         try {
             Files.walkFileTree(directory, new SimpleFileVisitor<>() {
                 @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                public FileVisitResult preVisitDirectory(Path current, BasicFileAttributes attributes)
                         throws IOException {
-                    rejectSymbolicLink(file);
+                    if (!current.equals(directory) && shouldIgnore.test(current.getFileName().toString())) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                    rejectSymbolicLink(current);
                     return FileVisitResult.CONTINUE;
                 }
 
                 @Override
-                public FileVisitResult preVisitDirectory(Path current, BasicFileAttributes attributes)
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
                         throws IOException {
-                    rejectSymbolicLink(current);
+                    if (shouldIgnore.test(file.getFileName().toString())) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    rejectSymbolicLink(file);
+                    entries.add(file);
                     return FileVisitResult.CONTINUE;
                 }
             });
+            return List.copyOf(entries);
         } catch (IOException exception) {
             throw unsafe("目录包含无法安全读取的符号链接或路径", exception);
         }

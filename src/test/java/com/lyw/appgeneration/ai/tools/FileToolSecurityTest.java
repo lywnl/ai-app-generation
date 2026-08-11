@@ -95,6 +95,23 @@ class FileToolSecurityTest {
     }
 
     @Test
+    void directoryReadSkipsNodeModulesLinksAndKeepsProjectFilesVisible() throws IOException {
+        Path projectRoot = createProjectRoot();
+        Files.createDirectories(projectRoot.resolve("src"));
+        Files.writeString(projectRoot.resolve("src/main.js"), "export default {}");
+        Path externalTarget = Files.writeString(temporaryDirectory.resolve("vite-target"), "外部目标");
+        Path viteLink = projectRoot.resolve("node_modules/.bin/vite");
+        Files.createDirectories(viteLink.getParent());
+        Files.createSymbolicLink(viteLink, externalTarget);
+
+        String result = fileDirReadTool.readDir("", APP_ID);
+
+        assertTrue(result.contains("main.js"), result);
+        assertFalse(result.contains("node_modules"), result);
+        assertFalse(result.contains("vite"), result);
+    }
+
+    @Test
     void allFileToolsRejectProjectRootThatIsExternalSymbolicLink() throws IOException {
         Path externalProjectRoot = Files.createDirectory(temporaryDirectory.resolve("external-project"));
         Files.writeString(externalProjectRoot.resolve("existing.txt"), "外部项目内容");
