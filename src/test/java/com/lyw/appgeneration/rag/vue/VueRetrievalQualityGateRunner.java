@@ -4,6 +4,7 @@ import com.lyw.appgeneration.rag.ingest.VueIngestionVerification;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
@@ -14,16 +15,8 @@ final class VueRetrievalQualityGateRunner {
     VueRetrievalEvaluationReport evaluateWhenIngested(
             Supplier<VueIngestionVerification> verificationSupplier,
             Supplier<VueRetrievalEvaluationReport> evaluationSupplier) {
-        VueIngestionVerification verification;
-        try {
-            verification = verificationSupplier.get();
-        } catch (RuntimeException exception) {
-            return VueRetrievalEvaluationReport.notExecuted(
-                    List.of("摄取前置核验失败: " + exception.getClass().getSimpleName()));
-        }
-        if (verification == null) {
-            return VueRetrievalEvaluationReport.notExecuted(List.of("摄取前置核验结果为空"));
-        }
+        VueIngestionVerification verification = Objects.requireNonNull(
+                verificationSupplier.get(), "摄取前置核验结果不能为空");
         if (!verification.passed()) {
             List<String> reasons = new ArrayList<>();
             reasons.add("摄取前置条件不满足");
@@ -31,14 +24,11 @@ final class VueRetrievalQualityGateRunner {
             return VueRetrievalEvaluationReport.notExecuted(reasons);
         }
 
-        try {
-            VueRetrievalEvaluationReport report = evaluationSupplier.get();
-            return report == null
-                    ? VueRetrievalEvaluationReport.notExecuted(List.of("检索评测未返回报告"))
-                    : report;
-        } catch (RuntimeException exception) {
-            return VueRetrievalEvaluationReport.notExecuted(
-                    List.of("检索评测执行失败: " + exception.getClass().getSimpleName()));
+        VueRetrievalEvaluationReport report = Objects.requireNonNull(
+                evaluationSupplier.get(), "检索评测报告不能为空");
+        if (!report.executed()) {
+            throw new IllegalStateException("摄取核验通过后，检索评测报告必须为已执行状态");
         }
+        return report;
     }
 }

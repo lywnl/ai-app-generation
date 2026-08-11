@@ -52,7 +52,7 @@ class VueRetrievalQualityGateTest {
         VuePgVectorTarget target = VuePgVectorTarget.from(variables);
         VueRetrievalEvaluationReport report = new VueRetrievalQualityGateRunner().evaluateWhenIngested(
                 () -> verifyIngestion(target, variables),
-                this::evaluateDataset);
+                () -> evaluateDataset(target, variables));
         writeReport(report);
         if (!report.executed()) {
             fail("Vue 真实检索的摄取前置条件不满足，详见 " + REPORT);
@@ -72,22 +72,26 @@ class VueRetrievalQualityGateTest {
                 expected, target, variables.get("SPRING_DATASOURCE_PASSWORD"));
     }
 
-    private VueRetrievalEvaluationReport evaluateDataset() {
+    private VueRetrievalEvaluationReport evaluateDataset(
+            VuePgVectorTarget target,
+            Map<String, String> variables) {
         VueEvalDataset dataset;
         try {
             dataset = VueEvalDataset.load("rag/vue-hybrid-eval-set.json", new ObjectMapper());
         } catch (IOException exception) {
             throw new UncheckedIOException("加载 Vue 检索评测集失败", exception);
         }
-        try (EvaluationServices services = createEvaluationServices()) {
+        try (EvaluationServices services = createEvaluationServices(target, variables)) {
             return new VueRetrievalEvaluator(services.retrievalService()).evaluate(dataset.queries());
         }
     }
 
-    private EvaluationServices createEvaluationServices() {
-        Map<String, String> environment = System.getenv();
-        RagProperties properties = evaluationProperties(environment);
-        String apiKey = environment.get("DASHSCOPE_API_KEY");
+    private EvaluationServices createEvaluationServices(
+            VuePgVectorTarget target,
+            Map<String, String> variables) {
+        RagProperties properties = evaluationProperties(
+                target, variables.get("SPRING_DATASOURCE_PASSWORD"));
+        String apiKey = variables.get("DASHSCOPE_API_KEY");
         EmbeddingModel embeddingModel = OpenAiEmbeddingModel.builder()
                 .baseUrl(properties.getEmbedding().getBaseUrl())
                 .apiKey(apiKey)
@@ -115,20 +119,16 @@ class VueRetrievalQualityGateTest {
         return new EvaluationServices(retrievalService, resourceProvider);
     }
 
-    private RagProperties evaluationProperties(Map<String, String> environment) {
+    static RagProperties evaluationProperties(VuePgVectorTarget target, String password) {
         RagProperties properties = new RagProperties();
         properties.setEnabled(true);
         properties.getHybrid().setEnabled(true);
         properties.setTemplatesDir(Path.of("embed_text").toAbsolutePath().toString());
-        properties.getPgvector().setHost(environment.getOrDefault(
-                "RAG_PGVECTOR_HOST", "127.0.0.1"));
-        properties.getPgvector().setPort(integerEnvironment(
-                environment, "RAG_PGVECTOR_PORT", 5432));
-        properties.getPgvector().setDatabase(environment.getOrDefault(
-                "RAG_PGVECTOR_DATABASE", "ai_codegen_rag"));
-        properties.getPgvector().setUser(environment.getOrDefault(
-                "RAG_PGVECTOR_USER", "admin"));
-        properties.getPgvector().setPassword(environment.get("SPRING_DATASOURCE_PASSWORD"));
+        properties.getPgvector().setHost(target.host());
+        properties.getPgvector().setPort(target.port());
+        properties.getPgvector().setDatabase(target.database());
+        properties.getPgvector().setUser(target.user());
+        properties.getPgvector().setPassword(password);
         return properties;
     }
 
@@ -145,17 +145,6 @@ class VueRetrievalQualityGateTest {
                 .createTable(false)
                 .useIndex(false)
                 .build();
-    }
-
-    private int integerEnvironment(
-            Map<String, String> environment,
-            String name,
-            int fallback) {
-        try {
-            return Integer.parseInt(environment.getOrDefault(name, Integer.toString(fallback)));
-        } catch (NumberFormatException exception) {
-            return fallback;
-        }
     }
 
     private void writeReport(VueRetrievalEvaluationReport report) throws IOException {
