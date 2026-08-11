@@ -3,9 +3,13 @@ package com.lyw.appgeneration.rag.vue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.rag.ingest.VueIngestionExpectedSnapshot;
+import com.lyw.appgeneration.rag.ingest.VuePgVectorIngestionVerifier;
+import com.lyw.appgeneration.rag.ingest.VuePgVectorTarget;
 import com.lyw.appgeneration.service.rag.RagRerankService;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import com.lyw.appgeneration.service.rag.VueHybridRetrievalService;
+import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
@@ -19,6 +23,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -43,15 +48,39 @@ class VueRetrievalQualityGateTest {
             return;
         }
 
-        VueEvalDataset dataset = VueEvalDataset.load(
-                "rag/vue-hybrid-eval-set.json", new ObjectMapper());
+        Map<String, String> variables = System.getenv();
+        VuePgVectorTarget target = VuePgVectorTarget.from(variables);
+        VueRetrievalEvaluationReport report = new VueRetrievalQualityGateRunner().evaluateWhenIngested(
+                () -> verifyIngestion(target, variables),
+                this::evaluateDataset);
+        writeReport(report);
+        if (!report.executed()) {
+            fail("Vue 真实检索的摄取前置条件不满足，详见 " + REPORT);
+        }
+        if (!report.passed()) {
+            fail("Vue 真实检索未达到质量门槛，详见 " + REPORT);
+        }
+    }
+
+    private com.lyw.appgeneration.rag.ingest.VueIngestionVerification verifyIngestion(
+            VuePgVectorTarget target,
+            Map<String, String> variables) {
+        TemplateCatalog catalog = new TemplateCatalog(
+                Path.of("embed_text/vue-project"), new ObjectMapper());
+        VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
+        return new VuePgVectorIngestionVerifier(new ObjectMapper()).verify(
+                expected, target, variables.get("SPRING_DATASOURCE_PASSWORD"));
+    }
+
+    private VueRetrievalEvaluationReport evaluateDataset() {
+        VueEvalDataset dataset;
+        try {
+            dataset = VueEvalDataset.load("rag/vue-hybrid-eval-set.json", new ObjectMapper());
+        } catch (IOException exception) {
+            throw new UncheckedIOException("加载 Vue 检索评测集失败", exception);
+        }
         try (EvaluationServices services = createEvaluationServices()) {
-            VueRetrievalEvaluationReport report = new VueRetrievalEvaluator(services.retrievalService())
-                    .evaluate(dataset.queries());
-            writeReport(report);
-            if (!report.passed()) {
-                fail("Vue 真实检索未达到质量门槛，详见 " + REPORT);
-            }
+            return new VueRetrievalEvaluator(services.retrievalService()).evaluate(dataset.queries());
         }
     }
 
