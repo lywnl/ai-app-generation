@@ -5,7 +5,6 @@ import com.lyw.appgeneration.rag.eval.EvaluationReportSanitizer;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
-import java.util.regex.Pattern;
 
 /**
  * Vue 知识真实摄取的脱敏质量报告。
@@ -14,12 +13,7 @@ import java.util.regex.Pattern;
  */
 public final class VueIngestionReport {
 
-    private static final Pattern TARGET = Pattern.compile(
-            "[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}/[A-Za-z0-9_-]+");
-    private static final Pattern TARGET_ENDPOINT = Pattern.compile(
-            "[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}");
-    private static final Pattern CATALOG_VERSION = Pattern.compile("[a-fA-F0-9]{64}");
-    private static final Pattern EXCEPTION_SIMPLE_NAME = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*");
+    private static final String TARGET = "PGVector/templates_vue";
 
     private enum Status {
         NOT_EXECUTED,
@@ -28,42 +22,38 @@ public final class VueIngestionReport {
     }
 
     private final Status status;
-    private final String target;
     private final String catalogVersion;
     private final VueIngestionVerification verification;
     private final List<String> reasons;
 
     private VueIngestionReport(
             Status status,
-            String target,
             String catalogVersion,
             VueIngestionVerification verification,
             List<String> reasons) {
         this.status = Objects.requireNonNull(status);
-        this.target = controlledTarget(target);
-        this.catalogVersion = controlledCatalogVersion(catalogVersion);
+        this.catalogVersion = catalogVersion == null ? "" : catalogVersion;
         this.verification = verification;
         this.reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    public static VueIngestionReport notExecuted(String target, List<String> reasons) {
-        return new VueIngestionReport(Status.NOT_EXECUTED, target, "", null, reasons);
+    public static VueIngestionReport notExecuted(List<String> reasons) {
+        return new VueIngestionReport(Status.NOT_EXECUTED, "", null, reasons);
     }
 
     public static VueIngestionReport failed(
-            String target,
-            String catalogVersion,
+            VueIngestionExpectedSnapshot expected,
             List<String> reasons) {
-        return new VueIngestionReport(Status.FAILED, target, catalogVersion, null, reasons);
+        return new VueIngestionReport(
+                Status.FAILED, catalogVersion(expected), null, reasons);
     }
 
     public static VueIngestionReport verified(
-            String target,
+            VueIngestionExpectedSnapshot expected,
             VueIngestionVerification verification) {
         return new VueIngestionReport(
                 Status.VERIFIED,
-                target,
-                verification == null ? "" : verification.catalogVersion(),
+                catalogVersion(expected),
                 Objects.requireNonNull(verification),
                 verification.issues());
     }
@@ -75,7 +65,7 @@ public final class VueIngestionReport {
     public String renderMarkdown() {
         StringBuilder output = new StringBuilder("# Vue 知识摄取质量报告\n\n");
         output.append("状态：").append(statusText()).append("\n\n");
-        output.append("目标：").append(target).append("/templates_vue\n\n");
+        output.append("目标：").append(TARGET).append("\n\n");
         output.append("模型：text-embedding-v4（1024 维）\n\n");
         appendCatalogVersion(output);
         appendVerification(output);
@@ -134,32 +124,18 @@ public final class VueIngestionReport {
                 || reason.equals("缺少环境变量 SPRING_DATASOURCE_PASSWORD")) {
             return EvaluationReportSanitizer.sanitize(reason);
         }
-        if (reason.startsWith("PGVector 端口不可达: ")) {
-            String endpoint = reason.substring("PGVector 端口不可达: ".length());
-            return TARGET_ENDPOINT.matcher(endpoint).matches()
-                    ? "PGVector 端口不可达: " + endpoint
-                    : "PGVector 端口不可达";
+        if (reason.startsWith("PGVector 端口不可达: ")
+                || reason.equals("PGVector 端口不可达")) {
+            return "PGVector 端口不可达";
         }
-        if (reason.startsWith("真实摄取依赖失败: ")) {
-            String exceptionName = reason.substring("真实摄取依赖失败: ".length());
-            return EXCEPTION_SIMPLE_NAME.matcher(exceptionName).matches()
-                    ? "真实摄取依赖失败: " + exceptionName
-                    : "真实摄取依赖失败";
+        if (reason.startsWith("真实摄取依赖失败: ")
+                || reason.equals("真实摄取依赖失败")) {
+            return "真实摄取依赖失败";
         }
         return "已检测到受控问题";
     }
 
-    private static String controlledTarget(String target) {
-        if (target != null && TARGET.matcher(target).matches()) {
-            return target;
-        }
-        return "未提供";
-    }
-
-    private static String controlledCatalogVersion(String catalogVersion) {
-        if (catalogVersion != null && CATALOG_VERSION.matcher(catalogVersion).matches()) {
-            return catalogVersion;
-        }
-        return "";
+    private static String catalogVersion(VueIngestionExpectedSnapshot expected) {
+        return expected == null ? "" : expected.catalogVersion();
     }
 }
