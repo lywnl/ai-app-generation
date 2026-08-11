@@ -56,6 +56,22 @@ docker compose --env-file .env -f docker-compose.yml build
 docker compose --env-file .env -f docker-compose.yml up -d
 ```
 
+### 启用 Vue Hybrid 检索（默认关闭）
+
+`RAG_HYBRID_ENABLED` 默认值为 `false`。仅当以下真实门禁严格依次完成后，才允许开启：
+
+1. 正式 23 条摄取并物理核验通过。
+2. 30 条真实检索达标。
+3. 十条首次生成 10/10。
+4. 在 `.env` 设置 `RAG_HYBRID_ENABLED=true`。
+5. 重启 backend：
+
+   ```bash
+   docker compose --env-file .env -f docker-compose.yml up -d --force-recreate backend
+   ```
+
+任一步失败都保持 `RAG_HYBRID_ENABLED=false`。默认 Maven、PGVector 协议探针、五骨架策展构建都不能替代以上三项真实成绩，也不得据此开启 Hybrid。
+
 PostgreSQL 说明：
 
 - 当前已改为直接使用 `pgvector/pgvector:pg16` 镜像
