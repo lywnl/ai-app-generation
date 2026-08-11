@@ -56,7 +56,7 @@
 
 ## 4. 架构与组件
 
-所有新增代码放在 `src/test/java/com/lyw/appgeneration/rag/ingest/`，生产目录不新增运维类。
+摄取环境、快照、JDBC 核验和报告代码放在 `src/test/java/com/lyw/appgeneration/rag/ingest/`，生产目录不新增运维类。真实检索门禁允许在既有 `rag/vue` 测试包新增一个 package-private 顺序编排器，只负责保证“摄取核验通过后才创建模型和执行评测”，不得复制检索业务逻辑。
 
 ### 4.1 `VueIngestionEnvironment`
 
