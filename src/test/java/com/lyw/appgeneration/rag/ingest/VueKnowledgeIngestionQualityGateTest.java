@@ -114,6 +114,55 @@ class VueKnowledgeIngestionQualityGateTest {
     }
 
     @Test
+    void 同一写入异常不会对自身添加suppressed() {
+        IOException original = new IOException("首次写入失败");
+        AtomicBoolean actionExecuted = new AtomicBoolean();
+
+        IOException thrown = assertThrows(IOException.class,
+                () -> run(readyEnvironment(), execution -> {
+                    actionExecuted.set(true);
+                    execution.setExpected(expectedSnapshot());
+                    return passedReport(execution.expected());
+                }, report -> {
+                    throw original;
+                }));
+
+        assertSame(original, thrown);
+        assertTrue(actionExecuted.get());
+        assertEquals(0, thrown.getSuppressed().length);
+    }
+
+    @Test
+    void 显式动作返回未通过报告时写入失败报告并抛出断言() {
+        AtomicReference<VueIngestionReport> written = new AtomicReference<>();
+
+        AssertionError thrown = assertThrows(AssertionError.class,
+                () -> run(readyEnvironment(), execution -> {
+                    VueIngestionExpectedSnapshot expected = expectedSnapshot();
+                    execution.setExpected(expected);
+                    return VueIngestionReport.verified(expected, new VueIngestionVerification(
+                            false, expected.catalogVersion(), 23, 22, 0, Set.of(1024), List.of()));
+                }, written::set));
+
+        assertTrue(thrown.getMessage().contains("未通过"));
+        assertTrue(written.get().renderMarkdown().contains("状态：未通过"));
+    }
+
+    @Test
+    void 显式动作返回空报告时写入失败报告并抛出断言() {
+        AtomicReference<VueIngestionReport> written = new AtomicReference<>();
+
+        AssertionError thrown = assertThrows(AssertionError.class,
+                () -> run(readyEnvironment(), execution -> {
+                    execution.setExpected(expectedSnapshot());
+                    return null;
+                }, written::set));
+
+        assertTrue(thrown.getMessage().contains("未通过"));
+        assertTrue(written.get().renderMarkdown().contains("状态：未通过"));
+    }
+
+    @Test
     void 默认环境短路不会执行显式动作() throws Exception {
         AtomicBoolean actionExecuted = new AtomicBoolean();
         AtomicReference<VueIngestionReport> written = new AtomicReference<>();
@@ -132,18 +181,43 @@ class VueKnowledgeIngestionQualityGateTest {
     }
 
     @Test
+    void 默认环境写入未执行报告失败时保留原异常且不执行动作() {
+        IOException original = new IOException("默认报告失败");
+        AtomicBoolean actionExecuted = new AtomicBoolean();
+        VueIngestionEnvironment disabled = new VueIngestionEnvironment(
+                false,
+                List.of("RAG_VUE_INGEST 未设置为 true"),
+                new VuePgVectorTarget("127.0.0.1", 5432, "ai_codegen_rag", "admin"));
+
+        IOException thrown = assertThrows(IOException.class,
+                () -> run(disabled, execution -> {
+                    actionExecuted.set(true);
+                    return VueIngestionReport.failed(null, List.of("不应执行"));
+                }, report -> {
+                    throw original;
+                }));
+
+        assertSame(original, thrown);
+        assertFalse(actionExecuted.get());
+    }
+
+    @Test
     void 显式动作成功时写入通过报告() throws Exception {
         AtomicReference<VueIngestionReport> written = new AtomicReference<>();
         VueIngestionExpectedSnapshot expected = expectedSnapshot();
 
         run(readyEnvironment(), execution -> {
             execution.setExpected(expected);
-            return VueIngestionReport.verified(expected, new VueIngestionVerification(
-                    true, expected.catalogVersion(), 23, 23, 0, Set.of(1024), List.of()));
+            return passedReport(expected);
         }, written::set);
 
         assertTrue(written.get().passed());
         assertTrue(written.get().renderMarkdown().contains("状态：通过"));
+    }
+
+    private static VueIngestionReport passedReport(VueIngestionExpectedSnapshot expected) {
+        return VueIngestionReport.verified(expected, new VueIngestionVerification(
+                true, expected.catalogVersion(), 23, 23, 0, Set.of(1024), List.of()));
     }
 
     static void run(
@@ -157,7 +231,9 @@ class VueKnowledgeIngestionQualityGateTest {
 
         ExplicitExecution execution = new ExplicitExecution();
         try {
-            reportWriter.write(action.execute(execution));
+            VueIngestionReport report = action.execute(execution);
+            requirePassedReport(report);
+            reportWriter.write(report);
         } catch (Exception exception) {
             writeFailureReport(execution, reportWriter, exception);
             throw exception;
@@ -177,7 +253,15 @@ class VueKnowledgeIngestionQualityGateTest {
                     List.of("真实摄取依赖失败: "
                             + originalFailure.getClass().getSimpleName())));
         } catch (IOException reportFailure) {
-            originalFailure.addSuppressed(reportFailure);
+            if (reportFailure != originalFailure) {
+                originalFailure.addSuppressed(reportFailure);
+            }
+        }
+    }
+
+    private static void requirePassedReport(VueIngestionReport report) {
+        if (report == null || !report.passed()) {
+            throw new AssertionError("Vue 真实摄取未通过物理核验");
         }
     }
 
