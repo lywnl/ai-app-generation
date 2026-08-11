@@ -98,8 +98,9 @@ public final class VuePgVectorIngestionVerifier {
             }
             compareRow(expected, expectedRow, actual, issues);
         });
-        actualByChunkId.keySet().forEach(chunkId ->
-                issues.add("存在未声明块: " + chunkId));
+        if (!actualByChunkId.isEmpty()) {
+            issues.add("存在未声明块: 数量=" + actualByChunkId.size());
+        }
         Set<Integer> dimensions = rows.stream()
                 .map(VuePgVectorRow::vectorDimension)
                 .collect(Collectors.toUnmodifiableSet());
@@ -204,6 +205,7 @@ public final class VuePgVectorIngestionVerifier {
             List<VuePgVectorRow> rows,
             List<String> issues) {
         Map<String, VuePgVectorRow> rowsByChunkId = new LinkedHashMap<>();
+        int duplicateCount = 0;
         for (VuePgVectorRow row : rows) {
             String chunkId = row.metadata().get("chunkId");
             if (chunkId == null) {
@@ -211,8 +213,11 @@ public final class VuePgVectorIngestionVerifier {
                 continue;
             }
             if (rowsByChunkId.putIfAbsent(chunkId, row) != null) {
-                issues.add("重复知识块: " + chunkId);
+                duplicateCount++;
             }
+        }
+        if (duplicateCount > 0) {
+            issues.add("重复知识块: 数量=" + duplicateCount);
         }
         return rowsByChunkId;
     }

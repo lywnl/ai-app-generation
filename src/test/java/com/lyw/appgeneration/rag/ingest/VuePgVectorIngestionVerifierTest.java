@@ -136,6 +136,29 @@ class VuePgVectorIngestionVerifierTest {
     }
 
     @Test
+    void 未声明和重复块问题不泄露数据库中的实际块标识() {
+        VueIngestionExpectedSnapshot snapshot = snapshot();
+        List<VuePgVectorRow> rows = new ArrayList<>(validRows(snapshot));
+        List<String> sensitiveChunkIds = List.of(
+                "password=database-secret-marker",
+                "<template>SOURCE_SECRET_MARKER</template>",
+                "检索文本秘密标记-SEARCH_TEXT_SECRET_MARKER");
+        for (String sensitiveChunkId : sensitiveChunkIds) {
+            rows.add(unexpectedRow(sensitiveChunkId));
+            rows.add(unexpectedRow(sensitiveChunkId));
+        }
+
+        VueIngestionVerification result = VuePgVectorIngestionVerifier.verifyRows(snapshot, rows, 0);
+
+        assertFalse(result.passed());
+        assertTrue(result.issues().stream().anyMatch(issue -> issue.contains("存在未声明块")));
+        assertTrue(result.issues().stream().anyMatch(issue -> issue.contains("重复知识块")));
+        sensitiveChunkIds.forEach(sensitiveChunkId ->
+                assertTrue(result.issues().stream().noneMatch(issue -> issue.contains(sensitiveChunkId)),
+                        sensitiveChunkId));
+    }
+
+    @Test
     void 元数据空值转换为核验问题而非逃逸异常() {
         VueIngestionExpectedSnapshot snapshot = snapshot();
         List<VuePgVectorRow> rows = validRows(snapshot);
@@ -342,14 +365,18 @@ class VuePgVectorIngestionVerifierTest {
 
     private static List<VuePgVectorRow> appendUnexpectedRow(List<VuePgVectorRow> rows) {
         List<VuePgVectorRow> result = new ArrayList<>(rows);
-        result.add(new VuePgVectorRow(
+        result.add(unexpectedRow("unexpected"));
+        return result;
+    }
+
+    private static VuePgVectorRow unexpectedRow(String chunkId) {
+        return new VuePgVectorRow(
                 UUID.randomUUID(), 1024, "未声明文本", Map.of(
-                "chunkId", "unexpected",
+                "chunkId", chunkId,
                 "documentId", "unexpected-document",
                 "documentKind", "FEATURE_SNIPPET",
                 "chunkKind", "OVERVIEW",
-                "catalogVersion", CATALOG_VERSION)));
-        return result;
+                "catalogVersion", CATALOG_VERSION));
     }
 
     private static List<VuePgVectorRow> replaceFirst(
