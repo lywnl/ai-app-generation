@@ -38,6 +38,7 @@ class VueIngestionExpectedSnapshotTest {
         catalog.getChunks().forEach(chunk -> {
             VueIngestionExpectedSnapshot.ExpectedRow row = snapshot.rowsByChunkId().get(chunk.chunkId());
             assertNotNull(row, chunk.chunkId());
+            assertEquals(chunk.chunkId(), row.chunkId());
             assertEquals(chunk.documentId(), row.documentId());
             assertEquals(chunk.documentKind(), row.documentKind());
             assertEquals(chunk.chunkKind(), row.chunkKind());
