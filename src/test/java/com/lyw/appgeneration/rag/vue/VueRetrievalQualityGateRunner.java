@@ -57,7 +57,8 @@ public final class VueRetrievalQualityGateRunner {
 
     public VueRetrievalEvaluationReport evaluateDataset(
             VuePgVectorTarget target,
-            Map<String, String> variables,
+            String pgVectorPassword,
+            String dashScopeApiKey,
             TemplateCatalog catalog) {
         VueEvalDataset dataset;
         try {
@@ -65,20 +66,21 @@ public final class VueRetrievalQualityGateRunner {
         } catch (IOException exception) {
             throw new UncheckedIOException("加载 Vue 检索评测集失败", exception);
         }
-        try (EvaluationServices services = createEvaluationServices(target, variables, catalog)) {
+        try (EvaluationServices services = createEvaluationServices(
+                target, pgVectorPassword, dashScopeApiKey, catalog)) {
             return new VueRetrievalEvaluator(services.retrievalService()).evaluate(dataset.queries());
         }
     }
 
     private EvaluationServices createEvaluationServices(
             VuePgVectorTarget target,
-            Map<String, String> variables,
+            String pgVectorPassword,
+            String dashScopeApiKey,
             TemplateCatalog catalog) {
-        RagProperties properties = evaluationProperties(target, variables);
-        String apiKey = variables.get("DASHSCOPE_API_KEY");
+        RagProperties properties = evaluationProperties(target, pgVectorPassword);
         EmbeddingModel embeddingModel = OpenAiEmbeddingModel.builder()
                 .baseUrl(properties.getEmbedding().getBaseUrl())
-                .apiKey(apiKey)
+                .apiKey(dashScopeApiKey)
                 .modelName(properties.getEmbedding().getModelName())
                 .dimensions(properties.getEmbedding().getDimension())
                 .timeout(Duration.ofMillis(properties.getEmbedding().getTimeoutMs()))
@@ -90,7 +92,8 @@ public final class VueRetrievalQualityGateRunner {
                 CodeGenTypeEnum.VUE_PROJECT, store);
         VueRetrievalResourceProvider resourceProvider =
                 VueRetrievalResourceProvider.forEvaluation(catalog);
-        RagRerankService rerankService = new RagRerankService(properties, apiKey);
+        RagRerankService rerankService = new RagRerankService(
+                properties, dashScopeApiKey);
         VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
                 resourceProvider,
                 new DenseRetriever(embeddingModel, stores, properties),
@@ -105,7 +108,7 @@ public final class VueRetrievalQualityGateRunner {
 
     static RagProperties evaluationProperties(
             VuePgVectorTarget target,
-            Map<String, String> environment) {
+            String pgVectorPassword) {
         RagProperties properties = new RagProperties();
         properties.setEnabled(true);
         properties.getHybrid().setEnabled(true);
@@ -114,7 +117,7 @@ public final class VueRetrievalQualityGateRunner {
         properties.getPgvector().setPort(target.port());
         properties.getPgvector().setDatabase(target.database());
         properties.getPgvector().setUser(target.user());
-        properties.getPgvector().setPassword(environment.get("RAG_PGVECTOR_PASSWORD"));
+        properties.getPgvector().setPassword(pgVectorPassword);
         return properties;
     }
 

@@ -66,7 +66,7 @@ class VueRetrievalQualityGateTest {
         VuePgVectorTarget target = VuePgVectorTarget.from(environment);
 
         RagProperties properties = VueRetrievalQualityGateRunner.evaluationProperties(
-                target, environment);
+                target, environment.get("RAG_PGVECTOR_PASSWORD"));
 
         assertEquals("pg-secret", properties.getPgvector().getPassword());
     }
@@ -107,12 +107,17 @@ class VueRetrievalQualityGateTest {
 
         Map<String, String> variables = System.getenv();
         VuePgVectorTarget target = VuePgVectorTarget.from(variables);
+        String pgVectorPassword = variables.get("RAG_PGVECTOR_PASSWORD");
         TemplateCatalog catalog = new TemplateCatalog(
                 Path.of("embed_text/vue-project"), new ObjectMapper());
         return new VueRetrievalQualityGateRunner().evaluateWhenIngested(
                 () -> verifyIngestion(target, variables, catalog),
                 () -> new VueRetrievalQualityGateRunner()
-                        .evaluateDataset(target, variables, catalog))
+                        .evaluateDataset(
+                                target,
+                                pgVectorPassword,
+                                variables.get("DASHSCOPE_API_KEY"),
+                                catalog))
                 .withRunId(runId);
     }
 

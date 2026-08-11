@@ -123,3 +123,39 @@
 - 追加 GREEN：原快照生命周期与宿主冲突完整 Spring 测试 2 个全部通过；宿主 DeepSeek、DashScope、Pexels Key 均保持原值，RAG/PG 强制值、同一 catalog 与关闭销毁断言仍通过。
 - 修正后重新验证：Task 2 扩大覆盖 43/43、默认 unset Vue RAG 回归 125/125，均 0 失败、0 错误、0 跳过，`BUILD SUCCESS`。
 - 修正后独立复核：Critical=0，Important=0，Minor=0，可以提交。
+
+## 2026-08-11 第三轮正式复审 Important 修复追加
+
+### Important：生成阶段复用同轮规范化 PGVector 目标
+
+- 根因：生成门禁入口先从同轮 variables 构造规范化 `VuePgVectorTarget`，物理核验和真实检索复用该 target；但生成 Supplier 只传 catalog，生成 Spring 再次 `System.getenv()` 并从原始字符串重复构造 PG 属性。原始端口非法、0 或 70000 时，前置 target 均规范化为 5432，而生成上下文仍使用原值。
+- RED 命令：
+  `JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" PATH="$JAVA_HOME/bin:$PATH" bash mvnw -Dtest='VueGenerationBuildQualityGateTest#生成属性复用同轮规范化PgVector目标' test`
+- RED 结果：参数化 3 个测试全部失败；三次均期望规范化端口 5432，实际依次为 `非法端口`、`0`、`70000`。
+- GREEN：入口一次读取 variables、一次构造 target、一次取得 `RAG_PGVECTOR_PASSWORD`；同一 target 显式传入物理 verifier、真实检索与生成 Spring。`evaluateGeneration`、`startEvaluationApplication`、`evaluationProperties` 不再读取环境或解析 PG 目标；host/port/database/user 全部只从 target 写入，password 只接收入口同轮值。
+- GREEN 定向：三组非法端口属性测试加完整 Spring 绑定测试共 4 个，0 失败、0 错误、0 跳过；完整 `VueGenerationBuildQualityGateTest` 8/8。
+
+### 第三轮验证与自审
+
+- Task 2 扩大覆盖：46 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`。
+- 默认 unset Vue RAG 回归：128 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`；未运行真实模型、数据库评测、正式摄取或十条 npm 生成。
+- `git diff --check`：通过。
+- `rg` 自审：生成门禁只有入口一处 `System.getenv()`；真实链只有入口一次 `VuePgVectorTarget.from(variables)`；下游 PG 属性构造无 `valueOrDefault` 或环境重解析。
+
+### 第三轮独立复核追加修正
+
+- 首次独立复核发现 2 个 Important：readiness 通过 `inspectSystemEnvironment()` 先读取一次系统环境，生成核心随后又读取一次；检索 runner 虽复用 target，仍从整张 variables 下游重新抽取 PG 密码。
+- 追加 RED 命令：
+  `JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" PATH="$JAVA_HOME/bin:$PATH" bash mvnw -Dtest='VueGenerationBuildQualityGateTest#生成入口使用调用方冻结的同一环境快照,VueRetrievalQualityGateTest#retrievalEvaluationUsesDedicatedPgVectorPassword,VueRetrievalIngestionPrerequisiteTest#规范化目标同时用于核验和评测配置' test`
+- 追加 RED 结果：testCompile 按预期出现 3 个错误，缺少接受冻结 variables 的生成核心签名，且检索属性 API 仍要求整张 Map、不能接受显式 password。
+- 修复：生成无参入口只执行一次 `System.getenv()` 并委托可测核心；核心使用 `VueGenerationBuildEnvironment.inspect(variables)`，从同一 Map 一次构造 target、一次抽取 PG 密码和 DashScope Key。检索 `evaluateDataset` 只接收显式 target、PG 密码、DashScope Key 和 catalog，删除下游对 `RAG_PGVECTOR_PASSWORD` 的按键访问。
+- 追加 GREEN：冻结环境与显式密码目标测试 2/2；直接受影响的生成、检索、摄取前置测试 19/19。
+- 最终验证：Task 2 扩大覆盖 47/47，默认 unset Vue RAG 回归 129/129，均 0 失败、0 错误、0 跳过，`BUILD SUCCESS`。
+
+### 第三轮最终独立复核
+
+- 最终复核：Critical=0，Important=0，可以提交。
+- 复核确认：生成门禁只在入口适配层读取一次 `System.getenv()`；readiness、target、密码及后续流程复用同一冻结 variables。
+- 复核确认：检索 runner 不再接收整张 variables，也不再查询 `RAG_PGVECTOR_PASSWORD`；同一 target 贯穿物理核验、真实检索和生成 Spring 属性。
+- 独立验证：显式 unset 外部评测开关与密钥后，受影响测试 22/22，0 失败、0 错误、0 跳过；`git diff --check` 通过，未运行真实外部评测。
+- Minor（不阻断）：`VueGenerationBuildEnvironment.inspectSystemEnvironment()` 已无调用，后续可单独删除或收窄，避免未来绕过冻结快照；本次不扩大修复范围。

@@ -17,6 +17,8 @@ import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -81,10 +83,33 @@ class VueGenerationBuildQualityGateTest {
         Map<String, String> environment = Map.of(
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
                 "RAG_PGVECTOR_PASSWORD", "pg-secret");
+        VuePgVectorTarget target = VuePgVectorTarget.from(environment);
 
-        Map<String, Object> properties = evaluationProperties(environment);
+        Map<String, Object> properties = evaluationProperties(
+                target, environment.get("RAG_PGVECTOR_PASSWORD"));
 
         assertEquals("pg-secret", properties.get("rag.pgvector.password"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"非法端口", "0", "70000"})
+    void 生成属性复用同轮规范化PgVector目标(String rawPort) {
+        Map<String, String> variables = Map.of(
+                "RAG_PGVECTOR_HOST", "same-run-host",
+                "RAG_PGVECTOR_PORT", rawPort,
+                "RAG_PGVECTOR_DATABASE", "same-run-database",
+                "RAG_PGVECTOR_USER", "same-run-user",
+                "RAG_PGVECTOR_PASSWORD", "same-run-password");
+        VuePgVectorTarget target = VuePgVectorTarget.from(variables);
+
+        Map<String, Object> properties = evaluationProperties(
+                target, variables.get("RAG_PGVECTOR_PASSWORD"));
+
+        assertEquals(target.host(), properties.get("rag.pgvector.host"));
+        assertEquals(target.port(), properties.get("rag.pgvector.port"));
+        assertEquals(target.database(), properties.get("rag.pgvector.database"));
+        assertEquals(target.user(), properties.get("rag.pgvector.user"));
+        assertEquals("same-run-password", properties.get("rag.pgvector.password"));
     }
 
     @Test
@@ -94,7 +119,10 @@ class VueGenerationBuildQualityGateTest {
         Bm25Retriever bm25;
 
         try (ConfigurableApplicationContext context = startEvaluationApplication(
-                catalog, Map.of(), contextTestHostProperties())) {
+                catalog,
+                VuePgVectorTarget.from(Map.of()),
+                null,
+                contextTestHostProperties())) {
             VueRetrievalResourceProvider provider =
                     context.getBean(VueRetrievalResourceProvider.class);
             assertSame(catalog, provider.current().orElseThrow().catalog());
@@ -132,7 +160,10 @@ class VueGenerationBuildQualityGateTest {
         Bm25Retriever bm25;
 
         try (ConfigurableApplicationContext context = startEvaluationApplication(
-                catalog, evaluationEnvironment, hostProperties)) {
+                catalog,
+                VuePgVectorTarget.from(evaluationEnvironment),
+                evaluationEnvironment.get("RAG_PGVECTOR_PASSWORD"),
+                hostProperties)) {
             RagProperties properties = context.getBean(RagProperties.class);
             assertTrue(properties.isEnabled());
             assertTrue(properties.getHybrid().isEnabled());
@@ -183,38 +214,67 @@ class VueGenerationBuildQualityGateTest {
         }
     }
 
+    @Test
+    void 生成入口使用调用方冻结的同一环境快照() {
+        VueGenerationBuildEnvironment[] inspectedEnvironment =
+                new VueGenerationBuildEnvironment[1];
+        Map<String, String> frozenVariables = Map.of(
+                "DASHSCOPE_API_KEY", "frozen-dashscope",
+                "DEEPSEEK_API_KEY", "frozen-deepseek",
+                "RAG_PGVECTOR_PASSWORD", "frozen-pg-password");
+
+        VueGenerationBuildReport report = evaluateCurrentRun(
+                "frozen-run", inspectedEnvironment, frozenVariables);
+
+        assertFalse(report.executed());
+        assertEquals("RAG_BUILD_EVAL 未设置为 true",
+                inspectedEnvironment[0].reasons().getFirst());
+    }
+
     private VueGenerationBuildReport evaluateCurrentRun(
             String runId,
             VueGenerationBuildEnvironment[] inspectedEnvironment) {
+        return evaluateCurrentRun(runId, inspectedEnvironment, System.getenv());
+    }
+
+    private VueGenerationBuildReport evaluateCurrentRun(
+            String runId,
+            VueGenerationBuildEnvironment[] inspectedEnvironment,
+            Map<String, String> variables) {
         VueGenerationBuildEnvironment environment =
-                VueGenerationBuildEnvironment.inspectSystemEnvironment();
+                VueGenerationBuildEnvironment.inspect(variables);
         inspectedEnvironment[0] = environment;
         if (!environment.ready()) {
             return VueGenerationBuildReport.notExecuted(runId, environment.reasons());
         }
 
-        Map<String, String> variables = System.getenv();
         VuePgVectorTarget target = VuePgVectorTarget.from(variables);
+        String pgVectorPassword = variables.get("RAG_PGVECTOR_PASSWORD");
+        String dashScopeApiKey = variables.get("DASHSCOPE_API_KEY");
         TemplateCatalog catalog = new TemplateCatalog(
                 Path.of("embed_text/vue-project"), new ObjectMapper());
         VueGenerationBuildReport report = new VueGenerationBuildQualityGateRunner().evaluate(
-                () -> verifyIngestion(target, variables, catalog),
+                () -> verifyIngestion(target, pgVectorPassword, catalog),
                 () -> new VueRetrievalQualityGateRunner()
-                        .evaluateDataset(target, variables, catalog),
-                () -> evaluateGeneration(catalog));
+                        .evaluateDataset(
+                                target, pgVectorPassword, dashScopeApiKey, catalog),
+                () -> evaluateGeneration(catalog, target, pgVectorPassword));
         return report.withRunId(runId);
     }
 
     private VueIngestionVerification verifyIngestion(
             VuePgVectorTarget target,
-            Map<String, String> variables,
+            String pgVectorPassword,
             TemplateCatalog catalog) {
         VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
         return new VuePgVectorIngestionVerifier(new ObjectMapper()).verify(
-                expected, target, variables.get("RAG_PGVECTOR_PASSWORD"));
+                expected, target, pgVectorPassword);
     }
 
-    private VueGenerationBuildReport evaluateGeneration(TemplateCatalog catalog) {
+    private VueGenerationBuildReport evaluateGeneration(
+            TemplateCatalog catalog,
+            VuePgVectorTarget target,
+            String pgVectorPassword) {
         VueGenerationBuildDataset dataset;
         try {
             dataset = VueGenerationBuildDataset.load(
@@ -222,7 +282,8 @@ class VueGenerationBuildQualityGateTest {
         } catch (IOException exception) {
             throw new UncheckedIOException("加载 Vue 生成构建评测集失败", exception);
         }
-        try (ConfigurableApplicationContext application = startEvaluationApplication(catalog)) {
+        try (ConfigurableApplicationContext application = startEvaluationApplication(
+                catalog, target, pgVectorPassword, Map.of())) {
             return new VueGenerationBuildEvaluator(
                     application.getBean(AiCodeGeneratorFacade.class),
                     application.getBean(VueProjectBuilder.class),
@@ -233,15 +294,12 @@ class VueGenerationBuildQualityGateTest {
         }
     }
 
-    private ConfigurableApplicationContext startEvaluationApplication(TemplateCatalog catalog) {
-        return startEvaluationApplication(catalog, System.getenv(), Map.of());
-    }
-
     private ConfigurableApplicationContext startEvaluationApplication(
             TemplateCatalog catalog,
-            Map<String, String> evaluationEnvironment,
+            VuePgVectorTarget target,
+            String pgVectorPassword,
             Map<String, Object> hostProperties) {
-        Map<String, Object> properties = evaluationProperties(evaluationEnvironment);
+        Map<String, Object> properties = evaluationProperties(target, pgVectorPassword);
         return new SpringApplicationBuilder(AiAppGenerationApplication.class)
                 .web(WebApplicationType.NONE)
                 .lazyInitialization(true)
@@ -259,21 +317,19 @@ class VueGenerationBuildQualityGateTest {
                 .run();
     }
 
-    private Map<String, Object> evaluationProperties(Map<String, String> environment) {
+    private Map<String, Object> evaluationProperties(
+            VuePgVectorTarget target,
+            String pgVectorPassword) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("rag.enabled", "true");
         properties.put("rag.hybrid.enabled", "true");
         properties.put("rag.ingest.enabled", "false");
         properties.put("rag.templates-dir", Path.of("embed_text").toAbsolutePath().toString());
-        properties.put("rag.pgvector.host", valueOrDefault(
-                environment, "RAG_PGVECTOR_HOST", "127.0.0.1"));
-        properties.put("rag.pgvector.port", valueOrDefault(
-                environment, "RAG_PGVECTOR_PORT", "5432"));
-        properties.put("rag.pgvector.database", valueOrDefault(
-                environment, "RAG_PGVECTOR_DATABASE", "ai_codegen_rag"));
-        properties.put("rag.pgvector.user", valueOrDefault(
-                environment, "RAG_PGVECTOR_USER", "admin"));
-        properties.put("rag.pgvector.password", environment.get("RAG_PGVECTOR_PASSWORD"));
+        properties.put("rag.pgvector.host", target.host());
+        properties.put("rag.pgvector.port", target.port());
+        properties.put("rag.pgvector.database", target.database());
+        properties.put("rag.pgvector.user", target.user());
+        properties.put("rag.pgvector.password", pgVectorPassword);
         return properties;
     }
 
@@ -282,14 +338,6 @@ class VueGenerationBuildQualityGateTest {
                 "DEEPSEEK_API_KEY", "unused-by-context-lifecycle-test",
                 "DASHSCOPE_API_KEY", "unused-by-context-lifecycle-test",
                 "PEXELS_API_KEY", "unused-by-context-lifecycle-test");
-    }
-
-    private String valueOrDefault(
-            Map<String, String> environment,
-            String name,
-            String fallback) {
-        String value = environment.get(name);
-        return value == null || value.isBlank() ? fallback : value;
     }
 
 }
