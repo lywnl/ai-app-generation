@@ -28,6 +28,17 @@ public class VueRetrievalResourceProvider {
         this(properties, objectMapper, Bm25Retriever::new);
     }
 
+    /**
+     * 使用调用方已经加载并校验的目录快照，避免质量门禁在同一轮重复读盘。
+     *
+     * @param catalog 已加载的 Vue 知识目录
+     */
+    public VueRetrievalResourceProvider(TemplateCatalog catalog) {
+        this.resources = resourcesWithOptionalBm25(
+                java.util.Objects.requireNonNull(catalog, "Vue 知识目录不能为空"),
+                Bm25Retriever::new);
+    }
+
     VueRetrievalResourceProvider(RagProperties properties,
                                  ObjectMapper objectMapper,
                                  Bm25RetrieverFactory bm25RetrieverFactory) {

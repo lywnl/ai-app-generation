@@ -11,6 +11,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VueRetrievalEvaluationReportTest {
 
     @Test
+    void failedReportRendersCurrentRunAndSanitizesEveryField() {
+        String markdown = VueRetrievalEvaluationReport.failed(
+                "run-token=run-secret",
+                List.of("检查 /Users/alice/private 失败，Bearer reason-secret"))
+                .renderMarkdown();
+
+        assertTrue(markdown.contains("状态：未通过"));
+        assertTrue(markdown.contains("运行标识："));
+        assertFalse(markdown.contains("run-secret"));
+        assertFalse(markdown.contains("alice"));
+        assertFalse(markdown.contains("reason-secret"));
+        assertFalse(markdown.contains("Skeleton Hit@1 |"));
+    }
+
+    @Test
     void unexecutedReportNeverClaimsPassingOrRendersFakeMetrics() {
         String markdown = VueRetrievalEvaluationReport.notExecuted(
                 List.of("缺少环境变量 DASHSCOPE_API_KEY")).renderMarkdown();
@@ -32,11 +47,12 @@ class VueRetrievalEvaluationReportTest {
         VueRetrievalObservation observation = new VueRetrievalObservation(
                 new VueEvalCase("q1", "需求", "精确技术词", List.of("s1"), List.of("f1")),
                 "s1", List.of("f1"), null);
+        List<VueRetrievalObservation> rows = java.util.Collections.nCopies(30, observation);
 
         String markdown = VueRetrievalEvaluationReport.executed(
                 VueRetrievalComparison.compare(hybrid, dense),
-                List.of(observation),
-                List.of(observation)).renderMarkdown();
+                rows,
+                rows).renderMarkdown();
 
         assertTrue(markdown.contains("状态：通过"));
         assertTrue(markdown.contains("Skeleton Hit@1"));
@@ -46,6 +62,17 @@ class VueRetrievalEvaluationReportTest {
         assertTrue(markdown.contains("q1"));
         assertTrue(markdown.contains("s1"));
         assertTrue(markdown.contains("f1"));
+    }
+
+    @Test
+    void 少于三十条的完美指标也不得通过() {
+        VueRetrievalMetrics metrics = new VueRetrievalMetrics(
+                1.0, 1.0, 1,
+                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(1.0, 1.0, 1)));
+        VueRetrievalEvaluationReport report = VueRetrievalEvaluationReport.executed(
+                VueRetrievalComparison.compare(metrics, metrics), List.of(), List.of());
+
+        assertFalse(report.passed());
     }
 
     @Test

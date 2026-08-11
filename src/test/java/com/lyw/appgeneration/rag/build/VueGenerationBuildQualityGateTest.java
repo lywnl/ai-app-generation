@@ -5,22 +5,38 @@ import com.lyw.appgeneration.AiAppGenerationApplication;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
+import com.lyw.appgeneration.rag.eval.EvaluationReportLifecycle;
+import com.lyw.appgeneration.rag.ingest.VueIngestionExpectedSnapshot;
+import com.lyw.appgeneration.rag.ingest.VueIngestionVerification;
+import com.lyw.appgeneration.rag.ingest.VuePgVectorIngestionVerifier;
+import com.lyw.appgeneration.rag.ingest.VuePgVectorTarget;
+import com.lyw.appgeneration.rag.vue.VueRetrievalQualityGateRunner;
+import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
+import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.env.MapPropertySource;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 十条 Vue 首次真实生成与 npm 构建的高成本质量门禁。
@@ -34,6 +50,32 @@ class VueGenerationBuildQualityGateTest {
     private static final Duration GENERATION_TIMEOUT = Duration.ofMinutes(10);
 
     @Test
+    void 入口异常时旧十条通过报告被本轮失败状态覆盖(@TempDir Path directory) throws Exception {
+        Path report = directory.resolve("generation.md");
+        Files.writeString(report, "状态：通过\n构建成功数：10/10\n", StandardCharsets.UTF_8);
+        IllegalArgumentException original = new IllegalArgumentException("Bearer 不得写入");
+
+        IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
+                () -> EvaluationReportLifecycle.execute(
+                        report,
+                        VueGenerationBuildReport.failed(
+                                "run-generation-new", java.util.List.of("本轮生成正在执行"))
+                                .renderMarkdown(),
+                        () -> { throw original; },
+                        VueGenerationBuildReport::renderMarkdown,
+                        VueGenerationBuildReport.failed(
+                                "run-generation-new", java.util.List.of("本轮生成执行异常"))
+                                .renderMarkdown()));
+
+        String markdown = Files.readString(report, StandardCharsets.UTF_8);
+        assertSame(original, thrown);
+        assertTrue(markdown.contains("状态：未通过"));
+        assertTrue(markdown.contains("run-generation-new"));
+        assertFalse(markdown.contains("10/10"));
+        assertFalse(markdown.contains("不得写入"));
+    }
+
+    @Test
     void evaluationPropertiesReceivesDedicatedPgVectorPassword() {
         Map<String, String> environment = Map.of(
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
@@ -45,38 +87,112 @@ class VueGenerationBuildQualityGateTest {
     }
 
     @Test
+    void 生成Spring复用本轮已核验的同一目录快照() {
+        TemplateCatalog catalog = new TemplateCatalog(
+                Path.of("embed_text/vue-project"), new ObjectMapper());
+        GenericApplicationContext context = new GenericApplicationContext();
+
+        registerCatalogSnapshot(context, catalog);
+        context.refresh();
+
+        VueRetrievalResourceProvider provider =
+                context.getBean(VueRetrievalResourceProvider.class);
+        assertSame(catalog, provider.current().orElseThrow().catalog());
+        context.close();
+    }
+
+    @Test
     void requiresTenOfTenRealFirstGenerationBuilds() throws Exception {
-        VueGenerationBuildEnvironment environment =
-                VueGenerationBuildEnvironment.inspectSystemEnvironment();
-        if (!environment.ready()) {
-            writeReport(VueGenerationBuildReport.notExecuted(environment.reasons()));
+        String runId = UUID.randomUUID().toString();
+        VueGenerationBuildEnvironment[] inspectedEnvironment =
+                new VueGenerationBuildEnvironment[1];
+        VueGenerationBuildReport report = EvaluationReportLifecycle.execute(
+                REPORT,
+                VueGenerationBuildReport.failed(
+                        runId, java.util.List.of("本轮真实生成运行中，旧结果已失效"))
+                        .renderMarkdown(),
+                () -> evaluateCurrentRun(runId, inspectedEnvironment),
+                VueGenerationBuildReport::renderMarkdown,
+                VueGenerationBuildReport.failed(
+                        runId, java.util.List.of("本轮真实生成发生异常"))
+                        .renderMarkdown());
+        if (!inspectedEnvironment[0].ready()) {
             return;
         }
+        if (!report.passed()) {
+            fail("Vue 首次真实生成构建未达到 10/10，详见 " + REPORT);
+        }
+    }
 
-        VueGenerationBuildDataset dataset = VueGenerationBuildDataset.load(
-                "rag/vue-generation-build-cases.json", new ObjectMapper());
-        try (ConfigurableApplicationContext application = startEvaluationApplication()) {
-            VueGenerationBuildReport report = new VueGenerationBuildEvaluator(
+    private VueGenerationBuildReport evaluateCurrentRun(
+            String runId,
+            VueGenerationBuildEnvironment[] inspectedEnvironment) {
+        VueGenerationBuildEnvironment environment =
+                VueGenerationBuildEnvironment.inspectSystemEnvironment();
+        inspectedEnvironment[0] = environment;
+        if (!environment.ready()) {
+            return VueGenerationBuildReport.notExecuted(runId, environment.reasons());
+        }
+
+        Map<String, String> variables = System.getenv();
+        VuePgVectorTarget target = VuePgVectorTarget.from(variables);
+        TemplateCatalog catalog = new TemplateCatalog(
+                Path.of("embed_text/vue-project"), new ObjectMapper());
+        VueGenerationBuildReport report = new VueGenerationBuildQualityGateRunner().evaluate(
+                () -> verifyIngestion(target, variables, catalog),
+                () -> new VueRetrievalQualityGateRunner()
+                        .evaluateDataset(target, variables, catalog),
+                () -> evaluateGeneration(catalog));
+        return report.withRunId(runId);
+    }
+
+    private VueIngestionVerification verifyIngestion(
+            VuePgVectorTarget target,
+            Map<String, String> variables,
+            TemplateCatalog catalog) {
+        VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
+        return new VuePgVectorIngestionVerifier(new ObjectMapper()).verify(
+                expected, target, variables.get("RAG_PGVECTOR_PASSWORD"));
+    }
+
+    private VueGenerationBuildReport evaluateGeneration(TemplateCatalog catalog) {
+        VueGenerationBuildDataset dataset;
+        try {
+            dataset = VueGenerationBuildDataset.load(
+                    "rag/vue-generation-build-cases.json", new ObjectMapper());
+        } catch (IOException exception) {
+            throw new UncheckedIOException("加载 Vue 生成构建评测集失败", exception);
+        }
+        try (ConfigurableApplicationContext application = startEvaluationApplication(catalog)) {
+            return new VueGenerationBuildEvaluator(
                     application.getBean(AiCodeGeneratorFacade.class),
                     application.getBean(VueProjectBuilder.class),
                     Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR),
                     GENERATED_ROOT,
                     GENERATION_TIMEOUT)
                     .evaluate(dataset.cases());
-            writeReport(report);
-            if (!report.passed()) {
-                fail("Vue 首次真实生成构建未达到 10/10，详见 " + REPORT);
-            }
         }
     }
 
-    private ConfigurableApplicationContext startEvaluationApplication() {
+    private ConfigurableApplicationContext startEvaluationApplication(TemplateCatalog catalog) {
         Map<String, Object> properties = evaluationProperties(System.getenv());
+        properties.put("spring.main.allow-bean-definition-overriding", "true");
         return new SpringApplicationBuilder(AiAppGenerationApplication.class)
                 .web(WebApplicationType.NONE)
-                .initializers(context -> context.getEnvironment().getPropertySources()
-                        .addFirst(new MapPropertySource("vueGenerationBuildEvaluation", properties)))
+                .initializers(context -> {
+                    context.getEnvironment().getPropertySources().addFirst(
+                            new MapPropertySource("vueGenerationBuildEvaluation", properties));
+                    registerCatalogSnapshot(context, catalog);
+                })
                 .run();
+    }
+
+    private static void registerCatalogSnapshot(
+            ConfigurableApplicationContext context,
+            TemplateCatalog catalog) {
+        context.getBeanFactory().registerSingleton(
+                "vueRetrievalResourceProvider",
+                new VueRetrievalResourceProvider(catalog));
     }
 
     private Map<String, Object> evaluationProperties(Map<String, String> environment) {
@@ -107,8 +223,4 @@ class VueGenerationBuildQualityGateTest {
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    private void writeReport(VueGenerationBuildReport report) throws IOException {
-        Files.createDirectories(REPORT.getParent());
-        Files.writeString(REPORT, report.renderMarkdown(), StandardCharsets.UTF_8);
-    }
 }

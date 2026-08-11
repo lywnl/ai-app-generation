@@ -12,6 +12,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VueGenerationBuildReportTest {
 
     @Test
+    void failedReportRendersCurrentRunAndSanitizesEveryField() {
+        String markdown = VueGenerationBuildReport.failed(
+                "run-secret=run-value",
+                List.of("检查 C:\\Users\\alice\\private 失败，password=reason-secret"))
+                .renderMarkdown();
+
+        assertTrue(markdown.contains("状态：未通过"));
+        assertTrue(markdown.contains("运行标识："));
+        assertFalse(markdown.contains("run-value"));
+        assertFalse(markdown.contains("alice"));
+        assertFalse(markdown.contains("reason-secret"));
+        assertFalse(markdown.contains("10/10"));
+    }
+
+    @Test
     void unexecutedReportNeverClaimsTenOfTen() {
         String markdown = VueGenerationBuildReport.notExecuted(
                 List.of("缺少环境变量 DEEPSEEK_API_KEY")).renderMarkdown();

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -30,7 +31,8 @@ class VueRetrievalEvaluatorTest {
         VueRetrievalEvaluationReport report = new VueRetrievalEvaluator(retrievalService)
                 .evaluate(List.of(evalCase));
 
-        assertTrue(report.passed());
+        assertFalse(report.passed(), "单样本只验证计算逻辑，不能冒充 30 条真实门禁");
+        assertTrue(report.comparison().passed());
         assertEquals(1.0, report.comparison().hybrid().skeletonHitAt1());
         assertEquals(1.0, report.comparison().hybrid().featureRecallAt4());
         assertEquals(0.0, report.comparison().denseOnly().featureRecallAt4());

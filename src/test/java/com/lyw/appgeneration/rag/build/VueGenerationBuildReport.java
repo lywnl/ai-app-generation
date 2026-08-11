@@ -4,6 +4,7 @@ import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.rag.eval.EvaluationReportSanitizer;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 十条真实 Vue 生成与构建质量报告。
@@ -11,26 +12,45 @@ import java.util.List;
 public final class VueGenerationBuildReport {
 
     private final boolean executed;
+    private final boolean failed;
+    private final String runId;
     private final List<String> reasons;
     private final List<VueGenerationBuildRow> rows;
 
     private VueGenerationBuildReport(
             boolean executed,
+            boolean failed,
+            String runId,
             List<String> reasons,
             List<VueGenerationBuildRow> rows) {
         this.executed = executed;
+        this.failed = failed;
+        this.runId = runId;
         this.reasons = List.copyOf(reasons);
         this.rows = List.copyOf(rows);
     }
 
     public static VueGenerationBuildReport notExecuted(List<String> reasons) {
+        return notExecuted(newRunId(), reasons);
+    }
+
+    public static VueGenerationBuildReport notExecuted(String runId, List<String> reasons) {
         return new VueGenerationBuildReport(
-                false, reasons == null ? List.of() : reasons, List.of());
+                false, false, runId, reasons == null ? List.of() : reasons, List.of());
+    }
+
+    public static VueGenerationBuildReport failed(String runId, List<String> reasons) {
+        return new VueGenerationBuildReport(
+                false, true, runId, reasons == null ? List.of() : reasons, List.of());
     }
 
     public static VueGenerationBuildReport executed(List<VueGenerationBuildRow> rows) {
+        return executed(newRunId(), rows);
+    }
+
+    public static VueGenerationBuildReport executed(String runId, List<VueGenerationBuildRow> rows) {
         return new VueGenerationBuildReport(
-                true, List.of(), rows == null ? List.of() : rows);
+                true, false, runId, List.of(), rows == null ? List.of() : rows);
     }
 
     public boolean executed() {
@@ -42,10 +62,17 @@ public final class VueGenerationBuildReport {
                 && rows.stream().allMatch(VueGenerationBuildRow::successful);
     }
 
+    public VueGenerationBuildReport withRunId(String currentRunId) {
+        return new VueGenerationBuildReport(
+                executed, failed, currentRunId, reasons, rows);
+    }
+
     public String renderMarkdown() {
         StringBuilder output = new StringBuilder("# Vue 十条真实生成构建报告\n\n");
+        output.append("运行标识：").append(runId).append("\n\n");
         if (!executed) {
-            output.append("状态：未执行\n\n原因：\n\n");
+            output.append("状态：").append(failed ? "未通过" : "未执行")
+                    .append("\n\n原因：\n\n");
             if (reasons.isEmpty()) {
                 output.append("- 未提供可执行环境\n");
             } else {
@@ -63,6 +90,10 @@ public final class VueGenerationBuildReport {
         output.append("|---|---:|---|---|---|---|---|---:|---|---|\n");
         rows.forEach(row -> appendRow(output, row));
         return EvaluationReportSanitizer.sanitize(output.toString());
+    }
+
+    private static String newRunId() {
+        return UUID.randomUUID().toString();
     }
 
     private void appendRow(StringBuilder output, VueGenerationBuildRow row) {
