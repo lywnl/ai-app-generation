@@ -7,6 +7,10 @@
 - 回归：项目 JDK 25 定向 78/78，0 failure、0 error、0 skipped；`git diff --check` 通过。
 - 任务级独立复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0；原“只测密码提取、不捕获 store/verifier 实参”的 Important 已由 `55160e5` 关闭。
 - 真实模型、正式 PGVector 摄取、30 条真实检索和十条首次生成均未执行，不改变“不可发布”结论。
+- 修复任务 2：完成（`e6e8379..ae4744a`）。新增原子报告写入与本轮生命周期、结构化生成前置 Runner、严格 Hybrid/Dense 健康检查，并使同一 `TemplateCatalog`、规范化 `VuePgVectorTarget` 与 PG 密码贯穿物理核验、检索和生成 Spring。
+- TDD 与回归：报告/Runner/入口生命周期分别完成 RED→GREEN；历次独立审查 finding 均有回归锁定。最终项目 JDK 25 默认 unset Vue RAG 回归 129/129，0 failure、0 error、0 skipped；`git diff --check` 通过。
+- 任务 2 正式独立复审：Spec Compliance 通过，Task quality 通过，Critical=0、Important=0。两个非阻断 Minor 为独立检索入口仍有两次不可变 JVM 环境读取、生成环境保留一个无调用的 `inspectSystemEnvironment()`；留待最终全分支审查重新分级。
+- 任务 2 未读取历史 Markdown 作为程序状态；未执行正式模型、数据库评测或十条 npm 生成，真实发布结论不变。
 
 ## Vue 知识摄取物理门禁（2026-08-11，本轮）
 
