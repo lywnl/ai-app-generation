@@ -42,12 +42,44 @@ class VueKnowledgeIngestionQualityGateTest {
     private static final Duration EMBEDDING_TIMEOUT = Duration.ofSeconds(10);
 
     @Test
-    void 摄取门禁将专用PGVector密码传给存储与核验器() {
+    void 摄取门禁将专用PGVector密码传给存储与核验器() throws Exception {
         Map<String, String> variables = Map.of(
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
                 "RAG_PGVECTOR_PASSWORD", "pg-secret");
+        VueIngestionExpectedSnapshot expected = expectedSnapshot();
+        AtomicReference<String> storePassword = new AtomicReference<>();
+        AtomicReference<String> verifierPassword = new AtomicReference<>();
 
-        assertEquals("pg-secret", pgVectorPassword(variables));
+        VueIngestionReport report = executeIngestion(
+                expected, readyEnvironment().target(), variables, new IngestionDependencies() {
+                    @Override
+                    public EmbeddingStore<TextSegment> createStore(
+                        VuePgVectorTarget target,
+                        String password) {
+                        storePassword.set(password);
+                        return null;
+                    }
+
+                    @Override
+                    public VueKnowledgeIngestor.IngestResult ingest(
+                            EmbeddingStore<TextSegment> store) {
+                        return new VueKnowledgeIngestor.IngestResult(expected.catalogVersion(), 23);
+                    }
+
+                    @Override
+                    public VueIngestionVerification verify(
+                            VueIngestionExpectedSnapshot snapshot,
+                            VuePgVectorTarget target,
+                            String password) {
+                        verifierPassword.set(password);
+                        return new VueIngestionVerification(
+                                true, snapshot.catalogVersion(), 23, 23, 0, Set.of(1024), List.of());
+                    }
+                });
+
+        assertTrue(report.passed());
+        assertEquals("pg-secret", storePassword.get());
+        assertEquals("pg-secret", verifierPassword.get());
     }
 
     @Test
@@ -58,19 +90,29 @@ class VueKnowledgeIngestionQualityGateTest {
             TemplateCatalog catalog = new TemplateCatalog(DATASET_ROOT, OBJECT_MAPPER);
             VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
             execution.setExpected(expected);
-            EmbeddingModel model = createEmbeddingModel(variables.get("DASHSCOPE_API_KEY"));
-            EmbeddingStore<TextSegment> store = createVueStore(
-                    environment.target(), pgVectorPassword(variables));
-            VueKnowledgeIngestor.IngestResult result = new VueKnowledgeIngestor(model, OBJECT_MAPPER)
-                    .ingest(DATASET_ROOT, store);
-            assertEquals(expected.catalogVersion(), result.catalogVersion());
-            assertEquals(23, result.chunkCount());
+            return executeIngestion(expected, environment.target(), variables, new IngestionDependencies() {
+                @Override
+                public EmbeddingStore<TextSegment> createStore(
+                        VuePgVectorTarget target,
+                        String password) {
+                    return createVueStore(target, password);
+                }
 
-            VueIngestionVerification verification = new VuePgVectorIngestionVerifier(OBJECT_MAPPER)
-                    .verify(expected, environment.target(), pgVectorPassword(variables));
-            VueIngestionReport report = VueIngestionReport.verified(expected, verification);
-            assertTrue(report.passed(), "Vue 真实摄取物理核验失败，详见 " + REPORT);
-            return report;
+                @Override
+                public VueKnowledgeIngestor.IngestResult ingest(EmbeddingStore<TextSegment> store) {
+                    EmbeddingModel model = createEmbeddingModel(variables.get("DASHSCOPE_API_KEY"));
+                    return new VueKnowledgeIngestor(model, OBJECT_MAPPER).ingest(DATASET_ROOT, store);
+                }
+
+                @Override
+                public VueIngestionVerification verify(
+                        VueIngestionExpectedSnapshot snapshot,
+                        VuePgVectorTarget target,
+                        String password) {
+                    return new VuePgVectorIngestionVerifier(OBJECT_MAPPER)
+                            .verify(snapshot, target, password);
+                }
+            });
         }, this::writeReport);
     }
 
@@ -285,6 +327,35 @@ class VueKnowledgeIngestionQualityGateTest {
 
     private static String pgVectorPassword(Map<String, String> environment) {
         return environment.get("RAG_PGVECTOR_PASSWORD");
+    }
+
+    static VueIngestionReport executeIngestion(
+            VueIngestionExpectedSnapshot expected,
+            VuePgVectorTarget target,
+            Map<String, String> variables,
+            IngestionDependencies dependencies) {
+        String password = pgVectorPassword(variables);
+        EmbeddingStore<TextSegment> store = dependencies.createStore(target, password);
+        VueKnowledgeIngestor.IngestResult result = dependencies.ingest(store);
+        assertEquals(expected.catalogVersion(), result.catalogVersion());
+        assertEquals(23, result.chunkCount());
+
+        VueIngestionVerification verification = dependencies.verify(expected, target, password);
+        VueIngestionReport report = VueIngestionReport.verified(expected, verification);
+        assertTrue(report.passed(), "Vue 真实摄取物理核验失败，详见 " + REPORT);
+        return report;
+    }
+
+    interface IngestionDependencies {
+
+        EmbeddingStore<TextSegment> createStore(VuePgVectorTarget target, String password);
+
+        VueKnowledgeIngestor.IngestResult ingest(EmbeddingStore<TextSegment> store);
+
+        VueIngestionVerification verify(
+                VueIngestionExpectedSnapshot expected,
+                VuePgVectorTarget target,
+                String password);
     }
 
     @FunctionalInterface
