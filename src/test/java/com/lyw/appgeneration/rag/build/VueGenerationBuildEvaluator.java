@@ -7,10 +7,9 @@ import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
 
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -73,10 +72,15 @@ public final class VueGenerationBuildEvaluator {
             if (appId <= 0) {
                 throw new IllegalStateException("分配器返回的 appId 必须是正数: " + appId);
             }
-            if (allocatedAppIds.contains(appId)
-                    || Files.exists(sourcePath(appId))
-                    || Files.exists(targetPath(appId))) {
+            if (allocatedAppIds.contains(appId)) {
                 continue;
+            }
+            try {
+                if (!tryClaimAppId(generatedSourceRoot, reportGeneratedRoot, appId)) {
+                    continue;
+                }
+            } catch (IOException exception) {
+                throw new IllegalStateException("领取评测 appId 失败: " + appId, exception);
             }
             allocatedAppIds.add(appId);
             return appId;
@@ -95,14 +99,61 @@ public final class VueGenerationBuildEvaluator {
                     facade.generateVueProjectForEvaluation(testCase.prompt(), executionAppId);
             context = generation.context();
             generation.stream().then().block(generationTimeout);
-            if (!Files.isDirectory(source)) {
-                throw new IllegalStateException("真实生成完成但项目目录不存在: " + source);
+            if (!Files.isDirectory(source) || isDirectoryEmpty(source)) {
+                throw new IllegalStateException("真实生成完成但项目目录不存在或为空: " + source);
             }
             moveGeneratedProject(source, target);
             BuildResult buildResult = projectBuilder.buildProjectDetailed(target.toString());
             return row(testCase, executionAppId, true, context, buildResult, null);
         } catch (Exception exception) {
+            deleteEmptyClaim(sourcePath(executionAppId));
+            deleteEmptyClaim(targetPath(executionAppId));
             return row(testCase, executionAppId, false, context, null, safeError(exception));
+        }
+    }
+
+    static boolean tryClaimAppId(
+            Path generatedSourceRoot,
+            Path reportGeneratedRoot,
+            long appId) throws IOException {
+        Path source = generatedSourceRoot.resolve("vue_project_" + appId);
+        Files.createDirectories(source.getParent());
+        try {
+            Files.createDirectory(source);
+        } catch (FileAlreadyExistsException exception) {
+            return false;
+        }
+        Path target = reportGeneratedRoot.resolve("vue_project_" + appId);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.createDirectory(target);
+        } catch (FileAlreadyExistsException exception) {
+            Files.deleteIfExists(source);
+            return false;
+        } catch (IOException exception) {
+            try {
+                Files.deleteIfExists(source);
+            } catch (IOException cleanupFailure) {
+                exception.addSuppressed(cleanupFailure);
+            }
+            throw exception;
+        }
+        return true;
+    }
+
+    private boolean isDirectoryEmpty(Path directory) throws IOException {
+        try (var entries = Files.list(directory)) {
+            return entries.findAny().isEmpty();
+        }
+    }
+
+    private void deleteEmptyClaim(Path source) {
+        try {
+            if (Files.isDirectory(source) && isDirectoryEmpty(source)) {
+                Files.deleteIfExists(source);
+            }
+        } catch (IOException ignored) {
+            // 部分生成目录是失败事实，清理失败不得覆盖原始评测错误。
         }
     }
 
@@ -133,13 +184,11 @@ public final class VueGenerationBuildEvaluator {
     }
 
     private void moveGeneratedProject(Path source, Path target) throws IOException {
-        Files.createDirectories(target.getParent());
-        try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException exception) {
-            copyRecursively(source, target);
-            deleteRecursively(source);
+        if (!Files.isDirectory(target) || !isDirectoryEmpty(target)) {
+            throw new IOException("评测事实目录未被独占或不为空: " + target);
         }
+        copyRecursively(source, target);
+        deleteRecursively(source);
     }
 
     private void copyRecursively(Path source, Path target) throws IOException {
@@ -150,7 +199,7 @@ public final class VueGenerationBuildEvaluator {
                     Files.createDirectories(destination);
                 } else {
                     Files.createDirectories(destination.getParent());
-                    Files.copy(path, destination, StandardCopyOption.REPLACE_EXISTING);
+                    Files.copy(path, destination);
                 }
             }
         }

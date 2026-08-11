@@ -2,6 +2,8 @@ package com.lyw.appgeneration.core.builder;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -71,8 +73,9 @@ class VueProjectBuilderTest {
         assertFalse(result.timedOut());
         assertEquals("install failed", result.outputTail());
         assertEquals(new CommandInvocation(
-                        tempDir,
-                        List.of("npm.cmd", "install", "--ignore-scripts", "--no-audit", "--no-fund"),
+                        tempDir.toRealPath(),
+                        List.of("npm.cmd", "install", "--ignore-scripts", "--package-lock=false",
+                                "--no-audit", "--no-fund"),
                         Duration.ofSeconds(300)),
                 executor.invocations.getFirst());
     }
@@ -91,11 +94,177 @@ class VueProjectBuilderTest {
         assertNull(result.exitCode());
         assertTrue(result.timedOut());
         assertTrue(result.outputTail().endsWith("build timed out"));
-        assertEquals(new CommandInvocation(
-                        tempDir,
-                        List.of("npm", "run", "build"),
-                        Duration.ofSeconds(180)),
-                executor.invocations.get(1));
+        CommandInvocation buildInvocation = executor.invocations.get(1);
+        Path projectRoot = tempDir.toRealPath();
+        assertEquals(projectRoot, buildInvocation.workingDirectory());
+        assertEquals(Duration.ofSeconds(180), buildInvocation.timeout());
+        assertEquals("node", buildInvocation.command().get(0));
+        Path viteCli = Path.of(buildInvocation.command().get(1));
+        assertTrue(viteCli.isAbsolute());
+        assertTrue(viteCli.startsWith(projectRoot));
+        assertEquals(projectRoot.resolve("node_modules/vite/bin/vite.js"), viteCli);
+        Path trustedConfig = Path.of(buildInvocation.command().get(4));
+        assertTrue(trustedConfig.isAbsolute());
+        assertTrue(trustedConfig.startsWith(projectRoot));
+        assertFalse(Files.exists(trustedConfig));
+        assertEquals(projectRoot.resolve("node_modules/vite/bin/vite.js").toString(),
+                buildInvocation.command().get(1));
+        assertEquals("build", buildInvocation.command().get(2));
+        assertEquals("--config", buildInvocation.command().get(3));
+        assertTrue(buildInvocation.command().get(4).contains(".trusted-vite-config-"));
+    }
+
+    @Test
+    void rejectsModelControlledBuildScriptBeforeStartingNpm() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "scripts": {"build": "node -e \\"process.exit(0)\\""},
+                  "dependencies": {"vue": "3.3.4"},
+                  "devDependencies": {
+                    "vite": "4.4.5",
+                    "@vitejs/plugin-vue": "4.2.3"
+                  }
+                }
+                """);
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains("build"));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @Test
+    void rejectsUntrustedDependencyBeforeInstallation() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "scripts": {"build": "vite build"},
+                  "dependencies": {
+                    "vue": "3.3.4",
+                    "malicious-build-plugin": "1.0.0"
+                  },
+                  "devDependencies": {
+                    "vite": "4.4.5",
+                    "@vitejs/plugin-vue": "4.2.3"
+                  }
+                }
+                """);
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains("malicious-build-plugin"));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "npm:evil@1.0.0",
+            "git+https://example.invalid/evil.git",
+            "file:../evil",
+            "https://example.invalid/evil.tgz",
+            "workspace:*"
+    })
+    void rejectsNonRegistrySemverDependencySourceBeforeInstallation(String version)
+            throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), trustedPackageJson()
+                .replace("\"vue\": \"3.3.4\"", "\"vue\": \"" + version + "\""));
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains("vue"));
+        assertTrue(result.outputTail().contains("版本"));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"package-lock.json", "npm-shrinkwrap.json", ".npmrc"})
+    void rejectsProjectControlledNpmResolutionFilesBeforeInstallation(String fileName)
+            throws IOException {
+        createPackageJson();
+        Files.writeString(tempDir.resolve(fileName), "{}");
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains(fileName));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @Test
+    void rejectsPreexistingNodeModulesBeforeInstallation() throws IOException {
+        createPackageJson();
+        Path maliciousVite = tempDir.resolve("node_modules/vite/bin/vite.js");
+        Files.createDirectories(maliciousVite.getParent());
+        Files.writeString(maliciousVite, "throw new Error('模型控制的 Vite CLI')");
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains("node_modules"));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "overrides",
+            "optionalDependencies",
+            "peerDependencies",
+            "bundledDependencies",
+            "bundleDependencies",
+            "workspaces"
+    })
+    void rejectsPackageFieldsThatCanChangeInstalledDependencyGraph(String fieldName)
+            throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), trustedPackageJson()
+                .replace("\n}", ",\n  \"" + fieldName + "\": {}\n}"));
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(result.outputTail().contains(fieldName));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @Test
+    void usesOnlyTrustedViteConfigAndDeletesItAfterSuccessfulBuild() throws IOException {
+        createPackageJson();
+        Files.writeString(tempDir.resolve("vite.config.js"),
+                "throw new Error('项目配置不得加载')");
+        Files.writeString(tempDir.resolve("postcss.config.js"),
+                "throw new Error('PostCSS 配置不得加载')");
+        RecordingCommandExecutor executor = successfulExecutorCreatingDist();
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertTrue(result.success());
+        CommandInvocation buildInvocation = executor.invocations.get(1);
+        Path trustedConfig = Path.of(buildInvocation.command().get(4));
+        assertEquals("--config", buildInvocation.command().get(3));
+        assertTrue(executor.buildConfigContents.contains("plugins: [vue()]"));
+        assertTrue(executor.buildConfigContents.contains("postcss"));
+        assertFalse(executor.buildConfigContents.contains("vite.config.js"));
+        assertFalse(Files.exists(trustedConfig));
     }
 
     @Test
@@ -197,7 +366,7 @@ class VueProjectBuilderTest {
     @Test
     void deletesDistSymbolicLinkWithoutTouchingItsExternalTarget() throws IOException {
         Path projectDirectory = Files.createDirectory(tempDir.resolve("project"));
-        Files.writeString(projectDirectory.resolve("package.json"), "{}");
+        Files.writeString(projectDirectory.resolve("package.json"), trustedPackageJson());
         Path externalDirectory = Files.createDirectory(tempDir.resolve("external"));
         Path externalAsset = externalDirectory.resolve("keep.js");
         Files.writeString(externalAsset, "keep");
@@ -222,7 +391,20 @@ class VueProjectBuilderTest {
     }
 
     private void createPackageJson() throws IOException {
-        Files.writeString(tempDir.resolve("package.json"), "{}");
+        Files.writeString(tempDir.resolve("package.json"), trustedPackageJson());
+    }
+
+    private static String trustedPackageJson() {
+        return """
+                {
+                  "scripts": {"build": "vite build"},
+                  "dependencies": {"vue": "3.3.4"},
+                  "devDependencies": {
+                    "vite": "4.4.5",
+                    "@vitejs/plugin-vue": "4.2.3"
+                  }
+                }
+                """;
     }
 
     private RecordingCommandExecutor successfulExecutor() {
@@ -243,6 +425,7 @@ class VueProjectBuilderTest {
         private final Queue<CommandResult> results = new ArrayDeque<>();
         private final List<CommandInvocation> invocations = new ArrayList<>();
         private CountDownLatch completionLatch;
+        private String buildConfigContents = "";
         private BuildAction successfulBuildAction = projectDirectory -> {
         };
 
@@ -268,6 +451,9 @@ class VueProjectBuilderTest {
                 throw new AssertionError("测试没有配置命令结果");
             }
             CommandResult result = results.remove();
+            if (command.size() == 5 && "build".equals(command.get(2))) {
+                buildConfigContents = Files.readString(Path.of(command.get(4)));
+            }
             if (isSuccessfulBuild(command, result)) {
                 successfulBuildAction.run(workingDirectory);
             }
@@ -275,8 +461,7 @@ class VueProjectBuilderTest {
         }
 
         private boolean isSuccessfulBuild(List<String> command, CommandResult result) {
-            return command.size() == 3
-                    && "run".equals(command.get(1))
+            return command.size() == 5
                     && "build".equals(command.get(2))
                     && Integer.valueOf(0).equals(result.exitCode())
                     && !result.timedOut();

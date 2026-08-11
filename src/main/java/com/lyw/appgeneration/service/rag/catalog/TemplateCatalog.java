@@ -159,6 +159,8 @@ public class TemplateCatalog {
         requireText(document.getBuildTool(), sourcePath, "buildTool 为空");
         validateDependencies(document.getDependencies(), sourcePath, "dependencies");
         validateDependencies(document.getDevDependencies(), sourcePath, "devDependencies");
+        validateDependencyScopes(document, sourcePath);
+        normalizeDependencies(document);
         requireText(document.getEmbedText(), sourcePath, "embedText 为空");
         if (document.getFiles() == null || document.getFiles().isEmpty()) {
             throw invalidFile(sourcePath, "files 为空");
@@ -191,6 +193,24 @@ public class TemplateCatalog {
                 throw invalidFile(sourcePath, fieldName + " 包含空白依赖名或版本");
             }
         }
+    }
+
+    private void validateDependencyScopes(TemplateDoc document, String sourcePath) {
+        Map<String, String> dependencies = emptyIfNull(document.getDependencies());
+        Map<String, String> devDependencies = emptyIfNull(document.getDevDependencies());
+        for (Map.Entry<String, String> dependency : dependencies.entrySet()) {
+            String devVersion = devDependencies.get(dependency.getKey());
+            if (devVersion != null && !dependency.getValue().equals(devVersion)) {
+                throw invalidFile(sourcePath,
+                        "依赖 %s 在 dependencies=%s 与 devDependencies=%s 中版本不同"
+                                .formatted(dependency.getKey(), dependency.getValue(), devVersion));
+            }
+        }
+    }
+
+    private void normalizeDependencies(TemplateDoc document) {
+        document.setDependencies(Map.copyOf(emptyIfNull(document.getDependencies())));
+        document.setDevDependencies(Map.copyOf(emptyIfNull(document.getDevDependencies())));
     }
 
     private void validateFileCount(TemplateDoc document, String sourcePath) {

@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -13,6 +14,11 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Vue 工程 npm 构建器。
@@ -23,6 +29,43 @@ public class VueProjectBuilder {
 
     private static final Duration NPM_INSTALL_TIMEOUT = Duration.ofSeconds(300);
     private static final Duration NPM_BUILD_TIMEOUT = Duration.ofSeconds(180);
+    private static final String TRUSTED_BUILD_SCRIPT = "vite build";
+    private static final Pattern TRUSTED_DEPENDENCY_VERSION = Pattern.compile(
+            "^[~^]?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$");
+    private static final Set<String> FORBIDDEN_PACKAGE_FIELDS = Set.of(
+            "overrides",
+            "optionalDependencies",
+            "peerDependencies",
+            "bundledDependencies",
+            "bundleDependencies",
+            "workspaces");
+    private static final List<String> FORBIDDEN_NPM_RESOLUTION_FILES = List.of(
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            ".npmrc",
+            "node_modules");
+    private static final Set<String> TRUSTED_RUNTIME_DEPENDENCIES = Set.of(
+            "vue",
+            "vue-router",
+            "element-plus",
+            "@element-plus/icons-vue",
+            "echarts");
+    private static final Set<String> TRUSTED_DEVELOPMENT_DEPENDENCIES = Set.of(
+            "vite",
+            "@vitejs/plugin-vue");
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String TRUSTED_VITE_CONFIG = """
+            import { defineConfig } from 'vite'
+            import vue from '@vitejs/plugin-vue'
+
+            export default defineConfig({
+              base: './',
+              plugins: [vue()],
+              css: {
+                postcss: { plugins: [] }
+              }
+            })
+            """;
 
     private final CommandExecutor commandExecutor;
     private final String npmExecutable;
@@ -75,11 +118,18 @@ public class VueProjectBuilder {
             return result(false, BuildStage.VALIDATION, null, false,
                     validationError, startNanos);
         }
+        try {
+            projectDirectory = projectDirectory.toRealPath();
+        } catch (IOException | RuntimeException exception) {
+            return result(false, BuildStage.VALIDATION, null, false,
+                    "项目目录无法规范化: " + safeMessage(exception), startNanos);
+        }
 
         StringBuilder output = new StringBuilder();
         BuildResult installResult = runCommand(
                 projectDirectory,
-                List.of(npmExecutable, "install", "--ignore-scripts", "--no-audit", "--no-fund"),
+                List.of(npmExecutable, "install", "--ignore-scripts", "--package-lock=false",
+                        "--no-audit", "--no-fund"),
                 NPM_INSTALL_TIMEOUT,
                 BuildStage.NPM_INSTALL,
                 output,
@@ -94,13 +144,7 @@ public class VueProjectBuilder {
             return distCleanupResult;
         }
 
-        BuildResult buildResult = runCommand(
-                projectDirectory,
-                List.of(npmExecutable, "run", "build"),
-                NPM_BUILD_TIMEOUT,
-                BuildStage.NPM_BUILD,
-                output,
-                startNanos);
+        BuildResult buildResult = runTrustedViteBuild(projectDirectory, output, startNanos);
         if (buildResult != null) {
             return buildResult;
         }
@@ -111,6 +155,48 @@ public class VueProjectBuilder {
             return result(false, BuildStage.DIST_CHECK, 0, false, output.toString(), startNanos);
         }
         return result(true, BuildStage.SUCCESS, 0, false, output.toString(), startNanos);
+    }
+
+    private BuildResult runTrustedViteBuild(
+            Path projectDirectory,
+            StringBuilder output,
+            long startNanos) {
+        Path trustedConfig = null;
+        try {
+            Path projectRoot = projectDirectory.toRealPath();
+            trustedConfig = Files.createTempFile(
+                    projectRoot, ".trusted-vite-config-", ".mjs");
+            Files.writeString(trustedConfig, TRUSTED_VITE_CONFIG, StandardCharsets.UTF_8);
+            return runCommand(
+                    projectRoot,
+                    List.of(
+                            "node",
+                            projectRoot.resolve("node_modules/vite/bin/vite.js").toString(),
+                            "build",
+                            "--config",
+                            trustedConfig.toString()),
+                    NPM_BUILD_TIMEOUT,
+                    BuildStage.NPM_BUILD,
+                    output,
+                    startNanos);
+        } catch (IOException | RuntimeException exception) {
+            appendOutput(output, "准备可信 Vite 构建配置失败: " + safeMessage(exception));
+            return result(false, BuildStage.NPM_BUILD, null, false,
+                    output.toString(), startNanos);
+        } finally {
+            deleteTrustedConfig(trustedConfig, output);
+        }
+    }
+
+    private void deleteTrustedConfig(Path trustedConfig, StringBuilder output) {
+        if (trustedConfig == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(trustedConfig);
+        } catch (IOException exception) {
+            appendOutput(output, "清理可信 Vite 构建配置失败: " + safeMessage(exception));
+        }
     }
 
     private BuildResult cleanPreviousDist(Path projectDirectory,
@@ -188,6 +274,63 @@ public class VueProjectBuilder {
         }
         if (!Files.isRegularFile(projectDirectory.resolve("package.json"))) {
             return "package.json 文件不存在或不是普通文件";
+        }
+        for (String fileName : FORBIDDEN_NPM_RESOLUTION_FILES) {
+            if (Files.exists(projectDirectory.resolve(fileName), LinkOption.NOFOLLOW_LINKS)) {
+                return "项目目录不允许包含可控制 npm 解析的文件: " + fileName;
+            }
+        }
+        return validatePackageJson(projectDirectory.resolve("package.json"));
+    }
+
+    private String validatePackageJson(Path packageJsonPath) {
+        JsonNode packageJson;
+        try {
+            packageJson = OBJECT_MAPPER.readTree(packageJsonPath.toFile());
+        } catch (IOException | RuntimeException exception) {
+            return "package.json 无法解析: " + safeMessage(exception);
+        }
+        if (packageJson == null || !packageJson.isObject()) {
+            return "package.json 必须是 JSON 对象";
+        }
+        String buildScript = packageJson.path("scripts").path("build").asText(null);
+        if (!TRUSTED_BUILD_SCRIPT.equals(buildScript)) {
+            return "package.json build 脚本必须固定为 " + TRUSTED_BUILD_SCRIPT;
+        }
+        for (String fieldName : FORBIDDEN_PACKAGE_FIELDS) {
+            if (packageJson.has(fieldName)) {
+                return "package.json 不允许包含可改变依赖图的字段: " + fieldName;
+            }
+        }
+        String runtimeError = validateDependencyNames(
+                packageJson.get("dependencies"), TRUSTED_RUNTIME_DEPENDENCIES, "dependencies");
+        if (runtimeError != null) {
+            return runtimeError;
+        }
+        return validateDependencyNames(
+                packageJson.get("devDependencies"),
+                TRUSTED_DEVELOPMENT_DEPENDENCIES,
+                "devDependencies");
+    }
+
+    private String validateDependencyNames(
+            JsonNode dependencyNode,
+            Set<String> trustedNames,
+            String fieldName) {
+        if (dependencyNode == null || !dependencyNode.isObject()) {
+            return fieldName + " 必须是 JSON 对象";
+        }
+        var names = dependencyNode.fieldNames();
+        while (names.hasNext()) {
+            String name = names.next();
+            if (!trustedNames.contains(name)) {
+                return fieldName + " 包含非受信依赖: " + name;
+            }
+            JsonNode versionNode = dependencyNode.get(name);
+            if (!versionNode.isTextual()
+                    || !TRUSTED_DEPENDENCY_VERSION.matcher(versionNode.textValue()).matches()) {
+                return fieldName + " 中依赖 " + name + " 的版本不是受控 semver";
+            }
         }
         return null;
     }

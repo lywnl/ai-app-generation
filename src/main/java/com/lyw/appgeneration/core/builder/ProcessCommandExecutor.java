@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,10 +39,11 @@ final class ProcessCommandExecutor implements CommandExecutor {
     @Override
     public CommandResult execute(Path workingDirectory, List<String> command, Duration timeout)
             throws IOException, InterruptedException {
-        Process process = new ProcessBuilder(command)
+        ProcessBuilder processBuilder = new ProcessBuilder(command)
                 .directory(workingDirectory.toFile())
-                .redirectErrorStream(true)
-                .start();
+                .redirectErrorStream(true);
+        isolateEnvironment(processBuilder.environment(), workingDirectory);
+        Process process = processBuilder.start();
         ProcessTracker tracker = new ProcessTracker(process.toHandle());
         CharacterTailBuffer outputTail = new CharacterTailBuffer(
                 BuildResult.MAX_OUTPUT_TAIL_CHARS);
@@ -78,6 +80,48 @@ final class ProcessCommandExecutor implements CommandExecutor {
                 exception.addSuppressed(cleanup.failure());
             }
             throw exception;
+        }
+    }
+
+    private void isolateEnvironment(
+            Map<String, String> childEnvironment,
+            Path workingDirectory) {
+        String path = childEnvironment.get("PATH");
+        childEnvironment.clear();
+        if (path != null && !path.isBlank()) {
+            String isolatedPath = isolatePath(path, workingDirectory);
+            if (!isolatedPath.isBlank()) {
+                childEnvironment.put("PATH", isolatedPath);
+            }
+        }
+    }
+
+    private String isolatePath(String path, Path workingDirectory) {
+        Path projectRoot = realOrAbsolutePath(workingDirectory);
+        return java.util.Arrays.stream(path.split(
+                        java.util.regex.Pattern.quote(java.io.File.pathSeparator), -1))
+                .filter(entry -> isTrustedPathEntry(entry, projectRoot))
+                .collect(java.util.stream.Collectors.joining(java.io.File.pathSeparator));
+    }
+
+    private boolean isTrustedPathEntry(String entry, Path projectRoot) {
+        if (entry == null || entry.isBlank()) {
+            return false;
+        }
+        try {
+            Path candidate = Path.of(entry);
+            return candidate.isAbsolute()
+                    && !realOrAbsolutePath(candidate).startsWith(projectRoot);
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    private Path realOrAbsolutePath(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException exception) {
+            return path.toAbsolutePath().normalize();
         }
     }
 

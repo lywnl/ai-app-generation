@@ -84,8 +84,8 @@ class VueKnowledgeIngestionQualityGateTest {
 
     @Test
     void 环境显式就绪时摄取并核验真实Vue知识() throws Exception {
-        VueIngestionEnvironment environment = VueIngestionEnvironment.inspectSystemEnvironment();
-        Map<String, String> variables = System.getenv();
+        Map<String, String> variables = Map.copyOf(System.getenv());
+        VueIngestionEnvironment environment = VueIngestionEnvironment.inspect(variables);
         run(environment, execution -> {
             TemplateCatalog catalog = new TemplateCatalog(DATASET_ROOT, OBJECT_MAPPER);
             VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);

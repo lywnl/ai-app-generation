@@ -12,6 +12,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -180,15 +181,90 @@ class TemplateCatalogTest {
         TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
 
         assertEquals(1, catalog.getDocuments().size());
+        var loaded = catalog.getDocuments().getFirst();
+        assertTrue(loaded.getDependencies() != null);
+        assertTrue(loaded.getDevDependencies() != null);
+        if (!mutationTargetsDependencies(mutation)) {
+            assertTrue(loaded.getDependencies().isEmpty());
+            assertThrows(UnsupportedOperationException.class,
+                    () -> loaded.getDependencies().put("vue", "3.5.0"));
+        } else {
+            assertTrue(loaded.getDevDependencies().isEmpty());
+            assertThrows(UnsupportedOperationException.class,
+                    () -> loaded.getDevDependencies().put("vite", "7.0.0"));
+        }
     }
 
     static Stream<Consumer<ObjectNode>> emptyDependencyDeclarations() {
         return Stream.of(
-                node -> node.remove("dependencies"),
-                node -> node.putNull("dependencies"),
-                node -> node.remove("devDependencies"),
-                node -> node.putNull("devDependencies")
+                removeField("dependencies"),
+                nullField("dependencies"),
+                removeField("devDependencies"),
+                nullField("devDependencies")
         );
+    }
+
+    @Test
+    void rejectsDifferentVersionsAcrossDependencyScopesWithCompleteSourceDetails(
+            @TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.featureDocument("feature-conflict");
+        document.with("dependencies").put("shared-package", "^4.1.0");
+        document.with("devDependencies").put("shared-package", "^5.0.0");
+        TemplateTestData.write(tempDir.resolve("nested/dependency-conflict.json"), document);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> new TemplateCatalog(tempDir, objectMapper));
+
+        assertTrue(exception.getMessage().contains("nested/dependency-conflict.json"));
+        assertTrue(exception.getMessage().contains("shared-package"));
+        assertTrue(exception.getMessage().contains("dependencies=^4.1.0"));
+        assertTrue(exception.getMessage().contains("devDependencies=^5.0.0"));
+    }
+
+    @Test
+    void allowsSameExactVersionAcrossDependencyScopes(@TempDir Path tempDir) throws IOException {
+        ObjectNode document = TemplateTestData.featureDocument("feature-shared-version");
+        document.with("dependencies").put("shared-package", "4.1.0");
+        document.with("devDependencies").put("shared-package", "4.1.0");
+        TemplateTestData.write(tempDir.resolve("shared-version.json"), document);
+
+        TemplateCatalog catalog = new TemplateCatalog(tempDir, objectMapper);
+
+        assertEquals(Map.of(
+                        "vue", "^3.5.0",
+                        "vue-router", "^4.5.0",
+                        "shared-package", "4.1.0"),
+                catalog.getDocuments().getFirst().getDependencies());
+        assertEquals(Map.of(
+                        "vite", "^7.0.0",
+                        "shared-package", "4.1.0"),
+                catalog.getDocuments().getFirst().getDevDependencies());
+    }
+
+    private static Consumer<ObjectNode> removeField(String fieldName) {
+        return new DependencyFieldMutation(fieldName, false);
+    }
+
+    private static Consumer<ObjectNode> nullField(String fieldName) {
+        return new DependencyFieldMutation(fieldName, true);
+    }
+
+    private static boolean mutationTargetsDependencies(Consumer<ObjectNode> mutation) {
+        return mutation instanceof DependencyFieldMutation fieldMutation
+                && "devDependencies".equals(fieldMutation.fieldName());
+    }
+
+    private record DependencyFieldMutation(String fieldName, boolean writeNull)
+            implements Consumer<ObjectNode> {
+
+        @Override
+        public void accept(ObjectNode node) {
+            if (writeNull) {
+                node.putNull(fieldName);
+            } else {
+                node.remove(fieldName);
+            }
+        }
     }
 
     @Test

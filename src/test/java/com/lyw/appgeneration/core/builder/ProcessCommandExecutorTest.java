@@ -4,9 +4,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -25,6 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProcessCommandExecutorTest {
 
+    private static final List<String> SECRET_VARIABLES = List.of(
+            "DASHSCOPE_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "RAG_PGVECTOR_PASSWORD",
+            "SPRING_DATASOURCE_PASSWORD");
+
     @TempDir
     Path tempDir;
 
@@ -39,6 +47,52 @@ class ProcessCommandExecutorTest {
         assertEquals(0, result.exitCode());
         assertEquals(BuildResult.MAX_OUTPUT_TAIL_CHARS, result.outputTail().length());
         assertTrue(result.outputTail().contains("标准错误结束"));
+    }
+
+    @Test
+    void clearsParentSecretsAndAllowsOnlyPathInRealNestedProcess() throws Exception {
+        ProcessBuilder parentBuilder = new ProcessBuilder(javaCommand("environment-parent"));
+        Map<String, String> parentEnvironment = parentBuilder.environment();
+        SECRET_VARIABLES.forEach(name -> parentEnvironment.put(name, "secret-" + name));
+        parentEnvironment.put("NOT_ALLOWED_MARKER", "must-not-cross-boundary");
+        parentEnvironment.put("PATH", javaBinDirectory() + java.io.File.pathSeparator
+                + parentEnvironment.getOrDefault("PATH", ""));
+        Process parent = parentBuilder.redirectErrorStream(true).start();
+
+        String output = new String(parent.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(parent.waitFor(10, TimeUnit.SECONDS), "父 JVM 必须有界结束");
+
+        assertEquals(0, parent.exitValue(), output);
+        assertTrue(output.contains("PATH_USABLE=true"), output);
+        SECRET_VARIABLES.forEach(name -> assertTrue(
+                output.contains(name + "=<absent>"), name + " 泄漏到命令子进程: " + output));
+        assertTrue(output.contains("NOT_ALLOWED_MARKER=<absent>"), output);
+    }
+
+    @Test
+    void removesRelativeAndCurrentDirectoryEntriesFromChildPath() throws Exception {
+        Path maliciousCommand = tempDir.resolve("model-command");
+        Files.writeString(maliciousCommand, "#!/bin/sh\necho MODEL_COMMAND_EXECUTED\n");
+        Files.setPosixFilePermissions(maliciousCommand, java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE));
+        ProcessBuilder parentBuilder = new ProcessBuilder(javaCommand("relative-path-parent"));
+        parentBuilder.directory(tempDir.toFile());
+        parentBuilder.environment().put("PATH", "." + java.io.File.pathSeparator
+                + "relative-bin" + java.io.File.pathSeparator + tempDir
+                + java.io.File.pathSeparator + javaBinDirectory());
+        Process parent = parentBuilder.redirectErrorStream(true).start();
+
+        String output = new String(parent.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(parent.waitFor(10, TimeUnit.SECONDS));
+
+        assertEquals(0, parent.exitValue(), output);
+        assertTrue(output.contains("COMMAND_BLOCKED=true"), output);
+        assertTrue(output.contains("PATH_HAS_ONLY_ABSOLUTE_ENTRIES=true"), output);
+        assertFalse(output.contains("MODEL_COMMAND_EXECUTED"), output);
     }
 
     @Test
@@ -227,9 +281,48 @@ class ProcessCommandExecutorTest {
         return List.copyOf(command);
     }
 
+    private String javaBinDirectory() {
+        return Path.of(System.getProperty("java.home"), "bin").toString();
+    }
+
     public static final class ProcessFixture {
 
         public static void main(String[] args) throws Exception {
+            if ("environment-parent".equals(args[0])) {
+                CommandResult result = new ProcessCommandExecutor().execute(
+                        Path.of("."),
+                        List.of("java", "-cp", System.getProperty("java.class.path"),
+                                ProcessFixture.class.getName(), "environment-child"),
+                        Duration.ofSeconds(5));
+                System.out.print(result.outputTail());
+                if (!Integer.valueOf(0).equals(result.exitCode())) {
+                    System.exit(2);
+                }
+                return;
+            }
+            if ("environment-child".equals(args[0])) {
+                System.out.println("PATH_USABLE=" + !System.getenv().getOrDefault("PATH", "").isBlank());
+                SECRET_VARIABLES.forEach(name -> System.out.println(
+                        name + "=" + System.getenv().getOrDefault(name, "<absent>")));
+                System.out.println("NOT_ALLOWED_MARKER="
+                        + System.getenv().getOrDefault("NOT_ALLOWED_MARKER", "<absent>"));
+                return;
+            }
+            if ("relative-path-parent".equals(args[0])) {
+                CommandResult result = new ProcessCommandExecutor().execute(
+                        Path.of("."),
+                        List.of("/bin/sh", "-c", "if model-command; then exit 9; else "
+                                + "echo COMMAND_BLOCKED=true; fi; "
+                                + "case \"$PATH\" in *':.'*|'.:'*|*':relative-bin'*|"
+                                + "'relative-bin:'*) echo PATH_HAS_ONLY_ABSOLUTE_ENTRIES=false;; "
+                                + "*) echo PATH_HAS_ONLY_ABSOLUTE_ENTRIES=true;; esac"),
+                        Duration.ofSeconds(5));
+                System.out.print(result.outputTail());
+                if (!Integer.valueOf(0).equals(result.exitCode())) {
+                    System.exit(2);
+                }
+                return;
+            }
             if ("late-spawn-parent".equals(args[0])) {
                 Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> {
                     try {

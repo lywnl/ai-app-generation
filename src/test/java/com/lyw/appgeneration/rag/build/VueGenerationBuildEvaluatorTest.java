@@ -12,10 +12,13 @@ import reactor.core.publisher.Flux;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Collections;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -189,6 +192,86 @@ class VueGenerationBuildEvaluatorTest {
     }
 
     @Test
+    void 两个并发评测器竞争同一候选appId时通过原子目录领取避免冲突() throws Exception {
+        Path sourceRoot = tempDir.resolve("tmp/code_output");
+        Path reportRoot = tempDir.resolve("target/rag-eval/generated");
+        CyclicBarrier candidateBarrier = new CyclicBarrier(2);
+        CyclicBarrier generationBarrier = new CyclicBarrier(2);
+        List<Long> facadeAppIds = Collections.synchronizedList(new ArrayList<>());
+        AiCodeGeneratorFacade facade = mock(AiCodeGeneratorFacade.class);
+        when(facade.generateVueProjectForEvaluation(anyString(), anyLong()))
+                .thenAnswer(invocation -> {
+                    long appId = invocation.getArgument(1);
+                    facadeAppIds.add(appId);
+                    generationBarrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                    return new AiCodeGeneratorFacade.VueProjectGeneration(
+                            VueRagContext.unavailable(),
+                            Flux.defer(() -> createGeneratedProject(sourceRoot, appId)));
+                });
+        VueProjectBuilder builder = mock(VueProjectBuilder.class);
+        when(builder.buildProjectDetailed(anyString())).thenReturn(successfulBuild());
+        VueGenerationBuildCase testCase = new VueGenerationBuildCase(
+                "case-race", "基础站点", "并发领取需求");
+        VueGenerationBuildEvaluator first = new VueGenerationBuildEvaluator(
+                facade, builder, sourceRoot, reportRoot, Duration.ofSeconds(5),
+                collidingAllocator(candidateBarrier, 701L, 702L));
+        VueGenerationBuildEvaluator second = new VueGenerationBuildEvaluator(
+                facade, builder, sourceRoot, reportRoot, Duration.ofSeconds(5),
+                collidingAllocator(candidateBarrier, 701L, 703L));
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<VueGenerationBuildReport> firstReport =
+                    executor.submit(() -> first.evaluate(List.of(testCase)));
+            Future<VueGenerationBuildReport> secondReport =
+                    executor.submit(() -> second.evaluate(List.of(testCase)));
+            firstReport.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            secondReport.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+
+        assertEquals(2, new HashSet<>(facadeAppIds).size(),
+                "同一候选只能由一个评测器领取，另一个必须重试新 appId");
+        assertEquals(2, facadeAppIds.stream()
+                .map(appId -> reportRoot.resolve("vue_project_" + appId))
+                .filter(Files::isDirectory)
+                .count());
+    }
+
+    @Test
+    void 两个真实JVM竞争同一候选appId时只有一个成功领取() throws Exception {
+        Path sourceRoot = tempDir.resolve("tmp/code_output");
+        Path reportRoot = tempDir.resolve("target/rag-eval/generated");
+        Path ready = tempDir.resolve("claim-ready");
+        Path go = tempDir.resolve("claim-go");
+        Path results = tempDir.resolve("claim-results");
+        Files.createDirectories(ready);
+        Files.createDirectories(results);
+        Process first = startClaimFixture(sourceRoot, reportRoot, ready, go, results, "first");
+        Process second = startClaimFixture(sourceRoot, reportRoot, ready, go, results, "second");
+        awaitFileCount(ready, 2);
+        Files.createFile(go);
+
+        assertTrue(first.waitFor(10, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue(second.waitFor(10, java.util.concurrent.TimeUnit.SECONDS));
+        String firstOutput = new String(first.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        String secondOutput = new String(second.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(0, first.exitValue(), firstOutput);
+        assertEquals(0, second.exitValue(), secondOutput);
+        List<String> claims;
+        try (var paths = Files.list(results)) {
+            claims = paths.map(path -> {
+                try {
+                    return Files.readString(path, StandardCharsets.UTF_8);
+                } catch (java.io.IOException exception) {
+                    throw new java.io.UncheckedIOException(exception);
+                }
+            }).sorted().toList();
+        }
+
+        assertEquals(List.of("false", "true"), claims);
+        assertTrue(Files.isDirectory(sourceRoot.resolve("vue_project_801")));
+    }
+
+    @Test
     void waitsForRealGenerationMovesActualOutputAndBuildsDetailedWithoutRepair() throws Exception {
         Path sourceRoot = tempDir.resolve("tmp/code_output");
         Path reportRoot = tempDir.resolve("target/rag-eval/generated");
@@ -274,5 +357,83 @@ class VueGenerationBuildEvaluatorTest {
 
     private BuildResult successfulBuild() {
         return new BuildResult(true, BuildStage.SUCCESS, 0, false, "built", 10L);
+    }
+
+    private VueGenerationAppIdAllocator collidingAllocator(
+            CyclicBarrier barrier, long collidingCandidate, long fallbackCandidate) {
+        AtomicInteger invocation = new AtomicInteger();
+        return () -> {
+            if (invocation.getAndIncrement() == 0) {
+                try {
+                    barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (Exception exception) {
+                    throw new IllegalStateException("同步候选 appId 失败", exception);
+                }
+                return collidingCandidate;
+            }
+            return fallbackCandidate;
+        };
+    }
+
+    private Process startClaimFixture(
+            Path sourceRoot,
+            Path reportRoot,
+            Path ready,
+            Path go,
+            Path results,
+            String id) throws Exception {
+        return new ProcessBuilder(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-cp",
+                System.getProperty("java.class.path"),
+                AppIdClaimFixture.class.getName(),
+                sourceRoot.toString(),
+                reportRoot.toString(),
+                ready.toString(),
+                go.toString(),
+                results.toString(),
+                id)
+                .redirectErrorStream(true)
+                .start();
+    }
+
+    private void awaitFileCount(Path directory, long expectedCount) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            try (var files = Files.list(directory)) {
+                if (files.count() == expectedCount) {
+                    return;
+                }
+            }
+            Thread.sleep(Duration.ofMillis(20));
+        }
+        org.junit.jupiter.api.Assertions.fail("真实 JVM 未在期限内就绪");
+    }
+
+    public static final class AppIdClaimFixture {
+
+        private AppIdClaimFixture() {
+        }
+
+        public static void main(String[] args) throws Exception {
+            Path sourceRoot = Path.of(args[0]);
+            Path reportRoot = Path.of(args[1]);
+            Path ready = Path.of(args[2]);
+            Path go = Path.of(args[3]);
+            Path results = Path.of(args[4]);
+            String id = args[5];
+            Files.createFile(ready.resolve(id));
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (!Files.exists(go) && System.nanoTime() < deadline) {
+                Thread.sleep(Duration.ofMillis(10));
+            }
+            if (!Files.exists(go)) {
+                throw new IllegalStateException("等待启动信号超时");
+            }
+            boolean claimed = VueGenerationBuildEvaluator.tryClaimAppId(
+                    sourceRoot, reportRoot, 801L);
+            Files.writeString(results.resolve(id), Boolean.toString(claimed),
+                    StandardCharsets.UTF_8);
+        }
     }
 }

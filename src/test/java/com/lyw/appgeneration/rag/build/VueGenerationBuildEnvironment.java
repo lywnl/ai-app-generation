@@ -18,10 +18,6 @@ public record VueGenerationBuildEnvironment(boolean ready, List<String> reasons)
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    public static VueGenerationBuildEnvironment inspectSystemEnvironment() {
-        return inspect(System.getenv());
-    }
-
     static VueGenerationBuildEnvironment inspect(Map<String, String> environment) {
         if (!"true".equalsIgnoreCase(environment.get("RAG_BUILD_EVAL"))) {
             return new VueGenerationBuildEnvironment(

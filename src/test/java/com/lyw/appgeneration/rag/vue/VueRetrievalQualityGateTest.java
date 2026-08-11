@@ -73,6 +73,7 @@ class VueRetrievalQualityGateTest {
 
     @Test
     void evaluatesRealRetrievalWhenEnvironmentIsExplicitlyReady() throws Exception {
+        Map<String, String> variables = Map.copyOf(System.getenv());
         String runId = UUID.randomUUID().toString();
         VueEvaluationEnvironment[] inspectedEnvironment = new VueEvaluationEnvironment[1];
         VueRetrievalEvaluationReport report = EvaluationReportLifecycle.execute(
@@ -80,7 +81,7 @@ class VueRetrievalQualityGateTest {
                 VueRetrievalEvaluationReport.failed(
                         runId, List.of("本轮真实检索运行中，旧结果已失效"))
                         .renderMarkdown(),
-                () -> evaluateCurrentRun(runId, inspectedEnvironment),
+                () -> evaluateCurrentRun(runId, inspectedEnvironment, variables),
                 VueRetrievalEvaluationReport::renderMarkdown,
                 VueRetrievalEvaluationReport.failed(
                         runId, List.of("本轮真实检索发生异常"))
@@ -98,14 +99,14 @@ class VueRetrievalQualityGateTest {
 
     private VueRetrievalEvaluationReport evaluateCurrentRun(
             String runId,
-            VueEvaluationEnvironment[] inspectedEnvironment) {
-        VueEvaluationEnvironment environment = VueEvaluationEnvironment.inspectSystemEnvironment();
+            VueEvaluationEnvironment[] inspectedEnvironment,
+            Map<String, String> variables) {
+        VueEvaluationEnvironment environment = VueEvaluationEnvironment.inspect(variables);
         inspectedEnvironment[0] = environment;
         if (!environment.ready()) {
             return VueRetrievalEvaluationReport.notExecuted(runId, environment.reasons());
         }
 
-        Map<String, String> variables = System.getenv();
         VuePgVectorTarget target = VuePgVectorTarget.from(variables);
         String pgVectorPassword = variables.get("RAG_PGVECTOR_PASSWORD");
         TemplateCatalog catalog = new TemplateCatalog(

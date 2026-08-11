@@ -20,8 +20,8 @@ public record VueEvaluationEnvironment(boolean ready, List<String> reasons) {
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    public static VueEvaluationEnvironment inspectSystemEnvironment() {
-        return inspect(System.getenv(), new SocketPortProbe(Duration.ofSeconds(1)));
+    public static VueEvaluationEnvironment inspect(Map<String, String> environment) {
+        return inspect(environment, new SocketPortProbe(Duration.ofSeconds(1)));
     }
 
     static VueEvaluationEnvironment inspect(

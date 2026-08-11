@@ -20,8 +20,8 @@ public record VueIngestionEnvironment(
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    public static VueIngestionEnvironment inspectSystemEnvironment() {
-        return inspect(System.getenv(), new SocketPortProbe(Duration.ofSeconds(1)));
+    public static VueIngestionEnvironment inspect(Map<String, String> environment) {
+        return inspect(environment, new SocketPortProbe(Duration.ofSeconds(1)));
     }
 
     static VueIngestionEnvironment inspect(Map<String, String> environment, PortProbe probe) {
