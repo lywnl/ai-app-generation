@@ -7,6 +7,7 @@ import com.lyw.appgeneration.service.rag.model.RagChunkKind;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
@@ -16,9 +17,18 @@ import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VueIngestionExpectedSnapshotTest {
+
+    @Test
+    void 不存在公共构造器且类型不可被record规范绕过() {
+        assertEquals(0, VueIngestionExpectedSnapshot.class.getConstructors().length);
+        assertFalse(VueIngestionExpectedSnapshot.class.isRecord());
+        assertTrue(Modifier.isFinal(VueIngestionExpectedSnapshot.class.getModifiers()));
+    }
 
     @Test
     void 当前目录生成二十三条稳定期望数据() {

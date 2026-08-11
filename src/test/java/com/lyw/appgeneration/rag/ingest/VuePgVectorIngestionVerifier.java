@@ -13,13 +13,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
  * 通过 JDBC 只读核验 Vue 当前目录版本的 PGVector 物理数据。
  */
-final class VuePgVectorIngestionVerifier {
+public final class VuePgVectorIngestionVerifier {
 
     private static final String TABLE_NAME = "templates_vue";
     private static final String COLUMN_PROTOCOL_SQL = """
@@ -46,18 +47,28 @@ final class VuePgVectorIngestionVerifier {
     private static final TypeReference<Map<String, String>> METADATA_TYPE =
             new TypeReference<>() {
             };
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private final ConnectionProvider connectionProvider;
+    private final ObjectMapper objectMapper;
 
-    private VuePgVectorIngestionVerifier() {
+    public VuePgVectorIngestionVerifier(ObjectMapper objectMapper) {
+        this(DriverManager::getConnection, objectMapper);
     }
 
-    static VueIngestionVerification verify(
+    VuePgVectorIngestionVerifier(
+            ConnectionProvider connectionProvider,
+            ObjectMapper objectMapper) {
+        this.connectionProvider = Objects.requireNonNull(connectionProvider);
+        this.objectMapper = Objects.requireNonNull(objectMapper);
+    }
+
+    public VueIngestionVerification verify(
             VueIngestionExpectedSnapshot expected,
             VuePgVectorTarget target,
             String password) {
         Connection connection;
         try {
-            connection = DriverManager.getConnection(target.jdbcUrl(), target.user(), password);
+            connection = connectionProvider.getConnection(
+                    target.jdbcUrl(), target.user(), password);
         } catch (SQLException exception) {
             return failure(expected, "数据库连接失败", exception);
         }
@@ -98,7 +109,7 @@ final class VuePgVectorIngestionVerifier {
                 dimensions, issues);
     }
 
-    private static VueIngestionVerification verifyConnection(
+    private VueIngestionVerification verifyConnection(
             VueIngestionExpectedSnapshot expected,
             Connection connection) {
         try {
@@ -147,7 +158,7 @@ final class VuePgVectorIngestionVerifier {
         return issues;
     }
 
-    private static List<VuePgVectorRow> readCurrentRows(
+    private List<VuePgVectorRow> readCurrentRows(
             Connection connection,
             String catalogVersion) throws SQLException, JsonProcessingException {
         List<VuePgVectorRow> rows = new ArrayList<>();
@@ -166,12 +177,12 @@ final class VuePgVectorIngestionVerifier {
         return rows;
     }
 
-    private static Map<String, String> readMetadata(String metadataJson)
+    private Map<String, String> readMetadata(String metadataJson)
             throws JsonProcessingException {
         if (metadataJson == null) {
             throw new IllegalArgumentException("metadata 为空");
         }
-        Map<String, String> metadata = OBJECT_MAPPER.readValue(metadataJson, METADATA_TYPE);
+        Map<String, String> metadata = objectMapper.readValue(metadataJson, METADATA_TYPE);
         if (metadata == null) {
             throw new IllegalArgumentException("metadata 不是对象");
         }
@@ -259,5 +270,12 @@ final class VuePgVectorIngestionVerifier {
     }
 
     private record ColumnProtocol(String dataType, String udtName) {
+    }
+
+    @FunctionalInterface
+    interface ConnectionProvider {
+
+        Connection getConnection(String jdbcUrl, String user, String password)
+                throws SQLException;
     }
 }

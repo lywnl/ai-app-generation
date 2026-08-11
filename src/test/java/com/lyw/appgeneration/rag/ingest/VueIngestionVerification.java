@@ -6,7 +6,7 @@ import java.util.Set;
 /**
  * Vue 向量物理数据核验结果。
  */
-record VueIngestionVerification(
+public record VueIngestionVerification(
         boolean passed,
         String catalogVersion,
         int expectedCount,
@@ -15,7 +15,7 @@ record VueIngestionVerification(
         Set<Integer> dimensions,
         List<String> issues) {
 
-    VueIngestionVerification {
+    public VueIngestionVerification {
         dimensions = Set.copyOf(dimensions);
         issues = List.copyOf(issues);
     }

@@ -15,20 +15,26 @@ import java.util.UUID;
 /**
  * 由 Vue 模板目录直接计算的摄取核验期望，不能由摄取结果反推。
  */
-public record VueIngestionExpectedSnapshot(
-        String catalogVersion,
-        int embeddingDimension,
-        Set<String> metadataKeys,
-        Map<String, ExpectedRow> rowsByChunkId) {
+public final class VueIngestionExpectedSnapshot {
 
     private static final int CURRENT_CHUNK_COUNT = 23;
     private static final int EMBEDDING_DIMENSION = 1024;
     private static final Set<String> METADATA_KEYS = Set.of(
             "chunkId", "documentId", "documentKind", "chunkKind", "catalogVersion");
+    private final String catalogVersion;
+    private final int embeddingDimension;
+    private final Set<String> metadataKeys;
+    private final Map<String, ExpectedRow> rowsByChunkId;
 
-    public VueIngestionExpectedSnapshot {
-        metadataKeys = Set.copyOf(metadataKeys);
-        rowsByChunkId = Map.copyOf(rowsByChunkId);
+    private VueIngestionExpectedSnapshot(
+            String catalogVersion,
+            int embeddingDimension,
+            Set<String> metadataKeys,
+            Map<String, ExpectedRow> rowsByChunkId) {
+        this.catalogVersion = catalogVersion;
+        this.embeddingDimension = embeddingDimension;
+        this.metadataKeys = Set.copyOf(metadataKeys);
+        this.rowsByChunkId = Map.copyOf(rowsByChunkId);
     }
 
     public static VueIngestionExpectedSnapshot from(TemplateCatalog catalog) {
@@ -59,6 +65,22 @@ public record VueIngestionExpectedSnapshot(
         }
         return new VueIngestionExpectedSnapshot(
                 catalogVersion, EMBEDDING_DIMENSION, METADATA_KEYS, rows);
+    }
+
+    public String catalogVersion() {
+        return catalogVersion;
+    }
+
+    public int embeddingDimension() {
+        return embeddingDimension;
+    }
+
+    public Set<String> metadataKeys() {
+        return metadataKeys;
+    }
+
+    public Map<String, ExpectedRow> rowsByChunkId() {
+        return rowsByChunkId;
     }
 
     public record ExpectedRow(

@@ -208,6 +208,7 @@ git commit -m "测试: 建立Vue摄取无秘密环境门禁"
 - 产出：`VueIngestionExpectedSnapshot.from(TemplateCatalog)`。
 - 产出：`ExpectedRow`，字段为 `embeddingId/chunkId/documentId/documentKind/chunkKind/searchText`。
 - 包内测试入口：`from(String catalogVersion, List<KnowledgeChunk> chunks)`，所有入口固定校验 23 条知识块。
+- 构造约束：`VueIngestionExpectedSnapshot` 是 `public final class` 且构造器私有，不存在绕过 23 条门槛的公共构造入口。
 
 - [ ] **步骤 1：先写当前目录和非法快照测试**
 
@@ -266,16 +267,27 @@ bash mvnw -Dtest=VueIngestionExpectedSnapshotTest test
 - [ ] **步骤 3：实现不可变期望快照**
 
 ```java
-public record VueIngestionExpectedSnapshot(
-        String catalogVersion,
-        int embeddingDimension,
-        Set<String> metadataKeys,
-        Map<String, ExpectedRow> rowsByChunkId) {
+public final class VueIngestionExpectedSnapshot {
 
     private static final int CURRENT_CHUNK_COUNT = 23;
     private static final int EMBEDDING_DIMENSION = 1024;
     private static final Set<String> METADATA_KEYS = Set.of(
             "chunkId", "documentId", "documentKind", "chunkKind", "catalogVersion");
+    private final String catalogVersion;
+    private final int embeddingDimension;
+    private final Set<String> metadataKeys;
+    private final Map<String, ExpectedRow> rowsByChunkId;
+
+    private VueIngestionExpectedSnapshot(
+            String catalogVersion,
+            int embeddingDimension,
+            Set<String> metadataKeys,
+            Map<String, ExpectedRow> rowsByChunkId) {
+        this.catalogVersion = catalogVersion;
+        this.embeddingDimension = embeddingDimension;
+        this.metadataKeys = Set.copyOf(metadataKeys);
+        this.rowsByChunkId = Map.copyOf(rowsByChunkId);
+    }
 
     public static VueIngestionExpectedSnapshot from(TemplateCatalog catalog) {
         return from(catalog.getCatalogVersion(), catalog.getChunks());
@@ -305,10 +317,15 @@ public record VueIngestionExpectedSnapshot(
         return new VueIngestionExpectedSnapshot(
                 catalogVersion, EMBEDDING_DIMENSION, METADATA_KEYS, rows);
     }
+
+    public String catalogVersion() { return catalogVersion; }
+    public int embeddingDimension() { return embeddingDimension; }
+    public Set<String> metadataKeys() { return metadataKeys; }
+    public Map<String, ExpectedRow> rowsByChunkId() { return rowsByChunkId; }
 }
 ```
 
-`ExpectedRow.from` 必须独立执行 `UUID.nameUUIDFromBytes(chunkId.getBytes(UTF_8))`，不得调用摄取结果反推期望；record 紧凑构造器使用 `Set.copyOf` 和 `Map.copyOf` 固化输入。
+`ExpectedRow.from` 必须独立执行 `UUID.nameUUIDFromBytes(chunkId.getBytes(UTF_8))`，不得调用摄取结果反推期望；私有构造器使用 `Set.copyOf` 和 `Map.copyOf` 固化输入。测试必须反射确认无 public 构造器且类型不是 record。
 
 - [ ] **步骤 4：运行 GREEN 与目录回归**
 
@@ -339,13 +356,15 @@ git commit -m "测试: 建立Vue摄取目录期望快照"
 - 新建：`src/test/java/com/lyw/appgeneration/rag/ingest/VueIngestionVerification.java`
 - 新建：`src/test/java/com/lyw/appgeneration/rag/ingest/VuePgVectorIngestionVerifier.java`
 - 新建：`src/test/java/com/lyw/appgeneration/rag/ingest/VuePgVectorIngestionVerifierTest.java`
+- 新建：`src/test/java/com/lyw/appgeneration/rag/vue/VueIngestionVerificationApiTest.java`
 
 **接口：**
 
 - 消费：`VueIngestionExpectedSnapshot`、`VuePgVectorTarget`、数据库密码。
-- 产出：`verify(snapshot, target, password)`，真实读取 PostgreSQL。
+- 产出：`new VuePgVectorIngestionVerifier(ObjectMapper).verify(snapshot, target, password)`，通过 public 实例 API 真实读取 PostgreSQL。
 - 包内纯比对入口：`verifyRows(snapshot, List<VuePgVectorRow>, long historicalCount)`。
-- 产出：`VueIngestionVerification(passed, catalogVersion, expectedCount, actualCount, historicalCount, dimensions, issues)`。
+- 产出：public `VueIngestionVerification(passed, catalogVersion, expectedCount, actualCount, historicalCount, dimensions, issues)`，供 `rag.vue` 跨包消费。
+- 可测试边界：包内构造器注入 `ConnectionProvider` 和 `ObjectMapper`；public 构造器固定委托 `DriverManager::getConnection`。
 
 - [ ] **步骤 1：先写逐项比对失败测试**
 
@@ -435,7 +454,7 @@ static VueIngestionVerification verifyRows(
 
 - [ ] **步骤 4：实现 JDBC 读取适配器**
 
-`verify(snapshot, target, password)` 使用 `DriverManager.getConnection(target.jdbcUrl(), target.user(), password)`，并按以下实测 SQL 协议读取：
+public `verify(snapshot, target, password)` 通过默认 `ConnectionProvider` 使用 `DriverManager.getConnection(target.jdbcUrl(), target.user(), password)`，并按以下实测 SQL 协议读取：
 
 ```sql
 SELECT embedding_id, vector_dims(embedding), text, metadata::text
@@ -461,14 +480,14 @@ text         -> data_type=text,         udt_name=text
 metadata     -> data_type=json,         udt_name=json
 ```
 
-表名必须是私有常量 `templates_vue`，不得拼接任何环境输入。`ObjectMapper.readValue(metadataJson, new TypeReference<Map<String,String>>() {})` 解析 metadata。缺表、列协议不一致或 SQL 异常时返回失败 `VueIngestionVerification`，问题只包含固定中文类别和异常类简单名，不拼接数据库密码或原始异常消息。
+表名必须是私有常量 `templates_vue`，不得拼接任何环境输入。`ObjectMapper.readValue(metadataJson, new TypeReference<Map<String,String>>() {})` 解析 metadata。缺表、列协议不一致或 SQL 异常时返回失败 `VueIngestionVerification`，问题只包含固定中文类别和异常类简单名，不拼接数据库密码或原始异常消息。使用现有 Mockito 模拟 JDBC 接口，覆盖 23 行成功与历史统计、缺表、错列、当前/历史 SQL 异常、metadata SQL NULL/JSON null/非法 JSON/含 null 值、三条参数绑定、全部 JDBC 资源关闭及关闭异常分类。
 
 - [ ] **步骤 5：运行 GREEN 与生产摄取单元回归**
 
 ```bash
 JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" \
 PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" \
-bash mvnw -Dtest='VuePgVectorIngestionVerifierTest,VueKnowledgeIngestorTest' test
+bash mvnw -Dtest='VuePgVectorIngestionVerifierTest,VueIngestionVerificationApiTest,VueKnowledgeIngestorTest' test
 git diff --check
 ```
 
@@ -480,7 +499,8 @@ git diff --check
 git add src/test/java/com/lyw/appgeneration/rag/ingest/VuePgVectorRow.java \
   src/test/java/com/lyw/appgeneration/rag/ingest/VueIngestionVerification.java \
   src/test/java/com/lyw/appgeneration/rag/ingest/VuePgVectorIngestionVerifier.java \
-  src/test/java/com/lyw/appgeneration/rag/ingest/VuePgVectorIngestionVerifierTest.java
+  src/test/java/com/lyw/appgeneration/rag/ingest/VuePgVectorIngestionVerifierTest.java \
+  src/test/java/com/lyw/appgeneration/rag/vue/VueIngestionVerificationApiTest.java
 git commit -m "测试: 实现Vue向量物理数据核验"
 ```
 
@@ -497,6 +517,7 @@ git commit -m "测试: 实现Vue向量物理数据核验"
 **接口：**
 
 - 消费：任务 1～3 的环境、快照和核验器。
+- API 约束：只通过 `VueIngestionExpectedSnapshot.from(catalog)` 创建可信快照，并通过 public `new VuePgVectorIngestionVerifier(OBJECT_MAPPER).verify(...)` 核验。
 - 产出：`VueIngestionReport.notExecuted(...)`、`failed(...)`、`verified(...)`。
 - 产出报告：`target/rag-eval/vue-ingestion-report.md`。
 
@@ -655,6 +676,7 @@ git commit -m "测试: 增加Vue知识真实摄取门禁"
 **接口：**
 
 - 消费：`VueIngestionExpectedSnapshot`、`VuePgVectorTarget`、`VuePgVectorIngestionVerifier`。
+- 跨包约束：`VuePgVectorIngestionVerifier`、实例 `verify` 与 `VueIngestionVerification` 均为 public；快照仍只能由可信 public 工厂创建。
 - 行为：只有 `verification.passed()` 才调用 `createEvaluationServices()`。
 - 报告：前置失败使用未执行报告，列出受控原因，并使显式真实检索测试失败。
 
@@ -797,7 +819,7 @@ git commit -m "测试: 增加Vue检索摄取前置门禁"
 ```bash
 JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" \
 PATH="$PWD/.codex/runtime/jdk25/Contents/Home/bin:$PATH" \
-bash mvnw -Dtest='VueIngestionEnvironmentTest,VueIngestionExpectedSnapshotTest,VuePgVectorIngestionVerifierTest,VueIngestionReportTest,VueKnowledgeIngestionQualityGateTest,VueRetrievalIngestionPrerequisiteTest,VueRetrievalEvaluationReportTest,VueRetrievalQualityGateTest,VueKnowledgeIngestorTest,VueTemplateDatasetTest' test
+bash mvnw -Dtest='VueIngestionEnvironmentTest,VueIngestionExpectedSnapshotTest,VuePgVectorIngestionVerifierTest,VueIngestionVerificationApiTest,VueIngestionReportTest,VueKnowledgeIngestionQualityGateTest,VueRetrievalIngestionPrerequisiteTest,VueRetrievalEvaluationReportTest,VueRetrievalQualityGateTest,VueKnowledgeIngestorTest,VueTemplateDatasetTest' test
 ```
 
 预期：0 failure、0 error；高成本入口在未设置开关时生成“未执行”报告。
