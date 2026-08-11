@@ -12,8 +12,10 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class VueIngestionExpectedSnapshotTest {
@@ -33,17 +35,39 @@ class VueIngestionExpectedSnapshotTest {
         snapshot.rowsByChunkId().forEach((chunkId, row) ->
                 assertEquals(UUID.nameUUIDFromBytes(chunkId.getBytes(StandardCharsets.UTF_8)),
                         row.embeddingId()));
+        catalog.getChunks().forEach(chunk -> {
+            VueIngestionExpectedSnapshot.ExpectedRow row = snapshot.rowsByChunkId().get(chunk.chunkId());
+            assertNotNull(row, chunk.chunkId());
+            assertEquals(chunk.documentId(), row.documentId());
+            assertEquals(chunk.documentKind(), row.documentKind());
+            assertEquals(chunk.chunkKind(), row.chunkKind());
+            assertEquals(chunk.searchText(), row.searchText());
+        });
     }
 
     @Test
     void 拒绝非二十三条目录和重复块标识() {
-        KnowledgeChunk chunk = new KnowledgeChunk(
-                "duplicate", "doc", RagDocumentKind.FEATURE_SNIPPET,
+        KnowledgeChunk firstChunk = new KnowledgeChunk(
+                "first", "doc", RagDocumentKind.FEATURE_SNIPPET,
                 RagChunkKind.OVERVIEW, "检索文本");
+        KnowledgeChunk secondChunk = new KnowledgeChunk(
+                "second", "doc", RagDocumentKind.FEATURE_SNIPPET,
+                RagChunkKind.OVERVIEW, "另一段检索文本");
 
         assertThrows(IllegalArgumentException.class, () ->
-                VueIngestionExpectedSnapshot.from("version", List.of(chunk), 23));
+                VueIngestionExpectedSnapshot.from("version", List.of(firstChunk, secondChunk)));
         assertThrows(IllegalArgumentException.class, () ->
-                VueIngestionExpectedSnapshot.from("version", List.of(chunk, chunk), 2));
+                VueIngestionExpectedSnapshot.from("version", duplicateChunkIds()));
+    }
+
+    private static List<KnowledgeChunk> duplicateChunkIds() {
+        return IntStream.range(0, 23)
+                .mapToObj(index -> new KnowledgeChunk(
+                        index == 22 ? "chunk-0" : "chunk-" + index,
+                        "doc-" + index,
+                        RagDocumentKind.FEATURE_SNIPPET,
+                        RagChunkKind.OVERVIEW,
+                        "检索文本-" + index))
+                .toList();
     }
 }

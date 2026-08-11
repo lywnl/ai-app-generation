@@ -32,20 +32,19 @@ public record VueIngestionExpectedSnapshot(
     }
 
     public static VueIngestionExpectedSnapshot from(TemplateCatalog catalog) {
-        return from(catalog.getCatalogVersion(), catalog.getChunks(), CURRENT_CHUNK_COUNT);
+        return from(catalog.getCatalogVersion(), catalog.getChunks());
     }
 
     static VueIngestionExpectedSnapshot from(
             String catalogVersion,
-            List<KnowledgeChunk> chunks,
-            int expectedCount) {
+            List<KnowledgeChunk> chunks) {
         if (catalogVersion == null || catalogVersion.isBlank()) {
             throw new IllegalArgumentException("Vue 目录版本为空");
         }
-        if (chunks == null || chunks.size() != expectedCount) {
+        if (chunks == null || chunks.size() != CURRENT_CHUNK_COUNT) {
             throw new IllegalArgumentException(
                     "Vue 知识块数量必须为 %d，实际为 %d".formatted(
-                            expectedCount, chunks == null ? 0 : chunks.size()));
+                            CURRENT_CHUNK_COUNT, chunks == null ? 0 : chunks.size()));
         }
 
         Map<String, ExpectedRow> rows = new LinkedHashMap<>();

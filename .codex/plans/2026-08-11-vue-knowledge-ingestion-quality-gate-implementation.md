@@ -207,7 +207,7 @@ git commit -m "测试: 建立Vue摄取无秘密环境门禁"
 - 消费：`TemplateCatalog#getCatalogVersion()` 与 `getChunks()`。
 - 产出：`VueIngestionExpectedSnapshot.from(TemplateCatalog)`。
 - 产出：`ExpectedRow`，字段为 `embeddingId/chunkId/documentId/documentKind/chunkKind/searchText`。
-- 包内测试入口：`from(String catalogVersion, List<KnowledgeChunk> chunks, int expectedCount)`。
+- 包内测试入口：`from(String catalogVersion, List<KnowledgeChunk> chunks)`，所有入口固定校验 23 条知识块。
 
 - [ ] **步骤 1：先写当前目录和非法快照测试**
 
@@ -223,22 +223,33 @@ void 当前目录生成二十三条稳定期望数据() {
     assertEquals(23, snapshot.rowsByChunkId().size());
     assertEquals(1024, snapshot.embeddingDimension());
     assertEquals(Set.of("chunkId", "documentId", "documentKind", "chunkKind", "catalogVersion"),
-            snapshot.metadataKeys());
+    snapshot.metadataKeys());
     snapshot.rowsByChunkId().forEach((chunkId, row) ->
             assertEquals(UUID.nameUUIDFromBytes(chunkId.getBytes(StandardCharsets.UTF_8)),
                     row.embeddingId()));
+    catalog.getChunks().forEach(chunk -> {
+        ExpectedRow row = snapshot.rowsByChunkId().get(chunk.chunkId());
+        assertNotNull(row, chunk.chunkId());
+        assertEquals(chunk.documentId(), row.documentId());
+        assertEquals(chunk.documentKind(), row.documentKind());
+        assertEquals(chunk.chunkKind(), row.chunkKind());
+        assertEquals(chunk.searchText(), row.searchText());
+    });
 }
 
 @Test
 void 拒绝非二十三条目录和重复块标识() {
-    KnowledgeChunk chunk = new KnowledgeChunk(
-            "duplicate", "doc", RagDocumentKind.FEATURE_SNIPPET,
+    KnowledgeChunk first = new KnowledgeChunk(
+            "first", "doc", RagDocumentKind.FEATURE_SNIPPET,
             RagChunkKind.OVERVIEW, "检索文本");
+    KnowledgeChunk second = new KnowledgeChunk(
+            "second", "doc", RagDocumentKind.FEATURE_SNIPPET,
+            RagChunkKind.OVERVIEW, "另一段检索文本");
 
     assertThrows(IllegalArgumentException.class, () ->
-            VueIngestionExpectedSnapshot.from("version", List.of(chunk), 23));
+            VueIngestionExpectedSnapshot.from("version", List.of(first, second)));
     assertThrows(IllegalArgumentException.class, () ->
-            VueIngestionExpectedSnapshot.from("version", List.of(chunk, chunk), 2));
+            VueIngestionExpectedSnapshot.from("version", 含重复chunkId的二十三条块()));
 }
 ```
 
@@ -267,20 +278,19 @@ public record VueIngestionExpectedSnapshot(
             "chunkId", "documentId", "documentKind", "chunkKind", "catalogVersion");
 
     public static VueIngestionExpectedSnapshot from(TemplateCatalog catalog) {
-        return from(catalog.getCatalogVersion(), catalog.getChunks(), CURRENT_CHUNK_COUNT);
+        return from(catalog.getCatalogVersion(), catalog.getChunks());
     }
 
     static VueIngestionExpectedSnapshot from(
             String catalogVersion,
-            List<KnowledgeChunk> chunks,
-            int expectedCount) {
+            List<KnowledgeChunk> chunks) {
         if (catalogVersion == null || catalogVersion.isBlank()) {
             throw new IllegalArgumentException("Vue 目录版本为空");
         }
-        if (chunks == null || chunks.size() != expectedCount) {
+        if (chunks == null || chunks.size() != CURRENT_CHUNK_COUNT) {
             throw new IllegalArgumentException(
                     "Vue 知识块数量必须为 %d，实际为 %d".formatted(
-                            expectedCount, chunks == null ? 0 : chunks.size()));
+                            CURRENT_CHUNK_COUNT, chunks == null ? 0 : chunks.size()));
         }
         Map<String, ExpectedRow> rows = new LinkedHashMap<>();
         for (KnowledgeChunk chunk : chunks) {
