@@ -1,5 +1,32 @@
 # Vue RAG 混合检索全分支最终审查
 
+## Vue 知识摄取物理门禁（2026-08-11，本轮）
+
+### 审查范围与门禁结构
+
+- 本轮验证基线为 `016888e`。新增摄取门禁任务 1～5 的提交链为：任务 1 `aff0895`；任务 2 `e7cb551`、`afa530f`、`1b6b5ff`；任务 3 `6885591`、`fbf578e`、`d00c300`；任务 4 `86c0e1f`、`37b0c23`、`79e4a87`；任务 5 `3223701`、`016888e`。
+- 任务 1～3 建立无秘密环境模型、可信 23 条目录快照与只读 JDBC 物理核验；任务 4 建立三态摄取报告和显式真实摄取入口；任务 5 让真实检索在构造模型服务前强制依赖同一 PGVector 目标的摄取核验。上述提交只改测试门禁与实施计划，没有新增生产接口。
+- 正式入口、开关、报告一一对应：`VueKnowledgeIngestionQualityGateTest` / `RAG_VUE_INGEST=true` / `vue-ingestion-report.md`；`VueRetrievalQualityGateTest` / `RAG_EVAL=true` / `vue-hybrid-retrieval-report.md`；`VueGenerationBuildQualityGateTest` / `RAG_BUILD_EVAL=true` / `vue-generation-build-report.md`。
+- 门禁依赖顺序不可交换：正式 `text-embedding-v4` 摄取并通过 23 条物理核验后才能运行 30 条真实检索；前两项通过且生成模型条件就绪后才能运行十条首次生成构建。
+
+### 本轮实测证据
+
+- 11 类定向测试使用项目 JDK 25，显式 unset 三个 RAG 门禁开关与两个模型变量，并设置 `MAVEN_OPTS='-DsocksNonProxyHosts=localhost|127.*|[::1]'`；精确结果为 51 项、0 failure、0 error、0 skipped，`BUILD SUCCESS`。摄取与检索报告均 fresh 写为“未执行”，且没有正式行数或检索指标。
+- `ai-codegen-rag-eval-pg` 为 `running/healthy`，`vector 0.8.6`。独立随机临时表的实测协议为 `embedding_id uuid`、`embedding vector`、`text text`、`metadata json`；实际向量为 1024 维，项目 Jackson 成功读取严格五个字符串 metadata 键。夹具表随后删除，`templates_vue` 未写入；该探针只证明无模型协议兼容。
+- 完整 Maven 按简报命令 fresh 执行，项目 JDK 25、三个 RAG 门禁开关与两个模型变量均 unset；结果为 317 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。Spring `contextLoads` 实际启动并通过，跳过项均为既有显式外部测试。
+- 完整 Maven fresh 生成的摄取、检索、生成三份报告均为“未执行”，分别由 `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL` 未启用而短路；报告无 Hit@1、Recall@4、Dense 相对差值或 10/10 构建伪成绩。
+- 环境变量只做存在性判断：`DASHSCOPE_API_KEY=UNSET`、`DEEPSEEK_API_KEY=UNSET`。本轮未读取变量值，未搜索工作区外凭据，也没有执行任何真实模型门禁。
+
+### 五轴自审与原总计划完成度
+
+- 正确性：可信快照固定 23 条、1024 维、稳定 UUID、检索文本和严格五键；真实检索先核验摄取，再创建模型及评测服务。报告的“未执行、未通过、通过”状态未混淆。
+- 可读性与架构：环境、快照、物理核验、报告、入口、检索前置各自分层；生产实现无本轮变更，默认 Maven 不承担外部真实成绩。
+- 安全：表名为代码内固定 `templates_vue`，目录版本使用 `PreparedStatement` 绑定；报告不输出密码、源码、向量或原始异常消息，本轮日志和文档也没有记录数据库密码。
+- 资源与性能：JDBC Connection、Statement、ResultSet 使用受控关闭；默认路径在数据库、DashScope 与评测服务构造前短路。高成本真实模型、30 条检索、十条生成和五骨架 npm 均未无授权执行。
+- 原总计划审计：第 1 项任务 1～7 生产实现、单元测试和默认 Maven 有当前分支证据；第 2 项正式 23 条摄取未完成；第 3 项 30 条真实检索指标未完成；第 4 项十条首次生成 10/10 未完成；第 5 项引用现有 2026-08-11 五骨架 5/5 真实构建证据，本轮不重跑高成本 npm；第 6 项本轮完整 Maven 完成；第 7 项中文提交均留在本地分支，本轮未 push、未合并。
+
+审查结论：未发现 Critical、Important 或 Minor 代码问题；代码可以合并。发布结论仍为不可发布，因为正式 `templates_vue` 当前目录版本 23 条物理核验、30 条真实检索门槛和十条首次生成 10/10 均没有成绩。默认 `BUILD SUCCESS` 与独立协议探针不能替代外部真实通过。
+
 ## 五骨架真实构建门禁补强复核（2026-08-11）
 
 - 完成度审计确认历史 5/5 构建日志存在，但受控测试只覆盖基础骨架，不能持续证明任务 2 的 5/5 要求。现已将该测试改为“默认校验五个固定来源 + 显式动态构建五个真实工程”。

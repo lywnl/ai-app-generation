@@ -1,5 +1,37 @@
 # Vue RAG 混合检索执行进度
 
+## Vue 知识摄取物理门禁（2026-08-11，本轮）
+
+### 任务 1～5 提交范围与门禁
+
+- 任务 1（`aff0895`）：新增 `VuePgVectorTarget`、`VueIngestionEnvironment` 及环境测试；只在 `RAG_VUE_INGEST=true` 且模型、数据库环境变量存在时探测数据库端口，不保存或输出秘密。
+- 任务 2（`e7cb551`、`afa530f`、`1b6b5ff`）：新增可信目录快照及测试，固定当前目录为 18 个父文档、23 个知识块、1024 维、严格五项 metadata 和稳定 UUID。
+- 任务 3（`6885591`、`fbf578e`、`d00c300`）：新增 PGVector 物理行、核验结果、JDBC 核验器及测试；固定读取 `templates_vue`，参数化目录版本，核验列协议、23 条当前版本数据、维度、文本、稳定 UUID 与严格五键，并隔离数据库脏数据标识。
+- 任务 4（`86c0e1f`、`37b0c23`、`79e4a87`）：新增三态摄取报告和 `VueKnowledgeIngestionQualityGateTest`；显式开关为 `RAG_VUE_INGEST=true`，报告为 `target/rag-eval/vue-ingestion-report.md`。
+- 任务 5（`3223701`、`016888e`）：真实检索门禁在创建模型与检索服务前强制核验同一 PGVector 目标的正式摄取；显式开关为 `RAG_EVAL=true`，报告为 `target/rag-eval/vue-hybrid-retrieval-report.md`。
+- 十条真实生成构建的既有入口为 `VueGenerationBuildQualityGateTest`，显式开关为 `RAG_BUILD_EVAL=true`，报告为 `target/rag-eval/vue-generation-build-report.md`。本轮承载代码的验证基线为 `016888e`；任务 1～5 均只改测试门禁/计划，没有新增生产接口。
+
+### 本轮 fresh 验证
+
+- 11 类定向命令：使用项目 `.codex/runtime/jdk25`，显式 unset `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL`、`DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`，并设置 `MAVEN_OPTS='-DsocksNonProxyHosts=localhost|127.*|[::1]'`，执行简报指定的 11 类测试；结果为 51 项、0 failure、0 error、0 skipped，`BUILD SUCCESS`。
+- 定向测试 fresh 生成的摄取报告与检索报告均为“状态：未执行”，原因分别为 `RAG_VUE_INGEST 未设置为 true`、`RAG_EVAL 未设置为 true`；两份报告没有正式摄取计数、Hit@1、Recall@4 或 Dense 相对退化伪指标。
+- 本地容器 `ai-codegen-rag-eval-pg` 实测为 `running/healthy`，`vector` 扩展版本为 `0.8.6`。无模型探针使用独立随机临时表，实测列为 `embedding_id uuid`、`embedding vector`、`text text`、`metadata json`，实际 `vector_dims(embedding)=1024`；项目 Jackson 成功读取且确认 metadata 恰好为 `chunkId`、`documentId`、`documentKind`、`chunkKind`、`catalogVersion` 五个字符串键。探针表已删除，`templates_vue` 未被写入，故该结果只证明协议，不代表正式摄取通过。
+- 完整 Maven 按简报命令 fresh 执行：项目 JDK 25、三个 RAG 门禁开关和两个模型变量均 unset，并使用回环直连 JVM 参数；结果为 317 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。Spring `contextLoads` 实际启动并通过；7 个跳过项均为既有显式外部测试，其中五骨架来源校验执行、真实 npm 动态构建按开关跳过。
+- 完整 Maven fresh 生成的三份报告均为“未执行”：摄取、真实检索、十条生成分别由 `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL` 未启用而短路，报告中没有外部真实成绩。默认测试通过只证明短路语义和代码回归通过，不等于外部真实门禁通过。
+
+### 外部条件与最终完成审计
+
+- 只按环境变量存在性审计：`DASHSCOPE_API_KEY=UNSET`、`DEEPSEEK_API_KEY=UNSET`；未读取变量值，也未搜索钥匙串、Shell 历史或其他凭据。由于前者 unset，本轮没有执行正式 `text-embedding-v4` 摄取和 30 条真实 Hybrid/Dense 检索；由于前两项没有通过且后者也 unset，没有执行十条首次真实生成构建。
+- 原总计划第 1 项：任务 1～7 的生产实现、单元测试和默认 Maven 有当前分支证据；本轮未发现需代码修复的规格、安全、资源或异常语义问题。
+- 原总计划第 2 项：未完成。正式 `templates_vue` 当前不存在；没有当前目录版本的 23 条真实 `text-embedding-v4` 物理核验成绩。
+- 原总计划第 3 项：未完成。没有 30 条真实检索的 `Skeleton Hit@1 >= 0.90`、`Feature Recall@4 >= 0.85` 或相对 Dense 退化不超过 `0.05` 的成绩。
+- 原总计划第 4 项：未完成。没有十条固定需求首次生成后的 10/10 `npm install` 与 `npm run build` 成绩。
+- 原总计划第 5 项：已有 2026-08-11 历史显式门禁证据证明五个策展骨架真实构建 5/5；本轮按简报不重复高成本 npm，完整 Maven 只执行固定五来源校验并跳过显式真实构建。
+- 原总计划第 6 项：完成。本轮完整 Maven 为 317 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。
+- 原总计划第 7 项：当前中文提交均在本地分支；本轮未 push、未合并。
+
+结论：代码与默认门禁可以合并；PGVector 基础设施和无模型物理协议可用。但正式 23 条摄取、30 条真实检索指标和十条首次生成构建均无成绩，因此当前不可发布。必须按“正式摄取并物理核验 → 真实检索达标 → 十条生成 10/10”顺序补齐外部门禁，不能用默认测试或协议探针缩小成功定义。
+
 ## 五骨架真实构建门禁补强（2026-08-11）
 
 - 完成度审计发现：历史任务 2 曾手工验证 5/5 骨架，但永久测试 `VueSkeletonRealBuildTest` 只构建 `vue-skeleton-basic-001`，无法在后续回归中证明计划要求的 5/5。该问题是门禁覆盖不足，不是骨架实现失败。
