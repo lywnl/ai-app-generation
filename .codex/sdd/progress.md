@@ -1,5 +1,15 @@
 # Vue RAG 混合检索执行进度
 
+## 最终收口（2026-08-11，当前结论）
+
+- 当前分支：`codex/vue-rag-hybrid-retrieval`；代码范围：`5850ef9..b05e7aa`，共 60 个提交；未 push、未 merge，工作树继续保留。
+- 全分支终审修复提交：`cfab860` 收紧五个 Vue 文件工具的路径边界并固定七个批准依赖版本；`3dc3b4d` 使目录安全遍历在进入前跳过 `node_modules` 等忽略目录；`cdd06f7` 将 Vue 系统提示词与构建器的精确依赖版本契约对齐；`b05e7aa` 改为真实写盘成功后记账、合并规范路径状态键，并用固定条带锁保证同一 appId 下的分类、I/O、提交、重置和计数一致。
+- TDD 与定向验证：文件工具、状态管理器、构建器及进程执行相关 fresh 回归 63/63；Vue RAG/构建扩大定向历史门禁 231/231；均为 0 failure、0 error、0 skipped。五骨架显式真实门禁 6/6，五个骨架均完成真实 npm 安装和可信 Vite 构建。
+- 最终 fresh 完整 Maven：项目 JDK 25.0.4，显式 unset `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL`、`RAG_SKELETON_BUILD`、两个模型密钥和 PG 密码；实际执行 432 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。三个报告均在本轮重写为“状态：未执行”，没有正式摄取数、Hit@1、Recall@4、Dense 相对退化或 10/10 伪成绩。
+- 最新独立全分支终审：评审包 `.codex/sdd/review-5850ef9..b05e7aa.diff`，SHA-256 为 `3e4aa9fb824727f6075cd5a9ebf4841e727efa7dac5405bfc202b29e389587dc`；Spec Compliance 与 Task quality 通过，Critical=0、Important=0、Minor=0，`Ready to merge=Yes`。
+- 代码合并判断与发布判断严格分离：当前代码可以合并，但不可发布。仍须依次取得“正式 23 条 `text-embedding-v4` 摄取及 PGVector 物理核验 → 30 条真实 Hybrid/Dense 检索达标 → 十条首次真实生成 10/10 构建”三项外部门禁，生产 `RAG_HYBRID_ENABLED` 必须保持 `false`。
+- 已知平台限制：标准 JVM `Path` API 没有可移植的 `openat` 式原子路径操作，当前实现已阻断模型可直接提供的绝对路径、`..` 和稳定符号链接逃逸，但无法彻底消除本地高权限进程在校验与 I/O 之间交换符号链接的 TOCTOU 竞争。
+
 ## 全分支终审修复（2026-08-11）
 
 - 修复任务 1：完成（`badb3a9..55160e5`）。目录只接受原始 JSON 整数 `schemaVersion: 1`，补齐工程元数据和依赖键值校验；三类 RAG 门禁统一只使用 `RAG_PGVECTOR_PASSWORD`。
@@ -11,6 +21,19 @@
 - TDD 与回归：报告/Runner/入口生命周期分别完成 RED→GREEN；历次独立审查 finding 均有回归锁定。最终项目 JDK 25 默认 unset Vue RAG 回归 129/129，0 failure、0 error、0 skipped；`git diff --check` 通过。
 - 任务 2 正式独立复审：Spec Compliance 通过，Task quality 通过，Critical=0、Important=0。两个非阻断 Minor 为独立检索入口仍有两次不可变 JVM 环境读取、生成环境保留一个无调用的 `inspectSystemEnvironment()`；留待最终全分支审查重新分级。
 - 任务 2 未读取历史 Markdown 作为程序状态；未执行正式模型、数据库评测或十条 npm 生成，真实发布结论不变。
+- 修复任务 3 步骤 1～5：完成（`bbf9893..2371204`）。生产 Compose 与 `.env.example` 均默认关闭 `RAG_HYBRID_ENABLED`；README 固定真实摄取、真实检索、十条生成、人工开启、重启 backend 的顺序。
+- TDD：生产配置 RED 1 项中 1 项失败、GREEN 1/1；独立审查发现服务顺序硬编码后追加 RED 2 项中 1 项失败、GREEN 4/4。静态测试现验证全文件唯一精确行且只位于 `services.backend.environment`。
+- 任务 3 独立复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0；可以进入 fresh 全量验证。
+- 修复任务 3 步骤 6：项目 JDK 25、三个 RAG 开关、两个模型密钥和 `RAG_PGVECTOR_PASSWORD` 均显式 unset，回环地址通过 `MAVEN_OPTS` 直连；fresh 定向回归实际执行 133 项，0 failure、0 error、0 skipped，`BUILD SUCCESS`。UTF-8 原始日志保存于 `.codex/sdd/vue-rag-final-targeted-2026-08-11.log`，该运行证据目录按仓库规则忽略，不强行纳入版本控制。
+- 修复任务 3 步骤 7：相同环境边界下 fresh 完整 Maven 实际执行 377 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`；`AiAppGenerationApplicationTests` 使用 Java 25.0.4 启动真实 Spring 上下文并通过。7 项跳过来自五骨架真实 npm 构建、网页截图、旧 RAG 联网评测和四项真实模型外部测试；UTF-8 原始日志为 `.codex/sdd/vue-rag-final-full-maven-2026-08-11.log`。
+- 修复任务 3 报告核验：三份报告修改时间均落在本轮完整 Maven 内，摄取、检索、生成分别由 `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL` 未启用而写为“状态：未执行”；报告中没有“状态：通过”、Hit@1、Recall@4、Dense 相对退化、正式摄取数量或 10/10 伪成绩。
+- 首轮全分支终审：范围 `5850ef9..2371204`，发现 Critical=1、Important=2、Minor=3，结论为不可合并、不可发布。问题分别是模型生成工程的构建子进程继承宿主秘密、固定报告与生成目录存在跨 JVM 竞争、目录允许依赖跨 scope 冲突、null 依赖 Map 未归一化、门禁未冻结环境快照及生成环境死入口。
+- 统一修复提交：`7fa30d2` 关闭六项 finding；`7c602af` 记录完整 TDD 证据；`6fca9e5` 只修复双 JVM 进程树测试在完整套件负载下 200ms 启动预算不足的时序抖动，未修改生产代码。构建边界现清空子进程环境并只保留清洗 PATH，不执行模型 build script，拒绝可控锁文件、`.npmrc`、预存 `node_modules`、非受控版本源和依赖图扩展字段，使用可信 Vite 配置；报告完整生命周期使用 JVM 锁与跨进程文件锁，appId 通过双目录原子领取。
+- 修复后主代理 fresh 定向：项目 JDK 25，三个 RAG 开关、五骨架开关、两个模型密钥与 PG 密码显式 unset；实际执行 213 项，0 failure、0 error、0 skipped，`BUILD SUCCESS`。原始日志为 `.codex/sdd/vue-rag-findings-fix-targeted-2026-08-11.log`。
+- 修复后主代理五骨架真实构建：`RAG_SKELETON_BUILD=true`，实际执行 6 项，0 failure、0 error、0 skipped；五个骨架均完成真实 npm 安装和可信 Vite CLI 构建，未残留可信临时配置。原始日志为 `.codex/sdd/vue-rag-findings-fix-five-skeletons-2026-08-11.log`。
+- 修复后首次完整 Maven 暴露测试时序问题：406 项中 1 failure，真实父 JVM 在 200ms 内尚未写出子 PID 即被超时清理；失败日志为 `.codex/sdd/vue-rag-findings-fix-full-maven-2026-08-11.log`。`6fca9e5` 将该双 JVM 启动预算改为 2 秒、专用外层有界上限改为 8 秒，随后五个独立 Maven 进程均为 8/8。
+- 修复后主代理最终 fresh 完整 Maven：406 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`；`AiAppGenerationApplicationTests` 使用 Java 25.0.4 启动 Spring 上下文并通过。三份报告均在本轮写为“状态：未执行”且没有成功指标。原始日志为 `.codex/sdd/vue-rag-findings-fix-full-maven-final-2026-08-11.log`。
+- 该阶段历史结论：当时修复后独立复审尚在进行；当前结论已由文档顶部“最终收口”替代。正式 23 条 `text-embedding-v4` 摄取、30 条真实检索指标和十条首次生成 10/10 仍无本轮成绩，发布结论始终为“不可发布”。
 
 ## Vue 知识摄取物理门禁（2026-08-11，本轮）
 
@@ -42,7 +65,7 @@
 - 原总计划第 6 项：完成。本轮完整 Maven 为 317 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。
 - 原总计划第 7 项：当前中文提交均在本地分支；本轮未 push、未合并。
 
-结论：代码与默认门禁可以合并；PGVector 基础设施和无模型物理协议可用。但正式 23 条摄取、30 条真实检索指标和十条首次生成构建均无成绩，因此当前不可发布。必须按“正式摄取并物理核验 → 真实检索达标 → 十条生成 10/10”顺序补齐外部门禁，不能用默认测试或协议探针缩小成功定义。
+该阶段历史结论：当时判断代码与默认门禁可以合并，PGVector 基础设施和无模型物理协议可用；该合并判断早于本轮五项终审修复，当前结论以本节顶部的新终审为准。正式 23 条摄取、30 条真实检索指标和十条首次生成构建均无成绩，因此当前不可发布；必须按“正式摄取并物理核验 → 真实检索达标 → 十条生成 10/10”顺序补齐外部门禁，不能用默认测试或协议探针缩小成功定义。
 
 ## 五骨架真实构建门禁补强（2026-08-11）
 
@@ -90,4 +113,4 @@
 - 任务 6：完成（提交 `ede5a53..12c5d61`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
 - 任务 7：完成（提交 `12c5d61..579e686`，最终复审 Spec Compliance 与 Task quality 均通过，无遗留问题）
 - 任务 8：代码与默认 Maven 门禁完成（提交 `579e686..a5c09b8`，定向复审和 Maven 门禁复审均通过；真实外部门禁仍未执行）
-- 全分支独立审查：最终 Spec Compliance 与 Task quality 均通过，Critical/Important/Minor 均为 0；代码可合并，默认 Maven 已通过，但两个真实外部门禁没有成绩，当前仍不可发布
+- 该阶段历史全分支独立审查：Spec Compliance 与 Task quality 均通过，Critical/Important/Minor 均为 0；当时判断代码可合并。该判断早于本轮五项终审修复，当前合并结论以本节顶部的新终审为准；两个真实外部门禁没有成绩，发布状态始终为不可发布。

@@ -1,5 +1,53 @@
 # Vue RAG 混合检索全分支最终审查
 
+## 最终独立复审结论（2026-08-11，当前结论）
+
+### 审查身份与范围
+
+- 分支：`codex/vue-rag-hybrid-retrieval`；基线：`5850ef9f4ffb50d58839245c3cd4dfaf4bad67a8`；终点：`b05e7aa7d08f2490345ff4d225a8fe6ffc30783c`；共 60 个提交。
+- 最终评审包：`.codex/sdd/review-5850ef9..b05e7aa.diff`，SHA-256：`3e4aa9fb824727f6075cd5a9ebf4841e727efa7dac5405bfc202b29e389587dc`。
+- 最后四次生产修复分别为：`cfab860` 路径边界与依赖精确白名单、`3dc3b4d` 忽略依赖目录的安全遍历、`cdd06f7` 提示词与依赖版本契约对齐、`b05e7aa` 成功写盘后记账及规范状态键。
+
+### Fresh 验证与报告真实性
+
+- 文件工具、状态管理器、构建器及进程执行相关 fresh 回归：63/63，0 failure、0 error、0 skipped。
+- Vue RAG/构建扩大定向历史门禁：231/231，0 failure、0 error、0 skipped；五骨架显式真实构建：6/6，0 failure、0 error、0 skipped，五个骨架均真实完成 npm 安装和可信 Vite 构建。
+- 最终完整 Maven 使用项目 JDK 25.0.4，显式清空三个 RAG 门禁开关、五骨架开关、两个模型密钥和 PG 密码；432 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。
+- 三份 `target/rag-eval/` 报告均由本轮完整 Maven 重写为“状态：未执行”：正式摄取因 `RAG_VUE_INGEST` 未开启、真实检索因 `RAG_EVAL` 未开启、十条生成因 `RAG_BUILD_EVAL` 未开启。报告没有真实成功指标，默认 Maven 成功不能替代外部门禁。
+
+### 独立复审 verdict
+
+- Spec Compliance：通过。
+- Task quality：通过。
+- Critical：0；Important：0；Minor：0。
+- `Ready to merge`：Yes。上一轮发现的“真实文件 I/O 前提交状态”和“等价路径使用不同状态键”已由 `b05e7aa` 关闭；首次失败不创建空应用状态，同一 appId 的写入、重置和计数共享固定条带锁。
+- 代码合并判断：可以合并。
+- 发布判断：不可发布。正式 23 条 `text-embedding-v4` 摄取及 PGVector 物理核验、30 条真实 Hybrid/Dense 检索指标、十条首次真实生成 10/10 均未执行，生产开关必须保持 `false`。
+- 外部门禁顺序不可调整：正式摄取并物理核验 → 30 条真实检索达标 → 十条首次生成 10/10。
+- 路径安全遗留限制：标准 JVM `Path` API 无法可移植地提供 `openat` 式原子语义，因此无法完全消除本地高权限进程交换符号链接造成的 TOCTOU；当前实现覆盖模型可直接控制的绝对路径、父级逃逸和稳定符号链接边界。
+
+## 终审修复验收（2026-08-11，历史阶段）
+
+### 当前范围与修复状态
+
+- 首轮全分支终审范围为 `5850ef9..2371204`。终审确认目录契约、专用 PG 密码、同轮前置、报告原子替换和生产开关主体成立，但发现 Critical=1、Important=2、Minor=3，因此结论为不可合并、不可发布。
+- finding 已由 `7fa30d2` 统一修复并由 `7c602af` 记录证据；`6fca9e5` 只修复完整套件暴露的双 JVM 测试启动预算不足，没有修改生产代码。当前复审范围为 `5850ef9..6fca9e5`，完整包为 `.codex/sdd/review-5850ef9..6fca9e5.diff`。
+- 安全根因修复位于进程创建和构建信任边界：子进程不继承秘密，模型脚本和项目 Vite/PostCSS 配置不执行，依赖解析输入 fail-closed。并发根因修复位于报告完整生命周期和生成目录领取边界：跨进程锁阻止报告交错，原子双目录占用阻止 appId TOCTOU。
+
+### Fresh 验证证据
+
+- 修复后定向命令使用项目 JDK 25，显式 unset 三个 RAG 开关、五骨架开关、两个模型密钥和 PG 密码，并设置回环直连参数；实际执行 213 项，0 failure、0 error、0 skipped，`BUILD SUCCESS`。原始 UTF-8 日志为 `.codex/sdd/vue-rag-findings-fix-targeted-2026-08-11.log`。
+- 修复后显式五骨架门禁执行 6 项，0 failure、0 error、0 skipped，五个骨架均真实完成 npm 安装和可信 Vite 构建；原始日志为 `.codex/sdd/vue-rag-findings-fix-five-skeletons-2026-08-11.log`。
+- 首次修复后完整 Maven 为 406 项中 1 failure，原因是进程树测试仅给双 JVM 200ms 启动预算；失败日志保留为 `.codex/sdd/vue-rag-findings-fix-full-maven-2026-08-11.log`。`6fca9e5` 将该用例启动预算改为 2 秒并保留 8 秒有界上限，五个独立 Maven 进程均 8/8。
+- 最终 fresh 完整 Maven 实际执行 406 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。`AiAppGenerationApplicationTests` 使用 Java 25.0.4 启动 Spring 上下文并通过；7 项跳过均属于显式外部测试。原始 UTF-8 日志为 `.codex/sdd/vue-rag-findings-fix-full-maven-final-2026-08-11.log`。
+- 三份 `target/rag-eval/` 报告修改时间均落在本轮完整 Maven 内：摄取、真实检索、十条生成均为“状态：未执行”，原因分别是对应显式开关未设置为 `true`。报告没有通过状态或真实质量指标，不能把默认 Maven 成功解释为外部门禁成功。
+
+### 当前结论
+
+- 代码验证：修复后 fresh 定向回归、五骨架真实构建和完整 Maven 均通过。
+- 合并判断：等待 `5850ef9..6fca9e5` 修复后独立复审；在 Critical/Important 清零前不下结论。
+- 发布判断：不可发布。正式 23 条 `text-embedding-v4` 摄取及物理核验、30 条真实 Hybrid/Dense 检索指标、十条首次真实生成 10/10 均没有本轮成绩，生产开关必须保持 `false`。
+
 ## Vue 知识摄取物理门禁（2026-08-11，本轮）
 
 ### 审查范围与门禁结构
@@ -25,7 +73,7 @@
 - 资源与性能：JDBC Connection、Statement、ResultSet 使用受控关闭；默认路径在数据库、DashScope 与评测服务构造前短路。高成本真实模型、30 条检索、十条生成和五骨架 npm 均未无授权执行。
 - 原总计划审计：第 1 项任务 1～7 生产实现、单元测试和默认 Maven 有当前分支证据；第 2 项正式 23 条摄取未完成；第 3 项 30 条真实检索指标未完成；第 4 项十条首次生成 10/10 未完成；第 5 项引用现有 2026-08-11 五骨架 5/5 真实构建证据，本轮不重跑高成本 npm；第 6 项本轮完整 Maven 完成；第 7 项中文提交均留在本地分支，本轮未 push、未合并。
 
-审查结论：未发现 Critical、Important 或 Minor 代码问题；代码可以合并。发布结论仍为不可发布，因为正式 `templates_vue` 当前目录版本 23 条物理核验、30 条真实检索门槛和十条首次生成 10/10 均没有成绩。默认 `BUILD SUCCESS` 与独立协议探针不能替代外部真实通过。
+该阶段历史结论：当时未发现 Critical、Important 或 Minor 代码问题并判断代码可以合并。该判断早于本轮五项终审修复，当前合并判断以文档顶部的新终审为准。发布结论始终为不可发布，因为正式 `templates_vue` 当前目录版本 23 条物理核验、30 条真实检索门槛和十条首次生成 10/10 均没有成绩；默认 `BUILD SUCCESS` 与独立协议探针不能替代外部真实通过。
 
 ## 五骨架真实构建门禁补强复核（2026-08-11）
 
@@ -46,7 +94,7 @@
 - 在数据库前置条件已满足的情况下，`VueRetrievalQualityGateTest` 与 `VueGenerationBuildQualityGateTest` 均以项目 JDK 25 重新执行，各 1/1、0 failure、0 error、0 skipped、`BUILD SUCCESS`。两项成功只证明门控和未执行报告正常，不代表真实门槛通过。
 - 最新真实检索报告只剩 `DASHSCOPE_API_KEY` 缺失；最新真实生成构建报告只剩 `DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY` 缺失。前者阻断正式摄取、Dense、Rerank 与检索指标，后者额外阻断十条真实生成。
 
-当前结论：默认 Maven 门禁、PGVector 基础设施和 Java 协议均已验证；代码仍可合并，但真实 Skeleton Hit@1、Feature Recall@4、Dense 相对退化与 10/10 构建没有成绩，所以仍不可发布。取得两个模型凭据后，应先摄取并核对 `templates_vue` 的当前目录版本与 23 条可见数据，再顺序运行两个真实门禁。
+该阶段历史结论：默认 Maven 门禁、PGVector 基础设施和 Java 协议均已验证，当时判断代码可以合并；该合并判断已由文档顶部的新终审状态替代。真实 Skeleton Hit@1、Feature Recall@4、Dense 相对退化与 10/10 构建没有成绩，所以仍不可发布。取得两个模型凭据后，应先摄取并核对 `templates_vue` 的当前目录版本与 23 条可见数据，再顺序运行两个真实门禁。
 
 ## Maven 门禁最终收敛（2026-08-11，替代此前失败状态）
 
@@ -56,10 +104,10 @@
 - 测试代码没有提交真实或虚假凭据。`dashscope.api-key=` 是空测试配置，仅使真实 `RagRerankService` 构造不发请求的 `RestClient`；运行进程同时显式清空所有相关环境变量。
 - 主代理最终定向验证：`AiAppGenerationApplicationTests,JsonMessageStreamHandlerTest` 共 3 项，0 failure、0 error、0 skipped；日志明确出现 `Started AiAppGenerationApplicationTests`。
 - 主代理补强五骨架门禁后的最终完整验证：279 项，0 failure、0 error、7 skipped，`BUILD SUCCESS`。七项均是显式外部门控的真实模型、网页、旧 RAG 联网评测或真实 npm 构建测试。
-- 独立最终复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0，Ready to merge 为 Yes，所有历史 finding 已关闭。
+- 该阶段独立复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0，当时 `Ready to merge` 为 `Yes`，所有当时的 finding 已关闭；当前合并判断以文档顶部的新终审状态为准。
 - 对应提交：`427fb16`、`25b83cc`、`a5c09b8`。未修改 `src/main/**`，未推送远程。
 
-当前结论：默认 Maven 门禁已完成，代码仍可合并；PGVector 基础设施后来已补齐并通过 Java 协议探针，真实 Vue Hybrid/Dense 检索指标与十条真实生成构建当前只因缺少模型凭据未执行，所以发布结论仍为不可发布。
+该阶段历史结论：默认 Maven 门禁完成后，当时判断代码可以合并；该合并判断已由文档顶部的新终审状态替代。PGVector 基础设施后来已补齐并通过 Java 协议探针，真实 Vue Hybrid/Dense 检索指标与十条真实生成构建当前只因缺少模型凭据未执行，所以发布结论仍为不可发布。
 
 ## 最终审查 Important 修复（2026-08-10）
 
@@ -119,7 +167,7 @@
 - Spec Compliance：通过。
 - Task quality：通过。
 - Critical：0；Important：0；Minor：0。
-- 代码合并结论：可以合并。
+- 该阶段代码合并结论：可以合并；当前合并判断以文档顶部的新终审状态为准。
 - 当时发布结论：不可发布。完整 Maven 的 10 个错误已在 2026-08-11 关闭；当前不可发布的剩余原因只有真实检索指标和 10/10 真实生成构建没有成绩。
 - 本轮未合并、未推送、未删除分支或工作树。
 
@@ -210,6 +258,6 @@ Hybrid 开启时，从目录/BM25/Dense 到 RRF、Rerank、兼容筛选、Prompt
 
 ## Assessment
 
-**历史 Ready to merge：No；当前 Ready to merge：Yes。**
+**该阶段 Ready to merge：Yes；当前合并判断以文档顶部的新终审状态为准。**
 
 两项历史 Important、跨层回归和完整 Maven 均已关闭。发布前仍必须取得真实 30 条检索门槛及 10/10 真实生成构建成绩。
