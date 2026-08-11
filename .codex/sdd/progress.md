@@ -1,5 +1,13 @@
 # Vue RAG 混合检索执行进度
 
+## 全分支终审修复（2026-08-11）
+
+- 修复任务 1：完成（`badb3a9..55160e5`）。目录只接受原始 JSON 整数 `schemaVersion: 1`，补齐工程元数据和依赖键值校验；三类 RAG 门禁统一只使用 `RAG_PGVECTOR_PASSWORD`。
+- TDD：目录契约 RED 44 项中 21 项失败、GREEN 44/44；严格 schema 类型追加 RED 50 项中 2 项失败、GREEN 50/50；密码环境 RED 20 项中 4 项失败、GREEN 20/20；真实摄取入口参数捕获补强后 11/11。
+- 回归：项目 JDK 25 定向 78/78，0 failure、0 error、0 skipped；`git diff --check` 通过。
+- 任务级独立复审：Spec Compliance 通过，Task quality 通过，Critical/Important/Minor 均为 0；原“只测密码提取、不捕获 store/verifier 实参”的 Important 已由 `55160e5` 关闭。
+- 真实模型、正式 PGVector 摄取、30 条真实检索和十条首次生成均未执行，不改变“不可发布”结论。
+
 ## Vue 知识摄取物理门禁（2026-08-11，本轮）
 
 ### 任务 1～5 提交范围与门禁
