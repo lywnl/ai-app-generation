@@ -15,7 +15,7 @@
 
 - 11 类定向命令：使用项目 `.codex/runtime/jdk25`，显式 unset `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL`、`DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`，并设置 `MAVEN_OPTS='-DsocksNonProxyHosts=localhost|127.*|[::1]'`，执行简报指定的 11 类测试；结果为 51 项、0 failure、0 error、0 skipped，`BUILD SUCCESS`。
 - 定向测试 fresh 生成的摄取报告与检索报告均为“状态：未执行”，原因分别为 `RAG_VUE_INGEST 未设置为 true`、`RAG_EVAL 未设置为 true`；两份报告没有正式摄取计数、Hit@1、Recall@4 或 Dense 相对退化伪指标。
-- 本地容器 `ai-codegen-rag-eval-pg` 实测为 `running/healthy`，`vector` 扩展版本为 `0.8.6`。无模型探针使用独立随机临时表，实测列为 `embedding_id uuid`、`embedding vector`、`text text`、`metadata json`，实际 `vector_dims(embedding)=1024`；项目 Jackson 成功读取且确认 metadata 恰好为 `chunkId`、`documentId`、`documentKind`、`chunkKind`、`catalogVersion` 五个字符串键。探针表已删除，`templates_vue` 未被写入，故该结果只证明协议，不代表正式摄取通过。
+- 本地容器 `ai-codegen-rag-eval-pg` 实测为 `running/healthy`，`vector` 扩展版本为 `0.8.6`。无模型探针使用 PID 后缀的独立一次性夹具表，由 trap 和显式 `DROP TABLE` 清理；实测列二元类型为 `embedding_id data_type=uuid, udt_name=uuid`、`embedding data_type=USER-DEFINED, udt_name=vector`、`text data_type=text, udt_name=text`、`metadata data_type=json, udt_name=json`，实际 `vector_dims(embedding)=1024`；项目 Jackson 成功读取且确认 metadata 恰好为 `chunkId`、`documentId`、`documentKind`、`chunkKind`、`catalogVersion` 五个字符串键。夹具表已删除，`templates_vue` 未被写入，故该结果只证明协议，不代表正式摄取通过。
 - 完整 Maven 按简报命令 fresh 执行：项目 JDK 25、三个 RAG 门禁开关和两个模型变量均 unset，并使用回环直连 JVM 参数；结果为 317 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。Spring `contextLoads` 实际启动并通过；7 个跳过项均为既有显式外部测试，其中五骨架来源校验执行、真实 npm 动态构建按开关跳过。
 - 完整 Maven fresh 生成的三份报告均为“未执行”：摄取、真实检索、十条生成分别由 `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL` 未启用而短路，报告中没有外部真实成绩。默认测试通过只证明短路语义和代码回归通过，不等于外部真实门禁通过。
 

@@ -12,7 +12,7 @@
 ### 本轮实测证据
 
 - 11 类定向测试使用项目 JDK 25，显式 unset 三个 RAG 门禁开关与两个模型变量，并设置 `MAVEN_OPTS='-DsocksNonProxyHosts=localhost|127.*|[::1]'`；精确结果为 51 项、0 failure、0 error、0 skipped，`BUILD SUCCESS`。摄取与检索报告均 fresh 写为“未执行”，且没有正式行数或检索指标。
-- `ai-codegen-rag-eval-pg` 为 `running/healthy`，`vector 0.8.6`。独立随机临时表的实测协议为 `embedding_id uuid`、`embedding vector`、`text text`、`metadata json`；实际向量为 1024 维，项目 Jackson 成功读取严格五个字符串 metadata 键。夹具表随后删除，`templates_vue` 未写入；该探针只证明无模型协议兼容。
+- `ai-codegen-rag-eval-pg` 为 `running/healthy`，`vector 0.8.6`。无模型探针使用 PID 后缀的独立一次性夹具表，由 trap 和显式 `DROP TABLE` 清理；实测列二元类型为 `embedding_id data_type=uuid, udt_name=uuid`、`embedding data_type=USER-DEFINED, udt_name=vector`、`text data_type=text, udt_name=text`、`metadata data_type=json, udt_name=json`。实际向量为 1024 维，项目 Jackson 成功读取严格五个字符串 metadata 键。夹具表随后删除，`templates_vue` 未写入；该探针只证明无模型协议兼容。
 - 完整 Maven 按简报命令 fresh 执行，项目 JDK 25、三个 RAG 门禁开关与两个模型变量均 unset；结果为 317 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`。Spring `contextLoads` 实际启动并通过，跳过项均为既有显式外部测试。
 - 完整 Maven fresh 生成的摄取、检索、生成三份报告均为“未执行”，分别由 `RAG_VUE_INGEST`、`RAG_EVAL`、`RAG_BUILD_EVAL` 未启用而短路；报告无 Hit@1、Recall@4、Dense 相对差值或 10/10 构建伪成绩。
 - 环境变量只做存在性判断：`DASHSCOPE_API_KEY=UNSET`、`DEEPSEEK_API_KEY=UNSET`。本轮未读取变量值，未搜索工作区外凭据，也没有执行任何真实模型门禁。
