@@ -42,10 +42,12 @@ public final class VueRetrievalEvaluator {
             List<String> featureIds = context == null
                     ? List.of()
                     : context.features().stream().map(TemplateDoc::getId).toList();
-            return new VueRetrievalObservation(evalCase, skeletonId, featureIds, null);
+            return new VueRetrievalObservation(
+                    evalCase, skeletonId, featureIds, null,
+                    context == null || context.degraded());
         } catch (RuntimeException exception) {
             return new VueRetrievalObservation(
-                    evalCase, null, List.of(), safeError(exception));
+                    evalCase, null, List.of(), safeError(exception), true);
         }
     }
 

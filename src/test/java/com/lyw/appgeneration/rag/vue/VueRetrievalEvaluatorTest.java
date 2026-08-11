@@ -40,6 +40,27 @@ class VueRetrievalEvaluatorTest {
         verify(retrievalService).retrieveVueProjectDenseOnlyForEvaluation("真实需求");
     }
 
+    @Test
+    void 将Hybrid退化和Dense异常写入结构化观察结果() {
+        RagRetrievalService retrievalService = mock(RagRetrievalService.class);
+        TemplateDoc skeleton = document("s1");
+        when(retrievalService.retrieveVueProject("真实需求"))
+                .thenReturn(new VueRagContext(skeleton, List.of(), "catalog", true));
+        when(retrievalService.retrieveVueProjectDenseOnlyForEvaluation("真实需求"))
+                .thenThrow(new IllegalStateException("Dense 异常"));
+        List<VueEvalCase> cases = java.util.stream.IntStream.range(0, 30)
+                .mapToObj(index -> new VueEvalCase(
+                        "q" + index, "真实需求", "同义", List.of("s1"), List.of()))
+                .toList();
+
+        VueRetrievalEvaluationReport report = new VueRetrievalEvaluator(retrievalService)
+                .evaluate(cases);
+
+        assertFalse(report.passed());
+        assertTrue(report.renderMarkdown().contains("| true |"));
+        assertTrue(report.renderMarkdown().contains("IllegalStateException"));
+    }
+
     private TemplateDoc document(String id) {
         TemplateDoc document = new TemplateDoc();
         document.setId(id);

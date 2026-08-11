@@ -34,9 +34,30 @@ public class VueRetrievalResourceProvider {
      * @param catalog 已加载的 Vue 知识目录
      */
     public VueRetrievalResourceProvider(TemplateCatalog catalog) {
-        this.resources = resourcesWithOptionalBm25(
+        this.resources = strictResources(
                 java.util.Objects.requireNonNull(catalog, "Vue 知识目录不能为空"),
                 Bm25Retriever::new);
+    }
+
+    /**
+     * 为离线质量评测创建严格资源，BM25 不可用时禁止退化运行。
+     */
+    public static VueRetrievalResourceProvider forEvaluation(TemplateCatalog catalog) {
+        return new VueRetrievalResourceProvider(catalog);
+    }
+
+    static VueRetrievalResourceProvider forEvaluation(
+            TemplateCatalog catalog,
+            Bm25RetrieverFactory bm25RetrieverFactory) {
+        return new VueRetrievalResourceProvider(catalog, bm25RetrieverFactory);
+    }
+
+    private VueRetrievalResourceProvider(
+            TemplateCatalog catalog,
+            Bm25RetrieverFactory bm25RetrieverFactory) {
+        this.resources = strictResources(
+                java.util.Objects.requireNonNull(catalog, "Vue 知识目录不能为空"),
+                bm25RetrieverFactory);
     }
 
     VueRetrievalResourceProvider(RagProperties properties,
@@ -76,6 +97,16 @@ public class VueRetrievalResourceProvider {
         } catch (Exception exception) {
             log.warn("[Vue RAG] BM25 索引不可用,将使用 Dense 单通道,candidateCount=0");
             return new VueRetrievalResources(catalog, Optional.empty());
+        }
+    }
+
+    private VueRetrievalResources strictResources(
+            TemplateCatalog catalog,
+            Bm25RetrieverFactory bm25RetrieverFactory) {
+        try {
+            return new VueRetrievalResources(catalog, bm25RetrieverFactory.create(catalog));
+        } catch (Exception exception) {
+            throw new IllegalStateException("评测 BM25 索引初始化失败", exception);
         }
     }
 

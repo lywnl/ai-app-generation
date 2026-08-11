@@ -61,3 +61,31 @@
 
 - 新增的 `VueRetrievalResourceProvider(TemplateCatalog)` 只供已加载快照注入；Spring 在线默认构造器及生产可用性降级语义未改变。
 - 真实发布结论未改变：正式 23 条摄取、30 条真实检索成绩和十条 10/10 构建成绩仍未取得。
+
+## 2026-08-11 正式独立评审 Important 修复追加
+
+### Important 1：真实生成 Spring 复用已核验快照并释放资源
+
+- 根因：initializer 使用 `registerSingleton("vueRetrievalResourceProvider", ...)` 注册的实例，会被后续组件扫描得到的同名 `@Component` BeanDefinition 替换；测试用简化容器无法证明真实生成 Spring 使用了该实例。
+- RED 命令：
+  `JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" PATH="$JAVA_HOME/bin:$PATH" env -u RAG_EVAL -u RAG_BUILD_EVAL -u DASHSCOPE_API_KEY -u DEEPSEEK_API_KEY -u RAG_PGVECTOR_PASSWORD bash mvnw -Dtest='VueGenerationBuildQualityGateTest#真实生成Spring复用同一目录快照并在关闭时释放资源' test`
+- RED 结果：真实完整组件扫描上下文成功启动，但最终 provider 的 `current()` 为空，测试因 `NoSuchElementException` 失败；1 个测试，0 失败、1 错误。
+- GREEN：使用 `BeanFactoryPostProcessor` 在组件扫描完成后替换同名 BeanDefinition，定义由本轮已核验的 `TemplateCatalog` 创建严格 provider，并声明 `destroyMethodName("close")`。启动级属性改由 `SpringApplicationBuilder.properties(...)` 提前注入，避免惰性属性在自动配置判断之后才生效。
+- GREEN 结果：同一命令 1 个测试通过；断言容器内 provider 持有同一 `TemplateCatalog` 实例，关闭上下文后再次调用已取得的 BM25 会抛异常，证明索引资源已释放。
+
+### Important 2：严格 Hybrid/Dense 检索健康门禁
+
+- 根因：`VueRagContext.degraded` 未进入结构化 observation/report；Dense 异常虽然写入 `error`，但 `passed()` 未检查；评测沿用生产 provider 的 BM25 降级初始化；报告也未校验逐行健康、queryId 唯一性和双链用例集合一致性。
+- RED 命令：
+  `JAVA_HOME="$PWD/.codex/runtime/jdk25/Contents/Home" PATH="$JAVA_HOME/bin:$PATH" bash mvnw -Dtest='VueRetrievalResourceProviderTest,VueRetrievalEvaluationReportTest,VueRetrievalEvaluatorTest' test`
+- RED 结果：testCompile 按预期失败，缺少严格评测创建入口 `forEvaluation(...)` 和结构化字段 `VueRetrievalObservation.degraded`；测试未进入执行阶段。
+- GREEN：新增仅供质量评测使用的 BM25 fail-closed 创建路径；生产 `RagProperties` 构造器继续保留在线降级。Hybrid 的 `degraded`、Dense 异常和 `error` 进入结构化观察及 Markdown；`passed()` 强制双链各 30 行、无错误、无退化、Hybrid queryId 30 个唯一且 Hybrid/Dense queryId 集合相同，再检查指标阈值。
+- GREEN 结果：同一命令 13 个测试全部通过，0 失败、0 错误、0 跳过。
+
+### 追加验证
+
+- Task 2 九类覆盖回归：33 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`；其中真实完整 Spring Boot 上下文实际启动。
+- 默认 unset 环境完整 Vue RAG 回归：122 个测试，0 失败、0 错误、0 跳过，`BUILD SUCCESS`；没有运行真实模型、数据库评测、正式摄取或十条 npm 生成。
+- `git diff --check`：通过。
+- 追加独立评审：Critical=0，Important=0；唯一 Minor 为 evaluator 测试只命中 `degraded` 表头，已收紧为直接断言结构化行渲染 `| true |`。
+- 生产语义边界：在线 `VueRetrievalResourceProvider(RagProperties, ObjectMapper)` 的 BM25 失败降级保持不变；fail-closed 只用于离线质量门禁。

@@ -89,7 +89,7 @@ public final class VueRetrievalQualityGateRunner {
         Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> stores = Map.of(
                 CodeGenTypeEnum.VUE_PROJECT, store);
         VueRetrievalResourceProvider resourceProvider =
-                new VueRetrievalResourceProvider(catalog);
+                VueRetrievalResourceProvider.forEvaluation(catalog);
         RagRerankService rerankService = new RagRerankService(properties, apiKey);
         VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
                 resourceProvider,

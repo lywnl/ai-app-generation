@@ -13,13 +13,12 @@ import com.lyw.appgeneration.rag.ingest.VuePgVectorTarget;
 import com.lyw.appgeneration.rag.vue.VueRetrievalQualityGateRunner;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
+import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.context.support.GenericApplicationContext;
-import org.springframework.core.env.MapPropertySource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -87,18 +86,22 @@ class VueGenerationBuildQualityGateTest {
     }
 
     @Test
-    void 生成Spring复用本轮已核验的同一目录快照() {
+    void 真实生成Spring复用同一目录快照并在关闭时释放资源() {
         TemplateCatalog catalog = new TemplateCatalog(
                 Path.of("embed_text/vue-project"), new ObjectMapper());
-        GenericApplicationContext context = new GenericApplicationContext();
+        Bm25Retriever bm25;
 
-        registerCatalogSnapshot(context, catalog);
-        context.refresh();
+        try (ConfigurableApplicationContext context = startEvaluationApplication(catalog)) {
+            VueRetrievalResourceProvider provider =
+                    context.getBean(VueRetrievalResourceProvider.class);
+            assertSame(catalog, provider.current().orElseThrow().catalog());
+            bm25 = provider.current().orElseThrow().bm25Retriever().orElseThrow();
+        }
 
-        VueRetrievalResourceProvider provider =
-                context.getBean(VueRetrievalResourceProvider.class);
-        assertSame(catalog, provider.current().orElseThrow().catalog());
-        context.close();
+        assertThrows(RuntimeException.class, () -> bm25.retrieve(
+                "Vue 基础站点",
+                com.lyw.appgeneration.service.rag.model.RagDocumentKind.PROJECT_SKELETON,
+                1));
     }
 
     @Test
@@ -176,28 +179,20 @@ class VueGenerationBuildQualityGateTest {
 
     private ConfigurableApplicationContext startEvaluationApplication(TemplateCatalog catalog) {
         Map<String, Object> properties = evaluationProperties(System.getenv());
-        properties.put("spring.main.allow-bean-definition-overriding", "true");
         return new SpringApplicationBuilder(AiAppGenerationApplication.class)
                 .web(WebApplicationType.NONE)
-                .initializers(context -> {
-                    context.getEnvironment().getPropertySources().addFirst(
-                            new MapPropertySource("vueGenerationBuildEvaluation", properties));
-                    registerCatalogSnapshot(context, catalog);
-                })
+                .properties(properties)
+                .initializers(context -> context.addBeanFactoryPostProcessor(
+                        new VueEvaluationCatalogSnapshotConfigurer(catalog)))
                 .run();
-    }
-
-    private static void registerCatalogSnapshot(
-            ConfigurableApplicationContext context,
-            TemplateCatalog catalog) {
-        context.getBeanFactory().registerSingleton(
-                "vueRetrievalResourceProvider",
-                new VueRetrievalResourceProvider(catalog));
     }
 
     private Map<String, Object> evaluationProperties(Map<String, String> environment) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("spring.main.lazy-initialization", "true");
+        properties.put("DEEPSEEK_API_KEY", "unused-by-context-lifecycle-test");
+        properties.put("DASHSCOPE_API_KEY", "unused-by-context-lifecycle-test");
+        properties.put("PEXELS_API_KEY", "unused-by-context-lifecycle-test");
         properties.put("rag.enabled", "true");
         properties.put("rag.hybrid.enabled", "true");
         properties.put("rag.ingest.enabled", "false");

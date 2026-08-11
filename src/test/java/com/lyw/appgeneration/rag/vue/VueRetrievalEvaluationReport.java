@@ -5,7 +5,9 @@ import com.lyw.appgeneration.rag.eval.EvaluationReportSanitizer;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Vue 双层检索真实评测报告。
@@ -81,7 +83,11 @@ public final class VueRetrievalEvaluationReport {
                 && comparison.hybrid().queryCount() == REQUIRED_QUERY_COUNT
                 && comparison.denseOnly().queryCount() == REQUIRED_QUERY_COUNT
                 && hybridRows.size() == REQUIRED_QUERY_COUNT
-                && denseRows.size() == REQUIRED_QUERY_COUNT;
+                && denseRows.size() == REQUIRED_QUERY_COUNT
+                && healthyRows(hybridRows)
+                && healthyRows(denseRows)
+                && uniqueQueryIds(hybridRows).size() == REQUIRED_QUERY_COUNT
+                && uniqueQueryIds(hybridRows).equals(uniqueQueryIds(denseRows));
     }
 
     public VueRetrievalComparison comparison() {
@@ -166,14 +172,27 @@ public final class VueRetrievalEvaluationReport {
             String heading,
             List<VueRetrievalObservation> rows) {
         output.append("\n## ").append(heading).append("\n\n");
-        output.append("| QueryID | Style | Skeleton | Features | Error |\n");
-        output.append("|---|---|---|---|---|\n");
+        output.append("| QueryID | Style | Skeleton | Features | degraded | Error |\n");
+        output.append("|---|---|---|---|---|---|\n");
         rows.forEach(row -> output.append("| ").append(escape(row.evalCase().queryId()))
                 .append(" | ").append(escape(row.evalCase().queryStyle()))
                 .append(" | ").append(escape(row.retrievedSkeletonId()))
                 .append(" | ").append(escape(String.join(", ", row.retrievedFeatureIds())))
+                .append(" | ").append(row.degraded())
                 .append(" | ").append(escape(row.error()))
                 .append(" |\n"));
+    }
+
+    private boolean healthyRows(List<VueRetrievalObservation> rows) {
+        return rows.stream().allMatch(row -> !row.degraded()
+                && (row.error() == null || row.error().isBlank()));
+    }
+
+    private Set<String> uniqueQueryIds(List<VueRetrievalObservation> rows) {
+        return rows.stream()
+                .map(VueRetrievalObservation::evalCase)
+                .map(VueEvalCase::queryId)
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private String format(double value) {

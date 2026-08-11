@@ -47,7 +47,13 @@ class VueRetrievalEvaluationReportTest {
         VueRetrievalObservation observation = new VueRetrievalObservation(
                 new VueEvalCase("q1", "需求", "精确技术词", List.of("s1"), List.of("f1")),
                 "s1", List.of("f1"), null);
-        List<VueRetrievalObservation> rows = java.util.Collections.nCopies(30, observation);
+        List<VueRetrievalObservation> rows = java.util.stream.IntStream.range(0, 30)
+                .mapToObj(index -> new VueRetrievalObservation(
+                        new VueEvalCase(
+                                "q" + index, "需求", "精确技术词",
+                                List.of("s1"), List.of("f1")),
+                        "s1", List.of("f1"), null))
+                .toList();
 
         String markdown = VueRetrievalEvaluationReport.executed(
                 VueRetrievalComparison.compare(hybrid, dense),
@@ -73,6 +79,43 @@ class VueRetrievalEvaluationReportTest {
                 VueRetrievalComparison.compare(metrics, metrics), List.of(), List.of());
 
         assertFalse(report.passed());
+    }
+
+    @Test
+    void 完美指标遇到退化错误重复或双链用例不一致也不得通过() {
+        List<VueRetrievalObservation> healthy = observations("q", 30, false, null);
+        List<VueRetrievalObservation> hybridDegraded = observations("q", 30, true, null);
+        List<VueRetrievalObservation> denseFailed = observations("q", 30, false, "Dense 检索异常");
+        List<VueRetrievalObservation> duplicates = java.util.Collections.nCopies(
+                30, healthy.getFirst());
+        List<VueRetrievalObservation> differentCases = observations("other", 30, false, null);
+        VueRetrievalMetrics perfect = new VueRetrievalMetrics(
+                1.0, 1.0, 30,
+                Map.of("精确技术词", new VueRetrievalMetrics.StyleSlice(1.0, 1.0, 30)));
+        VueRetrievalComparison comparison = VueRetrievalComparison.compare(perfect, perfect);
+
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                comparison, hybridDegraded, healthy).passed());
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                comparison, healthy, denseFailed).passed());
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                comparison, duplicates, duplicates).passed());
+        assertFalse(VueRetrievalEvaluationReport.executed(
+                comparison, healthy, differentCases).passed());
+    }
+
+    private List<VueRetrievalObservation> observations(
+            String queryPrefix,
+            int count,
+            boolean degraded,
+            String error) {
+        return java.util.stream.IntStream.range(0, count)
+                .mapToObj(index -> new VueRetrievalObservation(
+                        new VueEvalCase(
+                                queryPrefix + index, "需求", "精确技术词",
+                                List.of("s1"), List.of()),
+                        "s1", List.<String>of(), error, degraded))
+                .toList();
     }
 
     @Test

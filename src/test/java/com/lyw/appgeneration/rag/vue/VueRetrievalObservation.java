@@ -9,12 +9,21 @@ public record VueRetrievalObservation(
         VueEvalCase evalCase,
         String retrievedSkeletonId,
         List<String> retrievedFeatureIds,
-        String error
+        String error,
+        boolean degraded
 ) {
 
     public VueRetrievalObservation {
         retrievedFeatureIds = retrievedFeatureIds == null
                 ? List.of()
                 : List.copyOf(retrievedFeatureIds);
+    }
+
+    public VueRetrievalObservation(
+            VueEvalCase evalCase,
+            String retrievedSkeletonId,
+            List<String> retrievedFeatureIds,
+            String error) {
+        this(evalCase, retrievedSkeletonId, retrievedFeatureIds, error, false);
     }
 }

@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -65,6 +66,20 @@ class VueRetrievalResourceProviderTest {
         VueRetrievalResources resources = provider.current().orElseThrow();
         assertTrue(resources.catalog().findDocumentById("feature-login").isPresent());
         assertTrue(resources.bm25Retriever().isEmpty());
+    }
+
+    @Test
+    void 评测资源在Bm25初始化失败时拒绝降级(@TempDir Path tempDir) throws IOException {
+        Path vueRoot = tempDir.resolve("vue-project");
+        TemplateTestData.write(
+                vueRoot.resolve("features/login.json"),
+                TemplateTestData.featureDocument("feature-login"));
+        TemplateCatalog catalog = new TemplateCatalog(vueRoot, new ObjectMapper());
+
+        assertThrows(IllegalStateException.class,
+                () -> VueRetrievalResourceProvider.forEvaluation(
+                        catalog,
+                        ignored -> { throw new IOException("BM25 初始化失败"); }));
     }
 
     @Test
