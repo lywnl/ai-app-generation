@@ -392,8 +392,8 @@ public class VueProjectBuilder {
                 return cancellationResult(failureStage, output, startNanos);
             }
             if (commandResult.timedOut() || !Integer.valueOf(0).equals(commandResult.exitCode())) {
-                VueBuildFailureKind actualFailure = commandResult.timedOut()
-                        ? VueBuildFailureKind.INFRASTRUCTURE : failureKind;
+                VueBuildFailureKind actualFailure = commandFailureKind(
+                        failureStage, failureKind, commandResult.timedOut());
                 return result(false, failureStage, commandResult.exitCode(),
                         commandResult.timedOut(), false, actualFailure,
                         output.toString(), startNanos);
@@ -409,6 +409,17 @@ public class VueProjectBuilder {
             return result(false, failureStage, null, false, false,
                     VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
         }
+    }
+
+    private VueBuildFailureKind commandFailureKind(
+            BuildStage failureStage,
+            VueBuildFailureKind failureKind,
+            boolean timedOut) {
+        if (!timedOut) {
+            return failureKind;
+        }
+        return failureStage == BuildStage.NPM_INSTALL
+                ? VueBuildFailureKind.INFRASTRUCTURE : failureKind;
     }
 
     private String fingerprint(Path packageJson) throws IOException {

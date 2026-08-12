@@ -84,6 +84,21 @@ class VueProjectBuilderTest {
     }
 
     @Test
+    void classifiesNpmInstallTimeoutAsInfrastructureFailure() throws IOException {
+        createPackageJson();
+        RecordingCommandExecutor executor = new RecordingCommandExecutor(
+                new CommandResult(null, true, "install timed out"));
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir.toString());
+
+        assertFalse(result.success());
+        assertEquals(BuildStage.NPM_INSTALL, result.stage());
+        assertTrue(result.timedOut());
+        assertEquals(VueBuildFailureKind.INFRASTRUCTURE, result.failureKind());
+    }
+
+    @Test
     void reportsNpmBuildTimeoutAndUsesBuildTimeout() throws IOException {
         createPackageJson();
         RecordingCommandExecutor executor = new RecordingCommandExecutor(
@@ -96,6 +111,7 @@ class VueProjectBuilderTest {
         assertEquals(BuildStage.NPM_BUILD, result.stage());
         assertNull(result.exitCode());
         assertTrue(result.timedOut());
+        assertEquals(VueBuildFailureKind.CODE, result.failureKind());
         assertTrue(result.outputTail().endsWith("build timed out"));
         CommandInvocation buildInvocation = executor.invocations.get(1);
         Path projectRoot = tempDir.toRealPath();
