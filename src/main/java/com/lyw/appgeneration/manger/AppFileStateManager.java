@@ -42,12 +42,29 @@ public class AppFileStateManager {
             String relativePath,
             String content,
             WriteOperation writeOperation) throws IOException {
+        return writeAndRecord(appId, relativePath, content,
+                () -> hasRecordedContent(appId, relativePath, content), writeOperation);
+    }
+
+    /**
+     * 在同一条带锁内以当前存储内容判定是否需要写入，并在成功后更新展示状态。
+     */
+    public WriteResult writeAndRecord(
+            Long appId,
+            String relativePath,
+            String content,
+            ContentMatchOperation contentMatchOperation,
+            WriteOperation writeOperation) throws IOException {
         Long stateAppId = appId == null ? -1L : appId;
         String newHash = md5(content);
         synchronized (stateLock(stateAppId)) {
             AppWriteState appState = states.get(stateAppId);
-            WriteStatus status = classify(
-                    appState == null ? null : appState.files.get(relativePath), newHash);
+            String oldHash = appState == null ? null : appState.files.get(relativePath);
+            WriteStatus status = contentMatchOperation.matches()
+                    ? WriteStatus.DUPLICATE_SAME_CONTENT
+                    : oldHash == null
+                    ? WriteStatus.FIRST_TIME
+                    : WriteStatus.DUPLICATE_DIFFERENT_CONTENT;
             if (status != WriteStatus.DUPLICATE_SAME_CONTENT) {
                 writeOperation.write();
             }
@@ -61,17 +78,15 @@ public class AppFileStateManager {
         }
     }
 
-    int trackedAppCount() {
-        return states.size();
+    private boolean hasRecordedContent(Long appId, String relativePath, String content) {
+        Long stateAppId = appId == null ? -1L : appId;
+        AppWriteState appState = states.get(stateAppId);
+        return appState != null
+                && md5(content).equals(appState.files.get(relativePath));
     }
 
-    private WriteStatus classify(String oldHash, String newHash) {
-        if (oldHash == null) {
-            return WriteStatus.FIRST_TIME;
-        }
-        return oldHash.equals(newHash)
-                ? WriteStatus.DUPLICATE_SAME_CONTENT
-                : WriteStatus.DUPLICATE_DIFFERENT_CONTENT;
+    int trackedAppCount() {
+        return states.size();
     }
 
     private WriteResult buildResult(AppWriteState appState, WriteStatus status, int writeCount) {
@@ -146,6 +161,12 @@ public class AppFileStateManager {
     public interface WriteOperation {
 
         void write() throws IOException;
+    }
+
+    @FunctionalInterface
+    public interface ContentMatchOperation {
+
+        boolean matches() throws IOException;
     }
 
     private static final class AppWriteState {

@@ -11,6 +11,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -20,6 +21,9 @@ import java.util.function.Predicate;
  * 防止项目内符号链接把文件操作导向工程外。</p>
  */
 final class ProjectPathResolver {
+
+    private static final Set<String> PROTECTED_SEGMENTS = Set.of(
+            "node_modules", "dist", ".git", ".ai-build-dependency-state.json");
 
     Path resolveExisting(Long appId, String relativePath, boolean allowEmpty) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
@@ -48,9 +52,6 @@ final class ProjectPathResolver {
             Path directory, Long appId, Predicate<String> shouldIgnore) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
         Path normalizedDirectory = directory.toAbsolutePath().normalize();
-        if (isIgnoredPath(projectRoot, normalizedDirectory, shouldIgnore)) {
-            return List.of();
-        }
         Path realProjectRoot = requireExistingProjectRoot(projectRoot);
         requireRealPathWithinRoot(normalizedDirectory, realProjectRoot);
         List<Path> entries = new ArrayList<>();
@@ -60,7 +61,8 @@ final class ProjectPathResolver {
                 public FileVisitResult preVisitDirectory(Path current, BasicFileAttributes attributes)
                         throws IOException {
                     if (!current.equals(normalizedDirectory)
-                            && shouldIgnore.test(current.getFileName().toString())) {
+                            && shouldSkipTraversalEntry(
+                                    current.getFileName().toString(), shouldIgnore)) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     rejectSymbolicLink(current);
@@ -70,7 +72,8 @@ final class ProjectPathResolver {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
                         throws IOException {
-                    if (shouldIgnore.test(file.getFileName().toString())) {
+                    if (shouldSkipTraversalEntry(
+                            file.getFileName().toString(), shouldIgnore)) {
                         return FileVisitResult.CONTINUE;
                     }
                     rejectSymbolicLink(file);
@@ -84,18 +87,9 @@ final class ProjectPathResolver {
         }
     }
 
-    private boolean isIgnoredPath(
-            Path projectRoot, Path candidate, Predicate<String> shouldIgnore)
-            throws UnsafeProjectPathException {
-        if (!candidate.startsWith(projectRoot)) {
-            throw new UnsafeProjectPathException("目录不能越出项目根目录");
-        }
-        for (Path segment : projectRoot.relativize(candidate)) {
-            if (shouldIgnore.test(segment.toString())) {
-                return true;
-            }
-        }
-        return false;
+    private boolean shouldSkipTraversalEntry(
+            String name, Predicate<String> shouldIgnore) {
+        return PROTECTED_SEGMENTS.contains(name) || shouldIgnore.test(name);
     }
 
     private Path projectRoot(Long appId) throws UnsafeProjectPathException {
@@ -130,6 +124,7 @@ final class ProjectPathResolver {
             if (path.isAbsolute()) {
                 throw new UnsafeProjectPathException("不允许使用绝对路径");
             }
+            rejectProtectedSegments(path);
             Path candidate = projectRoot.resolve(path).normalize();
             if (!candidate.startsWith(projectRoot)) {
                 throw new UnsafeProjectPathException("相对路径不能越出项目根目录");
@@ -139,6 +134,14 @@ final class ProjectPathResolver {
             throw exception;
         } catch (RuntimeException exception) {
             throw unsafe("相对路径格式无效", exception);
+        }
+    }
+
+    private void rejectProtectedSegments(Path path) throws UnsafeProjectPathException {
+        for (Path segment : path) {
+            if (PROTECTED_SEGMENTS.contains(segment.toString())) {
+                throw new UnsafeProjectPathException("不允许访问受保护路径段: " + segment);
+            }
         }
     }
 
@@ -194,6 +197,7 @@ final class ProjectPathResolver {
             if (!realCandidate.startsWith(realProjectRoot)) {
                 throw new UnsafeProjectPathException("路径真实位置越出项目根目录");
             }
+            rejectProtectedSegments(realProjectRoot.relativize(realCandidate));
         } catch (UnsafeProjectPathException exception) {
             throw exception;
         } catch (IOException | RuntimeException exception) {

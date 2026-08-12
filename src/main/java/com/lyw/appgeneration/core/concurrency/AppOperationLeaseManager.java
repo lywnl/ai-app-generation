@@ -274,6 +274,11 @@ public final class AppOperationLeaseManager {
             return !closed.get() && state.isActiveInstance();
         }
 
+        /** 当前精确操作租约的取消门是否已经关闭。 */
+        public boolean isCancellationRequested() {
+            return state.isCancellationRequested();
+        }
+
         public void claimVueSession() {
             ensureActive();
             state.claimVueSession();
@@ -418,6 +423,10 @@ public final class AppOperationLeaseManager {
 
         private synchronized boolean isOwnedInstance() {
             return !ownerClosed && !replaced;
+        }
+
+        private synchronized boolean isCancellationRequested() {
+            return cancellationRequested;
         }
 
         private synchronized void claimVueSession() {

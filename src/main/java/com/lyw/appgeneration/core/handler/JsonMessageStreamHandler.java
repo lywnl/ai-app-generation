@@ -75,6 +75,7 @@ public class JsonMessageStreamHandler {
                     memorySummaryService.triggerSummarizationAsync(appId);
                     // 对话结束钩子：异步触发 L2 跨 app 用户偏好抽取（best-effort，不阻塞 Vue 构建与流返回）
                     userMemoryService.triggerPreferenceExtractionAsync(loginUser.getId(), appId);
+                    // 任务 6 接入实际工具回调作用域后，由受控 buildProject 原子替换该兼容构建钩子。
                     String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + appId;
                     vueProjectBuilder.buildProjectAsync(projectPath);
                 })
@@ -111,7 +112,8 @@ public class JsonMessageStreamHandler {
                 String toolName = toolExecutedMessage.getName();
                 JSONObject jsonObject = JSONUtil.parseObj(toolExecutedMessage.getArguments());
                 BaseTool tool = toolManager.getTool(toolName);
-                String result = tool.generateToolExecutedResult(jsonObject);
+                String result = tool.generateToolExecutedResult(
+                        jsonObject, toolExecutedMessage.getResult());
                 String output = String.format("\n\n%s\n\n", result);
                 chatHistoryStringBuilder.append(output);
                 // 先发"状态事件":告知前端该 toolCallId 已执行完成,便于卡片切换到 done 状态;

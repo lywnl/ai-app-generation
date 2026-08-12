@@ -12,49 +12,64 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
-/**
- * 文件修改工具
- * 支持 AI 通过工具调用的方式修改文件内容
- */
+/** 受控修改 Vue 项目内的普通文件。 */
 @Slf4j
 @Component
-public class FileModifyTool extends BaseTool{
+public class FileModifyTool extends BaseTool {
 
     private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
+    private final FileToolExecutionScopeManager scopeManager;
+
+    public FileModifyTool(FileToolExecutionScopeManager scopeManager) {
+        this.scopeManager = scopeManager;
+    }
 
     @Tool("修改文件内容，用新内容替换指定的旧内容")
     public String modifyFile(
-            @P("文件的相对路径")
-            String relativeFilePath,
-            @P("要替换的旧内容")
-            String oldContent,
-            @P("替换后的新内容")
-            String newContent,
-            @ToolMemoryId Long appId
-    ) {
+            @P("文件的相对路径") String relativeFilePath,
+            @P("要替换的旧内容") String oldContent,
+            @P("替换后的新内容") String newContent,
+            @ToolMemoryId Long appId) {
         try {
+            scopeManager.requireCurrent(requireAppId(appId), getToolName());
             Path path = projectPathResolver.resolveExisting(appId, relativeFilePath, false);
             if (!Files.exists(path) || !Files.isRegularFile(path)) {
-                return "错误：文件不存在或不是文件 - " + relativeFilePath;
+                return result(FileToolResult.notFound(
+                        getToolName(), relativeFilePath, "文件不存在或不是普通文件"));
             }
-            String originalContent = Files.readString(path);
-            if (!originalContent.contains(oldContent)) {
-                return "警告：文件中未找到要替换的内容，文件未修改 - " + relativeFilePath;
+            String original = Files.readString(path);
+            if (oldContent == null || !original.contains(oldContent)) {
+                return result(FileToolResult.noChange(
+                        getToolName(), relativeFilePath, "未找到要替换的内容，文件未修改"));
             }
-            String modifiedContent = originalContent.replace(oldContent, newContent);
-            if (originalContent.equals(modifiedContent)) {
-                return "信息：替换后文件内容未发生变化 - " + relativeFilePath;
+            String modified = original.replace(oldContent, newContent == null ? "" : newContent);
+            if (original.equals(modified)) {
+                return result(FileToolResult.noChange(
+                        getToolName(), relativeFilePath, "替换后文件内容未发生变化"));
             }
-            Files.writeString(path, modifiedContent, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            log.info("成功修改文件: {}", path.toAbsolutePath());
-            return "文件修改成功: " + relativeFilePath;
+            Files.writeString(path, modified,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            return result(FileToolResult.applied(
+                    getToolName(), relativeFilePath, true, "文件修改成功"));
+        } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
+            return FileToolProtocolSupport.rejected(
+                    getToolName(), relativeFilePath, exception);
         } catch (ProjectPathResolver.UnsafeProjectPathException exception) {
-            return "错误：路径不安全 - " + exception.getMessage();
-        } catch (IOException | RuntimeException e) {
-            String errorMessage = "修改文件失败: " + relativeFilePath + ", 错误: " + e.getMessage();
-            log.error(errorMessage, e);
-            return errorMessage;
+            return result(FileToolResult.rejected(
+                    getToolName(), relativeFilePath, exception.getMessage()));
+        } catch (IOException | RuntimeException exception) {
+            log.error("修改文件失败: appId={}, path={}", appId, relativeFilePath, exception);
+            return result(FileToolResult.failed(
+                    getToolName(), relativeFilePath, "修改文件失败"));
         }
+    }
+
+    private String result(FileToolResult result) {
+        return FileToolProtocolSupport.json(result);
+    }
+
+    private long requireAppId(Long appId) {
+        return appId == null ? Long.MIN_VALUE : appId;
     }
 
     @Override
@@ -69,22 +84,29 @@ public class FileModifyTool extends BaseTool{
 
     @Override
     public String generateToolExecutedResult(JSONObject arguments) {
-        String relativeFilePath = arguments.getStr("relativeFilePath");
-        String oldContent = arguments.getStr("oldContent");
-        String newContent = arguments.getStr("newContent");
-        // 显示对比内容
+        return generateToolExecutedResult(arguments, null);
+    }
+
+    @Override
+    public String generateToolExecutedResult(JSONObject arguments, String rawResult) {
+        String path = arguments == null ? null : arguments.getStr("relativeFilePath");
+        FileToolResult result = FileToolProtocolSupport.parse(rawResult, getToolName(), path);
+        if (result.status() != FileToolResult.FileToolStatus.APPLIED || !result.changed()) {
+            return FileToolProtocolSupport.stableSummary(this, result);
+        }
         return String.format("""
                 [工具调用] %s %s
-                
+
                 替换前：
                 ```
                 %s
                 ```
-                
+
                 替换后：
                 ```
                 %s
                 ```
-                """, getDisplayName(), relativeFilePath, oldContent, newContent);
+                """, getDisplayName(), path,
+                arguments.getStr("oldContent"), arguments.getStr("newContent"));
     }
 }

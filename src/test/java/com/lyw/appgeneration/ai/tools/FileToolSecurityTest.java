@@ -1,295 +1,418 @@
 package com.lyw.appgeneration.ai.tools;
 
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.constants.AppConstant;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.manger.AppFileStateManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.CyclicBarrier;
+import java.util.Set;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FileToolSecurityTest {
 
     private static final long APP_ID = 987654321L;
+    private static final long USER_ID = 9527L;
+    private static final String TURN_ID = "file-tool-turn";
+    private static final Set<String> ALL_TOOLS = Set.of(
+            "readFile", "writeFile", "modifyFile", "deleteFile", "readDir", "exit");
 
     @TempDir
     Path temporaryDirectory;
 
     private final AppFileStateManager fileStateManager = new AppFileStateManager();
-    private final FileReadTool fileReadTool = new FileReadTool();
-    private final FileModifyTool fileModifyTool = new FileModifyTool();
-    private final FileDeleteTool fileDeleteTool = new FileDeleteTool();
-    private final FileDirReadTool fileDirReadTool = new FileDirReadTool();
-    private final FileWriteTool fileWriteTool = new FileWriteTool();
-
-    FileToolSecurityTest() {
-        ReflectionTestUtils.setField(fileWriteTool, "appFileStateManager", fileStateManager);
-    }
+    private final FileToolExecutionScopeManager scopeManager = new FileToolExecutionScopeManager();
+    private final FileReadTool fileReadTool = new FileReadTool(scopeManager);
+    private final FileModifyTool fileModifyTool = new FileModifyTool(scopeManager);
+    private final FileDeleteTool fileDeleteTool = new FileDeleteTool(scopeManager);
+    private final FileDirReadTool fileDirReadTool = new FileDirReadTool(scopeManager);
+    private final FileWriteTool fileWriteTool = new FileWriteTool(fileStateManager, scopeManager);
+    private final ExitTool exitTool = new ExitTool(fileStateManager, scopeManager);
+    private final FileToolExecutionScopeManager.FileToolScope evaluationScope =
+            scopeManager.evaluation(APP_ID, "evaluation-file-tools", ALL_TOOLS);
 
     @AfterEach
     void cleanProjectDirectory() throws IOException {
         Path projectRoot = projectRoot();
         if (Files.exists(projectRoot)) {
-            Files.walk(projectRoot)
-                    .sorted(Comparator.reverseOrder())
-                    .forEach(path -> {
-                        try {
-                            Files.delete(path);
-                        } catch (IOException exception) {
-                            throw new RuntimeException(exception);
-                        }
-                    });
+            try (var paths = Files.walk(projectRoot)) {
+                paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.delete(path);
+                    } catch (IOException exception) {
+                        throw new RuntimeException(exception);
+                    }
+                });
+            }
         }
-        Files.deleteIfExists(Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR, "outside-file-tool-security-test.txt"));
+        Files.deleteIfExists(Path.of(
+                AppConstant.CODE_OUTPUT_ROOT_DIR,
+                "outside-file-tool-security-test.txt"));
         fileStateManager.reset(APP_ID);
     }
 
     @Test
-    void allFileToolsRejectAbsolutePaths() throws IOException {
-        Path externalFile = Files.writeString(temporaryDirectory.resolve("outside.txt"), "外部内容");
-        Path externalDirectory = Files.createDirectory(temporaryDirectory.resolve("outside-directory"));
+    void allToolsRejectMissingScopeWithoutSideEffects() {
+        assertStatus(fileReadTool.readFile("missing.txt", APP_ID), "REJECTED", false);
+        assertStatus(fileWriteTool.writeFile("created.txt", "绝不能落盘", APP_ID), "REJECTED", false);
+        assertStatus(fileModifyTool.modifyFile("missing.txt", "旧", "新", APP_ID), "REJECTED", false);
+        assertStatus(fileDeleteTool.deleteFile("missing.txt", APP_ID), "REJECTED", false);
+        assertStatus(fileDirReadTool.readDir("", APP_ID), "REJECTED", false);
+        assertStatus(exitTool.exit("误注册调用", APP_ID), "REJECTED", false);
 
-        assertRejected(fileReadTool.readFile(externalFile.toString(), APP_ID));
-        assertRejected(fileWriteTool.writeFile(externalFile.toString(), "篡改", APP_ID));
-        assertRejected(fileModifyTool.modifyFile(externalFile.toString(), "外部", "篡改", APP_ID));
-        assertRejected(fileDeleteTool.deleteFile(externalFile.toString(), APP_ID));
-        assertRejected(fileDirReadTool.readDir(externalDirectory.toString(), APP_ID));
-        assertEquals("外部内容", Files.readString(externalFile));
-        assertEquals(0, fileStateManager.fileCount(APP_ID));
-    }
-
-    @Test
-    void allFileToolsRejectParentTraversal() throws IOException {
-        Path externalFile = Files.writeString(
-                Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR, "outside-file-tool-security-test.txt"), "外部内容");
-        String traversal = "../" + externalFile.getFileName();
-
-        assertRejected(fileReadTool.readFile(traversal, APP_ID));
-        assertRejected(fileWriteTool.writeFile(traversal, "篡改", APP_ID));
-        assertRejected(fileModifyTool.modifyFile(traversal, "外部", "篡改", APP_ID));
-        assertRejected(fileDeleteTool.deleteFile(traversal, APP_ID));
-        assertRejected(fileDirReadTool.readDir("../", APP_ID));
-        assertEquals("外部内容", Files.readString(externalFile));
-        assertEquals(0, fileStateManager.fileCount(APP_ID));
-    }
-
-    @Test
-    void directoryReadRejectsExternalLinkNestedBelowProjectRoot() throws IOException {
-        Path projectRoot = createProjectRoot();
-        Path externalDirectory = Files.createDirectory(temporaryDirectory.resolve("outside-directory"));
-        Files.writeString(externalDirectory.resolve("secret.txt"), "绝不能泄露");
-        Files.createSymbolicLink(projectRoot.resolve("linked-directory"), externalDirectory);
-
-        String result = fileDirReadTool.readDir("", APP_ID);
-
-        assertRejected(result);
-        assertFalse(result.contains("绝不能泄露"));
-    }
-
-    @Test
-    void directoryReadSkipsNodeModulesLinksAndKeepsProjectFilesVisible() throws IOException {
-        Path projectRoot = createProjectRoot();
-        Files.createDirectories(projectRoot.resolve("src"));
-        Files.writeString(projectRoot.resolve("src/main.js"), "export default {}");
-        Path externalTarget = Files.writeString(temporaryDirectory.resolve("vite-target"), "外部目标");
-        Path viteLink = projectRoot.resolve("node_modules/.bin/vite");
-        Files.createDirectories(viteLink.getParent());
-        Files.createSymbolicLink(viteLink, externalTarget);
-
-        String result = fileDirReadTool.readDir("", APP_ID);
-
-        assertTrue(result.contains("main.js"), result);
-        assertFalse(result.contains("node_modules"), result);
-        assertFalse(result.contains("vite"), result);
-    }
-
-    @Test
-    void directoryReadDirectlyTargetingIgnoredDirectoryDoesNotExposeItsContents() throws IOException {
-        Path projectRoot = createProjectRoot();
-        Path hiddenFile = projectRoot.resolve("node_modules/package/secret.txt");
-        Files.createDirectories(hiddenFile.getParent());
-        Files.writeString(hiddenFile, "不应展示");
-        Path externalTarget = Files.writeString(temporaryDirectory.resolve("vite-target"), "外部目标");
-        Path viteLink = projectRoot.resolve("node_modules/.bin/vite");
-        Files.createDirectories(viteLink.getParent());
-        Files.createSymbolicLink(viteLink, externalTarget);
-
-        String result = fileDirReadTool.readDir("node_modules", APP_ID);
-
-        assertEquals("项目目录结构:\n", result);
-    }
-
-    @Test
-    void allFileToolsRejectProjectRootThatIsExternalSymbolicLink() throws IOException {
-        Path externalProjectRoot = Files.createDirectory(temporaryDirectory.resolve("external-project"));
-        Files.writeString(externalProjectRoot.resolve("existing.txt"), "外部项目内容");
-        Files.createSymbolicLink(projectRoot(), externalProjectRoot);
-
-        assertRejected(fileReadTool.readFile("existing.txt", APP_ID));
-        assertRejected(fileWriteTool.writeFile("new.txt", "篡改", APP_ID));
-        assertRejected(fileModifyTool.modifyFile("existing.txt", "外部", "篡改", APP_ID));
-        assertRejected(fileDeleteTool.deleteFile("existing.txt", APP_ID));
-        assertRejected(fileDirReadTool.readDir("", APP_ID));
-        assertEquals("外部项目内容", Files.readString(externalProjectRoot.resolve("existing.txt")));
-        assertFalse(Files.exists(externalProjectRoot.resolve("new.txt")));
-        assertEquals(0, fileStateManager.fileCount(APP_ID));
-    }
-
-    @Test
-    void allFileToolsRejectProjectLinksToOutside() throws IOException {
-        Path projectRoot = createProjectRoot();
-        Path externalFile = Files.writeString(temporaryDirectory.resolve("outside.txt"), "外部内容");
-        Path externalDirectory = Files.createDirectory(temporaryDirectory.resolve("outside-directory"));
-        Files.writeString(externalDirectory.resolve("secret.txt"), "秘密");
-        Files.createSymbolicLink(projectRoot.resolve("outside-file"), externalFile);
-        Files.createSymbolicLink(projectRoot.resolve("outside-directory"), externalDirectory);
-
-        assertRejected(fileReadTool.readFile("outside-file", APP_ID));
-        assertRejected(fileWriteTool.writeFile("outside-directory/new.txt", "篡改", APP_ID));
-        assertRejected(fileModifyTool.modifyFile("outside-file", "外部", "篡改", APP_ID));
-        assertRejected(fileDeleteTool.deleteFile("outside-file", APP_ID));
-        assertRejected(fileDirReadTool.readDir("outside-directory", APP_ID));
-        assertEquals("外部内容", Files.readString(externalFile));
-        assertFalse(Files.exists(externalDirectory.resolve("new.txt")));
-        assertEquals(0, fileStateManager.fileCount(APP_ID));
-    }
-
-    @Test
-    void allFileToolsKeepNormalProjectOperationsAvailable() throws IOException {
-        Path projectRoot = createProjectRoot();
-        Files.writeString(projectRoot.resolve("read.txt"), "旧内容");
-        Files.writeString(projectRoot.resolve("modify.txt"), "旧内容");
-        Files.writeString(projectRoot.resolve("delete.txt"), "删除我");
-
-        assertEquals("旧内容", fileReadTool.readFile("read.txt", APP_ID));
-        assertTrue(fileWriteTool.writeFile("nested/write.txt", "新内容", APP_ID).contains("文件写入成功"));
-        assertTrue(fileModifyTool.modifyFile("modify.txt", "旧", "新", APP_ID).contains("文件修改成功"));
-        assertTrue(fileDeleteTool.deleteFile("delete.txt", APP_ID).contains("文件删除成功"));
-        assertTrue(fileDirReadTool.readDir("", APP_ID).contains("read.txt"));
-        assertEquals("新内容", Files.readString(projectRoot.resolve("nested/write.txt")));
-        assertEquals("新内容", Files.readString(projectRoot.resolve("modify.txt")));
-        assertFalse(Files.exists(projectRoot.resolve("delete.txt")));
-    }
-
-    @Test
-    void emptyDirectoryPathReadsProjectRoot() throws IOException {
-        Path projectRoot = createProjectRoot();
-        Files.writeString(projectRoot.resolve("root.txt"), "根目录文件");
-
-        String result = fileDirReadTool.readDir(null, APP_ID);
-        assertTrue(result.contains("root.txt"), result);
-    }
-
-    @Test
-    void firstWriteCreatesMissingProjectRootOnlyAfterPathValidation() throws IOException {
         assertFalse(Files.exists(projectRoot()));
-
-        String result = fileWriteTool.writeFile("src/main.js", "export default {}", APP_ID);
-
-        assertTrue(result.contains("文件写入成功"), result);
-        assertTrue(Files.isRegularFile(projectRoot().resolve("src/main.js")));
-    }
-
-    @Test
-    void writeFailureToExistingDirectoryDoesNotPolluteState() throws IOException {
-        Files.createDirectories(projectRoot().resolve("target"));
-
-        String result = fileWriteTool.writeFile("target", "内容", APP_ID);
-
-        assertTrue(result.contains("文件写入失败"), result);
         assertEquals(0, fileStateManager.fileCount(APP_ID));
     }
 
     @Test
-    void nullContentWriteFailureDoesNotPolluteState() {
-        String result = fileWriteTool.writeFile("null-content.txt", null, APP_ID);
+    void explicitEvaluationScopeKeepsNormalOperationsAvailable() throws IOException {
+        Path root = createProjectRoot();
+        Files.writeString(root.resolve("read.txt"), "旧内容");
+        Files.writeString(root.resolve("modify.txt"), "旧内容");
+        Files.writeString(root.resolve("delete.txt"), "删除我");
 
-        assertTrue(result.contains("文件写入失败"), result);
+        JSONObject read = inEvaluation(() -> fileReadTool.readFile("read.txt", APP_ID));
+        JSONObject write = inEvaluation(() ->
+                fileWriteTool.writeFile("nested/write.txt", "新内容", APP_ID));
+        JSONObject modify = inEvaluation(() ->
+                fileModifyTool.modifyFile("modify.txt", "旧", "新", APP_ID));
+        JSONObject delete = inEvaluation(() -> fileDeleteTool.deleteFile("delete.txt", APP_ID));
+        JSONObject directory = inEvaluation(() -> fileDirReadTool.readDir("", APP_ID));
+
+        assertEquals("旧内容", read.getStr("message"));
+        assertEquals("APPLIED", write.getStr("status"));
+        assertEquals("APPLIED", modify.getStr("status"));
+        assertEquals("APPLIED", delete.getStr("status"));
+        assertTrue(directory.getStr("message").contains("read.txt"), directory.toString());
+        assertEquals("新内容", Files.readString(root.resolve("nested/write.txt")));
+        assertEquals("新内容", Files.readString(root.resolve("modify.txt")));
+        assertFalse(Files.exists(root.resolve("delete.txt")));
+    }
+
+    @Test
+    void allToolsRejectAbsoluteAndParentTraversalPaths() throws IOException {
+        Path externalFile = Files.writeString(temporaryDirectory.resolve("outside.txt"), "外部内容");
+        Path externalDirectory = Files.createDirectory(temporaryDirectory.resolve("outside-directory"));
+        Path sibling = Files.writeString(
+                Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR, "outside-file-tool-security-test.txt"),
+                "相邻内容");
+
+        assertRejectedInEvaluation(() -> fileReadTool.readFile(externalFile.toString(), APP_ID));
+        assertRejectedInEvaluation(() -> fileWriteTool.writeFile("../" + sibling.getFileName(), "篡改", APP_ID));
+        assertRejectedInEvaluation(() -> fileModifyTool.modifyFile(externalFile.toString(), "外部", "篡改", APP_ID));
+        assertRejectedInEvaluation(() -> fileDeleteTool.deleteFile("../" + sibling.getFileName(), APP_ID));
+        assertRejectedInEvaluation(() -> fileDirReadTool.readDir(externalDirectory.toString(), APP_ID));
+
+        assertEquals("外部内容", Files.readString(externalFile));
+        assertEquals("相邻内容", Files.readString(sibling));
         assertEquals(0, fileStateManager.fileCount(APP_ID));
-        assertFalse(Files.exists(projectRoot().resolve("null-content.txt")));
     }
 
     @Test
-    void retryAfterWriteFailureWritesFileAndRecordsFirstSuccess() throws IOException {
-        Path target = projectRoot().resolve("retry.txt");
-        Files.createDirectories(target);
-        assertTrue(fileWriteTool.writeFile("retry.txt", "重试内容", APP_ID).contains("文件写入失败"));
-        Files.delete(target);
+    void protectedSegmentsAreRejectedAtEveryPathDepthByAllTools() throws IOException {
+        Path root = createProjectRoot();
+        List<String> paths = List.of(
+                "node_modules/pkg/index.js",
+                "src/dist/app.js",
+                "src/.git/config",
+                "cache/.ai-build-dependency-state.json");
+        for (String path : paths) {
+            Path target = root.resolve(path);
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, "受保护内容");
 
-        String retryResult = fileWriteTool.writeFile("retry.txt", "重试内容", APP_ID);
-
-        assertTrue(retryResult.contains("文件写入成功"), retryResult);
-        assertEquals("重试内容", Files.readString(target));
-        assertEquals(1, fileStateManager.fileCount(APP_ID));
+            assertRejectedInEvaluation(() -> fileReadTool.readFile(path, APP_ID));
+            assertRejectedInEvaluation(() -> fileWriteTool.writeFile(path, "篡改", APP_ID));
+            assertRejectedInEvaluation(() -> fileModifyTool.modifyFile(path, "受保护", "篡改", APP_ID));
+            assertRejectedInEvaluation(() -> fileDeleteTool.deleteFile(path, APP_ID));
+            assertRejectedInEvaluation(() -> fileDirReadTool.readDir(path, APP_ID));
+            assertEquals("受保护内容", Files.readString(target));
+        }
     }
 
     @Test
-    void equivalentLexicalPathsShareOneCanonicalStateEntry() throws IOException {
-        String firstResult = fileWriteTool.writeFile("src/../same.txt", "相同内容", APP_ID);
-        String duplicateResult = fileWriteTool.writeFile("./same.txt", "相同内容", APP_ID);
+    void projectLinksCannotAliasProtectedDirectories() throws IOException {
+        Path root = createProjectRoot();
+        Path protectedDirectory = Files.createDirectories(root.resolve("node_modules/pkg"));
+        Path protectedFile = Files.writeString(protectedDirectory.resolve("index.js"), "受保护内容");
+        Files.createSymbolicLink(root.resolve("protected-directory-alias"), root.resolve("node_modules"));
+        Files.createSymbolicLink(root.resolve("protected-file-alias"), protectedFile);
 
-        assertTrue(firstResult.contains("文件写入成功"), firstResult);
-        assertTrue(duplicateResult.contains("跳过"), duplicateResult);
-        assertTrue(duplicateResult.contains("[same.txt]"), duplicateResult);
-        assertFalse(duplicateResult.contains("src/../same.txt"), duplicateResult);
+        assertRejectedInEvaluation(() -> fileReadTool.readFile("protected-file-alias", APP_ID));
+        assertRejectedInEvaluation(() -> fileWriteTool.writeFile(
+                "protected-directory-alias/new.js", "篡改", APP_ID));
+        assertRejectedInEvaluation(() -> fileModifyTool.modifyFile(
+                "protected-file-alias", "受保护", "篡改", APP_ID));
+        assertRejectedInEvaluation(() -> fileDeleteTool.deleteFile("protected-file-alias", APP_ID));
+        assertRejectedInEvaluation(() -> fileDirReadTool.readDir(
+                "protected-directory-alias", APP_ID));
+
+        assertEquals("受保护内容", Files.readString(protectedFile));
+        assertFalse(Files.exists(root.resolve("node_modules/new.js")));
+    }
+
+    @Test
+    void fileToolScopeUsesRequiredRecordShape() {
+        assertTrue(FileToolExecutionScopeManager.FileToolScope.class.isRecord());
+    }
+
+    @Test
+    void rootDirectoryListingNeverExposesProtectedEntries() throws IOException {
+        Path root = createProjectRoot();
+        Files.writeString(root.resolve("visible.txt"), "可见");
+        Files.writeString(root.resolve(".ai-build-dependency-state.json"), "内部状态");
+        Files.createDirectories(root.resolve("dist"));
+        Files.writeString(root.resolve("dist/secret.js"), "产物");
+
+        JSONObject directory = inEvaluation(() -> fileDirReadTool.readDir("", APP_ID));
+
+        assertEquals("APPLIED", directory.getStr("status"));
+        assertTrue(directory.getStr("message").contains("visible.txt"));
+        assertFalse(directory.getStr("message").contains(".ai-build-dependency-state.json"));
+        assertFalse(directory.getStr("message").contains("secret.js"));
+    }
+
+    @Test
+    void projectLinksCannotEscapeRoot() throws IOException {
+        Path root = createProjectRoot();
+        Path externalFile = Files.writeString(temporaryDirectory.resolve("linked-file.txt"), "秘密");
+        Path externalDirectory = Files.createDirectory(temporaryDirectory.resolve("linked-directory"));
+        Files.writeString(externalDirectory.resolve("secret.txt"), "绝不能泄露");
+        Files.createSymbolicLink(root.resolve("outside-file"), externalFile);
+        Files.createSymbolicLink(root.resolve("outside-directory"), externalDirectory);
+
+        assertRejectedInEvaluation(() -> fileReadTool.readFile("outside-file", APP_ID));
+        assertRejectedInEvaluation(() ->
+                fileWriteTool.writeFile("outside-directory/new.txt", "篡改", APP_ID));
+        assertRejectedInEvaluation(() ->
+                fileModifyTool.modifyFile("outside-file", "秘密", "篡改", APP_ID));
+        assertRejectedInEvaluation(() -> fileDeleteTool.deleteFile("outside-file", APP_ID));
+        JSONObject directory = inEvaluation(() -> fileDirReadTool.readDir("", APP_ID));
+        assertEquals("REJECTED", directory.getStr("status"));
+        assertFalse(directory.getStr("message").contains("绝不能泄露"));
+
+        assertEquals("秘密", Files.readString(externalFile));
+        assertFalse(Files.exists(externalDirectory.resolve("new.txt")));
+    }
+
+    @Test
+    void writeAndModifyReturnMachineDecidableStatuses() throws IOException {
+        JSONObject applied = inEvaluation(() ->
+                fileWriteTool.writeFile("same.txt", "相同内容", APP_ID));
+        JSONObject duplicate = inEvaluation(() ->
+                fileWriteTool.writeFile("./same.txt", "相同内容", APP_ID));
+        JSONObject failed = inEvaluation(() ->
+                fileWriteTool.writeFile("null.txt", null, APP_ID));
+        JSONObject noMatch = inEvaluation(() ->
+                fileModifyTool.modifyFile("same.txt", "不存在", "新内容", APP_ID));
+
+        assertStatus(applied, "APPLIED", true);
+        assertEquals("same.txt", applied.getStr("relativePath"));
+        assertStatus(duplicate, "NO_CHANGE", false);
+        assertStatus(failed, "FAILED", false);
+        assertStatus(noMatch, "NO_CHANGE", false);
         assertEquals("相同内容", Files.readString(projectRoot().resolve("same.txt")));
-        assertEquals(1, fileStateManager.fileCount(APP_ID));
+        assertFalse(Files.exists(projectRoot().resolve("null.txt")));
     }
 
     @Test
-    void successfulDifferentContentRewriteKeepsOverwriteSemantics() throws IOException {
-        assertTrue(fileWriteTool.writeFile("rewrite.txt", "第一版", APP_ID).contains("文件写入成功"));
+    void writeNoChangeUsesCurrentDiskContentAfterModifyOrDelete() throws IOException {
+        assertEquals("APPLIED", inEvaluation(() ->
+                fileWriteTool.writeFile("state.txt", "版本A", APP_ID)).getStr("status"));
+        assertEquals("APPLIED", inEvaluation(() ->
+                fileModifyTool.modifyFile("state.txt", "版本A", "版本B", APP_ID)).getStr("status"));
 
-        String rewriteResult = fileWriteTool.writeFile("rewrite.txt", "第二版", APP_ID);
+        JSONObject afterModify = inEvaluation(() ->
+                fileWriteTool.writeFile("state.txt", "版本A", APP_ID));
+        assertEquals("APPLIED", afterModify.getStr("status"));
+        assertEquals("版本A", Files.readString(projectRoot().resolve("state.txt")));
 
-        assertTrue(rewriteResult.contains("已覆盖已存在文件"), rewriteResult);
-        assertEquals("第二版", Files.readString(projectRoot().resolve("rewrite.txt")));
-        assertEquals(1, fileStateManager.fileCount(APP_ID));
+        assertEquals("APPLIED", inEvaluation(() ->
+                fileDeleteTool.deleteFile("state.txt", APP_ID)).getStr("status"));
+        JSONObject afterDelete = inEvaluation(() ->
+                fileWriteTool.writeFile("state.txt", "版本A", APP_ID));
+        assertEquals("APPLIED", afterDelete.getStr("status"));
+        assertEquals("版本A", Files.readString(projectRoot().resolve("state.txt")));
     }
 
     @Test
-    void concurrentSameContentWritesHaveOneSuccessAndOneDuplicate() throws Exception {
+    void concurrentSameContentWritesHaveOneAppliedAndOneNoChange() throws Exception {
         CyclicBarrier startBarrier = new CyclicBarrier(2);
-        List<String> results;
+        List<JSONObject> results;
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            Future<String> first = executor.submit(() -> {
+            var first = executor.submit(() -> {
                 startBarrier.await();
-                return fileWriteTool.writeFile("concurrent.txt", "并发内容", APP_ID);
+                return inEvaluation(() -> fileWriteTool.writeFile(
+                        "concurrent.txt", "并发内容", APP_ID));
             });
-            Future<String> second = executor.submit(() -> {
+            var second = executor.submit(() -> {
                 startBarrier.await();
-                return fileWriteTool.writeFile("./concurrent.txt", "并发内容", APP_ID);
+                return inEvaluation(() -> fileWriteTool.writeFile(
+                        "./concurrent.txt", "并发内容", APP_ID));
             });
             results = List.of(
                     first.get(3, TimeUnit.SECONDS),
                     second.get(3, TimeUnit.SECONDS));
         }
 
-        assertEquals(1, results.stream().filter(result -> result.contains("文件写入成功")).count());
-        assertEquals(1, results.stream().filter(result -> result.contains("跳过")).count());
+        assertEquals(1, results.stream()
+                .filter(result -> "APPLIED".equals(result.getStr("status"))).count());
+        assertEquals(1, results.stream()
+                .filter(result -> "NO_CHANGE".equals(result.getStr("status"))).count());
         assertEquals("并发内容", Files.readString(projectRoot().resolve("concurrent.txt")));
         assertEquals(1, fileStateManager.fileCount(APP_ID));
     }
 
     @Test
-    void invalidOrEmptyFilePathsReturnChineseErrorsInsteadOfEscapingToolFramework() {
-        assertRejected(fileReadTool.readFile("\u0000", APP_ID));
-        assertRejected(fileWriteTool.writeFile("", "内容", APP_ID));
-        assertRejected(fileModifyTool.modifyFile(null, "旧", "新", APP_ID));
-        assertRejected(fileDeleteTool.deleteFile("", APP_ID));
+    void stableMarkdownIncludesCodeOnlyForAppliedChanges() {
+        JSONObject writeArguments = new JSONObject()
+                .set("relativeFilePath", "src/App.vue")
+                .set("content", "<template>绝密参数代码</template>");
+        String applied = fileWriteTool.generateToolExecutedResult(
+                writeArguments,
+                FileToolProtocolSupport.json(FileToolResult.applied(
+                        "writeFile", "src/App.vue", true, "已写入")));
+        String noChange = fileWriteTool.generateToolExecutedResult(
+                writeArguments,
+                FileToolProtocolSupport.json(FileToolResult.noChange(
+                        "writeFile", "src/App.vue", "未变化")));
+        String malformed = fileWriteTool.generateToolExecutedResult(writeArguments, "不是 JSON");
+
+        assertTrue(applied.contains("绝密参数代码"), applied);
+        assertFalse(noChange.contains("绝密参数代码"), noChange);
+        assertFalse(malformed.contains("绝密参数代码"), malformed);
+        assertTrue(malformed.contains("失败"), malformed);
+
+        JSONObject modifyArguments = new JSONObject()
+                .set("relativeFilePath", "src/App.vue")
+                .set("oldContent", "旧绝密代码")
+                .set("newContent", "新绝密代码");
+        String rejected = fileModifyTool.generateToolExecutedResult(
+                modifyArguments,
+                FileToolProtocolSupport.json(FileToolResult.rejected(
+                        "modifyFile", "src/App.vue", "拒绝")));
+        assertFalse(rejected.contains("旧绝密代码"), rejected);
+        assertFalse(rejected.contains("新绝密代码"), rejected);
+
+        String mismatchedPath = fileWriteTool.generateToolExecutedResult(
+                writeArguments,
+                FileToolProtocolSupport.json(FileToolResult.applied(
+                        "writeFile", "src/Other.vue", true, "另一路径已写入")));
+        assertFalse(mismatchedPath.contains("绝密参数代码"), mismatchedPath);
+        assertTrue(mismatchedPath.contains("失败"), mismatchedPath);
+    }
+
+    @Test
+    void writeGuidanceDependsOnTrustedScopeType() {
+        JSONObject evaluation = inEvaluation(() ->
+                fileWriteTool.writeFile("evaluation.txt", "内容", APP_ID));
+        assertTrue(evaluation.getStr("message").contains("exit"), evaluation.toString());
+
+        try (OnlineHarness online = onlineHarness(Set.of("writeFile", "exit"))) {
+            JSONObject onlineWrite = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope,
+                    () -> fileWriteTool.writeFile("online.txt", "内容", APP_ID)));
+            assertTrue(onlineWrite.getStr("message").contains("buildProject"), onlineWrite.toString());
+
+            JSONObject onlineExit = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope,
+                    () -> exitTool.exit("提前退出", APP_ID)));
+            assertEquals("NO_CHANGE", onlineExit.getStr("status"));
+            assertTrue(onlineExit.getStr("message").contains("buildProject"), onlineExit.toString());
+        }
+    }
+
+    @Test
+    void scopedValueDoesNotLeakIntoNewVirtualThread() throws Exception {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            String raw = scopeManager.callInScope(evaluationScope, () -> {
+                try {
+                    return executor.submit(() ->
+                                    fileWriteTool.writeFile("leaked.txt", "绝不能落盘", APP_ID))
+                            .get(2, TimeUnit.SECONDS);
+                } catch (Exception exception) {
+                    throw new RuntimeException(exception);
+                }
+            });
+
+            assertStatus(raw, "REJECTED", false);
+            assertFalse(Files.exists(projectRoot().resolve("leaked.txt")));
+        }
+    }
+
+    @Test
+    void staleOnlineScopeCannotContinueOrBorrowReplacementLease() {
+        OnlineHarness old = onlineHarness(Set.of("writeFile"));
+        FileToolExecutionScopeManager.FileToolScope staleScope = old.scope;
+        old.close();
+
+        assertThrows(IllegalStateException.class, () -> scopeManager.callInScope(
+                staleScope,
+                () -> fileWriteTool.writeFile("stale.txt", "绝不能落盘", APP_ID)));
+
+        try (OnlineHarness replacement = onlineHarness(Set.of("writeFile"))) {
+            assertThrows(IllegalStateException.class, () -> scopeManager.callInScope(
+                    staleScope,
+                    () -> fileWriteTool.writeFile("borrowed.txt", "绝不能落盘", APP_ID)));
+            JSONObject valid = JSONUtil.parseObj(scopeManager.callInScope(
+                    replacement.scope,
+                    () -> fileWriteTool.writeFile("replacement.txt", "允许落盘", APP_ID)));
+            assertEquals("APPLIED", valid.getStr("status"));
+        }
+
+        assertFalse(Files.exists(projectRoot().resolve("stale.txt")));
+        assertFalse(Files.exists(projectRoot().resolve("borrowed.txt")));
+    }
+
+    @Test
+    void toolWhitelistAndAppIdentityAreEnforcedInsideBean() {
+        FileToolExecutionScopeManager.FileToolScope readOnly =
+                scopeManager.evaluation(APP_ID, "read-only", Set.of("readFile"));
+        String notAllowed = scopeManager.callInScope(
+                readOnly,
+                () -> fileWriteTool.writeFile("denied.txt", "不能落盘", APP_ID));
+        String wrongApp = scopeManager.callInScope(
+                evaluationScope,
+                () -> fileWriteTool.writeFile("wrong-app.txt", "不能落盘", APP_ID + 1));
+
+        assertStatus(notAllowed, "REJECTED", false);
+        assertStatus(wrongApp, "REJECTED", false);
+        assertFalse(Files.exists(projectRoot().resolve("denied.txt")));
+    }
+
+    private JSONObject inEvaluation(Supplier<String> action) {
+        return JSONUtil.parseObj(scopeManager.callInScope(evaluationScope, action));
+    }
+
+    private void assertRejectedInEvaluation(Supplier<String> action) {
+        assertEquals("REJECTED", inEvaluation(action).getStr("status"));
+    }
+
+    private void assertStatus(String raw, String status, boolean changed) {
+        assertStatus(JSONUtil.parseObj(raw), status, changed);
+    }
+
+    private void assertStatus(JSONObject json, String status, boolean changed) {
+        assertEquals("file-tool/v1", json.getStr("protocol"));
+        assertEquals(status, json.getStr("status"));
+        assertEquals(changed, json.getBool("changed"));
     }
 
     private Path createProjectRoot() throws IOException {
@@ -300,7 +423,25 @@ class FileToolSecurityTest {
         return Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR, "vue_project_" + APP_ID);
     }
 
-    private void assertRejected(String result) {
-        assertTrue(result.startsWith("错误：路径不安全"), result);
+    private OnlineHarness onlineHarness(Set<String> allowedTools) {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        var operation = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE, TURN_ID);
+        var lease = new VueBuildSessionManager().open(operation, USER_ID, TURN_ID);
+        var scope = scopeManager.online(lease, TURN_ID, APP_ID, allowedTools);
+        return new OnlineHarness(operation, lease, scope);
+    }
+
+    private record OnlineHarness(
+            AppOperationLeaseManager.AppOperationLease operation,
+            VueBuildSessionManager.VueBuildLease lease,
+            FileToolExecutionScopeManager.FileToolScope scope
+    ) implements AutoCloseable {
+
+        @Override
+        public void close() {
+            lease.close();
+            operation.close();
+        }
     }
 }

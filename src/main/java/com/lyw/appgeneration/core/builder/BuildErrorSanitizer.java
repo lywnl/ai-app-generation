@@ -1,5 +1,7 @@
 package com.lyw.appgeneration.core.builder;
 
+import org.springframework.stereotype.Component;
+
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
@@ -12,6 +14,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /** 把不可信构建输出转换成可交给模型分析的有界诊断数据。 */
+@Component
 public final class BuildErrorSanitizer {
 
     public static final int MAX_SUMMARY_CODE_POINTS = 4_000;

@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.ai.tools;
 
-import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -8,94 +7,76 @@ import dev.langchain4j.agent.tool.ToolMemoryId;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 
-/**
- * 文件目录读取工具
- * 使用受控路径遍历读取目录结构
- */
+/** 受控读取 Vue 项目目录结构。 */
 @Slf4j
 @Component
-public class FileDirReadTool extends BaseTool{
+public class FileDirReadTool extends BaseTool {
 
-    private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
-
-    /**
-     * 需要忽略的文件和目录
-     */
     private static final Set<String> IGNORED_NAMES = Set.of(
             "node_modules", ".git", "dist", "build", ".DS_Store",
-            ".env", "target", ".mvn", ".idea", ".vscode", "coverage"
-    );
-
-    /**
-     * 需要忽略的文件扩展名
-     */
+            ".env", "target", ".mvn", ".idea", ".vscode", "coverage");
     private static final Set<String> IGNORED_EXTENSIONS = Set.of(
-            ".log", ".tmp", ".cache", ".lock"
-    );
+            ".log", ".tmp", ".cache", ".lock");
+
+    private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
+    private final FileToolExecutionScopeManager scopeManager;
+
+    public FileDirReadTool(FileToolExecutionScopeManager scopeManager) {
+        this.scopeManager = scopeManager;
+    }
 
     @Tool("读取目录结构，获取指定目录下的所有文件和子目录信息")
     public String readDir(
-            @P("目录的相对路径，为空则读取整个项目结构")
-            String relativeDirPath,
-            @ToolMemoryId Long appId
-    ) {
+            @P("目录的相对路径，为空则读取整个项目结构") String relativeDirPath,
+            @ToolMemoryId Long appId) {
         try {
+            scopeManager.requireCurrent(appId == null ? Long.MIN_VALUE : appId, getToolName());
             Path path = projectPathResolver.resolveExisting(appId, relativeDirPath, true);
-            if (!java.nio.file.Files.isDirectory(path)) {
-                return "错误：目录不存在或不是目录 - " + relativeDirPath;
+            if (!Files.isDirectory(path)) {
+                return result(FileToolResult.notFound(
+                        getToolName(), relativeDirPath, "目录不存在或不是目录"));
             }
-            StringBuilder structure = new StringBuilder();
-            structure.append("项目目录结构:\n");
-            List<Path> allFiles = projectPathResolver.collectSafeDirectoryEntries(
+            List<Path> files = projectPathResolver.collectSafeDirectoryEntries(
                     path, appId, this::shouldIgnore);
-            // 按路径深度和名称排序显示
-            allFiles.stream()
-                    .sorted((f1, f2) -> {
-                        int depth1 = getRelativeDepth(path, f1);
-                        int depth2 = getRelativeDepth(path, f2);
-                        if (depth1 != depth2) {
-                            return Integer.compare(depth1, depth2);
-                        }
-                        return f1.toString().compareTo(f2.toString());
-                    })
-                    .forEach(file -> {
-                        int depth = getRelativeDepth(path, file);
-                        String indent = "  ".repeat(depth);
-                        structure.append(indent).append(file.getFileName());
-                    });
-            return structure.toString();
-
+            return result(FileToolResult.applied(
+                    getToolName(), relativeDirPath, false, formatStructure(path, files)));
+        } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
+            return FileToolProtocolSupport.rejected(
+                    getToolName(), relativeDirPath, exception);
         } catch (ProjectPathResolver.UnsafeProjectPathException exception) {
-            return "错误：路径不安全 - " + exception.getMessage();
-        } catch (Exception e) {
-            String errorMessage = "读取目录结构失败: " + relativeDirPath + ", 错误: " + e.getMessage();
-            log.error(errorMessage, e);
-            return errorMessage;
+            return result(FileToolResult.rejected(
+                    getToolName(), relativeDirPath, exception.getMessage()));
+        } catch (RuntimeException exception) {
+            log.error("读取目录失败: appId={}, path={}", appId, relativeDirPath, exception);
+            return result(FileToolResult.failed(
+                    getToolName(), relativeDirPath, "读取目录结构失败"));
         }
     }
 
-    /**
-     * 计算文件相对于根目录的深度
-     */
-    private int getRelativeDepth(Path root, Path file) {
-        return root.relativize(file).getNameCount() - 1;
+    private String formatStructure(Path root, List<Path> files) {
+        StringBuilder structure = new StringBuilder("项目目录结构:\n");
+        files.stream()
+                .sorted(Comparator.comparingInt((Path file) -> root.relativize(file).getNameCount())
+                        .thenComparing(Path::toString))
+                .forEach(file -> structure.append("  ".repeat(
+                                Math.max(0, root.relativize(file).getNameCount() - 1)))
+                        .append(file.getFileName()).append('\n'));
+        return structure.toString();
     }
 
-    /**
-     * 判断是否应该忽略该文件或目录
-     */
     private boolean shouldIgnore(String fileName) {
-        // 检查是否在忽略名称列表中
-        if (IGNORED_NAMES.contains(fileName)) {
-            return true;
-        }
+        return IGNORED_NAMES.contains(fileName)
+                || IGNORED_EXTENSIONS.stream().anyMatch(fileName::endsWith);
+    }
 
-        // 检查文件扩展名
-        return IGNORED_EXTENSIONS.stream().anyMatch(fileName::endsWith);
+    private String result(FileToolResult result) {
+        return FileToolProtocolSupport.json(result);
     }
 
     @Override
@@ -110,10 +91,13 @@ public class FileDirReadTool extends BaseTool{
 
     @Override
     public String generateToolExecutedResult(JSONObject arguments) {
-        String relativeDirPath = arguments.getStr("relativeDirPath");
-        if (StrUtil.isEmpty(relativeDirPath)) {
-            relativeDirPath = "根目录";
-        }
-        return String.format("[工具调用] %s %s", getDisplayName(), relativeDirPath);
+        return generateToolExecutedResult(arguments, null);
+    }
+
+    @Override
+    public String generateToolExecutedResult(JSONObject arguments, String rawResult) {
+        String path = arguments == null ? null : arguments.getStr("relativeDirPath");
+        return FileToolProtocolSupport.stableSummary(
+                this, FileToolProtocolSupport.parse(rawResult, getToolName(), path));
     }
 }

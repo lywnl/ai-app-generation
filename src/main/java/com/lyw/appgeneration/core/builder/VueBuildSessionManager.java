@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 /**
  * Vue 构建回合状态机。
@@ -86,6 +87,17 @@ public final class VueBuildSessionManager {
                 BuildAttemptTicket ticket, BuildResult result) {
             ensureOpen();
             return session.recordFailure(ticket, result);
+        }
+
+        /**
+         * 原子提交构建结果；若取消已先发生，则消费票据但保持取消终态。
+         */
+        public VueBuildSnapshot recordResult(
+                BuildAttemptTicket ticket,
+                BuildResult result,
+                BooleanSupplier cancellationRequested) {
+            ensureOpen();
+            return session.recordResult(ticket, result, cancellationRequested);
         }
 
         public void registerModelCancellation(Runnable cancellationAction) {
@@ -271,6 +283,41 @@ public final class VueBuildSessionManager {
                 throw new IllegalArgumentException("recordFailure 只接受失败构建结果");
             }
             validateTicket(ticket, result.cancelled() && phase == VueBuildPhase.CANCELLED);
+            completeTicket(ticket);
+            if (result.cancelled()) {
+                failureKind = null;
+                phase = VueBuildPhase.CANCELLED;
+                return snapshotUnsafe();
+            }
+            failureKind = classifyFailure(result);
+            phase = failurePhase(ticket.attempt);
+            return snapshotUnsafe();
+        }
+
+        private synchronized VueBuildSnapshot recordResult(
+                BuildAttemptTicket ticket,
+                BuildResult result,
+                BooleanSupplier cancellationRequested) {
+            Objects.requireNonNull(result, "BuildResult 不能为空");
+            Objects.requireNonNull(cancellationRequested, "取消状态不能为空");
+            validateTicket(ticket, phase == VueBuildPhase.CANCELLED);
+            if (cancellationRequested.getAsBoolean()
+                    || operationLease.isCancellationRequested()
+                    || phase == VueBuildPhase.CANCELLED) {
+                completeTicket(ticket);
+                failureKind = null;
+                phase = VueBuildPhase.CANCELLED;
+                return snapshotUnsafe();
+            }
+            if (result.success()) {
+                if (result.stage() != BuildStage.SUCCESS) {
+                    throw new IllegalArgumentException("成功构建结果必须处于 SUCCESS 阶段");
+                }
+                completeTicket(ticket);
+                failureKind = null;
+                phase = VueBuildPhase.SUCCEEDED;
+                return snapshotUnsafe();
+            }
             completeTicket(ticket);
             if (result.cancelled()) {
                 failureKind = null;

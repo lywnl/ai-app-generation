@@ -3,6 +3,8 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.ai.tools.BaseTool;
+import cn.hutool.json.JSONObject;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.manger.ToolManager;
@@ -33,10 +35,10 @@ class JsonMessageStreamHandlerTest {
     private static final long USER_ID = 99L;
 
     @Mock
-    private VueProjectBuilder vueProjectBuilder;
+    private ToolManager toolManager;
 
     @Mock
-    private ToolManager toolManager;
+    private VueProjectBuilder vueProjectBuilder;
 
     @Mock
     private AiGeneratorServiceFactory aiGeneratorServiceFactory;
@@ -63,7 +65,7 @@ class JsonMessageStreamHandlerTest {
     private JsonMessageStreamHandler handler;
 
     @Test
-    void handle_shouldBuildWithoutAdditionalAiCheck() {
+    void handle_shouldKeepCompatibilityBuildUntilGuardIsWired() {
         User loginUser = User.builder().id(USER_ID).build();
         List<String> output = handler.handle(
                 Flux.just("{\"type\":\"ai_response\",\"data\":\"ok\"}"),
@@ -76,7 +78,6 @@ class JsonMessageStreamHandlerTest {
 
         assertEquals(List.of("ok"), output);
 
-        String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID;
         InOrder inOrder = inOrder(
                 chatHistoryService,
                 toolMessageCollapser,
@@ -93,13 +94,40 @@ class JsonMessageStreamHandlerTest {
         inOrder.verify(toolMessageCollapser).collapseLastTurn(APP_ID, "ok");
         inOrder.verify(memorySummaryService).triggerSummarizationAsync(APP_ID);
         inOrder.verify(userMemoryService).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
-        inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
+        inOrder.verify(vueProjectBuilder).buildProjectAsync(
+                AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID);
         verify(aiGeneratorServiceFactory, never())
                 .getAiCodeGeneratorService(anyLong(), any());
         verify(aiCodeGeneratorService, never())
                 .generateVueProjectCodeStream(anyLong(), anyString());
         verify(tokenStream, never()).start();
         verify(toolMessageCollapser, never()).restore(anyLong(), anyList());
+    }
+
+    @Test
+    void toolExecutedPassesRawResultToStableRendererAndKeepsEventShape() {
+        User loginUser = User.builder().id(USER_ID).build();
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool("writeFile")).thenReturn(tool);
+        when(tool.generateToolExecutedResult(any(JSONObject.class), eq("受信原始结果")))
+                .thenReturn("稳定文本");
+        String event = """
+                {"type":"tool_executed","id":"tool-1","name":"writeFile",\
+                "arguments":"{\\\"relativeFilePath\\\":\\\"src/App.vue\\\"}",\
+                "result":"受信原始结果"}
+                """;
+
+        List<String> output = handler.handle(
+                Flux.just(event), chatHistoryService, APP_ID, loginUser,
+                memorySummaryService, userMemoryService).collectList().block();
+
+        assertEquals(List.of(event, "\n\n稳定文本\n\n"), output);
+        verify(tool).generateToolExecutedResult(
+                argThat(arguments -> "src/App.vue".equals(
+                        arguments.getStr("relativeFilePath"))),
+                eq("受信原始结果"));
+        verify(vueProjectBuilder).buildProjectAsync(
+                AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID);
     }
 
 }

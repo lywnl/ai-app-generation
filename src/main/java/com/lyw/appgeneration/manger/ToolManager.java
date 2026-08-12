@@ -7,7 +7,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
+import java.util.Comparator;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * 工具管理器
@@ -58,5 +61,30 @@ public class ToolManager {
     public BaseTool[] getAllTools() {
         return tools;
     }
-}
 
+    /**
+     * 按显式白名单选择工具；未知名称直接拒绝，避免配置错误悄悄扩大或缩小权限。
+     */
+    public BaseTool[] getTools(Set<String> allowedToolNames) {
+        Set<String> allowed = Set.copyOf(
+                Objects.requireNonNull(allowedToolNames, "工具白名单不能为空"));
+        Set<String> unknown = new java.util.HashSet<>(allowed);
+        unknown.removeAll(toolMap.keySet());
+        if (!unknown.isEmpty()) {
+            throw new IllegalArgumentException("工具白名单包含未知工具: " + unknown);
+        }
+        return toolMap.values().stream()
+                .filter(tool -> allowed.contains(tool.getToolName()))
+                .sorted(Comparator.comparingInt(tool -> indexOfTool(tool.getToolName())))
+                .toArray(BaseTool[]::new);
+    }
+
+    private int indexOfTool(String toolName) {
+        for (int index = 0; index < tools.length; index++) {
+            if (tools[index].getToolName().equals(toolName)) {
+                return index;
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+}

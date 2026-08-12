@@ -38,5 +38,11 @@ public abstract class BaseTool {
      * @return 格式化的工具执行结果
      */
     public abstract String generateToolExecutedResult(JSONObject arguments);
-}
 
+    /**
+     * 根据真实工具结果生成稳定文本；旧工具默认保持只依赖参数的兼容行为。
+     */
+    public String generateToolExecutedResult(JSONObject arguments, String rawResult) {
+        return generateToolExecutedResult(arguments);
+    }
+}

@@ -11,35 +11,46 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * 文件读取工具
- * 支持 AI 通过工具调用的方式读取文件内容
- */
+/** 受控读取 Vue 项目内的普通文件。 */
 @Slf4j
 @Component
-public class FileReadTool extends BaseTool{
+public class FileReadTool extends BaseTool {
 
     private final ProjectPathResolver projectPathResolver = new ProjectPathResolver();
+    private final FileToolExecutionScopeManager scopeManager;
+
+    public FileReadTool(FileToolExecutionScopeManager scopeManager) {
+        this.scopeManager = scopeManager;
+    }
 
     @Tool("读取指定路径的文件内容")
     public String readFile(
-            @P("文件的相对路径")
-            String relativeFilePath,
-            @ToolMemoryId Long appId
-    ) {
+            @P("文件的相对路径") String relativeFilePath,
+            @ToolMemoryId Long appId) {
         try {
+            scopeManager.requireCurrent(requireAppId(appId), getToolName());
             Path path = projectPathResolver.resolveExisting(appId, relativeFilePath, false);
             if (!Files.exists(path) || !Files.isRegularFile(path)) {
-                return "错误：文件不存在或不是文件 - " + relativeFilePath;
+                return FileToolProtocolSupport.json(FileToolResult.notFound(
+                        getToolName(), relativeFilePath, "文件不存在或不是普通文件"));
             }
-            return Files.readString(path);
+            return FileToolProtocolSupport.json(FileToolResult.applied(
+                    getToolName(), relativeFilePath, false, Files.readString(path)));
+        } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
+            return FileToolProtocolSupport.rejected(
+                    getToolName(), relativeFilePath, exception);
         } catch (ProjectPathResolver.UnsafeProjectPathException exception) {
-            return "错误：路径不安全 - " + exception.getMessage();
-        } catch (IOException | RuntimeException e) {
-            String errorMessage = "读取文件失败: " + relativeFilePath + ", 错误: " + e.getMessage();
-            log.error(errorMessage, e);
-            return errorMessage;
+            return FileToolProtocolSupport.json(FileToolResult.rejected(
+                    getToolName(), relativeFilePath, exception.getMessage()));
+        } catch (IOException | RuntimeException exception) {
+            log.error("读取文件失败: appId={}, path={}", appId, relativeFilePath, exception);
+            return FileToolProtocolSupport.json(FileToolResult.failed(
+                    getToolName(), relativeFilePath, "读取文件失败"));
         }
+    }
+
+    private long requireAppId(Long appId) {
+        return appId == null ? Long.MIN_VALUE : appId;
     }
 
     @Override
@@ -54,7 +65,13 @@ public class FileReadTool extends BaseTool{
 
     @Override
     public String generateToolExecutedResult(JSONObject arguments) {
-        String relativeFilePath = arguments.getStr("relativeFilePath");
-        return String.format("[工具调用] %s %s", getDisplayName(), relativeFilePath);
+        return generateToolExecutedResult(arguments, null);
+    }
+
+    @Override
+    public String generateToolExecutedResult(JSONObject arguments, String rawResult) {
+        String path = arguments == null ? null : arguments.getStr("relativeFilePath");
+        return FileToolProtocolSupport.stableSummary(
+                this, FileToolProtocolSupport.parse(rawResult, getToolName(), path));
     }
 }

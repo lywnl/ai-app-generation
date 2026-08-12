@@ -417,6 +417,34 @@ class VueBuildSessionManagerTest {
     }
 
     @Test
+    void closedOperationCancellationGateWinsBeforeCallbacksReachSession() throws Exception {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager manager = new VueBuildSessionManager();
+        CountDownLatch blockingCancellationEntered = new CountDownLatch(1);
+        CountDownLatch releaseBlockingCancellation = new CountDownLatch(1);
+        try (var operation = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+             var ignored = operation.registerCancellation(() -> {
+                 blockingCancellationEntered.countDown();
+                 awaitUnchecked(releaseBlockingCancellation);
+             });
+             var lease = manager.open(operation, 9L, "turn-1");
+             var ticket = lease.beginBuild();
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> cancellation = executor.submit(operation::requestCancellation);
+            try {
+                assertTrue(blockingCancellationEntered.await(1, TimeUnit.SECONDS));
+
+                assertEquals(VueBuildPhase.CANCELLED,
+                        lease.recordResult(ticket, success(), () -> false).phase());
+            } finally {
+                releaseBlockingCancellation.countDown();
+            }
+            assertTrue(cancellation.get(1, TimeUnit.SECONDS));
+            assertEquals(VueBuildPhase.CANCELLED, lease.snapshot().phase());
+        }
+    }
+
+    @Test
     void openRejectsWrongOperationTypeOwnerAndClosedLease() {
         AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
         VueBuildSessionManager manager = new VueBuildSessionManager();
