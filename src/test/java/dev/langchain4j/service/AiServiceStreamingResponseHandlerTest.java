@@ -402,6 +402,136 @@ class AiServiceStreamingResponseHandlerTest {
         assertToolResultModelCalls("buildProject", "not-json", 1);
     }
 
+    @Test
+    void ordinaryMemoryFailureReportsErrorWithoutCompleteOrCancellationOverride() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        AtomicInteger cancellations = new AtomicInteger();
+        StreamingRequestController controller = new StreamingRequestController();
+        controller.onControlledTermination(termination -> cancellations.incrementAndGet());
+        ChatMemory failingMemory = new ChatMemory() {
+            @Override public Object id() { return "failing"; }
+            @Override public void add(ChatMessage message) {
+                controller.cancel();
+                throw new IllegalStateException("memory 写入失败");
+            }
+            @Override public List<ChatMessage> messages() { return List.of(); }
+            @Override public void clear() { }
+        };
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, failingMemory, partial -> { },
+                response -> completed.incrementAndGet(),
+                error -> {
+                    assertEquals("memory 写入失败", error.getMessage());
+                    errors.incrementAndGet();
+                }, controller);
+
+        handler.onCompleteResponse(ordinaryResponse("完成"));
+        handler.onError(new IllegalStateException("迟到错误"));
+
+        assertEquals(0, completed.get());
+        assertEquals(1, errors.get());
+        assertEquals(0, cancellations.get(), "正常完成 claim 后取消不能覆盖结果");
+    }
+
+    @Test
+    void ordinaryCompleteCallbackFailureReportsErrorExactlyOnce() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        AtomicInteger successfulCompletes = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        StreamingRequestController controller = new StreamingRequestController();
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10), partial -> { },
+                response -> {
+                    throw new IllegalStateException("complete 回调失败");
+                },
+                error -> {
+                    assertEquals("complete 回调失败", error.getMessage());
+                    errors.incrementAndGet();
+                }, controller);
+
+        handler.onCompleteResponse(ordinaryResponse("完成"));
+        handler.onError(new IllegalStateException("迟到错误"));
+
+        assertEquals(0, successfulCompletes.get());
+        assertEquals(1, errors.get());
+    }
+
+    @Test
+    void ordinaryOutputGuardrailFailureReportsErrorWithoutComplete() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        configureOutputGuardrails(context, new IllegalStateException("输出护栏失败"));
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        StreamingRequestController controller = new StreamingRequestController();
+        AiServiceStreamingResponseHandler handler = new AiServiceStreamingResponseHandler(
+                new NoopChatExecutor(), context, "mem-1", partial -> { },
+                (index, request) -> { }, (index, request) -> { }, execution -> { },
+                response -> completed.incrementAndGet(),
+                error -> {
+                    assertEquals("输出护栏失败", error.getMessage());
+                    errors.incrementAndGet();
+                },
+                MessageWindowChatMemory.withMaxMessages(10), new TokenUsage(),
+                List.of(), Map.of(),
+                dev.langchain4j.guardrail.GuardrailRequestParams.builder()
+                        .userMessageTemplate("测试").variables(Map.of()).build(),
+                "method-1", controller, ToolExecutionGuard.direct());
+
+        handler.onCompleteResponse(ordinaryResponse("完成"));
+
+        assertEquals(0, completed.get());
+        assertEquals(1, errors.get());
+    }
+
+    @Test
+    void ordinaryBufferedPartialFailureReportsErrorWithoutComplete() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        configureOutputGuardrails(context, null);
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        StreamingRequestController controller = new StreamingRequestController();
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10), partial -> {
+                    throw new IllegalStateException("缓冲 partial 回调失败");
+                },
+                response -> completed.incrementAndGet(),
+                error -> {
+                    assertEquals("缓冲 partial 回调失败", error.getMessage());
+                    errors.incrementAndGet();
+                }, controller);
+
+        handler.onPartialResponse("缓冲内容");
+        handler.onCompleteResponse(ordinaryResponse("完成"));
+
+        assertEquals(0, completed.get());
+        assertEquals(1, errors.get());
+    }
+
+    @Test
+    void ordinaryResponseSuccessCompletesOnceWithoutError() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        StreamingRequestController controller = new StreamingRequestController();
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10), partial -> { },
+                response -> completed.incrementAndGet(),
+                error -> errors.incrementAndGet(), controller);
+
+        handler.onCompleteResponse(ordinaryResponse("完成"));
+        handler.onCompleteResponse(ordinaryResponse("重复完成"));
+
+        assertEquals(1, completed.get());
+        assertEquals(0, errors.get());
+    }
+
     private void assertBuildResultModelCalls(String result, int expectedCalls) throws Exception {
         assertToolResultModelCalls("buildProject", result, expectedCalls);
     }
@@ -489,6 +619,51 @@ class AiServiceStreamingResponseHandlerTest {
                 .aiMessage(AiMessage.from(List.of(requests)))
                 .metadata(ChatResponseMetadata.builder().tokenUsage(new TokenUsage()).build())
                 .build();
+    }
+
+    private static ChatResponse ordinaryResponse(String text) {
+        return ChatResponse.builder()
+                .aiMessage(AiMessage.from(text))
+                .metadata(ChatResponseMetadata.builder().tokenUsage(new TokenUsage()).build())
+                .build();
+    }
+
+    private static AiServiceStreamingResponseHandler ordinaryHandler(
+            AiServiceContext context,
+            ChatMemory memory,
+            java.util.function.Consumer<String> partial,
+            java.util.function.Consumer<ChatResponse> complete,
+            java.util.function.Consumer<Throwable> error,
+            StreamingRequestController controller) {
+        return new AiServiceStreamingResponseHandler(
+                new NoopChatExecutor(), context, "mem-1", partial,
+                (index, request) -> { }, (index, request) -> { }, execution -> { },
+                complete, error, memory, new TokenUsage(), List.of(), Map.of(),
+                null, "method-1", controller, ToolExecutionGuard.direct());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void configureOutputGuardrails(
+            AiServiceContext context, RuntimeException executionFailure) {
+        dev.langchain4j.service.guardrail.GuardrailService guardrails =
+                org.mockito.Mockito.mock(
+                        dev.langchain4j.service.guardrail.GuardrailService.class);
+        org.mockito.Mockito.when(guardrails.hasOutputGuardrails("method-1"))
+                .thenReturn(true);
+        if (executionFailure != null) {
+            org.mockito.Mockito.when(guardrails.executeGuardrails(
+                            org.mockito.ArgumentMatchers.eq("method-1"),
+                            org.mockito.ArgumentMatchers.any(
+                                    dev.langchain4j.guardrail.OutputGuardrailRequest.class)))
+                    .thenThrow(executionFailure);
+        }
+        java.util.concurrent.atomic.AtomicReference<
+                dev.langchain4j.service.guardrail.GuardrailService> reference =
+                (java.util.concurrent.atomic.AtomicReference<
+                        dev.langchain4j.service.guardrail.GuardrailService>)
+                        org.springframework.test.util.ReflectionTestUtils.getField(
+                                context, "guardrailService");
+        reference.set(guardrails);
     }
 
     private static ToolExecutionRequest tool(String id, String name) {

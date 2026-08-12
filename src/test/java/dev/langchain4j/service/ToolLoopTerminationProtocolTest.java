@@ -295,4 +295,36 @@ class ToolLoopTerminationProtocolTest {
         assertEquals(1, second.get());
         assertNull(controller.enterCallback());
     }
+
+    @Test
+    void normalCompletionClaimPreventsCancellationFromOverwritingOutcome() {
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger cancellations = new AtomicInteger();
+        controller.onControlledTermination(termination -> cancellations.incrementAndGet());
+
+        assertTrue(controller.claimNormalCompletion());
+        controller.cancel();
+
+        assertTrue(controller.finishNormalCompletion());
+        assertEquals(0, cancellations.get());
+        assertNull(controller.controlledTermination());
+        assertNull(controller.enterCallback());
+    }
+
+    @Test
+    void failedNormalCompletionDeliversErrorExactlyOnceAndIsolatesHandlerFailure() {
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger errors = new AtomicInteger();
+        assertTrue(controller.claimNormalCompletion());
+
+        assertTrue(controller.failNormalCompletion(new IllegalStateException("提交失败"), error -> {
+            errors.incrementAndGet();
+            throw new IllegalStateException("错误回调失败");
+        }));
+        assertFalse(controller.failNormalCompletion(
+                new IllegalStateException("重复失败"), error -> errors.incrementAndGet()));
+
+        assertEquals(1, errors.get());
+        assertNull(controller.enterCallback());
+    }
 }

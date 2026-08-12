@@ -376,11 +376,12 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     private void completeOrdinaryResponse(
             ChatResponse completeResponse, AiMessage aiMessage) {
-        if (!requestController.completeNormally()) {
+        if (!requestController.claimNormalCompletion()) {
             return;
         }
-        addToMemory(aiMessage);
-        if (completeResponseHandler != null) {
+        try {
+            addToMemory(aiMessage);
+            if (completeResponseHandler != null) {
                 ChatResponse finalChatResponse = ChatResponse.builder()
                         .aiMessage(aiMessage)
                         .metadata(completeResponse.metadata().toBuilder()
@@ -417,6 +418,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
                 // TODO should completeResponseHandler accept all ChatResponses that happened?
                 completeResponseHandler.accept(finalChatResponse);
+            }
+            requestController.finishNormalCompletion();
+        } catch (RuntimeException exception) {
+            requestController.failNormalCompletion(exception, errorHandler);
         }
     }
 

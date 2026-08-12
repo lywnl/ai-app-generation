@@ -1,6 +1,8 @@
 package dev.langchain4j.service;
 
 import dev.langchain4j.model.chat.response.StreamingRequestHandle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -13,6 +15,8 @@ import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerm
 
 /** 跨递归模型请求共享的通用取消门、计数器和受控终止状态。 */
 public final class StreamingRequestController {
+
+    private static final Logger LOG = LoggerFactory.getLogger(StreamingRequestController.class);
 
     public static final int MAX_MODEL_REQUESTS = 64;
     public static final int MAX_TOOL_EXECUTIONS = 64;
@@ -141,6 +145,47 @@ public final class StreamingRequestController {
             state = State.COMPLETED;
             return true;
         }
+    }
+
+    boolean claimNormalCompletion() {
+        synchronized (this) {
+            if (state != State.ACTIVE) {
+                return false;
+            }
+            state = State.NORMAL_COMPLETING;
+            return true;
+        }
+    }
+
+    boolean finishNormalCompletion() {
+        synchronized (this) {
+            if (state != State.NORMAL_COMPLETING) {
+                return false;
+            }
+            state = State.COMPLETED;
+            return true;
+        }
+    }
+
+    boolean failNormalCompletion(Throwable error, Consumer<Throwable> errorHandler) {
+        Objects.requireNonNull(error, "普通完成错误不能为空");
+        synchronized (this) {
+            if (state != State.NORMAL_COMPLETING) {
+                return false;
+            }
+            state = State.COMPLETED;
+        }
+        if (errorHandler == null) {
+            LOG.warn("Ignored error", error);
+            return true;
+        }
+        try {
+            errorHandler.accept(error);
+        } catch (RuntimeException handlerError) {
+            LOG.error("While handling the following error...", error);
+            LOG.error("...the following error happened", handlerError);
+        }
+        return true;
     }
 
     public CallbackTicket enterCallback() {
@@ -313,6 +358,7 @@ public final class StreamingRequestController {
 
     private enum State {
         ACTIVE,
+        NORMAL_COMPLETING,
         CONTROLLED_TERMINATION,
         CANCELLED,
         COMPLETED
