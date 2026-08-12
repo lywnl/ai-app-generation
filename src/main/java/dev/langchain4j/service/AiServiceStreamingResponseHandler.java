@@ -316,7 +316,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 failure);
                         if (failure == null) {
                             try {
-                                completeClaimedTermination(completeResponse, termination);
+                                completeClaimedTermination(termination);
                             } catch (RuntimeException exception) {
                                 failure = exception;
                             }
@@ -426,22 +426,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void completeClaimedTermination(
-            ChatResponse source,
             ToolLoopTerminationProtocol.ControlledTermination termination) {
         String finalResponse = termination.finalResponse();
         if (finalResponse != null) {
             AiMessage finalMessage = AiMessage.from(finalResponse);
             addToMemory(finalMessage);
             partialResponseHandler.accept(finalResponse);
-            if (completeResponseHandler != null) {
-                ChatResponse finalChatResponse = ChatResponse.builder()
-                        .aiMessage(finalMessage)
-                        .metadata(source.metadata().toBuilder()
-                                .tokenUsage(tokenUsage.add(source.metadata().tokenUsage()))
-                                .build())
-                        .build();
-                completeResponseHandler.accept(finalChatResponse);
-            }
+            // 受控终止由专用回调唯一收口；普通完成回调会抢先结束上层 Flux，
+            // 使随后的 CANCELLED / PROTOCOL_ERROR 等类型化终态被静默丢弃。
         }
     }
 

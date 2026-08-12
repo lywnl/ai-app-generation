@@ -7,6 +7,7 @@ import com.lyw.appgeneration.ai.tools.BaseTool;
 import cn.hutool.json.JSONObject;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
+import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
@@ -14,8 +15,11 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import dev.langchain4j.service.TokenStream;
+import dev.langchain4j.service.ToolLoopTerminationProtocol;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -128,6 +132,31 @@ class JsonMessageStreamHandlerTest {
                 eq("受信原始结果"));
         verify(vueProjectBuilder).buildProjectAsync(
                 AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ToolLoopTerminationProtocol.ControlledTerminationReason.class,
+            names = {"CANCELLED", "PROTOCOL_ERROR", "LOOP_LIMIT_EXCEEDED",
+                    "EVALUATION_COMPLETED"})
+    void onlineAbnormalControlledTerminationDoesNotRunSuccessfulTurnHooks(
+            ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+        User loginUser = User.builder().id(USER_ID).build();
+        AiCodeGeneratorFacade.OnlineControlledTerminationException error =
+                new AiCodeGeneratorFacade.OnlineControlledTerminationException(reason);
+
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () ->
+                handler.handle(Flux.error(error), chatHistoryService, APP_ID, loginUser,
+                        memorySummaryService, userMemoryService)
+                        .then().block());
+
+        verify(chatHistoryService).addChatMessage(
+                eq(APP_ID),
+                eq("AI回复失败: " + error.getMessage()),
+                eq(ChatHistoryMessageTypeEnum.AI.getValue()),
+                eq(USER_ID));
+        verifyNoMoreInteractions(chatHistoryService);
+        verifyNoInteractions(toolMessageCollapser, memorySummaryService,
+                userMemoryService, vueProjectBuilder);
     }
 
 }

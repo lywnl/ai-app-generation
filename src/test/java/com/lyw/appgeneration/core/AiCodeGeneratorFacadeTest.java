@@ -18,6 +18,8 @@ import dev.langchain4j.service.ToolLoopTerminationProtocol;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -192,6 +194,39 @@ class AiCodeGeneratorFacadeTest {
 
         verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
         verify(generatorService).generateVueProjectCodeStream(APP_ID, "原消息拼装");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ToolLoopTerminationProtocol.ControlledTerminationReason.class,
+            names = {"CANCELLED", "PROTOCOL_ERROR", "LOOP_LIMIT_EXCEEDED",
+                    "EVALUATION_COMPLETED"})
+    void onlineNonSuccessfulControlledTerminationFailsFlux(
+            ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+        OnlineControlledTokenStream stream = new OnlineControlledTokenStream(reason);
+        stubOnlineControlledGenerator(stream);
+
+        RuntimeException error = assertThrows(RuntimeException.class, () ->
+                facade.generateAndSaveCodeStream(
+                        RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false)
+                        .then().block());
+
+        assertTrue(error instanceof AiCodeGeneratorFacade
+                .OnlineControlledTerminationException);
+        assertEquals(reason, ((AiCodeGeneratorFacade.OnlineControlledTerminationException)
+                error).reason());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ToolLoopTerminationProtocol.ControlledTerminationReason.class,
+            names = {"BUILD_SUCCEEDED", "BUILD_FAILED"})
+    void onlineBuildControlledTerminationCompletesFlux(
+            ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+        OnlineControlledTokenStream stream = new OnlineControlledTokenStream(reason);
+        stubOnlineControlledGenerator(stream);
+
+        assertDoesNotThrow(() -> facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false)
+                .then().block());
     }
 
     @Test
@@ -423,6 +458,71 @@ class AiCodeGeneratorFacadeTest {
                 .thenReturn(evaluationGeneratorService);
         when(evaluationGeneratorService.generate(APP_ID, "评测生成提示词"))
                 .thenReturn(evaluationStream);
+    }
+
+    private void stubOnlineControlledGenerator(OnlineControlledTokenStream stream) {
+        properties.setEnabled(false);
+        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
+                .thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+    }
+
+    private static final class OnlineControlledTokenStream implements TokenStream {
+
+        private final ToolLoopTerminationProtocol.ControlledTerminationReason reason;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse> completeHandler;
+        private Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler;
+
+        private OnlineControlledTokenStream(
+                ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+            this.reason = reason;
+        }
+
+        @Override public TokenStream onPartialResponse(Consumer<String> handler) { return this; }
+        @Override public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer, dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer, dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) { return this; }
+        @Override public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) { return this; }
+        @Override public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            this.completeHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onError(Consumer<Throwable> handler) { return this; }
+        @Override public TokenStream onControlledTermination(
+                Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
+            this.handler = handler;
+            return this;
+        }
+        @Override public TokenStream ignoreErrors() { return this; }
+
+        @Override
+        public void start() {
+            // 受控终止不能复用普通完成回调；若底层恢复这种旧时序，
+            // facade 会先完成 Flux，随后类型化终止被 Reactor 丢弃。
+            assertTrue(completeHandler != null);
+            handler.accept(new ToolLoopTerminationProtocol.ControlledTermination(
+                    reason, controlledFinalResponse(reason)));
+        }
+
+        private static String controlledFinalResponse(
+                ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+            return switch (reason) {
+                case BUILD_SUCCEEDED -> "项目已生成并构建成功。";
+                case BUILD_FAILED, CANCELLED, PROTOCOL_ERROR ->
+                        "抱歉，系统遇到了一些问题，请您稍后重试修复";
+                case LOOP_LIMIT_EXCEEDED, EVALUATION_COMPLETED -> null;
+            };
+        }
     }
 
     private static final class CapturingTokenStream implements TokenStream {

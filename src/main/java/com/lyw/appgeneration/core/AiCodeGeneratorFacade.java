@@ -252,7 +252,7 @@ public class AiCodeGeneratorFacade {
      */
     private Flux<String> processTokenStream(TokenStream tokenStream) {
         return processTokenStream(tokenStream, () -> { }, () -> { },
-                termination -> null);
+                this::onlineControlledTerminationError);
     }
 
     private Flux<String> processTokenStream(
@@ -358,6 +358,32 @@ public class AiCodeGeneratorFacade {
             // 非法或伪造的 exit 结果按普通工具结果处理，不能结束评测工具循环。
         }
         return null;
+    }
+
+    private Throwable onlineControlledTerminationError(
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        return switch (termination.reason()) {
+            case BUILD_SUCCEEDED, BUILD_FAILED -> null;
+            case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
+                    EVALUATION_COMPLETED -> new OnlineControlledTerminationException(
+                    termination.reason());
+        };
+    }
+
+    public static final class OnlineControlledTerminationException
+            extends IllegalStateException {
+
+        private final ToolLoopTerminationProtocol.ControlledTerminationReason reason;
+
+        public OnlineControlledTerminationException(
+                ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+            super("Vue 在线生成被受控终止: " + reason);
+            this.reason = reason;
+        }
+
+        public ToolLoopTerminationProtocol.ControlledTerminationReason reason() {
+            return reason;
+        }
     }
 
     private static final class EvaluationControlledTerminationException

@@ -99,7 +99,8 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
-    void controlledTerminationCompletesInOrderAndSkipsRemainingBatch() throws Exception {
+    void controlledTerminationPublishesFinalTextWithoutOrdinaryCompletionAndSkipsRemainingBatch()
+            throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -141,8 +142,7 @@ class AiServiceStreamingResponseHandlerTest {
                 "memory:add-tool-result:write",
                 "callback:on-tool-executed:writeFile",
                 "memory:add-final-ai",
-                "callback:on-partial-final-text",
-                "callback:on-complete"), events);
+                "callback:on-partial-final-text"), events);
         assertEquals(0, writeCalls.get());
         assertEquals(0, model.chatInvocations);
         assertEquals(1, terminations.get());
@@ -236,7 +236,7 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
-    void finalPartialCallbackFailureStopsDependentCompleteButDispatchesTermination()
+    void finalPartialCallbackFailureStillDispatchesControlledTermination()
             throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         context.streamingChatModel = new CapturingStreamingChatModel();
