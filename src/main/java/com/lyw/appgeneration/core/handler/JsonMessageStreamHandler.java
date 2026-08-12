@@ -1,11 +1,8 @@
 package com.lyw.appgeneration.core.handler;
 
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.lyw.appgeneration.ai.AiCodeGeneratorService;
-import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.ai.model.message.*;
 import com.lyw.appgeneration.ai.tools.BaseTool;
@@ -14,26 +11,17 @@ import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
-import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
-import com.mybatisflex.core.query.QueryWrapper;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.service.TokenStream;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
-import java.io.File;
-import java.util.concurrent.CountDownLatch;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * JSON 消息流处理器
@@ -43,24 +31,11 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component
 public class JsonMessageStreamHandler {
 
-    private static final long PRE_BUILD_CHECK_TIMEOUT_SECONDS = 120;
-
-    private static final String VUE_PRE_BUILD_CHECK_PROMPT = """
-            构建前代码自检：请仅检查当前 Vue 项目代码的语法与可构建性风险，不要新增功能，不要改业务逻辑。
-            重点检查 .vue、.ts、.js、.json 文件中的语法错误、导入导出错误、模板标签闭合、括号/引号匹配问题。
-            如果发现问题，必须调用 modifyFile 工具做最小修复；如需定位可调用 readFile 或 readDir。
-            检查和修复完成后，若无问题请输出“检查完成，无需修改”；若有修改请输出“检查完成”并列出修改文件。
-            最后调用 exit 工具结束, 切记切记切记一定要仔细检查所有文件, 以免构建出错, 反复检查直到确定。
-            """;
-
     @Resource
     private VueProjectBuilder vueProjectBuilder;
 
     @Resource
     private ToolManager toolManager;
-
-    @Resource
-    private AiGeneratorServiceFactory aiGeneratorServiceFactory;
 
     @Resource
     private ToolMessageCollapser toolMessageCollapser;
@@ -92,24 +67,15 @@ public class JsonMessageStreamHandler {
                 .filter(StrUtil::isNotEmpty)
                 .doOnComplete(() -> {
                     // 流式响应完成后，添加 AI 消息到对话历史
-                    boolean shouldRunPreBuildCheck = shouldRunPreBuildCheck(chatHistoryService, appId);
                     String aiResponse = chatHistoryStringBuilder.toString();
                     chatHistoryService.addChatMessage(appId, aiResponse, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
                     // 把本轮 AI 的多条工具消息在 L0 窗口折叠为一条(复用上面同一 aiResponse,与 MySQL/冷启动逐字一致,真正释放窗口槽位)。
-                    // 必须在 runVuePreBuildCheck 之前:否则"最后一条 UserMessage"会变成自检 prompt,折叠定界错乱。
-                    List<ChatMessage> collapsedWindow = toolMessageCollapser.collapseLastTurn(appId, aiResponse);
+                    toolMessageCollapser.collapseLastTurn(appId, aiResponse);
                     // 对话结束钩子：异步触发 L1 摘要提炼（best-effort，不阻塞 Vue 构建与流返回）
                     memorySummaryService.triggerSummarizationAsync(appId);
                     // 对话结束钩子：异步触发 L2 跨 app 用户偏好抽取（best-effort，不阻塞 Vue 构建与流返回）
                     userMemoryService.triggerPreferenceExtractionAsync(loginUser.getId(), appId);
                     String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + appId;
-                    if (shouldRunPreBuildCheck) {
-                        runVuePreBuildCheck(appId);
-                        // 自检轮往窗口追加的消息本就不入 MySQL/冷启动,折叠快照恢复后丢弃它们,使实时窗口 == 冷启动形态
-                        toolMessageCollapser.restore(appId, collapsedWindow);
-                    } else {
-                        log.info("非首轮对话，跳过构建前代码自检: appId={}", appId);
-                    }
                     vueProjectBuilder.buildProjectAsync(projectPath);
                 })
                 .doOnError(error -> {
@@ -118,54 +84,6 @@ public class JsonMessageStreamHandler {
                     chatHistoryService.addChatMessage(appId, errorMessage, ChatHistoryMessageTypeEnum.AI.getValue(), loginUser.getId());
                 });
     }
-    /**
-     * 仅首轮 AI 回复时触发构建前代码自检。
-     */
-    private boolean shouldRunPreBuildCheck(ChatHistoryService chatHistoryService, long appId) {
-        QueryWrapper queryWrapper = QueryWrapper.create();
-        queryWrapper.eq("appId", appId);
-        queryWrapper.eq("messageType", ChatHistoryMessageTypeEnum.AI.getValue());
-        return chatHistoryService.count(queryWrapper) == 0;
-    }
-    /**
-     * 解析并收集 TokenStream 数据
-     */
-    private void runVuePreBuildCheck(long appId) {
-        try {
-            AiCodeGeneratorService aiCodeGeneratorService =
-                    aiGeneratorServiceFactory.getAiCodeGeneratorService(appId, CodeGenTypeEnum.VUE_PROJECT);
-            TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(appId, VUE_PRE_BUILD_CHECK_PROMPT);
-            CountDownLatch done = new CountDownLatch(1);
-            AtomicReference<Throwable> errorRef = new AtomicReference<>();
-            tokenStream
-                    .onPartialResponse((String ignored) -> {
-                        // 自检阶段不透传文本到前端，但必须注册回调以满足 TokenStream 配置约束
-                    })
-                    .onCompleteResponse((ChatResponse ignored) -> done.countDown())
-                    .onError(error -> {
-                        errorRef.set(error);
-                        done.countDown();
-                    })
-                    .start();
-            boolean finished = done.await(PRE_BUILD_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            if (!finished) {
-                log.warn("构建前代码自检超时，继续执行构建: appId={}", appId);
-                return;
-            }
-            Throwable error = errorRef.get();
-            if (error != null) {
-                log.warn("构建前代码自检失败，继续执行构建: appId={}, error={}", appId, error.getMessage());
-            } else {
-                log.info("构建前代码自检完成: appId={}", appId);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("构建前代码自检被中断，继续执行构建: appId={}", appId);
-        } catch (Exception e) {
-            log.warn("构建前代码自检异常，继续执行构建: appId={}, error={}", appId, e.getMessage());
-        }
-    }
-
     private List<String> handleJsonMessageChunk(String chunk, StringBuilder chatHistoryStringBuilder, Set<String> seenToolIds) {
         // 解析 JSON
         StreamMessage streamMessage = JSONUtil.toBean(chunk, StreamMessage.class);
@@ -212,5 +130,3 @@ public class JsonMessageStreamHandler {
         }
     }
 }
-
-

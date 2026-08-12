@@ -8,15 +8,9 @@ import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
-import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
-import com.mybatisflex.core.query.QueryWrapper;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,8 +21,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.*;
@@ -70,34 +62,8 @@ class JsonMessageStreamHandlerTest {
     @InjectMocks
     private JsonMessageStreamHandler handler;
 
-    @SuppressWarnings("unchecked")
     @Test
-    void handle_shouldCheckWithAiBeforeBuild() {
-        AtomicReference<Consumer<ChatResponse>> onComplete = new AtomicReference<>();
-        List<ChatMessage> snapshot = List.of(
-                UserMessage.from("生成一个待办应用"),
-                AiMessage.from("已生成待办应用")
-        );
-
-        when(aiGeneratorServiceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
-                .thenReturn(aiCodeGeneratorService);
-        when(aiCodeGeneratorService.generateVueProjectCodeStream(eq(APP_ID), anyString()))
-                .thenReturn(tokenStream);
-        when(tokenStream.onPartialResponse(any())).thenReturn(tokenStream);
-        when(tokenStream.onCompleteResponse(any())).thenAnswer(invocation -> {
-            onComplete.set((Consumer<ChatResponse>) invocation.getArgument(0));
-            return tokenStream;
-        });
-        when(tokenStream.onError(any())).thenReturn(tokenStream);
-        when(toolMessageCollapser.collapseLastTurn(APP_ID, "ok")).thenReturn(snapshot);
-        doAnswer(invocation -> {
-            Consumer<ChatResponse> callback = onComplete.get();
-            if (callback != null) {
-                callback.accept(null);
-            }
-            return null;
-        }).when(tokenStream).start();
-
+    void handle_shouldBuildWithoutAdditionalAiCheck() {
         User loginUser = User.builder().id(USER_ID).build();
         List<String> output = handler.handle(
                 Flux.just("{\"type\":\"ai_response\",\"data\":\"ok\"}"),
@@ -113,10 +79,9 @@ class JsonMessageStreamHandlerTest {
         String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID;
         InOrder inOrder = inOrder(
                 chatHistoryService,
-                aiGeneratorServiceFactory,
-                aiCodeGeneratorService,
-                tokenStream,
                 toolMessageCollapser,
+                memorySummaryService,
+                userMemoryService,
                 vueProjectBuilder
         );
         inOrder.verify(chatHistoryService).addChatMessage(
@@ -126,53 +91,15 @@ class JsonMessageStreamHandlerTest {
                 eq(USER_ID)
         );
         inOrder.verify(toolMessageCollapser).collapseLastTurn(APP_ID, "ok");
-        inOrder.verify(aiGeneratorServiceFactory)
-                .getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
-        inOrder.verify(aiCodeGeneratorService)
-                .generateVueProjectCodeStream(eq(APP_ID), contains("构建前代码自检"));
-        inOrder.verify(tokenStream).onPartialResponse(any());
-        inOrder.verify(tokenStream).start();
-        inOrder.verify(toolMessageCollapser).restore(eq(APP_ID), same(snapshot));
+        inOrder.verify(memorySummaryService).triggerSummarizationAsync(APP_ID);
+        inOrder.verify(userMemoryService).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
         inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
-    }
-
-    @Test
-    void handle_shouldSkipPreBuildCheckWhenNotFirstDialogue() {
-        when(chatHistoryService.count(any(QueryWrapper.class))).thenReturn(1L);
-
-        User loginUser = User.builder().id(USER_ID).build();
-        List<String> output = handler.handle(
-                Flux.just("{\"type\":\"ai_response\",\"data\":\"ok\"}"),
-                chatHistoryService,
-                APP_ID,
-                loginUser,
-                memorySummaryService,
-                userMemoryService
-        ).collectList().block();
-
-        assertEquals(List.of("ok"), output);
-
-        String projectPath = AppConstant.CODE_OUTPUT_ROOT_DIR + "/vue_project_" + APP_ID;
-        verify(chatHistoryService).addChatMessage(
-                eq(APP_ID),
-                eq("ok"),
-                eq(ChatHistoryMessageTypeEnum.AI.getValue()),
-                eq(USER_ID)
-        );
         verify(aiGeneratorServiceFactory, never())
                 .getAiCodeGeneratorService(anyLong(), any());
         verify(aiCodeGeneratorService, never())
                 .generateVueProjectCodeStream(anyLong(), anyString());
         verify(tokenStream, never()).start();
         verify(toolMessageCollapser, never()).restore(anyLong(), anyList());
-        InOrder inOrder = inOrder(chatHistoryService, toolMessageCollapser, vueProjectBuilder);
-        inOrder.verify(chatHistoryService).addChatMessage(
-                eq(APP_ID),
-                eq("ok"),
-                eq(ChatHistoryMessageTypeEnum.AI.getValue()),
-                eq(USER_ID)
-        );
-        inOrder.verify(toolMessageCollapser).collapseLastTurn(APP_ID, "ok");
-        inOrder.verify(vueProjectBuilder).buildProjectAsync(projectPath);
     }
+
 }
