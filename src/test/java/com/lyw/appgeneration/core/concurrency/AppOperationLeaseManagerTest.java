@@ -390,6 +390,77 @@ class AppOperationLeaseManagerTest {
         }
     }
 
+    @Test
+    void lateRegistrationFailurePreventsDeleteReplacement() throws Exception {
+        AssertionError actionFailure = new AssertionError("晚注册动作失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        var callback = generateLease.enterCallback();
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> delete = executor.submit(() -> manager.cancelAndAcquireDelete(
+                    7L, "delete-1", Duration.ofSeconds(1)));
+            awaitCancellationGateClosed(generateLease);
+            Future<?> registration = executor.submit(() ->
+                    generateLease.registerCancellation(() -> { throw actionFailure; }));
+
+            ExecutionException registrationException = assertThrows(
+                    ExecutionException.class,
+                    () -> registration.get(1, TimeUnit.SECONDS));
+            assertSame(actionFailure, registrationException.getCause());
+            callback.close();
+
+            ExecutionException deleteException = assertThrows(
+                    ExecutionException.class,
+                    () -> delete.get(1, TimeUnit.SECONDS));
+            assertSame(actionFailure, deleteException.getCause());
+            assertThrows(AppOperationLeaseManager.ActiveAppOperationException.class,
+                    () -> manager.acquire(7L, AppOperationType.DELETE, "delete-2"));
+            generateLease.close();
+            assertCanAcquireNewTurn(manager);
+        } finally {
+            callback.close();
+            generateLease.close();
+        }
+    }
+
+    @Test
+    void sameEarlyAndLateCancellationFailureDoesNotSelfSuppress() throws Exception {
+        AssertionError actionFailure = new AssertionError("重复取消失败");
+        CountDownLatch earlyActionFinished = new CountDownLatch(1);
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        var callback = generateLease.enterCallback();
+        generateLease.registerCancellation(() -> {
+            earlyActionFinished.countDown();
+            throw actionFailure;
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> delete = executor.submit(() -> manager.cancelAndAcquireDelete(
+                    7L, "delete-1", Duration.ofSeconds(1)));
+            assertTrue(earlyActionFinished.await(1, TimeUnit.SECONDS));
+            Future<?> registration = executor.submit(() ->
+                    generateLease.registerCancellation(() -> { throw actionFailure; }));
+            ExecutionException registrationException = assertThrows(
+                    ExecutionException.class,
+                    () -> registration.get(1, TimeUnit.SECONDS));
+            assertSame(actionFailure, registrationException.getCause());
+            callback.close();
+
+            ExecutionException deleteException = assertThrows(
+                    ExecutionException.class,
+                    () -> delete.get(1, TimeUnit.SECONDS));
+            assertSame(actionFailure, deleteException.getCause());
+            assertEquals(0, actionFailure.getSuppressed().length);
+            generateLease.close();
+            assertCanAcquireNewTurn(manager);
+        } finally {
+            callback.close();
+            generateLease.close();
+        }
+    }
+
     private void assertRegistrationRejected(Future<?> registration) throws Exception {
         ExecutionException exception = assertThrows(
                 ExecutionException.class,

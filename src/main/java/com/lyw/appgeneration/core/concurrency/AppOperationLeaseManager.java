@@ -123,8 +123,7 @@ public final class AppOperationLeaseManager {
             throw new OperationQuiescenceTimeoutException(
                     appId, "等待生成回调静默超时", null);
         }
-        Throwable cancellationFailure = cancellationDispatch == null
-                ? null : cancellationDispatch.failure.get();
+        Throwable cancellationFailure = source.consumeCancellationFailure();
         if (cancellationFailure != null) {
             abortDeleteTakeover(source);
             throwUnchecked(cancellationFailure);
@@ -394,6 +393,7 @@ public final class AppOperationLeaseManager {
         private int cancellationDispatchCount;
         private int cancellationDispatchStartDecisionCount;
         private int runningCancellationCount;
+        private Throwable cancellationFailure;
         private boolean cancellationRequested;
         private boolean ownerClosed;
         private boolean deleteTakeover;
@@ -464,10 +464,16 @@ public final class AppOperationLeaseManager {
             }
             if (runImmediately) {
                 CancellationDispatch dispatch = new CancellationDispatch(List.of(entry));
+                Throwable failure = null;
                 try {
                     runCancellationAction(entry);
+                } catch (Throwable exception) {
+                    failure = exception;
                 } finally {
-                    finishCancellationDispatch(dispatch, null);
+                    finishCancellationDispatch(dispatch, failure);
+                }
+                if (failure != null) {
+                    throwUnchecked(failure);
                 }
             }
             return new CancellationRegistration(this, entry);
@@ -608,6 +614,7 @@ public final class AppOperationLeaseManager {
             boolean removable;
             synchronized (this) {
                 dispatch.failure.set(failure);
+                cancellationFailure = appendFailure(cancellationFailure, failure);
                 cancellationDispatchCount--;
                 notifyAll();
                 removable = removable();
@@ -657,6 +664,12 @@ public final class AppOperationLeaseManager {
                 throwUnchecked(invariantFailure);
             }
             return removable;
+        }
+
+        private synchronized Throwable consumeCancellationFailure() {
+            Throwable failure = cancellationFailure;
+            cancellationFailure = null;
+            return failure;
         }
 
         private synchronized boolean awaitQuiescence(Duration timeout)
