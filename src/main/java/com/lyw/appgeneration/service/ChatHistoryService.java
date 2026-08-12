@@ -60,7 +60,38 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      * @param maxCount
      * @return
      */
-    int loadChatHistoryToMemory(Long appId, ChatMemory chatMemory, int maxCount);
+    HistoryLoadResult loadChatHistoryToMemory(
+            Long appId, ChatMemory chatMemory, int maxCount);
+
+    enum HistoryLoadStatus {
+        LOADED,
+        EMPTY,
+        FAILED
+    }
+
+    record HistoryLoadResult(HistoryLoadStatus status, int count) {
+
+        public HistoryLoadResult {
+            java.util.Objects.requireNonNull(status, "status 不能为空");
+            if (count < 0 || (status == HistoryLoadStatus.EMPTY && count != 0)
+                    || (status == HistoryLoadStatus.FAILED && count != 0)
+                    || (status == HistoryLoadStatus.LOADED && count == 0)) {
+                throw new IllegalArgumentException("历史加载状态与数量不匹配");
+            }
+        }
+
+        public static HistoryLoadResult loaded(int count) {
+            return new HistoryLoadResult(HistoryLoadStatus.LOADED, count);
+        }
+
+        public static HistoryLoadResult empty() {
+            return new HistoryLoadResult(HistoryLoadStatus.EMPTY, 0);
+        }
+
+        public static HistoryLoadResult failed() {
+            return new HistoryLoadResult(HistoryLoadStatus.FAILED, 0);
+        }
+    }
 
     /**
      * 判断指定应用是否已存在任何对话记录（用于「是否首次对话」判定）

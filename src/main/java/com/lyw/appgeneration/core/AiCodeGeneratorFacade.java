@@ -157,8 +157,22 @@ public class AiCodeGeneratorFacade {
     public Flux<String> generateVueProjectStream(
             String userMessage, long appId, boolean isFirstMessage,
             VueTurnContext turnContext) {
-        AiCodeGeneratorService generatorService = aiGeneratorServiceFactory
-                .getAiCodeGeneratorService(appId, CodeGenTypeEnum.VUE_PROJECT);
+        AiCodeGeneratorService generatorService = prepareVueGenerator(appId);
+        return generateVueProjectStream(
+                userMessage, appId, isFirstMessage, turnContext, generatorService);
+    }
+
+    /** 只完成缓存命中或 MySQL 冷重建，不做图片、RAG、Prompt 或模型调用。 */
+    public AiCodeGeneratorService prepareVueGenerator(long appId) {
+        return aiGeneratorServiceFactory.getAiCodeGeneratorService(
+                appId, CodeGenTypeEnum.VUE_PROJECT);
+    }
+
+    /** User 已稳定持久化后，才允许执行增强并创建本轮 TokenStream。 */
+    public Flux<String> generateVueProjectStream(
+            String userMessage, long appId, boolean isFirstMessage,
+            VueTurnContext turnContext, AiCodeGeneratorService generatorService) {
+        java.util.Objects.requireNonNull(generatorService, "Vue 生成服务不能为空");
         String generationRequest = isFirstMessage
                 ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
         if (ragProperties.isEnabled()) {

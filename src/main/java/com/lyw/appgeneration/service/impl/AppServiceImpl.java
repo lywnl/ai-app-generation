@@ -237,10 +237,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     aiGeneratorServiceFactory.prepareVueColdRebuild(appId);
                 }
 
-                // 必须先取得/创建服务与未启动 TokenStream，再保存当前原始 User。
-                Flux<String> codeStream = aiCodeGeneratorFacade
-                        .generateVueProjectStream(
-                                message, appId, !hasHistory, context);
+                // 保存 User 前只允许缓存命中或从旧历史冷重建服务。
+                var generatorService = aiCodeGeneratorFacade.prepareVueGenerator(appId);
                 boolean saved = chatHistoryService.addChatMessage(
                         appId, message,
                         ChatHistoryMessageTypeEnum.USER.getValue(),
@@ -250,6 +248,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     return Flux.error(new BusinessException(
                             ErrorCode.OPERATION_ERROR, "保存用户消息失败"));
                 }
+                Flux<String> codeStream = aiCodeGeneratorFacade
+                        .generateVueProjectStream(
+                                message, appId, !hasHistory, context,
+                                generatorService);
                 MonitorContextHolder.setContext(MonitorContext.builder()
                         .userId(loginUser.getId().toString())
                         .appId(Long.toString(appId)).build());

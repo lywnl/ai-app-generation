@@ -159,17 +159,23 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     @Override
-    public int loadChatHistoryToMemory(Long appId, ChatMemory chatMemory, int maxCount) {
+    public HistoryLoadResult loadChatHistoryToMemory(
+            Long appId, ChatMemory chatMemory, int maxCount) {
         try {
             QueryWrapper queryWrapper = QueryWrapper.create()
                     .eq("appId", appId)
-                    .orderBy("createTime", false)
-                    .limit(1, maxCount);
+                    .orderBy("id", false)
+                    .limit(maxCount);
             List<ChatHistory> history = this.list(queryWrapper);
-            if (CollUtil.isEmpty(history)) {
-                return 0;
+            if (history == null) {
+                log.error("加载对话历史返回 null,应用ID：{}", appId);
+                return HistoryLoadResult.failed();
             }
-            //反转列表 确保时间正序 老的在前
+            if (history.isEmpty()) {
+                return HistoryLoadResult.empty();
+            }
+            // DAO 返回集合不保证可变，复制后反转为稳定时间正序。
+            history = new java.util.ArrayList<>(history);
             CollUtil.reverse(history);
             //按照时间顺序添加到激励中
             int loadCount = 0;
@@ -184,10 +190,10 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 loadCount++;
             }
             log.info("成功加载 {} 条对话历史到内存中，应用ID：{}", loadCount, appId);
-            return loadCount;
+            return HistoryLoadResult.loaded(loadCount);
         } catch (Exception e) {
-            log.error("加载对话历史到内存中出错：{}", e.getMessage());
-            return 0;
+            log.error("加载对话历史到内存失败,应用ID：{}", appId, e);
+            return HistoryLoadResult.failed();
         }
 
     }

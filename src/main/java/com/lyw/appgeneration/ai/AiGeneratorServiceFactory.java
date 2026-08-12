@@ -106,7 +106,11 @@ public class AiGeneratorServiceFactory {
                 .maxMessages(100)
                 .build();
         // 冷启动重建:回填最近原文到 delegate(L1 摘要由 LayeredChatMemory.messages() 在拼装时注入)
-        chatHistoryService.loadChatHistoryToMemory(appId, delegate, 20);
+        ChatHistoryService.HistoryLoadResult historyLoad =
+                chatHistoryService.loadChatHistoryToMemory(appId, delegate, 20);
+        if (historyLoad.status() == ChatHistoryService.HistoryLoadStatus.FAILED) {
+            throw new IllegalStateException("从 MySQL 重建对话历史失败,appId=" + appId);
+        }
         // 分层装饰器:messages() 返回前前置 L2 用户偏好 + L1 摘要;add/clear/id 全部委托 delegate
         LayeredChatMemory chatMemory = new LayeredChatMemory(delegate, memorySummaryService, userMemoryService);
         // 根据代码生成类型选择不同的模型配置

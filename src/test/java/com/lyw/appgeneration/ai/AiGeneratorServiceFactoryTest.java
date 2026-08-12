@@ -15,6 +15,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doReturn;
@@ -74,6 +75,24 @@ class AiGeneratorServiceFactoryTest {
         verify(factory, times(2)).evaluationStreamingChatModel();
         verifyNoInteractions(redisStore, chatHistoryService,
                 memorySummaryService, userMemoryService);
+    }
+
+    @Test
+    void failedColdHistoryLoadDoesNotReturnOrCacheVueService() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        when(history.loadChatHistoryToMemory(any(), any(), any(Integer.class)))
+                .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
+
+        assertThrows(IllegalStateException.class, () -> factory
+                .getAiCodeGeneratorService(7L, com.lyw.appgeneration.model.enums.CodeGenTypeEnum.VUE_PROJECT));
+        assertThrows(IllegalStateException.class, () -> factory
+                .getAiCodeGeneratorService(7L, com.lyw.appgeneration.model.enums.CodeGenTypeEnum.VUE_PROJECT));
+
+        verify(history, times(2)).loadChatHistoryToMemory(any(), any(), any(Integer.class));
     }
 
     private static final class EvaluationTools extends BaseTool {
