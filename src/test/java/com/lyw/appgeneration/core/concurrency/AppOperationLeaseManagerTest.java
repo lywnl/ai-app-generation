@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -147,11 +148,122 @@ class AppOperationLeaseManagerTest {
         }
     }
 
+    @Test
+    void runtimeFailureStartingDispatchDoesNotLeakOperationState() {
+        AtomicInteger actions = new AtomicInteger();
+        IllegalStateException startFailure = new IllegalStateException("启动失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(
+                null, task -> { throw startFailure; });
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(actions::incrementAndGet);
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-1", Duration.ofSeconds(1)));
+
+        assertSame(startFailure, thrown);
+        assertEquals(1, actions.get());
+        generateLease.close();
+        assertCanAcquireNewTurn(manager);
+    }
+
+    @Test
+    void errorStartingDispatchDoesNotLeakOperationState() {
+        AtomicInteger actions = new AtomicInteger();
+        AssertionError startFailure = new AssertionError("启动错误");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(
+                null, task -> { throw startFailure; });
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(actions::incrementAndGet);
+
+        AssertionError thrown = assertThrows(
+                AssertionError.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-1", Duration.ofSeconds(1)));
+
+        assertSame(startFailure, thrown);
+        assertEquals(1, actions.get());
+        generateLease.close();
+        assertCanAcquireNewTurn(manager);
+    }
+
+    @Test
+    void cancellationErrorStillRunsRemainingActionsAndPreventsDeleteReplacement() {
+        AtomicInteger laterActions = new AtomicInteger();
+        AssertionError actionFailure = new AssertionError("动作错误");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(() -> { throw actionFailure; });
+        generateLease.registerCancellation(laterActions::incrementAndGet);
+
+        AssertionError thrown = assertThrows(
+                AssertionError.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-1", Duration.ofSeconds(1)));
+
+        assertSame(actionFailure, thrown);
+        assertEquals(1, laterActions.get());
+        assertThrows(AppOperationLeaseManager.ActiveAppOperationException.class,
+                () -> manager.acquire(7L, AppOperationType.DELETE, "delete-2"));
+        generateLease.close();
+        assertCanAcquireNewTurn(manager);
+    }
+
+    @Test
+    void repeatedSameCancellationErrorStillRunsRemainingActions() {
+        AtomicInteger laterActions = new AtomicInteger();
+        AssertionError actionFailure = new AssertionError("重复动作错误");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(() -> { throw actionFailure; });
+        generateLease.registerCancellation(() -> { throw actionFailure; });
+        generateLease.registerCancellation(laterActions::incrementAndGet);
+
+        AssertionError thrown = assertThrows(
+                AssertionError.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-1", Duration.ofSeconds(1)));
+
+        assertSame(actionFailure, thrown);
+        assertEquals(1, laterActions.get());
+        generateLease.close();
+        assertCanAcquireNewTurn(manager);
+    }
+
+    @Test
+    void startFailureKeepsOriginalThrowableAndSuppressesActionFailure() {
+        IllegalStateException startFailure = new IllegalStateException("启动失败");
+        AssertionError actionFailure = new AssertionError("动作失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(
+                null, task -> { throw startFailure; });
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(() -> { throw actionFailure; });
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-1", Duration.ofSeconds(1)));
+
+        assertSame(startFailure, thrown);
+        assertEquals(1, thrown.getSuppressed().length);
+        assertSame(actionFailure, thrown.getSuppressed()[0]);
+        generateLease.close();
+        assertCanAcquireNewTurn(manager);
+    }
+
     private void assertRegistrationRejected(Future<?> registration) throws Exception {
         ExecutionException exception = assertThrows(
                 ExecutionException.class,
                 () -> registration.get(1, TimeUnit.SECONDS));
         assertInstanceOf(IllegalStateException.class, exception.getCause());
+    }
+
+    private void assertCanAcquireNewTurn(AppOperationLeaseManager manager) {
+        try (var ignored = manager.acquire(
+                7L, AppOperationType.GENERATE, "turn-next")) {
+            // 能领取即证明旧操作状态已经释放。
+        }
     }
 
     private void awaitCancellationGateClosed(

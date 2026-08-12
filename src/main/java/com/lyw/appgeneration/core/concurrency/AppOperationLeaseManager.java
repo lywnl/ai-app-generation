@@ -24,17 +24,33 @@ public final class AppOperationLeaseManager {
     private final ConcurrentHashMap<Long, OperationState> operations =
             new ConcurrentHashMap<>();
     private final Runnable registrationTestHook;
+    private final CancellationDispatchStarter cancellationDispatchStarter;
 
     public AppOperationLeaseManager() {
-        this(null);
+        this(null, task -> Thread.ofVirtual()
+                .name("app-delete-cancellation-", 0).start(task));
     }
 
     AppOperationLeaseManager(Runnable registrationTestHook) {
+        this(registrationTestHook, task -> Thread.ofVirtual()
+                .name("app-delete-cancellation-", 0).start(task));
+    }
+
+    AppOperationLeaseManager(
+            Runnable registrationTestHook,
+            CancellationDispatchStarter cancellationDispatchStarter) {
         this.registrationTestHook = registrationTestHook;
+        this.cancellationDispatchStarter =
+                Objects.requireNonNull(cancellationDispatchStarter);
     }
 
     public enum AppOperationType {
         GENERATE, DEPLOY, DOWNLOAD, DELETE
+    }
+
+    @FunctionalInterface
+    interface CancellationDispatchStarter {
+        void start(Runnable task);
     }
 
     /** 原子领取指定应用的操作租约。 */
@@ -85,8 +101,12 @@ public final class AppOperationLeaseManager {
         CancellationDispatch cancellationDispatch =
                 source.prepareCancellationDispatch();
         if (cancellationDispatch != null) {
-            Thread.ofVirtual().name("app-delete-cancellation-", 0).start(
-                    () -> source.executeCancellationDispatch(cancellationDispatch, false));
+            try {
+                cancellationDispatchStarter.start(
+                        () -> source.executeCancellationDispatch(cancellationDispatch, false));
+            } catch (Throwable startFailure) {
+                completeFailedDispatchStart(source, cancellationDispatch, startFailure);
+            }
         }
         boolean readyForReplacement;
         try {
@@ -102,11 +122,11 @@ public final class AppOperationLeaseManager {
             throw new OperationQuiescenceTimeoutException(
                     appId, "等待生成回调静默超时", null);
         }
-        RuntimeException cancellationFailure = cancellationDispatch == null
+        Throwable cancellationFailure = cancellationDispatch == null
                 ? null : cancellationDispatch.failure.get();
         if (cancellationFailure != null) {
             abortDeleteTakeover(source);
-            throw cancellationFailure;
+            throwUnchecked(cancellationFailure);
         }
         OperationState delete = new OperationState(
                 this, appId, AppOperationType.DELETE, ownerToken);
@@ -116,6 +136,41 @@ public final class AppOperationLeaseManager {
         }
         source.completeDeleteTakeover();
         return new AppOperationLease(delete);
+    }
+
+    private void completeFailedDispatchStart(
+            OperationState source,
+            CancellationDispatch cancellationDispatch,
+            Throwable startFailure) {
+        try {
+            source.executeCancellationDispatch(cancellationDispatch, false);
+            Throwable actionFailure = cancellationDispatch.failure.get();
+            if (actionFailure != null && actionFailure != startFailure) {
+                startFailure.addSuppressed(actionFailure);
+            }
+        } catch (Throwable cleanupFailure) {
+            if (cleanupFailure != startFailure) {
+                startFailure.addSuppressed(cleanupFailure);
+            }
+        }
+        try {
+            abortDeleteTakeover(source);
+        } catch (Throwable cleanupFailure) {
+            if (cleanupFailure != startFailure) {
+                startFailure.addSuppressed(cleanupFailure);
+            }
+        }
+        throwUnchecked(startFailure);
+    }
+
+    private static void throwUnchecked(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("取消分发出现受检异常", failure);
     }
 
     private void abortDeleteTakeover(OperationState source) {
@@ -445,15 +500,15 @@ public final class AppOperationLeaseManager {
 
         private void executeCancellationDispatch(
                 CancellationDispatch dispatch, boolean propagateFailure) {
-            RuntimeException failure = null;
+            Throwable failure = null;
             try {
                 for (CancellationEntry entry : dispatch.entries) {
                     try {
                         runCancellationAction(entry);
-                    } catch (RuntimeException exception) {
+                    } catch (Throwable exception) {
                         if (failure == null) {
                             failure = exception;
-                        } else {
+                        } else if (failure != exception) {
                             failure.addSuppressed(exception);
                         }
                     }
@@ -462,7 +517,7 @@ public final class AppOperationLeaseManager {
                 finishCancellationDispatch(dispatch, failure);
             }
             if (propagateFailure && failure != null) {
-                throw failure;
+                throwUnchecked(failure);
             }
         }
 
@@ -490,7 +545,7 @@ public final class AppOperationLeaseManager {
         }
 
         private void finishCancellationDispatch(
-                CancellationDispatch dispatch, RuntimeException failure) {
+                CancellationDispatch dispatch, Throwable failure) {
             boolean removable;
             synchronized (this) {
                 dispatch.failure.set(failure);
@@ -592,7 +647,7 @@ public final class AppOperationLeaseManager {
     private static final class CancellationDispatch {
 
         private final List<CancellationEntry> entries;
-        private final AtomicReference<RuntimeException> failure = new AtomicReference<>();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
 
         private CancellationDispatch(List<CancellationEntry> entries) {
             this.entries = entries;
