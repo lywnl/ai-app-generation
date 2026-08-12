@@ -37,6 +37,17 @@ public class ReasoningStreamingChatModelConfig {
     @Bean
     @Scope("prototype")
     public StreamingChatModel reasoningStreamingChatModelPrototype() {
+        return createReasoningStreamingChatModel();
+    }
+
+    /** 评测代理使用独立 prototype，避免与在线生成共享模型实例。 */
+    @Bean
+    @Scope("prototype")
+    public StreamingChatModel evaluationReasoningStreamingChatModelPrototype() {
+        return createReasoningStreamingChatModel();
+    }
+
+    private StreamingChatModel createReasoningStreamingChatModel() {
         return OpenAiStreamingChatModel.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)

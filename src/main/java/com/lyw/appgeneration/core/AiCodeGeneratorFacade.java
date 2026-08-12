@@ -3,6 +3,8 @@ package com.lyw.appgeneration.core;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
+import com.lyw.appgeneration.ai.VueToolNames;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
@@ -12,6 +14,7 @@ import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
 import com.lyw.appgeneration.ai.parser.ToolRequestStreamParser;
+import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
@@ -25,6 +28,8 @@ import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
+import dev.langchain4j.service.ToolExecutionGuard;
+import dev.langchain4j.service.ToolLoopTerminationProtocol;
 import dev.langchain4j.service.tool.ToolExecution;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -32,9 +37,13 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.io.File;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 /**
  * AI 代码生成门面
@@ -44,6 +53,8 @@ import java.util.Map;
 @Slf4j
 @Service
 public class AiCodeGeneratorFacade {
+
+    private static final Duration EVALUATION_DRAIN_TIMEOUT = Duration.ofMillis(100);
 
     @Resource
     private AiGeneratorServiceFactory aiGeneratorServiceFactory;
@@ -59,6 +70,9 @@ public class AiCodeGeneratorFacade {
 
     @Resource
     private RagProperties ragProperties;
+
+    @Resource
+    private FileToolExecutionScopeManager fileToolExecutionScopeManager;
 
     /**
      * 生成并保存代码
@@ -150,9 +164,42 @@ public class AiCodeGeneratorFacade {
         if (!ragProperties.isEnabled() || !ragProperties.getHybrid().isEnabled()) {
             throw new IllegalStateException("真实 Vue 生成评测必须显式开启 RAG 与 hybrid");
         }
-        AiCodeGeneratorService generatorService = aiGeneratorServiceFactory
-                .getAiCodeGeneratorService(appId, CodeGenTypeEnum.VUE_PROJECT);
-        return prepareVueGeneration(userMessage, appId, false, generatorService, true);
+        VueRagContext context = retrieveVueContext(userMessage, true);
+        String augmentedMessage = ragPromptAssembler.assembleVueProject(userMessage, context);
+        VueEvaluationCodeGeneratorService generatorService = aiGeneratorServiceFactory
+                .getVueEvaluationCodeGeneratorService(appId);
+        TokenStream tokenStream = generatorService.generate(appId, augmentedMessage);
+        FileToolExecutionScopeManager.FileToolScope scope =
+                fileToolExecutionScopeManager.evaluation(
+                        appId, UUID.randomUUID().toString(), VueToolNames.EVALUATION);
+        ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
+        tokenStream.toolExecutionGuard((toolName, memoryId, action) -> {
+            ToolExecutionGuard.GuardedToolExecution execution = directGuard.execute(
+                    toolName, memoryId,
+                    () -> fileToolExecutionScopeManager.callInScope(scope, action));
+            if (!"exit".equals(toolName)) {
+                return execution;
+            }
+            return new ToolExecutionGuard.GuardedToolExecution(
+                    execution.toolResult(), evaluationExitTermination(execution.toolResult()));
+        });
+        return new VueProjectGeneration(context, processTokenStream(
+                tokenStream,
+                () -> fileToolExecutionScopeManager.revokeEvaluation(scope),
+                () -> {
+                    fileToolExecutionScopeManager.closeEvaluation(scope);
+                    if (!fileToolExecutionScopeManager.awaitEvaluationQuiescence(
+                            scope, EVALUATION_DRAIN_TIMEOUT)) {
+                        log.warn("Vue 评测工具未在撤销期限内静默,appId={},ownerToken={}",
+                                scope.appId(), scope.ownerToken());
+                    }
+                },
+                termination -> termination.reason()
+                        == ToolLoopTerminationProtocol.ControlledTerminationReason
+                        .EVALUATION_COMPLETED
+                        ? null
+                        : new EvaluationControlledTerminationException(
+                                termination.reason())));
     }
 
     private VueProjectGeneration prepareVueGeneration(
@@ -204,10 +251,40 @@ public class AiCodeGeneratorFacade {
      * @return Flux<String> 流式响应
      */
     private Flux<String> processTokenStream(TokenStream tokenStream) {
+        return processTokenStream(tokenStream, () -> { }, () -> { },
+                termination -> null);
+    }
+
+    private Flux<String> processTokenStream(
+            TokenStream tokenStream,
+            Runnable revoke,
+            Runnable cleanup,
+            Function<ToolLoopTerminationProtocol.ControlledTermination, Throwable>
+                    controlledTerminationError) {
         return Flux.create(sink -> {
+            AtomicBoolean terminated = new AtomicBoolean();
+            Runnable finish = () -> {
+                if (terminated.compareAndSet(false, true)) {
+                    cleanup.run();
+                }
+            };
+            Runnable cancelAndFinish = () -> {
+                if (terminated.compareAndSet(false, true)) {
+                    revoke.run();
+                    try {
+                        tokenStream.cancel();
+                    } finally {
+                        cleanup.run();
+                    }
+                }
+            };
+            sink.onCancel(cancelAndFinish::run);
+            sink.onDispose(cancelAndFinish::run);
+
             // 每个 tool call id 维护独立的字符级状态机。同一 id 的多次 partial 喂入同一 parser。
             Map<String, ToolRequestStreamParser> parsers = new HashMap<>();
-            tokenStream.onPartialResponse((String partialResponse) -> {
+            try {
+                tokenStream.onPartialResponse((String partialResponse) -> {
                         AiResponseMessage aiResponseMessage = new AiResponseMessage(partialResponse);
                         sink.next(JSONUtil.toJsonStr(aiResponseMessage));
                     })
@@ -238,16 +315,58 @@ public class AiCodeGeneratorFacade {
                         ToolExecutedMessage toolExecutedMessage = new ToolExecutedMessage(toolExecution);
                         sink.next(JSONUtil.toJsonStr(toolExecutedMessage));
                     })
+                    .onControlledTermination(termination -> {
+                        finish.run();
+                        Throwable error = controlledTerminationError.apply(termination);
+                        if (error == null) {
+                            sink.complete();
+                        } else {
+                            sink.error(error);
+                        }
+                    })
                     .onCompleteResponse((ChatResponse response) -> {
                         parsers.values().forEach(ToolRequestStreamParser::finish);
+                        finish.run();
                         sink.complete();
                     })
                     .onError((Throwable error) -> {
-                        error.printStackTrace();
+                        finish.run();
                         sink.error(error);
                     })
                     .start();
+            } catch (RuntimeException exception) {
+                finish.run();
+                sink.error(exception);
+            }
         });
+    }
+
+    private ToolLoopTerminationProtocol.ControlledTermination evaluationExitTermination(
+            String toolResult) {
+        try {
+            cn.hutool.json.JSONObject result = JSONUtil.parseObj(toolResult);
+            if ("file-tool/v1".equals(result.getStr("protocol"))
+                    && "exit".equals(result.getStr("operation"))
+                    && "APPLIED".equals(result.getStr("status"))
+                    && !Boolean.TRUE.equals(result.getBool("changed"))) {
+                return new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol.ControlledTerminationReason
+                                .EVALUATION_COMPLETED,
+                        null);
+            }
+        } catch (RuntimeException ignored) {
+            // 非法或伪造的 exit 结果按普通工具结果处理，不能结束评测工具循环。
+        }
+        return null;
+    }
+
+    private static final class EvaluationControlledTerminationException
+            extends IllegalStateException {
+
+        private EvaluationControlledTerminationException(
+                ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+            super("Vue 评测生成被受控终止: " + reason);
+        }
     }
 
 

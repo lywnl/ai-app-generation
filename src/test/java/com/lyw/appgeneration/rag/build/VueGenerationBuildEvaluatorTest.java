@@ -312,7 +312,8 @@ class VueGenerationBuildEvaluatorTest {
         assertTrue(markdown.contains("skeleton-1"));
         assertTrue(markdown.contains("feature-1"));
         verify(facade).generateVueProjectForEvaluation("真实需求", 7L);
-        verify(builder).buildProjectDetailed(expectedTarget.toString());
+        verify(builder, org.mockito.Mockito.times(1))
+                .buildProjectDetailed(expectedTarget.toString());
     }
 
     @Test
@@ -336,6 +337,30 @@ class VueGenerationBuildEvaluatorTest {
         assertTrue(report.renderMarkdown().contains("模型失败"));
         verify(facade).generateVueProjectForEvaluation("失败需求", 9L);
         verify(builder, org.mockito.Mockito.never()).buildProjectDetailed(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void generationTimeoutCancelsStreamAndDoesNotInvokeBuilder() {
+        Path sourceRoot = tempDir.resolve("tmp/code_output");
+        Path reportRoot = tempDir.resolve("target/rag-eval/generated");
+        AtomicInteger cancellations = new AtomicInteger();
+        AiCodeGeneratorFacade facade = mock(AiCodeGeneratorFacade.class);
+        when(facade.generateVueProjectForEvaluation("超时需求", 10L))
+                .thenReturn(new AiCodeGeneratorFacade.VueProjectGeneration(
+                        VueRagContext.unavailable(),
+                        Flux.<String>never().doOnCancel(cancellations::incrementAndGet)));
+        VueProjectBuilder builder = mock(VueProjectBuilder.class);
+
+        VueGenerationBuildReport report = new VueGenerationBuildEvaluator(
+                facade, builder, sourceRoot, reportRoot,
+                Duration.ofMillis(50), () -> 10L)
+                .evaluate(List.of(new VueGenerationBuildCase(
+                        "case-timeout", "基础站点", "超时需求")));
+
+        assertFalse(report.passed());
+        assertEquals(1, cancellations.get());
+        verify(builder, org.mockito.Mockito.never())
+                .buildProjectDetailed(org.mockito.ArgumentMatchers.any());
     }
 
     private TemplateDoc document(String id) {

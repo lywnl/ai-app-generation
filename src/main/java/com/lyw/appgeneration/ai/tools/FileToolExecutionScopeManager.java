@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Objects;
 import java.util.Set;
+import java.time.Duration;
 import java.util.function.Supplier;
 
 /** 为文件类工具提供不跨线程泄漏的词法执行权限。 */
@@ -28,7 +29,7 @@ public final class FileToolExecutionScopeManager {
         }
         return new FileToolScope(
                 ScopeType.ONLINE, appId, ownerToken, Set.copyOf(allowedTools), lease,
-                scopeAuthority);
+                null, scopeAuthority);
     }
 
     public FileToolScope evaluation(
@@ -38,7 +39,7 @@ public final class FileToolExecutionScopeManager {
         }
         return new FileToolScope(
                 ScopeType.EVALUATION, appId, requireToken(ownerToken),
-                Set.copyOf(allowedTools), null, scopeAuthority);
+                Set.copyOf(allowedTools), null, new EvaluationGate(), scopeAuthority);
     }
 
     public <T> T callInScope(FileToolScope scope, Supplier<T> action) {
@@ -46,7 +47,9 @@ public final class FileToolExecutionScopeManager {
         Objects.requireNonNull(action, "action 不能为空");
         requireIssuedScope(scope);
         if (scope.type() == ScopeType.EVALUATION) {
-            return ScopedValue.where(CURRENT_SCOPE, scope).call(action::get);
+            try (EvaluationTicket ignored = scope.evaluationGate().enter()) {
+                return ScopedValue.where(CURRENT_SCOPE, scope).call(action::get);
+            }
         }
         try (AutoCloseable ignored = scope.lease().enterCallback()) {
             return ScopedValue.where(CURRENT_SCOPE, scope).call(action::get);
@@ -55,6 +58,32 @@ public final class FileToolExecutionScopeManager {
         } catch (Exception exception) {
             throw new IllegalStateException("关闭在线工具回调失败", exception);
         }
+    }
+
+    /** 关闭评测作用域；关闭后旧 guard 无法重新取得执行票据。 */
+    public void closeEvaluation(FileToolScope scope) {
+        revokeEvaluation(scope);
+    }
+
+    /** 立即撤销评测作用域的新工具票据，不等待已经开始的动作。 */
+    public void revokeEvaluation(FileToolScope scope) {
+        Objects.requireNonNull(scope, "scope 不能为空");
+        requireIssuedScope(scope);
+        if (scope.type() != ScopeType.EVALUATION) {
+            throw new IllegalArgumentException("只能关闭评测工具作用域");
+        }
+        scope.evaluationGate().revoke();
+    }
+
+    /** 在给定上限内等待已领取的评测工具票据退出。 */
+    public boolean awaitEvaluationQuiescence(FileToolScope scope, Duration timeout) {
+        Objects.requireNonNull(scope, "scope 不能为空");
+        Objects.requireNonNull(timeout, "timeout 不能为空");
+        requireIssuedScope(scope);
+        if (scope.type() != ScopeType.EVALUATION) {
+            throw new IllegalArgumentException("只能等待评测工具作用域");
+        }
+        return scope.evaluationGate().awaitQuiescence(timeout);
     }
 
     public FileToolScope requireCurrent(long appId, String toolName) {
@@ -71,6 +100,8 @@ public final class FileToolExecutionScopeManager {
         }
         if (scope.type() == ScopeType.ONLINE) {
             validateOnlineScope(scope);
+        } else {
+            scope.evaluationGate().requireActive();
         }
         return scope;
     }
@@ -121,6 +152,7 @@ public final class FileToolExecutionScopeManager {
                 String ownerToken,
                 Set<String> allowedTools,
                 VueBuildLease lease,
+                EvaluationGate evaluationGate,
                 ScopeAuthority authority) {
 
         public FileToolScope {
@@ -132,8 +164,83 @@ public final class FileToolExecutionScopeManager {
             if (type == ScopeType.ONLINE && lease == null) {
                 throw new IllegalArgumentException("在线作用域必须绑定精确 Vue 租约");
             }
-            if (type == ScopeType.EVALUATION && lease != null) {
-                throw new IllegalArgumentException("评测作用域不能绑定在线租约");
+            if (type == ScopeType.ONLINE && evaluationGate != null) {
+                throw new IllegalArgumentException("在线作用域不能绑定评测生命周期门");
+            }
+            if (type == ScopeType.EVALUATION
+                    && (lease != null || evaluationGate == null)) {
+                throw new IllegalArgumentException("评测作用域必须绑定独立生命周期门且不能绑定在线租约");
+            }
+        }
+    }
+
+    private static final class EvaluationGate {
+
+        private boolean active = true;
+        private int inFlight;
+
+        private synchronized EvaluationTicket enter() {
+            if (!active) {
+                throw new ScopeViolationException("PROTOCOL_ERROR: 评测工具作用域已经关闭");
+            }
+            inFlight++;
+            return new EvaluationTicket(this);
+        }
+
+        private synchronized void leave() {
+            inFlight--;
+            if (inFlight == 0) {
+                notifyAll();
+            }
+        }
+
+        private synchronized void revoke() {
+            active = false;
+        }
+
+        private synchronized void requireActive() {
+            if (!active) {
+                throw new ScopeViolationException("PROTOCOL_ERROR: 评测工具作用域已经关闭");
+            }
+        }
+
+        private synchronized boolean awaitQuiescence(Duration timeout) {
+            if (timeout.isNegative()) {
+                throw new IllegalArgumentException("等待时长不能为负数");
+            }
+            long remainingNanos = timeout.toNanos();
+            long deadline = System.nanoTime() + remainingNanos;
+            while (inFlight > 0) {
+                if (remainingNanos <= 0) {
+                    return false;
+                }
+                try {
+                    long millis = Math.max(1L, remainingNanos / 1_000_000L);
+                    wait(millis);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+                remainingNanos = deadline - System.nanoTime();
+            }
+            return true;
+        }
+    }
+
+    private static final class EvaluationTicket implements AutoCloseable {
+
+        private final EvaluationGate gate;
+        private boolean closed;
+
+        private EvaluationTicket(EvaluationGate gate) {
+            this.gate = gate;
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                gate.leave();
             }
         }
     }

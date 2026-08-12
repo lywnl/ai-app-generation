@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
+import java.util.Set;
 
 /**
  * AI 生成服务工厂
@@ -103,7 +104,7 @@ public class AiGeneratorServiceFactory {
                     .chatMemoryProvider(memoryId -> chatMemory)
                     // 深度防御第二层：@PromptSafetyCheck 切面是主防线，此处兜底防绕过 AppServiceImpl 直调代理
                     .inputGuardrails(new PromptSafetyInputGuardrail())
-                    .tools(toolManager.getAllTools())
+                    .tools((Object[]) onlineVueTools())
                     .hallucinatedToolNameStrategy(toolExecutionRequest -> ToolExecutionResultMessage.from(
                             toolExecutionRequest, "Error: there is no tool called " + toolExecutionRequest.name()
                     ))
@@ -124,6 +125,49 @@ public class AiGeneratorServiceFactory {
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR,
                     "不支持的代码生成类型: " + codeGenType.getValue());
         };
+    }
+
+    /**
+     * 每次评测创建独立代理、独立模型和纯内存窗口，绝不复用在线缓存或持久记忆。
+     */
+    public VueEvaluationCodeGeneratorService getVueEvaluationCodeGeneratorService(long appId) {
+        StreamingChatModel evaluationModel = evaluationStreamingChatModel();
+        MessageWindowChatMemory evaluationMemory = MessageWindowChatMemory.builder()
+                .id("vue-evaluation-" + appId + "-" + java.util.UUID.randomUUID())
+                .maxMessages(100)
+                .build();
+        return AiServices.builder(VueEvaluationCodeGeneratorService.class)
+                .streamingChatModel(evaluationModel)
+                .chatMemoryProvider(memoryId -> evaluationMemory)
+                .inputGuardrails(new PromptSafetyInputGuardrail())
+                .tools((Object[]) evaluationVueTools())
+                .hallucinatedToolNameStrategy(toolExecutionRequest ->
+                        ToolExecutionResultMessage.from(
+                                toolExecutionRequest,
+                                "Error: there is no tool called "
+                                        + toolExecutionRequest.name()))
+                .build();
+    }
+
+    StreamingChatModel evaluationStreamingChatModel() {
+        return SpringContextUtil.getBean(
+                "evaluationReasoningStreamingChatModelPrototype", StreamingChatModel.class);
+    }
+
+    Set<String> onlineVueToolNames() {
+        return VueToolNames.ONLINE;
+    }
+
+    Set<String> evaluationVueToolNames() {
+        return VueToolNames.EVALUATION;
+    }
+
+    BaseTool[] onlineVueTools() {
+        return toolManager.getTools(VueToolNames.ONLINE);
+    }
+
+    BaseTool[] evaluationVueTools() {
+        return toolManager.getTools(VueToolNames.EVALUATION);
     }
 
     /**

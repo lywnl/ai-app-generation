@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VueProjectSystemPromptTest {
 
     private static final String PROMPT_RESOURCE = "prompt/codegen-vue-project-system-prompt.txt";
+    private static final String EVALUATION_PROMPT_RESOURCE =
+            "prompt/codegen-vue-project-evaluation-system-prompt.txt";
 
     @Test
     void requiresCorrectNodeUrlImportAndComponentLibrarySetup() throws IOException {
@@ -52,8 +54,23 @@ class VueProjectSystemPromptTest {
         assertFalse(dependencyRules.contains("~"), "依赖规则不得引导模型使用 ~ 版本范围");
     }
 
+    @Test
+    void onlineAndEvaluationPromptsRequireDifferentTerminalTools() throws IOException {
+        String online = readPrompt(PROMPT_RESOURCE);
+        String evaluation = readPrompt(EVALUATION_PROMPT_RESOURCE);
+
+        assertTrue(online.contains("最后调用 buildProject"));
+        assertFalse(online.contains("必须立即调用 exit"));
+        assertTrue(evaluation.contains("最后调用 exit"));
+        assertFalse(evaluation.contains("最后调用 buildProject"));
+    }
+
     private String readPrompt() throws IOException {
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(PROMPT_RESOURCE)) {
+        return readPrompt(PROMPT_RESOURCE);
+    }
+
+    private String readPrompt(String resource) throws IOException {
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource)) {
             assertNotNull(input, "Vue 工程系统提示词必须存在");
             return new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }

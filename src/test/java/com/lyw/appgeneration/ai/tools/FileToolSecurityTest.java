@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -379,6 +380,43 @@ class FileToolSecurityTest {
 
         assertFalse(Files.exists(projectRoot().resolve("stale.txt")));
         assertFalse(Files.exists(projectRoot().resolve("borrowed.txt")));
+    }
+
+    @Test
+    void revokedEvaluationScopeUsesBoundedDrainForBlockedInFlightAction()
+            throws Exception {
+        FileToolExecutionScopeManager.FileToolScope scope = scopeManager.evaluation(
+                APP_ID, "blocked-evaluation", Set.of("writeFile"));
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var blocked = executor.submit(() -> scopeManager.callInScope(scope, () -> {
+                entered.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+                return "完成";
+            }));
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+
+            scopeManager.revokeEvaluation(scope);
+            long started = System.nanoTime();
+            assertFalse(scopeManager.awaitEvaluationQuiescence(
+                    scope, java.time.Duration.ofMillis(30)));
+            long elapsedMillis = java.time.Duration.ofNanos(
+                    System.nanoTime() - started).toMillis();
+
+            assertTrue(elapsedMillis < 500, "有界 drain 不能被卡死工具无限阻塞");
+            assertThrows(FileToolExecutionScopeManager.ScopeViolationException.class,
+                    () -> scopeManager.callInScope(scope, () -> "迟到动作"));
+            release.countDown();
+            assertEquals("完成", blocked.get(1, TimeUnit.SECONDS));
+            assertTrue(scopeManager.awaitEvaluationQuiescence(
+                    scope, java.time.Duration.ofSeconds(1)));
+        }
     }
 
     @Test

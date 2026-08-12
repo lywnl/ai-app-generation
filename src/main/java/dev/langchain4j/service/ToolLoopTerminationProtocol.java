@@ -152,6 +152,7 @@ public final class ToolLoopTerminationProtocol {
     public enum ControlledTerminationReason {
         BUILD_SUCCEEDED,
         BUILD_FAILED,
+        EVALUATION_COMPLETED,
         CANCELLED,
         PROTOCOL_ERROR,
         LOOP_LIMIT_EXCEEDED
