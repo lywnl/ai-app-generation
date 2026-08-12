@@ -7,6 +7,7 @@ import com.lyw.appgeneration.core.builder.BuildExecutionContext;
 import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.builder.VueBuildFailureKind;
+import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
@@ -277,6 +278,47 @@ class BuildProjectToolTest {
     }
 
     @Test
+    void stableMarkdownDistinguishesRetryBuildFromCodeRepair() {
+        BuildProjectTool tool = new BuildProjectTool(
+                mock(VueProjectBuilder.class), new BuildErrorSanitizer(),
+                new FileToolExecutionScopeManager());
+        BuildProjectToolResult result = BuildProjectToolResult.completedFailure(
+                1, BuildStage.NPM_INSTALL, VueBuildFailureKind.DEPENDENCY,
+                false, "绝密依赖诊断 /private/project");
+
+        String markdown = tool.generateToolExecutedResult(
+                new JSONObject(), BuildProjectProtocolSupport.json(result));
+
+        assertEquals("第 1 次构建失败（阶段：NPM_INSTALL），正在直接重试构建，未修改业务代码",
+                markdown);
+        assertFalse(markdown.contains("绝密依赖诊断"));
+        assertFalse(markdown.contains("/private/project"));
+        assertFalse(markdown.contains("最小修复"));
+    }
+
+    @Test
+    void postCommitSanitizerFailureCannotOverwriteRecordedCodeFailure() {
+        VueProjectBuilder builder = mock(VueProjectBuilder.class);
+        when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
+                .thenReturn(codeFailure());
+        Harness harness = harness(builder, (projectRoot, result) -> {
+            throw new IllegalStateException("诊断组装失败");
+        });
+        try (harness) {
+            JSONObject json = invoke(harness);
+
+            assertEquals("REJECTED", json.getStr("invocationStatus"));
+            assertTrue(json.getBool("terminateToolLoop"));
+            assertTrue(json.getStr("message").contains("PROTOCOL_ERROR"));
+            assertEquals(BuildProjectToolResult.FAILURE_RESPONSE,
+                    json.getStr("finalResponse"));
+            assertEquals(VueBuildPhase.REPAIRING, harness.lease.snapshot().phase());
+            assertEquals(VueBuildFailureKind.CODE, harness.lease.snapshot().failureKind());
+            assertEquals(1, harness.lease.snapshot().buildAttempt());
+        }
+    }
+
+    @Test
     void unexpectedBuilderFailureConsumesReservedAttemptAsInfrastructureFailure() {
         VueProjectBuilder builder = mock(VueProjectBuilder.class);
         when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
@@ -343,6 +385,17 @@ class BuildProjectToolTest {
     }
 
     private Harness harness(VueProjectBuilder builder) {
+        return harness(builder, new BuildErrorSanitizer());
+    }
+
+    private Harness harness(
+            VueProjectBuilder builder, BuildErrorSanitizer sanitizer) {
+        return harness(builder, sanitizer::sanitize);
+    }
+
+    private Harness harness(
+            VueProjectBuilder builder,
+            java.util.function.BiFunction<Path, BuildResult, String> sanitizer) {
         AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
         var operation = operationManager.acquire(
                 APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE, TURN_ID);
@@ -351,7 +404,7 @@ class BuildProjectToolTest {
         var scope = scopeManager.online(
                 lease, TURN_ID, APP_ID, Set.of("buildProject"));
         BuildProjectTool tool = new BuildProjectTool(
-                builder, new BuildErrorSanitizer(), scopeManager);
+                builder, sanitizer, scopeManager);
         return new Harness(operation, lease, scopeManager, scope, tool);
     }
 

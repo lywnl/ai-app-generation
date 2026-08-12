@@ -32,16 +32,30 @@ class ToolManagerTest {
                 () -> manager.getTools(Set.of("writeFile", "unknownTool")));
     }
 
+    @Test
+    void rejectsDuplicateToolNamesWithoutSplittingArrayAndMapViews() {
+        ToolManager manager = new ToolManager();
+        BaseTool[] duplicateTools = toolsWithNames("writeFile", "writeFile");
+        ReflectionTestUtils.setField(manager, "tools", duplicateTools);
+
+        assertThrows(IllegalStateException.class, manager::initTools);
+        assertArrayEquals(new BaseTool[0], manager.getAllTools());
+    }
+
     private ToolManager managerWith(String... names) {
-        BaseTool[] tools = java.util.Arrays.stream(names).map(name -> {
+        BaseTool[] tools = toolsWithNames(names);
+        ToolManager manager = new ToolManager();
+        ReflectionTestUtils.setField(manager, "tools", tools);
+        manager.initTools();
+        return manager;
+    }
+
+    private BaseTool[] toolsWithNames(String... names) {
+        return java.util.Arrays.stream(names).map(name -> {
             BaseTool tool = mock(BaseTool.class);
             when(tool.getToolName()).thenReturn(name);
             when(tool.getDisplayName()).thenReturn(name);
             return tool;
         }).toArray(BaseTool[]::new);
-        ToolManager manager = new ToolManager();
-        ReflectionTestUtils.setField(manager, "tools", tools);
-        manager.initTools();
-        return manager;
     }
 }

@@ -6,8 +6,7 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -20,10 +19,8 @@ import java.util.Set;
 @Component
 public class ToolManager {
 
-    /**
-     * 工具名称到工具实例的映射
-     */
-    private final Map<String, BaseTool> toolMap = new HashMap<>();
+    /** 已校验的数组和映射通过同一不可变快照原子发布。 */
+    private volatile ToolRegistry registry = ToolRegistry.empty();
 
     /**
      * 自动注入所有工具
@@ -36,11 +33,24 @@ public class ToolManager {
      */
     @PostConstruct
     public void initTools() {
-        for (BaseTool tool : tools) {
-            toolMap.put(tool.getToolName(), tool);
-            log.info("注册工具: {} -> {}", tool.getToolName(), tool.getDisplayName());
+        BaseTool[] candidates = Objects.requireNonNull(tools, "注入工具数组不能为空").clone();
+        Map<String, BaseTool> validatedTools = new LinkedHashMap<>();
+        for (BaseTool tool : candidates) {
+            if (tool == null) {
+                throw new IllegalStateException("工具实例不能为空");
+            }
+            String toolName = tool.getToolName();
+            if (toolName == null || toolName.isBlank()) {
+                throw new IllegalStateException("工具名称不能为空");
+            }
+            if (validatedTools.putIfAbsent(toolName, tool) != null) {
+                throw new IllegalStateException("存在重复工具名称: " + toolName);
+            }
         }
-        log.info("工具管理器初始化完成，共注册 {} 个工具", toolMap.size());
+        registry = new ToolRegistry(Map.copyOf(validatedTools), candidates);
+        validatedTools.forEach((name, tool) ->
+                log.info("注册工具: {} -> {}", name, tool.getDisplayName()));
+        log.info("工具管理器初始化完成，共注册 {} 个工具", validatedTools.size());
     }
 
     /**
@@ -50,7 +60,7 @@ public class ToolManager {
      * @return 工具实例
      */
     public BaseTool getTool(String toolName) {
-        return toolMap.get(toolName);
+        return registry.toolMap().get(toolName);
     }
 
     /**
@@ -59,7 +69,7 @@ public class ToolManager {
      * @return 工具实例集合
      */
     public BaseTool[] getAllTools() {
-        return tools;
+        return registry.tools().clone();
     }
 
     /**
@@ -68,23 +78,26 @@ public class ToolManager {
     public BaseTool[] getTools(Set<String> allowedToolNames) {
         Set<String> allowed = Set.copyOf(
                 Objects.requireNonNull(allowedToolNames, "工具白名单不能为空"));
+        ToolRegistry currentRegistry = registry;
         Set<String> unknown = new java.util.HashSet<>(allowed);
-        unknown.removeAll(toolMap.keySet());
+        unknown.removeAll(currentRegistry.toolMap().keySet());
         if (!unknown.isEmpty()) {
             throw new IllegalArgumentException("工具白名单包含未知工具: " + unknown);
         }
-        return toolMap.values().stream()
+        return java.util.Arrays.stream(currentRegistry.tools())
                 .filter(tool -> allowed.contains(tool.getToolName()))
-                .sorted(Comparator.comparingInt(tool -> indexOfTool(tool.getToolName())))
                 .toArray(BaseTool[]::new);
     }
 
-    private int indexOfTool(String toolName) {
-        for (int index = 0; index < tools.length; index++) {
-            if (tools[index].getToolName().equals(toolName)) {
-                return index;
-            }
+    private record ToolRegistry(Map<String, BaseTool> toolMap, BaseTool[] tools) {
+
+        private ToolRegistry {
+            toolMap = Map.copyOf(toolMap);
+            tools = tools.clone();
         }
-        return Integer.MAX_VALUE;
+
+        private static ToolRegistry empty() {
+            return new ToolRegistry(Map.of(), new BaseTool[0]);
+        }
     }
 }
