@@ -23,6 +23,15 @@ public final class AppOperationLeaseManager {
 
     private final ConcurrentHashMap<Long, OperationState> operations =
             new ConcurrentHashMap<>();
+    private final Runnable registrationTestHook;
+
+    public AppOperationLeaseManager() {
+        this(null);
+    }
+
+    AppOperationLeaseManager(Runnable registrationTestHook) {
+        this.registrationTestHook = registrationTestHook;
+    }
 
     public enum AppOperationType {
         GENERATE, DEPLOY, DOWNLOAD, DELETE
@@ -49,6 +58,7 @@ public final class AppOperationLeaseManager {
             long appId, String ownerToken, Duration quiescenceTimeout) {
         validateIdentity(appId, AppOperationType.DELETE, ownerToken);
         Duration boundedTimeout = boundedTimeout(quiescenceTimeout);
+        long deadlineNanos = deadlineAfter(boundedTimeout);
         AtomicReference<OperationState> sourceReference = new AtomicReference<>();
         AtomicReference<OperationState> deleteReference = new AtomicReference<>();
         operations.compute(appId, (ignored, active) -> {
@@ -72,25 +82,31 @@ public final class AppOperationLeaseManager {
         }
 
         OperationState source = sourceReference.get();
-        try {
-            source.fireCancellationActions();
-        } catch (RuntimeException exception) {
-            abortDeleteTakeover(source);
-            throw exception;
+        CancellationDispatch cancellationDispatch =
+                source.prepareCancellationDispatch();
+        if (cancellationDispatch != null) {
+            Thread.ofVirtual().name("app-delete-cancellation-", 0).start(
+                    () -> source.executeCancellationDispatch(cancellationDispatch, false));
         }
-        boolean quiescent;
+        boolean readyForReplacement;
         try {
-            quiescent = source.awaitQuiescence(boundedTimeout);
+            readyForReplacement = source.awaitQuiescenceAndSeal(deadlineNanos);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             abortDeleteTakeover(source);
             throw new OperationQuiescenceTimeoutException(
                     appId, "等待静默时线程被中断", exception);
         }
-        if (!quiescent) {
+        if (!readyForReplacement) {
             abortDeleteTakeover(source);
             throw new OperationQuiescenceTimeoutException(
                     appId, "等待生成回调静默超时", null);
+        }
+        RuntimeException cancellationFailure = cancellationDispatch == null
+                ? null : cancellationDispatch.failure.get();
+        if (cancellationFailure != null) {
+            abortDeleteTakeover(source);
+            throw cancellationFailure;
         }
         OperationState delete = new OperationState(
                 this, appId, AppOperationType.DELETE, ownerToken);
@@ -141,6 +157,13 @@ public final class AppOperationLeaseManager {
                 ? MAX_DELETE_QUIESCENCE_WAIT : timeout;
     }
 
+    private static long deadlineAfter(Duration timeout) {
+        long now = System.nanoTime();
+        long timeoutNanos = timeout.toNanos();
+        return timeoutNanos >= Long.MAX_VALUE - now
+                ? Long.MAX_VALUE : now + timeoutNanos;
+    }
+
     private static void validateIdentity(
             long appId, AppOperationType operationType, String ownerToken) {
         if (appId <= 0) {
@@ -186,6 +209,10 @@ public final class AppOperationLeaseManager {
 
         public CancellationRegistration registerCancellation(Runnable action) {
             ensureActiveOrCancellationRequested();
+            Runnable hook = state.manager.registrationTestHook;
+            if (hook != null) {
+                hook.run();
+            }
             return state.registerCancellation(action);
         }
 
@@ -297,6 +324,7 @@ public final class AppOperationLeaseManager {
         private boolean ownerClosed;
         private boolean deleteTakeover;
         private boolean replaced;
+        private boolean cancellationRegistrationSealed;
         private boolean vueSessionClaimed;
 
         private OperationState(
@@ -349,6 +377,9 @@ public final class AppOperationLeaseManager {
             CancellationEntry entry;
             boolean runImmediately;
             synchronized (this) {
+                if (ownerClosed || replaced || cancellationRegistrationSealed) {
+                    throw new IllegalStateException("取消动作注册边界已经关闭");
+                }
                 entry = new CancellationEntry(++nextCancellationId, action);
                 runImmediately = cancellationRequested;
                 if (runImmediately) {
@@ -358,10 +389,11 @@ public final class AppOperationLeaseManager {
                 }
             }
             if (runImmediately) {
+                CancellationDispatch dispatch = new CancellationDispatch(List.of(entry));
                 try {
                     runCancellationAction(entry);
                 } finally {
-                    finishCancellationDispatch();
+                    finishCancellationDispatch(dispatch, null);
                 }
             }
             return new CancellationRegistration(this, entry);
@@ -392,18 +424,30 @@ public final class AppOperationLeaseManager {
         }
 
         private void fireCancellationActions() {
+            CancellationDispatch dispatch = prepareCancellationDispatch();
+            if (dispatch != null) {
+                executeCancellationDispatch(dispatch, true);
+            }
+        }
+
+        private CancellationDispatch prepareCancellationDispatch() {
             List<CancellationEntry> entries;
             synchronized (this) {
                 if (!cancellationRequested || cancellationEntries.isEmpty()) {
-                    return;
+                    return null;
                 }
                 cancellationDispatchCount++;
                 entries = new ArrayList<>(cancellationEntries.values());
                 cancellationEntries.clear();
             }
+            return new CancellationDispatch(entries);
+        }
+
+        private void executeCancellationDispatch(
+                CancellationDispatch dispatch, boolean propagateFailure) {
             RuntimeException failure = null;
             try {
-                for (CancellationEntry entry : entries) {
+                for (CancellationEntry entry : dispatch.entries) {
                     try {
                         runCancellationAction(entry);
                     } catch (RuntimeException exception) {
@@ -415,9 +459,9 @@ public final class AppOperationLeaseManager {
                     }
                 }
             } finally {
-                finishCancellationDispatch();
+                finishCancellationDispatch(dispatch, failure);
             }
-            if (failure != null) {
+            if (propagateFailure && failure != null) {
                 throw failure;
             }
         }
@@ -445,9 +489,11 @@ public final class AppOperationLeaseManager {
             }
         }
 
-        private void finishCancellationDispatch() {
+        private void finishCancellationDispatch(
+                CancellationDispatch dispatch, RuntimeException failure) {
             boolean removable;
             synchronized (this) {
+                dispatch.failure.set(failure);
                 cancellationDispatchCount--;
                 notifyIfQuiescent();
                 removable = removable();
@@ -459,16 +505,37 @@ public final class AppOperationLeaseManager {
 
         private synchronized boolean awaitQuiescence(Duration timeout)
                 throws InterruptedException {
-            long remainingNanos = timeout.toNanos();
-            long deadlineNanos = System.nanoTime() + remainingNanos;
+            long deadlineNanos = deadlineAfter(timeout);
+            long remainingNanos = remainingNanos(deadlineNanos);
             while (!isQuiescent()) {
                 if (remainingNanos <= 0) {
                     return false;
                 }
                 TimeUnit.NANOSECONDS.timedWait(this, remainingNanos);
-                remainingNanos = deadlineNanos - System.nanoTime();
+                remainingNanos = remainingNanos(deadlineNanos);
             }
             return true;
+        }
+
+        private synchronized boolean awaitQuiescenceAndSeal(long deadlineNanos)
+                throws InterruptedException {
+            long remainingNanos = remainingNanos(deadlineNanos);
+            while (!isQuiescent()) {
+                if (remainingNanos <= 0) {
+                    return false;
+                }
+                TimeUnit.NANOSECONDS.timedWait(this, remainingNanos);
+                remainingNanos = remainingNanos(deadlineNanos);
+            }
+            cancellationRegistrationSealed = true;
+            return true;
+        }
+
+        private static long remainingNanos(long deadlineNanos) {
+            if (deadlineNanos == Long.MAX_VALUE) {
+                return Long.MAX_VALUE;
+            }
+            return deadlineNanos - System.nanoTime();
         }
 
         private synchronized void beginDeleteTakeover() {
@@ -485,12 +552,16 @@ public final class AppOperationLeaseManager {
         }
 
         private synchronized void completeDeleteTakeover() {
+            if (!cancellationRegistrationSealed || !isQuiescent()) {
+                throw new IllegalStateException("删除替换前取消注册边界尚未静默封闭");
+            }
             replaced = true;
             deleteTakeover = false;
         }
 
         private synchronized boolean closeOwner() {
             if (!ownerClosed) {
+                cancellationRegistrationSealed = true;
                 ownerClosed = true;
                 requestCancellation();
             }
@@ -515,6 +586,16 @@ public final class AppOperationLeaseManager {
             if (isQuiescent()) {
                 notifyAll();
             }
+        }
+    }
+
+    private static final class CancellationDispatch {
+
+        private final List<CancellationEntry> entries;
+        private final AtomicReference<RuntimeException> failure = new AtomicReference<>();
+
+        private CancellationDispatch(List<CancellationEntry> entries) {
+            this.entries = entries;
         }
     }
 
