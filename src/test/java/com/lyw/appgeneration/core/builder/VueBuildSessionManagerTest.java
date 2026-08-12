@@ -186,6 +186,65 @@ class VueBuildSessionManagerTest {
     }
 
     @Test
+    void ticketCompletionCancelsPendingActionAlreadyCopiedForCancellation() throws Exception {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager manager = new VueBuildSessionManager();
+        CountDownLatch firstActionStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirstAction = new CountDownLatch(1);
+        AtomicInteger oldTicketCancellation = new AtomicInteger();
+        try (var operation = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            operation.registerCancellation(() -> {
+                firstActionStarted.countDown();
+                awaitUnchecked(releaseFirstAction);
+            });
+            try (var lease = manager.open(operation, 9L, "turn-1");
+                 var ticket = lease.beginBuild()) {
+                ticket.registerCancellation(oldTicketCancellation::incrementAndGet);
+                Future<Boolean> cancellation = executor.submit(operation::requestCancellation);
+
+                try {
+                    assertTrue(firstActionStarted.await(1, TimeUnit.SECONDS));
+                    lease.recordFailure(ticket, failure(BuildStage.NPM_BUILD));
+                } finally {
+                    releaseFirstAction.countDown();
+                }
+
+                assertTrue(cancellation.get(1, TimeUnit.SECONDS));
+                assertEquals(0, oldTicketCancellation.get());
+            }
+        }
+    }
+
+    @Test
+    void runningCancellationKeepsClosedOperationOccupiedUntilActionFinishes() throws Exception {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        CountDownLatch actionStarted = new CountDownLatch(1);
+        CountDownLatch releaseAction = new CountDownLatch(1);
+        var operation = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        operation.registerCancellation(() -> {
+            actionStarted.countDown();
+            awaitUnchecked(releaseAction);
+        });
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> cancellation = executor.submit(operation::requestCancellation);
+            assertTrue(actionStarted.await(1, TimeUnit.SECONDS));
+
+            try {
+                operation.close();
+                assertThrows(AppOperationLeaseManager.ActiveAppOperationException.class,
+                        () -> operationManager.acquire(
+                                7L, AppOperationType.GENERATE, "turn-2"));
+            } finally {
+                releaseAction.countDown();
+            }
+            assertTrue(cancellation.get(1, TimeUnit.SECONDS));
+        }
+        assertDoesNotThrow(() -> operationManager.acquire(
+                7L, AppOperationType.GENERATE, "turn-2").close());
+    }
+
+    @Test
     void deleteTakeoverCancellationFailureDoesNotPermanentlyLockManager() {
         AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
         VueBuildSessionManager manager = new VueBuildSessionManager();
@@ -401,6 +460,15 @@ class VueBuildSessionManagerTest {
             VueBuildSessionManager.VueBuildLease lease) throws Exception {
         start.await();
         return lease.beginBuild();
+    }
+
+    private void awaitUnchecked(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(exception);
+        }
     }
 
     private BuildResult success() {

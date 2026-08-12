@@ -126,6 +126,12 @@ public final class AppOperationLeaseManager {
         }
     }
 
+    private void cancellationActivityFinished(OperationState state) {
+        if (state.isRemovable()) {
+            operations.remove(state.appId, state);
+        }
+    }
+
     private static Duration boundedTimeout(Duration timeout) {
         Objects.requireNonNull(timeout, "quiescenceTimeout 不能为空");
         if (timeout.isNegative()) {
@@ -236,7 +242,7 @@ public final class AppOperationLeaseManager {
 
         @Override
         public void close() {
-            state.removeCancellation(entry);
+            state.cancelCancellation(entry);
         }
     }
 
@@ -285,6 +291,8 @@ public final class AppOperationLeaseManager {
 
         private long nextCancellationId;
         private int callbackCount;
+        private int cancellationDispatchCount;
+        private int runningCancellationCount;
         private boolean cancellationRequested;
         private boolean ownerClosed;
         private boolean deleteTakeover;
@@ -343,18 +351,35 @@ public final class AppOperationLeaseManager {
             synchronized (this) {
                 entry = new CancellationEntry(++nextCancellationId, action);
                 runImmediately = cancellationRequested;
-                if (!runImmediately) {
+                if (runImmediately) {
+                    cancellationDispatchCount++;
+                } else {
                     cancellationEntries.put(entry.id, entry);
                 }
             }
             if (runImmediately) {
-                entry.runOnce();
+                try {
+                    runCancellationAction(entry);
+                } finally {
+                    finishCancellationDispatch();
+                }
             }
             return new CancellationRegistration(this, entry);
         }
 
-        private synchronized void removeCancellation(CancellationEntry entry) {
-            cancellationEntries.remove(entry.id, entry);
+        private void cancelCancellation(CancellationEntry entry) {
+            if (!entry.cancelPending()) {
+                return;
+            }
+            boolean removable;
+            synchronized (this) {
+                cancellationEntries.remove(entry.id, entry);
+                notifyIfQuiescent();
+                removable = removable();
+            }
+            if (removable) {
+                manager.cancellationActivityFinished(this);
+            }
         }
 
         private synchronized boolean requestCancellation() {
@@ -372,23 +397,63 @@ public final class AppOperationLeaseManager {
                 if (!cancellationRequested || cancellationEntries.isEmpty()) {
                     return;
                 }
+                cancellationDispatchCount++;
                 entries = new ArrayList<>(cancellationEntries.values());
                 cancellationEntries.clear();
             }
             RuntimeException failure = null;
-            for (CancellationEntry entry : entries) {
-                try {
-                    entry.runOnce();
-                } catch (RuntimeException exception) {
-                    if (failure == null) {
-                        failure = exception;
-                    } else {
-                        failure.addSuppressed(exception);
+            try {
+                for (CancellationEntry entry : entries) {
+                    try {
+                        runCancellationAction(entry);
+                    } catch (RuntimeException exception) {
+                        if (failure == null) {
+                            failure = exception;
+                        } else {
+                            failure.addSuppressed(exception);
+                        }
                     }
                 }
+            } finally {
+                finishCancellationDispatch();
             }
             if (failure != null) {
                 throw failure;
+            }
+        }
+
+        private void runCancellationAction(CancellationEntry entry) {
+            synchronized (this) {
+                if (!entry.start()) {
+                    return;
+                }
+                runningCancellationCount++;
+            }
+            try {
+                entry.runAction();
+            } finally {
+                boolean removable;
+                synchronized (this) {
+                    entry.finish();
+                    runningCancellationCount--;
+                    notifyIfQuiescent();
+                    removable = removable();
+                }
+                if (removable) {
+                    manager.cancellationActivityFinished(this);
+                }
+            }
+        }
+
+        private void finishCancellationDispatch() {
+            boolean removable;
+            synchronized (this) {
+                cancellationDispatchCount--;
+                notifyIfQuiescent();
+                removable = removable();
+            }
+            if (removable) {
+                manager.cancellationActivityFinished(this);
             }
         }
 
@@ -396,7 +461,7 @@ public final class AppOperationLeaseManager {
                 throws InterruptedException {
             long remainingNanos = timeout.toNanos();
             long deadlineNanos = System.nanoTime() + remainingNanos;
-            while (callbackCount > 0) {
+            while (!isQuiescent()) {
                 if (remainingNanos <= 0) {
                     return false;
                 }
@@ -433,24 +498,57 @@ public final class AppOperationLeaseManager {
         }
 
         private boolean removable() {
-            return ownerClosed && callbackCount == 0 && !deleteTakeover && !replaced;
+            return ownerClosed && isQuiescent() && cancellationEntries.isEmpty()
+                    && !deleteTakeover && !replaced;
+        }
+
+        private synchronized boolean isRemovable() {
+            return removable();
+        }
+
+        private boolean isQuiescent() {
+            return callbackCount == 0 && cancellationDispatchCount == 0
+                    && runningCancellationCount == 0;
+        }
+
+        private void notifyIfQuiescent() {
+            if (isQuiescent()) {
+                notifyAll();
+            }
         }
     }
 
     private static final class CancellationEntry {
 
+        private enum Lifecycle {
+            PENDING, RUNNING, CANCELLED, DONE
+        }
+
         private final long id;
         private final Runnable action;
-        private final AtomicBoolean executed = new AtomicBoolean();
+        private final AtomicReference<Lifecycle> lifecycle =
+                new AtomicReference<>(Lifecycle.PENDING);
 
         private CancellationEntry(long id, Runnable action) {
             this.id = id;
             this.action = action;
         }
 
-        private void runOnce() {
-            if (executed.compareAndSet(false, true)) {
-                action.run();
+        private boolean start() {
+            return lifecycle.compareAndSet(Lifecycle.PENDING, Lifecycle.RUNNING);
+        }
+
+        private boolean cancelPending() {
+            return lifecycle.compareAndSet(Lifecycle.PENDING, Lifecycle.CANCELLED);
+        }
+
+        private void runAction() {
+            action.run();
+        }
+
+        private void finish() {
+            if (!lifecycle.compareAndSet(Lifecycle.RUNNING, Lifecycle.DONE)) {
+                throw new IllegalStateException("取消动作生命周期不合法");
             }
         }
     }
