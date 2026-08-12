@@ -91,6 +91,59 @@ class VueHybridRetrievalServiceTest {
     }
 
     @Test
+    void echartsRequirementDoesNotFilterHybridCandidatesBeforeRerank() {
+        String query = "生成商城，并使用 ECharts 展示销售趋势";
+        TemplateDoc shopSkeleton = compatibleSkeleton("skeleton-shop");
+        TemplateDoc dashboardSkeleton = compatibleSkeleton("skeleton-dashboard");
+        dashboardSkeleton.getDependencies().put("echarts", "5.5.1");
+        Harness harness = harness(List.of(shopSkeleton, dashboardSkeleton));
+        when(harness.bm25.retrieve(eq(query), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(candidates(
+                        List.of(shopSkeleton, dashboardSkeleton),
+                        RagDocumentKind.PROJECT_SKELETON));
+        when(harness.dense.retrieve(eq(query), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(List.of());
+        when(harness.bm25.retrieve(eq(query), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of());
+        when(harness.dense.retrieve(eq(query), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of());
+
+        VueRagContext context = harness.service.retrieve(query);
+
+        assertEquals("skeleton-shop", context.skeleton().getId());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<TemplateDoc>> rerankCandidates = ArgumentCaptor.forClass(List.class);
+        verify(harness.rerank).rerankVue(eq(query), rerankCandidates.capture(), eq(3));
+        assertEquals(List.of("skeleton-shop", "skeleton-dashboard"),
+                rerankCandidates.getValue().stream().map(TemplateDoc::getId).toList());
+    }
+
+    @Test
+    void echartsRejectionDoesNotOverrideDenseOnlyRanking() {
+        String query = "生成数据看板，但不要使用 ECharts";
+        TemplateDoc dashboardSkeleton = compatibleSkeleton("skeleton-dashboard");
+        dashboardSkeleton.getDependencies().put("echarts", "5.5.1");
+        TemplateDoc adminSkeleton = compatibleSkeleton("skeleton-admin");
+        Harness harness = harness(List.of(dashboardSkeleton, adminSkeleton));
+        when(harness.dense.retrieve(eq(query), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+                .thenReturn(candidates(
+                        List.of(dashboardSkeleton, adminSkeleton),
+                        RagDocumentKind.PROJECT_SKELETON));
+        when(harness.dense.retrieve(eq(query), eq(CATALOG_VERSION),
+                eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of());
+
+        VueRagContext production = harness.service.retrieveDenseOnly(query);
+        VueRagContext evaluation = harness.service.retrieveDenseOnlyForEvaluation(query);
+
+        assertEquals("skeleton-dashboard", production.skeleton().getId());
+        assertEquals("skeleton-dashboard", evaluation.skeleton().getId());
+    }
+
+    @Test
     void rerankTextContainsParentMetadataAndNeverContainsSourceContent() {
         RagProperties properties = new RagProperties();
         properties.getRerank().setDocCharLimit(10_000);

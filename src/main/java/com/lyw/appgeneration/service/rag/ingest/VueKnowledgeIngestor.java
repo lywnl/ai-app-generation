@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,6 +25,8 @@ import java.util.UUID;
 @Slf4j
 @Component
 public class VueKnowledgeIngestor {
+
+    private static final int EMBEDDING_BATCH_SIZE = 10;
 
     private final EmbeddingModel embeddingModel;
     private final ObjectMapper objectMapper;
@@ -52,19 +55,32 @@ public class VueKnowledgeIngestor {
                 .map(VueKnowledgeIngestor::stableId)
                 .toList();
 
-        Response<List<Embedding>> response = embeddingModel.embedAll(segments);
-        List<Embedding> embeddings = response == null ? null : response.content();
-        if (embeddings == null || embeddings.size() != chunks.size()) {
-            int actualSize = embeddings == null ? -1 : embeddings.size();
-            throw new IllegalStateException("Vue 知识块与 embedding 数量不一致: chunks="
-                    + chunks.size() + ", embeddings=" + actualSize);
-        }
+        List<Embedding> embeddings = embedInBatches(segments);
         store.addAll(ids, embeddings, segments);
 
         long elapsed = System.currentTimeMillis() - start;
         log.info("[RAG Ingest] Vue 目录版本={},块数={},耗时={}ms",
                 catalog.getCatalogVersion(), chunks.size(), elapsed);
         return new IngestResult(catalog.getCatalogVersion(), chunks.size());
+    }
+
+    private List<Embedding> embedInBatches(List<TextSegment> segments) {
+        List<Embedding> embeddings = new ArrayList<>(segments.size());
+        for (int start = 0; start < segments.size(); start += EMBEDDING_BATCH_SIZE) {
+            int end = Math.min(start + EMBEDDING_BATCH_SIZE, segments.size());
+            List<TextSegment> batch = segments.subList(start, end);
+            Response<List<Embedding>> response = embeddingModel.embedAll(batch);
+            List<Embedding> batchEmbeddings = response == null ? null : response.content();
+            if (batchEmbeddings == null || batchEmbeddings.size() != batch.size()) {
+                int actualSize = batchEmbeddings == null ? -1 : batchEmbeddings.size();
+                int batchNumber = start / EMBEDDING_BATCH_SIZE + 1;
+                throw new IllegalStateException("Vue 知识块与 embedding 数量不一致: 批次="
+                        + batchNumber + ", 范围=[" + start + "," + end + ")"
+                        + ", chunks=" + batch.size() + ", embeddings=" + actualSize);
+            }
+            embeddings.addAll(batchEmbeddings);
+        }
+        return List.copyOf(embeddings);
     }
 
     private TextSegment createSegment(KnowledgeChunk chunk, String catalogVersion) {

@@ -15,6 +15,8 @@ import com.lyw.appgeneration.rag.vue.VueRetrievalQualityGateRunner;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
+import com.lyw.appgeneration.utils.SpringContextUtil;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -22,7 +24,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -40,11 +45,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 /**
  * 十条 Vue 首次真实生成与 npm 构建的高成本质量门禁。
  */
 class VueGenerationBuildQualityGateTest {
+
+    private static final String DISABLED_PEXELS_API_KEY =
+            "disabled-for-vue-generation-build-evaluation";
 
     private static final Path REPORT = Path.of(
             "target/rag-eval/vue-generation-build-report.md");
@@ -89,6 +98,7 @@ class VueGenerationBuildQualityGateTest {
                 target, environment);
 
         assertEquals("pg-secret", properties.get("rag.pgvector.password"));
+        assertEquals(DISABLED_PEXELS_API_KEY, properties.get("PEXELS_API_KEY"));
     }
 
     @ParameterizedTest
@@ -136,6 +146,36 @@ class VueGenerationBuildQualityGateTest {
     }
 
     @Test
+    void 懒加载评测上下文会初始化并在关闭后恢复原Spring上下文() {
+        ApplicationContext originalContext = (ApplicationContext) ReflectionTestUtils.getField(
+                SpringContextUtil.class, "applicationContext");
+        ApplicationContext previousContext = mock(ApplicationContext.class);
+        ReflectionTestUtils.setField(
+                SpringContextUtil.class, "applicationContext", previousContext);
+        TemplateCatalog catalog = new TemplateCatalog(
+                Path.of("embed_text/vue-project"), new ObjectMapper());
+
+        try {
+            try (ConfigurableApplicationContext context = startEvaluationApplication(
+                    catalog,
+                    VuePgVectorTarget.from(Map.of()),
+                    Map.of(),
+                    contextTestHostProperties())) {
+                StreamingChatModel model = SpringContextUtil.getBean(
+                        "reasoningStreamingChatModelPrototype", StreamingChatModel.class);
+
+                assertTrue(context.isActive());
+                assertTrue(model != null);
+            }
+            assertSame(previousContext, ReflectionTestUtils.getField(
+                    SpringContextUtil.class, "applicationContext"));
+        } finally {
+            ReflectionTestUtils.setField(
+                    SpringContextUtil.class, "applicationContext", originalContext);
+        }
+    }
+
+    @Test
     void 评测强制属性覆盖宿主冲突配置且保持快照生命周期() {
         TemplateCatalog catalog = new TemplateCatalog(
                 Path.of("embed_text/vue-project"), new ObjectMapper());
@@ -177,7 +217,7 @@ class VueGenerationBuildQualityGateTest {
                     context.getEnvironment().getProperty("DEEPSEEK_API_KEY"));
             assertEquals("host-dashscope-key",
                     context.getEnvironment().getProperty("DASHSCOPE_API_KEY"));
-            assertEquals("host-pexels-key",
+            assertEquals(DISABLED_PEXELS_API_KEY,
                     context.getEnvironment().getProperty("PEXELS_API_KEY"));
             VueRetrievalResourceProvider provider =
                     context.getBean(VueRetrievalResourceProvider.class);
@@ -294,11 +334,25 @@ class VueGenerationBuildQualityGateTest {
             VuePgVectorTarget target,
             Map<String, String> variables,
             Map<String, Object> hostProperties) {
+        ApplicationContext previousContext = (ApplicationContext) ReflectionTestUtils.getField(
+                SpringContextUtil.class, "applicationContext");
         Map<String, Object> properties = evaluationProperties(target, variables);
-        return new SpringApplicationBuilder(AiAppGenerationApplication.class)
+        ConfigurableApplicationContext application = new SpringApplicationBuilder(
+                AiAppGenerationApplication.class)
                 .web(WebApplicationType.NONE)
                 .lazyInitialization(true)
                 .initializers(context -> {
+                    context.addApplicationListener((ContextClosedEvent event) -> {
+                        ApplicationContext currentContext =
+                                (ApplicationContext) ReflectionTestUtils.getField(
+                                        SpringContextUtil.class, "applicationContext");
+                        if (currentContext == context) {
+                            ReflectionTestUtils.setField(
+                                    SpringContextUtil.class,
+                                    "applicationContext",
+                                    previousContext);
+                        }
+                    });
                     if (!hostProperties.isEmpty()) {
                         context.getEnvironment().getPropertySources().addFirst(
                                 new MapPropertySource("simulatedHost", hostProperties));
@@ -310,6 +364,8 @@ class VueGenerationBuildQualityGateTest {
                             new VueEvaluationCatalogSnapshotConfigurer(catalog));
                 })
                 .run();
+        application.getBean(SpringContextUtil.class);
+        return application;
     }
 
     private Map<String, Object> evaluationProperties(
@@ -325,6 +381,7 @@ class VueGenerationBuildQualityGateTest {
         properties.put("rag.pgvector.database", target.database());
         properties.put("rag.pgvector.user", target.user());
         properties.put("rag.pgvector.password", variables.get("RAG_PGVECTOR_PASSWORD"));
+        properties.put("PEXELS_API_KEY", DISABLED_PEXELS_API_KEY);
         putIfPresent(properties, "DASHSCOPE_API_KEY", variables.get("DASHSCOPE_API_KEY"));
         putIfPresent(properties, "DEEPSEEK_API_KEY", variables.get("DEEPSEEK_API_KEY"));
         return properties;

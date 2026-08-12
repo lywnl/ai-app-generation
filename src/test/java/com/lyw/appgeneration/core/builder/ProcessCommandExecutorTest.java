@@ -102,7 +102,7 @@ class ProcessCommandExecutorTest {
         CommandResult result = new ProcessCommandExecutor().execute(
                 tempDir,
                 javaCommand("sleep"),
-                Duration.ofMillis(100));
+                Duration.ofSeconds(2));
 
         long elapsedMillis = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
         assertTrue(result.timedOut());

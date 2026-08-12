@@ -12,8 +12,8 @@
     "element-plus"
   ],
   "title": "Vue3 个人资料页(头像 + 基本信息卡 + 统计数据 + 活动时间线)",
-  "embedText": "Vue3 个人资料 profile 用户中心 头像 基本信息 统计数据 活动记录 时间线 timeline 成就 徽章 主页 卡片",
-  "description": "用户个人主页,顶部大 Banner 含头像/用户名/简介/关注按钮,中间统计数据卡(发布/粉丝/关注),下方活动时间线",
+  "embedText": "Vue3 个人资料 profile 用户中心 作者资料 作者信息 作者主页 专栏作者 创作者 头像 基本信息 个人简介 统计数据 活动记录 时间线 timeline 成就 徽章 主页 卡片",
+  "description": "可复用于用户或内容作者资料页,顶部大 Banner 含头像/用户名/个人简介/关注按钮,中间统计数据卡(发布/粉丝/关注),下方活动时间线",
   "files": [
     {
       "path": "src/views/Profile.vue",

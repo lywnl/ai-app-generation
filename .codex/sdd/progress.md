@@ -1,5 +1,23 @@
 # Vue RAG 混合检索执行进度
 
+## 2026-08-12 最新真实门禁与终审收口
+
+- 用户确认删除计划外的 **ECharts 专项意图解析、ECharts 骨架硬过滤和拟议的 `EchartsIntentParser`**。当前职责恢复为：Hybrid 将 BM25 与 Dense 候选交给 RRF，再把全部父文档候选交给 Rerank；Dense-only 保留 Dense 原排名；最终功能片段仍执行计划内的 Vue 主版本、语言、构建工具和共享依赖主版本兼容性过滤。代码中不存在 `EchartsIntentParser`，也不存在按 ECharts 肯定、否定或未决措辞预删骨架的生产分支。
+- 删除专项规则的行为回归完成 RED→GREEN：RED 为 2 项、2 failure；GREEN 为 2/2，完整 `VueHybridRetrievalServiceTest` 为 29/29。两条永久用例分别锁定“Hybrid 在 Rerank 前不得按 ECharts 依赖删候选”和“Dense-only 不得按 ECharts 肯定/否定语义覆盖原排名”；证据为 `.codex/runtime/echarts-hard-filter-delete-red.log`、`.codex/runtime/echarts-hard-filter-delete-green.log`、`.codex/runtime/echarts-hard-filter-delete-service-green.log`。
+- 其余终审修复保留：23 条 embedding 按 `10/10/3` 批量获取且全部成功后一次写库；生成评测上下文关闭时仅在静态值仍指向本上下文时恢复旧值；评测报告完整脱敏带空格、异种引号、转义引号及角括号的命名秘密。
+- 最新正式摄取：11/11，`BUILD SUCCESS`；PGVector 当前目录版本 23/23、历史版本 0、向量维度 1024，目录版本为 `bd799d82b3f00151016246ff0228009b1ef8e84dd0a66e999bbdc3b1e4942af0`。日志为 `.codex/runtime/final-real-ingestion-after-echarts-delete-2026-08-12.log`。
+- 最新 30 条真实检索：3/3，`BUILD SUCCESS`；Hybrid 的 Skeleton Hit@1 为 0.9333、Feature Recall@4 为 0.9528，相对 Dense 差值分别为 0.0000、-0.0389，均满足计划门槛。日志为 `.codex/runtime/final-real-retrieval-after-echarts-delete-2026-08-12.log`。
+- DeepSeek 充值后重新执行十条首次真实生成：固定 10 个用例全部 `生成完成=true`，逐条完成 `npm install` 和 `npm run build`，阶段均为 `SUCCESS`、退出码 0、未超时；测试类 10/10、0 failure、0 error、0 skipped，`BUILD SUCCESS`，总耗时 10 分 31 秒。报告副本为 `.codex/runtime/vue-generation-build-report-after-echarts-delete-2026-08-12.md`，日志为 `.codex/runtime/final-real-generation-build-after-echarts-delete-2026-08-12.log`。
+- 首次生成重跑最初被本机 JVM SOCKS 代理错误接管 `127.0.0.1`，JDBC 以 `UnknownHostException` 在认证前失败；A/B 探测确认 `JAVA_TOOL_OPTIONS='-DsocksNonProxyHosts=localhost|127.*|[::1]'` 后 JDBC 直连成功。该问题属于本机运行参数，不需要修改生产代码。生成期间主 MySQL 未启动只产生历史记忆读写的降级告警，没有中断文件生成或构建，最终成绩仍严格来自每个工程的真实 npm 结果。
+- 最新无外部门禁扩大定向回归：198 项、0 failure、0 error、1 个既有显式跳过，`BUILD SUCCESS`；其中 `VueHybridRetrievalServiceTest` 为 29/29。日志为 `.codex/runtime/final-expanded-targeted-regression-after-echarts-delete-2026-08-12.log`。
+- 最新无外部门禁完整 Maven：443 项、0 failure、0 error、7 个显式外部测试跳过，`BUILD SUCCESS`；日志为 `.codex/runtime/final-full-maven-after-echarts-delete-2026-08-12.log`。该运行按生命周期把 `target/rag-eval/` 报告改写为“未执行”，不能覆盖已保存的真实外部门禁副本。
+- 真实生成报告、保存副本和完整运行日志对 DashScope Key、DeepSeek Key、PGVector 密码的精确字面值扫描均为 0，常见 `sk-...` 模式计数也为 0；私密环境文件仍被 Git 忽略且权限为 0600。生产 `RAG_HYBRID_ENABLED` 继续默认 `false`，本轮只提交、不 push、不 merge；最终独立全分支复审尚待最新差异完成后回传。
+- 最新独立复审发现 Critical：模型请求/响应正文日志默认开启会把新增的 RAG 提示词、模板源码和生成内容写入日志，真实生成日志已证明该数据流可达。现已完成 TDD 修复：配置测试 RED 为 2 项、2 failure；四类模型的 `log-requests` / `log-responses` 改为仅由显式本地环境开关控制且默认 `false`，生产 Compose 额外硬编码二者为 `false`，GREEN 为 2/2。日志为 `.codex/runtime/ai-model-body-logging-config-red-2026-08-12.log` 与 `.codex/runtime/ai-model-body-logging-config-green-2026-08-12.log`。
+- 模型正文日志修复后的 fresh 定向回归为 82 项、0 failure、0 error、1 个既有显式跳过；完整 Maven 为 445 项、0 failure、0 error、7 个显式外部测试跳过，均 `BUILD SUCCESS`。日志为 `.codex/runtime/final-targeted-after-model-logging-fix-2026-08-12.log` 与 `.codex/runtime/final-full-maven-after-model-logging-fix-2026-08-12.log`。该配置修复没有再次调用 DeepSeek，不改变此前十条真实生成构建 10/10 的功能成绩；最终提交仍等待修复后的独立复审确认 Critical/Important 清零。
+- 修复后独立复审确认原 Critical 已关闭，Critical=0、Important=0，并指出一个非阻断 Minor：生产 `.env.example` 列出的模型日志变量会被 Compose 硬编码 `false` 覆盖。现已删除这两个误导项，并由配置测试锁定“本地应用可显式开启、生产 Compose 强制关闭且生产 `.env` 不暴露无效开关”；该项 RED 2 项中 1 failure，GREEN 2/2，日志为 `.codex/runtime/ai-model-production-env-contract-minor-red-2026-08-12.log` 与 `.codex/runtime/ai-model-production-env-contract-minor-green-2026-08-12.log`。
+- 末轮独立全差异复审：Spec Compliance 与 Task quality 均通过，Critical=0、Important=0、Minor=0，`Ready to commit=Yes`。本轮保持生产 Hybrid 默认关闭，最终只创建本地中文提交，不 push、不 merge。
+- 包含最后 Minor 清理的提交前 fresh 完整 Maven：445 项、0 failure、0 error、7 个显式外部测试跳过，`BUILD SUCCESS`；日志为 `.codex/runtime/final-full-maven-before-commit-2026-08-12.log`。
+
 ## 最终收口（2026-08-11，当前结论）
 
 - 当前分支：`codex/vue-rag-hybrid-retrieval`；代码范围：`5850ef9..b05e7aa`，共 60 个提交；未 push、未 merge，工作树继续保留。

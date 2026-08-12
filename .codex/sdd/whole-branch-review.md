@@ -1,5 +1,36 @@
 # Vue RAG 混合检索全分支最终审查
 
+## 2026-08-12 最新稳定工作树复审
+
+- 复审范围：`8694a01` 之后的当前未提交终审修复工作树。
+- 用户已否决计划外的 ECharts 专项策略：**删除 ECharts 专项意图解析、ECharts 骨架硬过滤和拟议的 `EchartsIntentParser`**。当前代码不存在该解析器，也不存在根据 ECharts 肯定、否定或未决措辞在 Rerank 前删除骨架的分支。
+- 正确职责为：Hybrid 执行 BM25 + Dense → RRF → 全部父文档候选 → Rerank；Dense-only 保持 Dense 原排名；最终功能片段只执行原计划的 Vue 主版本、语言、构建工具和共享依赖主版本兼容性检查。ECharts 仍可作为知识、依赖和普通检索词存在，但没有专项决策权。
+- 删除专项过滤完成 RED→GREEN：2 项 RED 中 2 failure，最小 GREEN 2/2，完整混合检索服务测试 29/29。永久回归验证 Hybrid 的 Rerank 候选不被 ECharts 依赖预删，且 Dense-only 排名不被 ECharts 语义覆盖；日志为 `.codex/runtime/echarts-hard-filter-delete-red.log`、`.codex/runtime/echarts-hard-filter-delete-green.log`、`.codex/runtime/echarts-hard-filter-delete-service-green.log`。
+- 最新正式摄取为 23/23、历史版本 0、1024 维；最新 30 条真实检索的 Hybrid Skeleton Hit@1=0.9333、Feature Recall@4=0.9528，相对 Dense 差值为 0.0000、-0.0389，均满足门槛。日志为 `.codex/runtime/final-real-ingestion-after-echarts-delete-2026-08-12.log` 与 `.codex/runtime/final-real-retrieval-after-echarts-delete-2026-08-12.log`。
+- DeepSeek 充值后，十条固定首次生成全部真实完成 `npm install + npm run build`：报告 10/10，每条均 `生成完成=true`、`SUCCESS`、退出码 0、未超时；测试类 10/10、0 failure、0 error、0 skipped，`BUILD SUCCESS`。报告副本为 `.codex/runtime/vue-generation-build-report-after-echarts-delete-2026-08-12.md`，日志为 `.codex/runtime/final-real-generation-build-after-echarts-delete-2026-08-12.log`。
+- 最新 Fresh 本地验证：扩大定向回归 198 项、0 failure、0 error、1 skipped；完整 Maven 443 项、0 failure、0 error、7 skipped，均为 `BUILD SUCCESS`。日志分别为 `.codex/runtime/final-expanded-targeted-regression-after-echarts-delete-2026-08-12.log`、`.codex/runtime/final-full-maven-after-echarts-delete-2026-08-12.log`。
+- 安全复核：报告脱敏覆盖引号/无引号多词秘密、异种引号、转义引号与 quoted 角括号；真实生成报告、保存副本和日志对三个秘密字面值及 `sk-...` 模式扫描均为 0；临时凭据文件被 Git 忽略且权限 0600。
+- 本机 JVM SOCKS 默认错误代理回环地址，导致首轮生成前置 JDBC 报 `UnknownHostException`；A/B 证明确认用 `JAVA_TOOL_OPTIONS='-DsocksNonProxyHosts=localhost|127.*|[::1]'` 即可直连。这是本机运行参数，不是生产 PGVector 代码缺陷。默认完整 Maven 会把 `target/rag-eval/` 报告改写为“未执行”，因此真实报告已先保存至忽略目录。
+- 最新独立复审发现 1 个 Critical：`application.yml` 原先默认开启模型请求与响应正文日志，而 Vue RAG 会将模板源码拼入模型请求；真实生成日志证明完整提示词、模板源码、工具参数和生成内容确实被记录，违反计划的日志边界。修复已把四类模型正文日志改为显式本地开关且默认 `false`，生产 Compose 再硬编码为 `false`；永久配置测试同时锁定默认值和生产部署位置。
+- 正文日志修复完成 RED→GREEN：RED 2 项、2 failure，GREEN 2/2；修复后 fresh 定向回归 82 项、0 failure、0 error、1 skipped，完整 Maven 445 项、0 failure、0 error、7 skipped，均为 `BUILD SUCCESS`。证据为 `.codex/runtime/ai-model-body-logging-config-red-2026-08-12.log`、`.codex/runtime/ai-model-body-logging-config-green-2026-08-12.log`、`.codex/runtime/final-targeted-after-model-logging-fix-2026-08-12.log`、`.codex/runtime/final-full-maven-after-model-logging-fix-2026-08-12.log`。
+- 修复后独立复审已确认原 Critical 关闭，Critical=0、Important=0；唯一 Minor 为生产 `.env.example` 暴露了会被 Compose 硬编码覆盖的模型日志变量。该误导项已删除，并完成 RED 2 项中 1 failure、GREEN 2/2；生产仍只能硬编码关闭正文日志，本地直接启动才可显式临时开启。最终 Minor 清零结论等待末轮只读复审回传。
+- 末轮独立全差异复审 verdict：Spec Compliance 通过、Task quality 通过，Critical=0、Important=0、Minor=0，`Ready to commit=Yes`。生产 `RAG_HYBRID_ENABLED` 仍默认 `false`；本轮只提交，不 push、不 merge。
+- 包含最后 Minor 清理的提交前 fresh 完整 Maven 为 445 项、0 failure、0 error、7 skipped，`BUILD SUCCESS`；证据为 `.codex/runtime/final-full-maven-before-commit-2026-08-12.log`。
+
+### 原计划任务 1～8 完成审计
+
+| 计划项 | 当前判断 | 权威证据 |
+|---|---|---|
+| 任务 1：双层知识目录 | 已证明 | `ac2bca9`；`TemplateCatalogTest`、`KnowledgeChunkFactoryTest`；当前完整 Maven 通过 |
+| 任务 2：13 个片段与 5 个骨架 | 已证明 | `8aead1b`；当前目录为 13+5；Fresh 五骨架真实构建 6/6 |
+| 任务 3：知识块稠密摄取 | 已证明 | `e4ce5fe` 及当前批量修复；`VueKnowledgeIngestorTest` 证明稳定 ID、最小 metadata、`10/10/3` 顺序与写库原子性；真实物理核验 23/23、1024 维 |
+| 任务 4：Lucene BM25 | 已证明 | `240a8d0..b2a2db6`；三项 Lucene 依赖；`Bm25RetrieverTest` |
+| 任务 5：Dense + RRF + 双链 + Rerank | 已证明 | `f3c4dd0..ede5a53` 及当前删除 ECharts 专项过滤的回归；生产常量 Top10/Top15/Top3/Top8/Top4；对应检索、融合、精排与降级测试 |
+| 任务 6：上下文拼装 | 已证明 | `0652f38..12c5d61`；4000/8000 字符预算、整文件边界和生成约束测试 |
+| 任务 7：生成接入顺序与观测 | 已证明 | `cac739d..579e686`；Facade 使用原始需求检索、增强需求拼装；指标与脱敏日志测试 |
+| 任务 8：检索与真实构建验收 | 已证明 | 30 条真实检索指标达标、五骨架 5/5、十条首次真实生成构建 10/10、完整 Maven 通过 |
+| 发布顺序 | 代码门禁已满足 | 生产开关仍按计划默认 `false`；实际发布需由运维人工开启并观察降级、Rerank 失败和构建成功率 |
+
 ## 最终独立复审结论（2026-08-11，当前结论）
 
 ### 审查身份与范围

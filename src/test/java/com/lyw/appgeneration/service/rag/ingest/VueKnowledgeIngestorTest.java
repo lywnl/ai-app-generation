@@ -35,6 +35,8 @@ import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import dev.langchain4j.service.TokenStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -51,6 +53,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -68,20 +71,24 @@ class VueKnowledgeIngestorTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void batchesTwentyThreeChunksWithStableIdsAndMinimalMetadata() {
+    void splitsTwentyThreeChunksIntoDashScopeCompatibleEmbeddingBatches() {
         RecordingEmbeddingModel embeddingModel = new RecordingEmbeddingModel();
         RecordingEmbeddingStore store = new RecordingEmbeddingStore();
         TemplateCatalog catalog = new TemplateCatalog(DATASET_ROOT, objectMapper);
 
         VueKnowledgeIngestor.IngestResult result = ingestor(embeddingModel).ingest(DATASET_ROOT, store);
 
-        assertEquals(1, embeddingModel.batchCalls);
+        assertEquals(3, embeddingModel.batchCalls);
+        assertEquals(List.of(10, 10, 3), embeddingModel.batchSizes);
         assertEquals(1, store.batchCalls);
         assertEquals(23, result.chunkCount());
         assertEquals(catalog.getCatalogVersion(), result.catalogVersion());
         assertEquals(catalog.getChunks().stream().map(KnowledgeChunk::searchText).toList(),
                 embeddingModel.inputs.stream().map(TextSegment::text).toList());
         assertEquals(embeddingModel.inputs, store.segments);
+        assertEquals(23, store.embeddings.size());
+        assertEquals(store.ids.size(), store.embeddings.size());
+        assertEquals(store.segments.size(), store.embeddings.size());
 
         for (int index = 0; index < catalog.getChunks().size(); index++) {
             KnowledgeChunk chunk = catalog.getChunks().get(index);
@@ -95,6 +102,7 @@ class VueKnowledgeIngestorTest {
             assertEquals(chunk.documentKind().name(), segment.metadata().getString("documentKind"));
             assertEquals(chunk.chunkKind().name(), segment.metadata().getString("chunkKind"));
             assertEquals(catalog.getCatalogVersion(), segment.metadata().getString("catalogVersion"));
+            assertEquals((float) index, store.embeddings.get(index).vector()[0]);
         }
         assertSourceCodeAbsent(catalog, store.segments);
     }
@@ -132,16 +140,39 @@ class VueKnowledgeIngestorTest {
                 .collect(java.util.stream.Collectors.toSet()));
     }
 
-    @Test
-    void rejectsEmbeddingCountMismatchBeforeWritingStore() {
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3})
+    void rejectsAnyBatchEmbeddingCountMismatchBeforeWritingStore(int failedBatch) {
         RecordingEmbeddingModel embeddingModel = new RecordingEmbeddingModel();
-        embeddingModel.dropLastEmbedding = true;
+        embeddingModel.mismatchBatch = failedBatch;
         RecordingEmbeddingStore store = new RecordingEmbeddingStore();
 
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> ingestor(embeddingModel).ingest(DATASET_ROOT, store));
 
-        assertFalse(exception.getMessage().isBlank());
+        int expectedStart = (failedBatch - 1) * 10;
+        int expectedEnd = Math.min(expectedStart + 10, 23);
+        assertTrue(exception.getMessage().contains("批次=" + failedBatch));
+        assertTrue(exception.getMessage().contains(
+                "范围=[" + expectedStart + "," + expectedEnd + ")"));
+        assertEquals(0, store.batchCalls);
+        assertEquals(0, store.visibleSegments.size());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {2, 3})
+    void modelExceptionInLaterBatchPropagatesWithoutWritingStore(int failedBatch) {
+        RecordingEmbeddingModel embeddingModel = new RecordingEmbeddingModel();
+        IllegalStateException original = new IllegalStateException("第 " + failedBatch + " 批失败");
+        embeddingModel.exceptionBatch = failedBatch;
+        embeddingModel.exception = original;
+        RecordingEmbeddingStore store = new RecordingEmbeddingStore();
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> ingestor(embeddingModel).ingest(DATASET_ROOT, store));
+
+        assertSame(original, thrown);
+        assertEquals(failedBatch, embeddingModel.batchCalls);
         assertEquals(0, store.batchCalls);
         assertEquals(0, store.visibleSegments.size());
     }
@@ -285,16 +316,29 @@ class VueKnowledgeIngestorTest {
     private static final class RecordingEmbeddingModel implements EmbeddingModel {
 
         private int batchCalls;
-        private boolean dropLastEmbedding;
-        private List<TextSegment> inputs = List.of();
+        private int mismatchBatch = -1;
+        private int exceptionBatch = -1;
+        private RuntimeException exception;
+        private int nextEmbeddingIndex;
+        private final List<Integer> batchSizes = new ArrayList<>();
+        private final List<TextSegment> inputs = new ArrayList<>();
 
         @Override
         public Response<List<Embedding>> embedAll(List<TextSegment> segments) {
             batchCalls++;
-            inputs = List.copyOf(segments);
-            int resultSize = dropLastEmbedding ? Math.max(0, segments.size() - 1) : segments.size();
+            batchSizes.add(segments.size());
+            inputs.addAll(segments);
+            if (batchCalls == exceptionBatch) {
+                throw exception;
+            }
+            int resultSize = batchCalls == mismatchBatch
+                    ? Math.max(0, segments.size() - 1)
+                    : segments.size();
             List<Embedding> embeddings = java.util.stream.IntStream.range(0, resultSize)
-                    .mapToObj(index -> Embedding.from(new float[]{index, index + 1}))
+                    .mapToObj(index -> {
+                        int globalIndex = nextEmbeddingIndex++;
+                        return Embedding.from(new float[]{globalIndex, globalIndex + 1});
+                    })
                     .toList();
             return Response.from(embeddings);
         }
@@ -323,6 +367,7 @@ class VueKnowledgeIngestorTest {
 
         private int batchCalls;
         private List<String> ids = List.of();
+        private List<Embedding> embeddings = List.of();
         private List<TextSegment> segments = List.of();
         private final Map<String, TextSegment> visibleSegments = new LinkedHashMap<>();
 
@@ -330,6 +375,7 @@ class VueKnowledgeIngestorTest {
         public void addAll(List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {
             batchCalls++;
             this.ids = List.copyOf(ids);
+            this.embeddings = List.copyOf(embeddings);
             this.segments = List.copyOf(segments);
             for (int index = 0; index < ids.size(); index++) {
                 visibleSegments.put(ids.get(index), segments.get(index));

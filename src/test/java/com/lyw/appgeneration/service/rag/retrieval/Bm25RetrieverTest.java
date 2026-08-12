@@ -26,7 +26,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class Bm25RetrieverTest {
 
+    private static final Path VUE_DATASET_ROOT = Path.of("embed_text/vue-project");
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void curatedFeatureAliasesCoverAuthorProfilesAndAlertTables() throws IOException {
+        TemplateCatalog catalog = new TemplateCatalog(VUE_DATASET_ROOT, objectMapper);
+
+        try (Bm25Retriever retriever = new Bm25Retriever(catalog)) {
+            List<String> authorProfileCandidates = retriever.retrieve(
+                            "内容与文章系统需要杂志式首页、文章详情、作者信息、阅读量、点赞、"
+                                    + "评论输入和推荐文章，整体采用清晰的中文排版与阅读聚焦布局",
+                            RagDocumentKind.FEATURE_SNIPPET, 4)
+                    .stream().map(RankedCandidate::documentId).toList();
+            List<String> alertTableCandidates = retriever.retrieve(
+                            "实时业务看板需要总量、转化率和增长率卡片，使用 ECharts 绘制折线与环形图，"
+                                    + "并配套进度条、迷你柱状图、告警列表和深色大屏布局",
+                            RagDocumentKind.FEATURE_SNIPPET, 4)
+                    .stream().map(RankedCandidate::documentId).toList();
+
+            assertTrue(authorProfileCandidates.contains("vue-profile-page-001"));
+            assertTrue(alertTableCandidates.contains("vue-data-table-001"));
+        }
+    }
 
     @Test
     void retrievesChineseSemanticMatchAndIsolatesDocumentKind(@TempDir Path tempDir) throws IOException {

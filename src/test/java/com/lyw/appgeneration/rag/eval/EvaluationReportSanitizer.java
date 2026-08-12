@@ -16,9 +16,18 @@ public final class EvaluationReportSanitizer {
             "(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^<>\\s|&,}]+");
     private static final Pattern STANDALONE_BEARER = Pattern.compile(
             "(?i)(?<![\\p{Alnum}_])bearer\\s+[A-Z0-9][A-Z0-9._~+/=-]{2,}");
-    private static final Pattern NAMED_SECRET = Pattern.compile(
-            "(?i)([\\\"']?(?:api[-_]?key|token|password|secret)[\\\"']?"
-                    + "\\s*[:=]\\s*[\\\"']?)([^\\\"'<>\\s|&,}\\]]+)([\\\"']?)");
+    private static final String SECRET_NAME =
+            "[\\\"']?(?:api[-_]?key|token|password|secret)[\\\"']?";
+    private static final Pattern DOUBLE_QUOTED_NAMED_SECRET = Pattern.compile(
+            "(?i)(" + SECRET_NAME + "\\s*[:=]\\s*)\\\"(?:\\\\.|[^\\\"\\\\\\r\\n])*\\\"");
+    private static final Pattern SINGLE_QUOTED_NAMED_SECRET = Pattern.compile(
+            "(?i)(" + SECRET_NAME + "\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\\\r\\n])*'");
+    private static final Pattern UNCLOSED_DOUBLE_QUOTED_NAMED_SECRET = Pattern.compile(
+            "(?i)(" + SECRET_NAME + "\\s*[:=]\\s*)\\\"(?:\\\\.|[^\\\"\\r\\n])*(?=\\r?\\n|$)");
+    private static final Pattern UNCLOSED_SINGLE_QUOTED_NAMED_SECRET = Pattern.compile(
+            "(?i)(" + SECRET_NAME + "\\s*[:=]\\s*)'(?:\\\\.|[^'\\r\\n])*(?=\\r?\\n|$)");
+    private static final Pattern UNQUOTED_NAMED_SECRET = Pattern.compile(
+            "(?i)(" + SECRET_NAME + "\\s*[:=]\\s*)(?![\\\"'])([^<>\\r\\n|&,}\\]]+)");
 
     private EvaluationReportSanitizer() {
     }
@@ -31,7 +40,15 @@ public final class EvaluationReportSanitizer {
         sanitized = WINDOWS_USER_PATH.matcher(sanitized).replaceAll("<用户路径>");
         sanitized = AUTHORIZATION_BEARER.matcher(sanitized).replaceAll("$1" + REDACTED);
         sanitized = STANDALONE_BEARER.matcher(sanitized).replaceAll("Bearer " + REDACTED);
-        return NAMED_SECRET.matcher(sanitized)
-                .replaceAll(match -> match.group(1) + REDACTED + match.group(3));
+        sanitized = DOUBLE_QUOTED_NAMED_SECRET.matcher(sanitized)
+                .replaceAll(match -> match.group(1) + "\"" + REDACTED + "\"");
+        sanitized = SINGLE_QUOTED_NAMED_SECRET.matcher(sanitized)
+                .replaceAll(match -> match.group(1) + "'" + REDACTED + "'");
+        sanitized = UNCLOSED_DOUBLE_QUOTED_NAMED_SECRET.matcher(sanitized)
+                .replaceAll(match -> match.group(1) + "\"" + REDACTED + "\"");
+        sanitized = UNCLOSED_SINGLE_QUOTED_NAMED_SECRET.matcher(sanitized)
+                .replaceAll(match -> match.group(1) + "'" + REDACTED + "'");
+        return UNQUOTED_NAMED_SECRET.matcher(sanitized)
+                .replaceAll(match -> match.group(1) + REDACTED);
     }
 }

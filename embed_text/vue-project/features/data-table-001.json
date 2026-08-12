@@ -12,8 +12,8 @@
     "element-plus"
   ],
   "title": "Vue3 数据表格页(分页 + 搜索 + 排序 + 操作列)",
-  "embedText": "Vue3 数据表格 table 分页 搜索 过滤 排序 操作列 编辑 删除 后台列表页 el-table el-pagination CRUD 用户列表 订单列表",
-  "description": "后台管理系统标配的数据表格页,含顶部搜索框、Element Plus el-table 支持列排序、右下角分页器、每行末尾编辑/删除按钮,自带模拟数据",
+  "embedText": "Vue3 数据表格 table 分页 搜索 过滤 排序 状态列 操作列 编辑 删除 后台列表页 el-table el-pagination CRUD 用户列表 订单列表 告警表格 告警列表 实时告警 处理状态 监控事件列表",
+  "description": "现有源码是用户数据表格页,含顶部搜索框、Element Plus el-table 列排序、角色标签列、分页器和行操作按钮；可复用于订单列表，也可改造为实时告警、处理状态或监控事件列表",
   "files": [
     {
       "path": "src/views/DataList.vue",

@@ -41,7 +41,7 @@ import java.util.Map;
  *
  * @author lyw
  */
-@SpringBootTest
+@SpringBootTest(properties = "PEXELS_API_KEY=disabled-for-rag-evaluation")
 @Slf4j
 @EnabledIfEnvironmentVariable(named = "RAG_EVAL", matches = "true")
 class RagEvaluationTest {

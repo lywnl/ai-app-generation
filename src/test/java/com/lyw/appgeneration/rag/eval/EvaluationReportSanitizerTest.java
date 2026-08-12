@@ -67,6 +67,65 @@ class EvaluationReportSanitizerTest {
     }
 
     @Test
+    void sanitizesCompleteQuotedAndUnquotedSecretsContainingSpaces() {
+        String input = """
+                password="correct horse battery staple"
+                token: abc def
+                safe=visible
+                """;
+
+        String sanitized = EvaluationReportSanitizer.sanitize(input);
+
+        assertFalse(sanitized.contains("correct"));
+        assertFalse(sanitized.contains("horse battery staple"));
+        assertFalse(sanitized.contains("abc def"));
+        assertEquals(2, sanitized.lines()
+                .filter(line -> line.contains("<已脱敏>"))
+                .count());
+        org.junit.jupiter.api.Assertions.assertTrue(sanitized.contains("safe=visible"));
+    }
+
+    @Test
+    void sanitizesQuotedSecretsContainingOtherOrEscapedQuoteCharacters() {
+        String input = """
+                password="don't share this"
+                token='value "with quote" here'
+                secret="abc\\\"def ghi"
+                api-key="abc<def ghi"
+                token='abc>def ghi'
+                """;
+
+        String sanitized = EvaluationReportSanitizer.sanitize(input);
+
+        assertFalse(sanitized.contains("don't share this"));
+        assertFalse(sanitized.contains("value \"with quote\" here"));
+        assertFalse(sanitized.contains("abc\\\"def ghi"));
+        assertFalse(sanitized.contains("abc<def ghi"));
+        assertFalse(sanitized.contains("abc>def ghi"));
+        assertEquals(5, sanitized.lines()
+                .filter(line -> line.contains("<已脱敏>"))
+                .count());
+    }
+
+    @Test
+    void sanitizesUnclosedQuotedSecretsUntilLineEnd() {
+        String input = """
+                password="correct horse battery staple
+                token='abc def
+                safe=visible
+                """;
+
+        String sanitized = EvaluationReportSanitizer.sanitize(input);
+
+        assertFalse(sanitized.contains("correct horse battery staple"));
+        assertFalse(sanitized.contains("abc def"));
+        assertEquals(2, sanitized.lines()
+                .filter(line -> line.contains("<已脱敏>"))
+                .count());
+        org.junit.jupiter.api.Assertions.assertTrue(sanitized.contains("safe=visible"));
+    }
+
+    @Test
     void preservesOrdinaryDiagnosticTextWithoutCredentialSyntax() {
         String ordinary = "token 计数为 128，password policy 校验通过，secret manager 不可用，Bearer 类型说明";
 
