@@ -203,7 +203,8 @@ public final class VueBuildSessionManager {
             String turnId,
             VueBuildPhase phase,
             int buildAttempt,
-            VueBuildFailureKind failureKind) {
+            VueBuildFailureKind failureKind,
+            boolean timedOut) {
     }
 
     /** 同一回合已有真实构建占用。 */
@@ -223,6 +224,7 @@ public final class VueBuildSessionManager {
         private VueBuildPhase phase = VueBuildPhase.GENERATING;
         private int buildAttempt;
         private VueBuildFailureKind failureKind;
+        private boolean timedOut;
         private BuildAttemptTicket activeTicket;
         private CancellationRegistration operationCancellation;
         private CancellationRegistration modelCancellation;
@@ -259,6 +261,8 @@ public final class VueBuildSessionManager {
                 throw new BuildInProgressException();
             }
             buildAttempt++;
+            // 新构建票据开始后，上一尝试的超时事实不再代表当前尝试。
+            timedOut = false;
             activeTicket = new BuildAttemptTicket(this, buildAttempt);
             return activeTicket;
         }
@@ -272,6 +276,7 @@ public final class VueBuildSessionManager {
             }
             completeTicket(ticket);
             failureKind = null;
+            timedOut = false;
             phase = VueBuildPhase.SUCCEEDED;
             return snapshotUnsafe();
         }
@@ -286,10 +291,12 @@ public final class VueBuildSessionManager {
             completeTicket(ticket);
             if (result.cancelled()) {
                 failureKind = null;
+                timedOut = false;
                 phase = VueBuildPhase.CANCELLED;
                 return snapshotUnsafe();
             }
             failureKind = classifyFailure(result);
+            timedOut = result.timedOut();
             phase = failurePhase(ticket.attempt);
             return snapshotUnsafe();
         }
@@ -306,6 +313,7 @@ public final class VueBuildSessionManager {
                     || phase == VueBuildPhase.CANCELLED) {
                 completeTicket(ticket);
                 failureKind = null;
+                timedOut = false;
                 phase = VueBuildPhase.CANCELLED;
                 return snapshotUnsafe();
             }
@@ -315,16 +323,19 @@ public final class VueBuildSessionManager {
                 }
                 completeTicket(ticket);
                 failureKind = null;
+                timedOut = false;
                 phase = VueBuildPhase.SUCCEEDED;
                 return snapshotUnsafe();
             }
             completeTicket(ticket);
             if (result.cancelled()) {
                 failureKind = null;
+                timedOut = false;
                 phase = VueBuildPhase.CANCELLED;
                 return snapshotUnsafe();
             }
             failureKind = classifyFailure(result);
+            timedOut = result.timedOut();
             phase = failurePhase(ticket.attempt);
             return snapshotUnsafe();
         }
@@ -349,6 +360,7 @@ public final class VueBuildSessionManager {
                 }
                 phase = VueBuildPhase.CANCELLED;
                 failureKind = null;
+                timedOut = false;
             }
             return operationLease.requestCancellation();
         }
@@ -357,6 +369,7 @@ public final class VueBuildSessionManager {
             if (!isCompletedTerminal()) {
                 phase = VueBuildPhase.CANCELLED;
                 failureKind = null;
+                timedOut = false;
             }
         }
 
@@ -409,6 +422,7 @@ public final class VueBuildSessionManager {
             }
             if (!ticket.completed && !isTerminal()) {
                 failureKind = VueBuildFailureKind.INFRASTRUCTURE;
+                timedOut = false;
                 phase = failurePhase(ticket.attempt);
             }
             ticket.closeCancellationRegistration();
@@ -442,7 +456,7 @@ public final class VueBuildSessionManager {
         private VueBuildSnapshot snapshotUnsafe() {
             return new VueBuildSnapshot(
                     operationLease.appId(), userId, turnId,
-                    phase, buildAttempt, failureKind);
+                    phase, buildAttempt, failureKind, timedOut);
         }
 
         private boolean isTerminal() {

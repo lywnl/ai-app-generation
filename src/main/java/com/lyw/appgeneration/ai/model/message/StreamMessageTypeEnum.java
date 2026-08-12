@@ -12,7 +12,8 @@ public enum StreamMessageTypeEnum {
     TOOL_REQUEST("tool_request", "工具请求"),
     TOOL_ARGUMENT("tool_argument", "工具参数完成"),
     TOOL_ARGUMENT_DELTA("tool_argument_delta", "工具参数增量"),
-    TOOL_EXECUTED("tool_executed", "工具执行结果");
+    TOOL_EXECUTED("tool_executed", "工具执行结果"),
+    TURN_OUTCOME("turn_outcome", "回合终态");
 
     private final String value;
     private final String text;

@@ -46,6 +46,28 @@ class VueBuildSessionManagerTest {
     }
 
     @Test
+    void buildTimeoutIsCommittedWithAttemptAndClearedWhenNextAttemptStarts() {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager manager = new VueBuildSessionManager();
+        try (var operation = operationManager.acquire(
+                77L, AppOperationType.GENERATE, "turn-timeout-state");
+             var lease = manager.open(operation, 9L, "turn-timeout-state")) {
+            try (var first = lease.beginBuild()) {
+                BuildResult timeout = new BuildResult(
+                        false, BuildStage.NPM_BUILD, null,
+                        true, false, VueBuildFailureKind.INFRASTRUCTURE,
+                        "timeout", 10L);
+                var snapshot = lease.recordFailure(first, timeout);
+                assertTrue(snapshot.timedOut());
+                assertEquals(1, snapshot.buildAttempt());
+            }
+            try (var second = lease.beginBuild()) {
+                assertFalse(lease.snapshot().timedOut());
+            }
+        }
+    }
+
+    @Test
     void sameAppMustNotAcquireTwoActiveLeases() {
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         try (var ignored = manager.acquire(7L, AppOperationType.GENERATE, "turn-1")) {

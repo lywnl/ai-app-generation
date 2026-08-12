@@ -78,6 +78,22 @@ public class AiGeneratorServiceFactory {
         return serviceCache.get(cacheKey, key -> createAiCodeGeneratorService(appId, codeGenType));
     }
 
+    public boolean isVueServiceCached(long appId) {
+        return serviceCache.getIfPresent(
+                buildCacheKey(appId, CodeGenTypeEnum.VUE_PROJECT)) != null;
+    }
+
+    /** 终态 L0 不稳定时失效 Vue 代理，下一轮强制走 MySQL 冷启动重建。 */
+    public void invalidateVueService(long appId) {
+        serviceCache.invalidate(buildCacheKey(appId, CodeGenTypeEnum.VUE_PROJECT));
+    }
+
+    /** 清空不可信 L0，并让下一次获取严格从 MySQL 冷启动。 */
+    public void prepareVueColdRebuild(long appId) {
+        invalidateVueService(appId);
+        redisChatMemoryStore.deleteMessages(appId);
+    }
+
     /**
      * 创建新的 AI 服务实例
      */

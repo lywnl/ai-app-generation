@@ -9,6 +9,7 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import dev.langchain4j.store.memory.chat.InMemoryChatMemoryStore;
 import org.junit.jupiter.api.Test;
 
@@ -153,9 +154,11 @@ class ToolMessageCollapserTest {
         assertEquals(15, memory.messages().size(), "折叠前应为 2N+1=15 条原始消息");
 
         ToolMessageCollapser collapser = new ToolMessageCollapser(store);
-        List<ChatMessage> merged = collapser.collapseLastTurn(appId, "已生成待办App(合并文本)");
+        ToolMessageCollapser.CollapseResult result =
+                collapser.collapseLastTurn(appId, "已生成待办App(合并文本)");
 
-        assertNotNull(merged, "折叠应成功返回合并后窗口");
+        assertEquals(ToolMessageCollapser.CollapseStatus.COLLAPSED, result.status());
+        assertEquals(2, result.messages().size());
         assertEquals(2, memory.messages().size(), "折叠后窗口恒降到 User + 1 条 Ai(与 N 无关)");
         assertInstanceOf(UserMessage.class, memory.messages().get(0));
         assertInstanceOf(AiMessage.class, memory.messages().get(1));
@@ -173,26 +176,23 @@ class ToolMessageCollapserTest {
         }
     }
 
-    /** restore 把窗口恢复到折叠快照,丢弃首轮自检往窗口追加的残留消息。 */
     @Test
-    void restoreResetsWindowToSnapshotDiscardingResidue() {
-        long appId = 556L;
-        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
-        MessageWindowChatMemory memory = MessageWindowChatMemory.builder()
-                .id(appId).chatMemoryStore(store).maxMessages(100).build();
-        memory.add(UserMessage.from("做App"));
-        memory.add(AiMessage.from("已生成"));
-        List<ChatMessage> snapshot = List.copyOf(memory.messages()); // 折叠后的窗口快照(2 条)
+    void collapseDistinguishesEmptyBoundaryAndStoreFailure() {
+        long appId = 557L;
+        ChatMemoryStore store = mock(ChatMemoryStore.class);
+        ToolMessageCollapser collapser = new ToolMessageCollapser(store);
 
-        // 模拟首轮构建前自检往窗口追加的残留(不入 MySQL/冷启动)
-        memory.add(UserMessage.from("构建前代码自检 prompt"));
-        memory.add(AiMessage.from("检查完成"));
-        assertEquals(4, memory.messages().size());
+        when(store.getMessages(appId)).thenReturn(List.of());
+        assertEquals(ToolMessageCollapser.CollapseStatus.NO_MESSAGES,
+                collapser.collapseLastTurn(appId, "正文").status());
 
-        new ToolMessageCollapser(store).restore(appId, snapshot);
+        when(store.getMessages(appId)).thenReturn(List.of(AiMessage.from("孤立 AI")));
+        assertEquals(ToolMessageCollapser.CollapseStatus.NO_USER_BOUNDARY,
+                collapser.collapseLastTurn(appId, "正文").status());
 
-        assertEquals(2, memory.messages().size(), "restore 应把窗口恢复到快照,丢弃自检残留");
-        assertEquals("已生成", ((AiMessage) memory.messages().get(1)).text());
+        when(store.getMessages(appId)).thenThrow(new IllegalStateException("redis down"));
+        assertEquals(ToolMessageCollapser.CollapseStatus.STORE_FAILED,
+                collapser.collapseLastTurn(appId, "正文").status());
     }
-}
 
+}

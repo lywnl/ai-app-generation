@@ -67,35 +67,45 @@ public class ToolMessageCollapser {
      * {@code MessageWindowChatMemory} 无状态(每次 {@code messages()} 直读 store),故写回后工厂缓存的
      * delegate 下次读取自动反映,无需 clear()+重灌。
      *
-     * @return 折叠后的窗口(供调用方作快照用于后续 {@link #restore});全程 best-effort,任一步异常或无可折叠时返回 {@code null}(降级保留原始多条)
+     * @return 结构化折叠结果；调用方可区分空窗口、无 User 边界、非法文本和存储失败
      */
-    public List<ChatMessage> collapseLastTurn(long appId, String mergedAiText) {
+    public CollapseResult collapseLastTurn(long appId, String mergedAiText) {
         try {
             List<ChatMessage> raw = store.getMessages(appId);
             if (raw == null || raw.isEmpty()) {
-                return null;
+                return new CollapseResult(CollapseStatus.NO_MESSAGES, List.of());
+            }
+            if (StrUtil.isBlank(mergedAiText)) {
+                return new CollapseResult(CollapseStatus.INVALID_TEXT, raw);
+            }
+            boolean hasUserBoundary = raw.stream().anyMatch(UserMessage.class::isInstance);
+            if (!hasUserBoundary) {
+                return new CollapseResult(CollapseStatus.NO_USER_BOUNDARY, raw);
             }
             List<ChatMessage> merged = mergeLastTurn(raw, mergedAiText);
             store.updateMessages(appId, merged);
-            return merged;
+            return new CollapseResult(CollapseStatus.COLLAPSED, merged);
         } catch (Exception e) {
             log.warn("L0 窗口工具消息折叠失败,降级保留原始多条: appId={}, error={}", appId, e.getMessage());
-            return null;
+            return new CollapseResult(CollapseStatus.STORE_FAILED, List.of());
         }
     }
 
-    /**
-     * 把窗口恢复到给定快照(best-effort),用于首轮构建前自检后丢弃自检轮往窗口追加的残留
-     * (自检轮本就不入 MySQL/冷启动)。{@code snapshot == null}(如折叠曾降级)时不动窗口。
-     */
-    public void restore(long appId, List<ChatMessage> snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            store.updateMessages(appId, snapshot);
-        } catch (Exception e) {
-            log.warn("L0 窗口快照恢复失败,降级保留当前窗口: appId={}, error={}", appId, e.getMessage());
+    public enum CollapseStatus {
+        COLLAPSED,
+        NO_MESSAGES,
+        NO_USER_BOUNDARY,
+        INVALID_TEXT,
+        STORE_FAILED
+    }
+
+    public record CollapseResult(CollapseStatus status, List<ChatMessage> messages) {
+
+        public CollapseResult {
+            status = java.util.Objects.requireNonNull(status, "status 不能为空");
+            messages = List.copyOf(java.util.Objects.requireNonNull(messages,
+                    "messages 不能为空"));
         }
     }
+
 }
