@@ -70,14 +70,25 @@
                     v-for="[id, view] in message.toolCalls"
                     :key="id"
                     class="tool-call-card"
-                    :class="{ 'is-done': view.status === 'done' }"
+                    :class="{
+                      'is-done':
+                        view.name === 'buildProject'
+                          ? view.build?.success === true
+                          : view.status === 'done',
+                      'is-build-failed':
+                        view.name === 'buildProject' && view.build && view.build.success !== true,
+                    }"
                   >
                     <div class="tool-call-header">
                       <span class="tool-call-name">{{ view.name }}</span>
                       <span v-if="view.args.relativeFilePath" class="tool-call-path">
                         {{ view.args.relativeFilePath }}
                       </span>
-                      <span class="tool-call-status" :class="view.status">
+                      <span
+                        v-if="view.name !== 'buildProject'"
+                        class="tool-call-status"
+                        :class="view.status"
+                      >
                         <template v-if="view.status === 'done'">
                           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <polyline points="20 6 9 17 4 12" />
@@ -91,7 +102,42 @@
                           执行中
                         </template>
                       </span>
+                      <span
+                        v-else-if="getBuildProjectDisplayState(view) === 'streaming'"
+                        class="tool-call-status streaming"
+                      >
+                        <svg class="status-icon spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                          <circle cx="12" cy="12" r="9" stroke-dasharray="14 30" />
+                        </svg>
+                        执行中
+                      </span>
+                      <span
+                        v-else-if="getBuildProjectDisplayState(view) === 'unrecognized'"
+                        class="tool-call-status error"
+                      >
+                        结果不可识别
+                      </span>
                     </div>
+                    <template v-if="view.name === 'buildProject' && view.build">
+                      <div class="build-status-row">
+                        <span
+                          class="build-status-text"
+                          :class="{
+                            success: view.build.success === true,
+                            failed: view.build.success === false,
+                          }"
+                        >
+                          {{ view.build.statusText }}
+                        </span>
+                        <span v-if="view.build.stage" class="build-stage">
+                          阶段：{{ view.build.stage }}
+                        </span>
+                      </div>
+                      <details v-if="view.build.errorSummary" class="build-error-details">
+                        <summary>查看错误摘要</summary>
+                        <pre class="build-error-summary">{{ view.build.errorSummary }}</pre>
+                      </details>
+                    </template>
                     <!-- 修改文件:展示 old → new 两段 -->
                     <template v-if="view.name === 'modifyFile'">
                       <div v-if="view.args.oldContent" class="tool-call-label">旧内容</div>
@@ -217,7 +263,7 @@
           </div>
         </div>
         <div class="preview-content">
-          <div v-if="!previewUrl && !isGenerating && !isBuildingVue" class="preview-placeholder">
+          <div v-if="!previewUrl && !isGenerating" class="preview-placeholder">
             <div class="placeholder-icon" aria-hidden="true">
               <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="32" cy="32" r="24" />
@@ -227,10 +273,6 @@
               </svg>
             </div>
             <p>网站文件生成完成后将在这里展示</p>
-          </div>
-          <div v-else-if="isBuildingVue" class="preview-loading">
-            <a-spin size="large" />
-            <p>正在构建 Vue 项目，可能需要几秒钟...</p>
           </div>
           <div v-else-if="isGenerating" class="preview-loading">
             <a-spin size="large" />
@@ -281,10 +323,13 @@ import request from '@/request'
 import {
   type ToolCallView,
   type GenerationSessionSnapshot,
+  type GenerationOutcome,
   startGenerationSession,
   subscribeGenerationSession,
   getGenerationSessionSnapshot,
   clearGenerationSession,
+  getBuildProjectDisplayState,
+  shouldRefreshGenerationPreview,
 } from '@/utils/generationSession'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -322,7 +367,7 @@ const vAutoScroll = {
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
 import aiAvatar from '@/assets/aiAvatar.png'
-import { API_BASE_URL, STATIC_BASE_URL, getStaticPreviewUrl } from '@/config/env'
+import { API_BASE_URL, getStaticPreviewUrl } from '@/config/env'
 import { VisualEditor, type ElementInfo } from '@/utils/visualEditor'
 
 import {
@@ -379,11 +424,6 @@ const historyLoaded = ref(false)
 // 预览相关
 const previewUrl = ref('')
 const previewReady = ref(false)
-// Vue 构建就绪探测:后端 npm install + build 是异步的,前端用 HEAD 轮询 dist/index.html 来判定完成
-const isBuildingVue = ref(false)
-let buildWaitTimer: ReturnType<typeof setTimeout> | null = null
-const currentGenerationStartedAt = ref<number | null>(null)
-
 // 部署相关
 const deploying = ref(false)
 const deployModalVisible = ref(false)
@@ -525,15 +565,12 @@ const fetchAppInfo = async () => {
           updatePreview()
         }
         restoreActiveSessionIfNeeded()
-      } else if (sessionSnapshot?.status === 'done') {
-        if (appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
-          await waitForVueBuild()
-        } else if (messages.value.length >= 2) {
-          updatePreview()
-        }
-        clearGenerationSession(id)
-      } else if (sessionSnapshot?.status === 'error') {
-        if (messages.value.length >= 2) {
+      } else if (sessionSnapshot) {
+        createSessionMessage(sessionSnapshot)
+        applySessionSnapshot(sessionSnapshot)
+        if (shouldRefreshGenerationPreview(sessionSnapshot)) {
+          updatePreview(true)
+        } else if (messages.value.length >= 2 && !previewUrl.value) {
           updatePreview()
         }
         isGenerating.value = false
@@ -575,6 +612,37 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   isGenerating.value = snapshot.status === 'streaming'
 }
 
+const createSessionMessage = (snapshot: GenerationSessionSnapshot) => {
+  const lastMessageIndex = messages.value.length - 1
+  const canReuseLastAiMessage =
+    snapshot.status !== 'streaming' && messages.value[lastMessageIndex]?.type === 'ai'
+  if (canReuseLastAiMessage) {
+    sessionMessageIndex.value = lastMessageIndex
+    return
+  }
+  sessionMessageIndex.value = messages.value.length
+  messages.value.push({
+    type: 'ai',
+    content: '',
+    loading: true,
+    toolCalls: new Map(),
+  })
+}
+
+const outcomeMessage = (outcome: GenerationOutcome, fallback?: string) => {
+  if (fallback) {
+    return fallback
+  }
+  const messages: Partial<Record<GenerationOutcome, string>> = {
+    failed: '生成失败，请根据构建信息重试',
+    cancelled: '生成已取消',
+    timed_out: '生成超时，请重试',
+    system_error: '系统异常，请稍后重试',
+    protocol_error: '生成协议异常，请重试',
+  }
+  return messages[outcome] || '生成失败，请重试'
+}
+
 const attachSessionListener = (targetAppId: string) => {
   detachSession.value?.()
   detachSession.value = subscribeGenerationSession(targetAppId, (snapshot, eventType) => {
@@ -584,16 +652,18 @@ const attachSessionListener = (targetAppId: string) => {
     applySessionSnapshot(snapshot)
     scrollToBottom()
     if (eventType === 'business-error') {
-      const errorMsg = snapshot.errorMessage || '生成过程中出现错误'
-      message.error(errorMsg)
       return
     }
     if (eventType === 'error') {
-      message.error(snapshot.errorMessage || '生成失败，请重试')
+      message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))
+      finalizeGeneration(snapshot)
       return
     }
     if (eventType === 'done') {
-      finalizeGeneration()
+      if (snapshot.outcome !== 'succeeded') {
+        message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))
+      }
+      finalizeGeneration(snapshot)
     }
   })
 }
@@ -607,8 +677,8 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
   activeSessionAppId.value = targetAppId
   sessionMessageIndex.value = aiMessageIndex
   isGenerating.value = true
-  currentGenerationStartedAt.value = Date.now()
 
+  attachSessionListener(targetAppId)
   startGenerationSession({
     appId: targetAppId,
     userMessage: inputMessage,
@@ -616,8 +686,8 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
     renderMode:
       appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT ? 'direct' : 'throttled',
     throttleMs: 100,
+    expectVueTurnOutcome: appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT,
   })
-  attachSessionListener(targetAppId)
   const snapshot = getGenerationSessionSnapshot(targetAppId)
   if (snapshot) {
     applySessionSnapshot(snapshot)
@@ -633,15 +703,8 @@ const restoreActiveSessionIfNeeded = () => {
   if (!snapshot || snapshot.status !== 'streaming') {
     return
   }
-  const aiMessageIndex = messages.value.length
-  messages.value.push({
-    type: 'ai',
-    content: '',
-    loading: true,
-    toolCalls: new Map(),
-  })
+  createSessionMessage(snapshot)
   activeSessionAppId.value = targetAppId
-  sessionMessageIndex.value = aiMessageIndex
   attachSessionListener(targetAppId)
   applySessionSnapshot(snapshot)
   scrollToBottom()
@@ -733,71 +796,10 @@ const updatePreview = (forceReload = false) => {
   }
 }
 
-// 等 Vue 项目构建就绪
-// 原子性依据:Vite 在所有 bundle 就绪后才写 dist/index.html,所以该文件存在 = 构建完成
-// 破缓存:StaticResourceController 未设 Cache-Control,一次 404 会被浏览器按启发式规则缓存
-const waitForVueBuild = async (sinceTimestamp?: number) => {
-  if (!appId.value) return
-  if (buildWaitTimer) {
-    clearTimeout(buildWaitTimer)
-    buildWaitTimer = null
-  }
-  isBuildingVue.value = true
-  const url = `${STATIC_BASE_URL}/vue_project_${appId.value}/dist/index.html`
-  const startAt = Date.now()
-  const TIMEOUT_MS = 8 * 60 * 1000
-  const INTERVAL_MS = 1500
-  try {
-    while (Date.now() - startAt < TIMEOUT_MS) {
-      try {
-        const resp = await fetch(`${url}?_t=${Date.now()}`, {
-          method: 'HEAD',
-          credentials: 'include',
-          cache: 'no-store',
-        })
-        if (resp.ok) {
-          if (!sinceTimestamp) {
-            updatePreview(true)
-            return
-          }
-          const fileModifiedRaw = resp.headers.get('x-file-last-modified')
-          const fileModified = fileModifiedRaw ? Number(fileModifiedRaw) : NaN
-          if (Number.isFinite(fileModified)) {
-            if (fileModified >= sinceTimestamp) {
-              updatePreview(true)
-              return
-            }
-          } else {
-            const lastModifiedRaw = resp.headers.get('last-modified')
-            const lastModified = lastModifiedRaw ? Date.parse(lastModifiedRaw) : NaN
-            if (Number.isFinite(lastModified) && lastModified >= sinceTimestamp) {
-              updatePreview(true)
-              return
-            }
-          }
-        }
-      } catch {
-        // 网络抖动/连接被中断,静默重试
-      }
-      await new Promise<void>((resolve) => {
-        buildWaitTimer = setTimeout(() => resolve(), INTERVAL_MS)
-      })
-    }
-    message.error('构建超时，请重试')
-  } finally {
-    isBuildingVue.value = false
-    buildWaitTimer = null
-  }
-}
-
-// 流式生成收尾:Vue 走轮询探测,其他类型直接刷预览
-const finalizeGeneration = async () => {
+// 后端回合终态是唯一刷新依据；失败时保留旧预览，便于用户继续对照修复。
+const finalizeGeneration = (snapshot: GenerationSessionSnapshot) => {
   isGenerating.value = false
-  await fetchAppInfo()
-  const codeGenType = appInfo.value?.codeGenType
-  if (codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
-    await waitForVueBuild(currentGenerationStartedAt.value ?? undefined)
-  } else {
+  if (shouldRefreshGenerationPreview(snapshot)) {
     updatePreview(true)
   }
   const currentAppId = activeSessionAppId.value
@@ -805,7 +807,6 @@ const finalizeGeneration = async () => {
     clearGenerationSession(currentAppId)
   }
   activeSessionAppId.value = null
-  currentGenerationStartedAt.value = null
   sessionMessageIndex.value = null
   detachSession.value?.()
   detachSession.value = null
@@ -1001,10 +1002,6 @@ onUnmounted(() => {
   detachSession.value?.()
   detachSession.value = null
   messagesContainer.value?.removeEventListener('scroll', handleMessagesScroll)
-  if (buildWaitTimer) {
-    clearTimeout(buildWaitTimer)
-    buildWaitTimer = null
-  }
 })
 </script>
 
@@ -1337,6 +1334,10 @@ onUnmounted(() => {
   border-color: var(--success-border);
   background: var(--success-bg);
 }
+.tool-call-card.is-build-failed {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
 .tool-call-header {
   display: flex;
   align-items: center;
@@ -1389,6 +1390,54 @@ onUnmounted(() => {
   color: var(--success);
   background: var(--success-bg);
   border: 1px solid var(--success-border);
+}
+.tool-call-status.error {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+.build-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.build-status-text {
+  font-weight: 600;
+}
+.build-status-text.success {
+  color: var(--success);
+}
+.build-status-text.failed {
+  color: var(--warning);
+}
+.build-stage {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.build-error-details {
+  margin-top: 8px;
+  color: var(--text-secondary);
+}
+.build-error-details summary {
+  cursor: pointer;
+  user-select: none;
+}
+.build-error-summary {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .tool-call-label {
   margin: 6px 0 2px;

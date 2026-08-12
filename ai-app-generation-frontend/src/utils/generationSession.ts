@@ -1,3 +1,8 @@
+import {
+  parseBuildProjectToolResult,
+  type BuildProjectToolView,
+} from './buildProjectToolResult'
+
 export type SessionEventType = 'delta' | 'done' | 'error' | 'business-error'
 
 export type ToolCallStatus = 'streaming' | 'done' | 'error'
@@ -15,17 +20,46 @@ export interface ToolCallView {
   name: string
   status: ToolCallStatus
   args: ToolArgView
+  result?: string
+  build?: BuildProjectToolView
+}
+
+export type BuildProjectDisplayState = 'streaming' | 'parsed' | 'unrecognized'
+
+export function getBuildProjectDisplayState(
+  view: Pick<ToolCallView, 'status'> & { build?: unknown },
+): BuildProjectDisplayState {
+  if (view.status === 'streaming') {
+    return 'streaming'
+  }
+  return view.build ? 'parsed' : 'unrecognized'
 }
 
 export type GenerationStatus = 'streaming' | 'done' | 'error'
+
+export type GenerationOutcome =
+  | 'pending'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'system_error'
+  | 'protocol_error'
 
 export interface GenerationSessionSnapshot {
   appId: string
   content: string
   loading: boolean
   status: GenerationStatus
+  outcome: GenerationOutcome
   errorMessage?: string
   toolCalls: Map<string, ToolCallView>
+}
+
+export function shouldRefreshGenerationPreview(
+  snapshot: Pick<GenerationSessionSnapshot, 'status' | 'outcome'>,
+): boolean {
+  return snapshot.status === 'done' && snapshot.outcome === 'succeeded'
 }
 
 export interface StartGenerationSessionOptions {
@@ -34,6 +68,7 @@ export interface StartGenerationSessionOptions {
   baseURL: string
   renderMode?: 'direct' | 'throttled'
   throttleMs?: number
+  expectVueTurnOutcome?: boolean
 }
 
 type Listener = (snapshot: GenerationSessionSnapshot, eventType: SessionEventType) => void
@@ -47,6 +82,9 @@ interface SessionState {
   renderMode: 'direct' | 'throttled'
   throttleMs: number
   requestId: number
+  expectVueTurnOutcome: boolean
+  businessErrorSeen: boolean
+  awaitingDone: boolean
 }
 
 type JsonRecord = Record<string, unknown>
@@ -60,6 +98,7 @@ function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
     content: '',
     loading: false,
     status: 'done',
+    outcome: 'pending',
     toolCalls: new Map(),
   }
 }
@@ -70,6 +109,7 @@ function cloneSnapshot(snapshot: GenerationSessionSnapshot): GenerationSessionSn
     toolCalls.set(key, {
       ...value,
       args: { ...value.args },
+      build: value.build ? { ...value.build } : undefined,
     })
   })
   return {
@@ -90,6 +130,9 @@ function getOrCreateSession(appId: string): SessionState {
     renderMode: 'throttled',
     throttleMs: DEFAULT_THROTTLE_MS,
     requestId: 0,
+    expectVueTurnOutcome: false,
+    businessErrorSeen: false,
+    awaitingDone: false,
   }
   sessions.set(appId, created)
   return created
@@ -169,6 +212,7 @@ function finishSession(
   nextStatus: GenerationStatus,
   eventType: SessionEventType,
   errorMessage?: string,
+  outcome: GenerationOutcome = 'system_error',
 ): void {
   const session = getActiveSession(appId, requestId)
   if (!session) {
@@ -178,20 +222,41 @@ function finishSession(
   session.snapshot.loading = false
   session.snapshot.status = nextStatus
   session.snapshot.errorMessage = errorMessage
+  session.snapshot.outcome = outcome
   stopSessionStream(session)
   emit(appId, eventType, requestId)
 }
 
 function markDone(appId: string, requestId: number): void {
   const session = getActiveSession(appId, requestId)
-  if (!session) {
+  if (!session || session.snapshot.status !== 'streaming') {
     return
   }
   flushBuffer(appId, requestId)
+  if (
+    session.expectVueTurnOutcome &&
+    session.snapshot.outcome === 'pending' &&
+    !session.businessErrorSeen
+  ) {
+    finishSession(
+      appId,
+      requestId,
+      'error',
+      'error',
+      '生成协议缺少业务终态',
+      'protocol_error',
+    )
+    return
+  }
   session.snapshot.loading = false
   if (session.snapshot.status === 'streaming') {
     session.snapshot.status = 'done'
-    session.snapshot.errorMessage = undefined
+    if (!session.expectVueTurnOutcome && session.snapshot.outcome === 'pending') {
+      session.snapshot.outcome = 'succeeded'
+    }
+    if (session.snapshot.outcome === 'succeeded') {
+      session.snapshot.errorMessage = undefined
+    }
   }
   stopSessionStream(session)
   emit(appId, 'done', requestId)
@@ -331,6 +396,13 @@ function handleToolExecuted(appId: string, requestId: number, payload: JsonRecor
   const name = toStringValue(payload.name)
   const view = ensureToolCall(session, id, name)
   mergeToolArguments(view, parseArgumentObject(payload.arguments))
+  const result = toStringValue(payload.result)
+  if (result !== undefined) {
+    view.result = result
+    if (view.name === 'buildProject') {
+      view.build = parseBuildProjectToolResult(result)
+    }
+  }
   view.status = 'done'
   emit(appId, 'delta', requestId)
 }
@@ -369,7 +441,7 @@ function handleMessageData(appId: string, requestId: number, data: string): void
   const outer = tryParseJson(data)
   if (outer && outer.error === true) {
     const errorMessage = readErrorMessage(outer)
-    finishSession(appId, requestId, 'error', 'business-error', errorMessage)
+    handleBusinessError(appId, requestId, errorMessage)
     return
   }
   const wrapped = outer && typeof outer.d === 'string' ? outer.d : data
@@ -384,22 +456,96 @@ function handleMessageData(appId: string, requestId: number, data: string): void
   queueDelta(appId, requestId, wrapped)
 }
 
+const OUTCOME_MAP: Record<string, Exclude<GenerationOutcome, 'pending'>> = {
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  CANCELLED: 'cancelled',
+  TIMED_OUT: 'timed_out',
+  SYSTEM_ERROR: 'system_error',
+  PROTOCOL_ERROR: 'protocol_error',
+}
+
+function markProtocolError(appId: string, requestId: number, message: string): void {
+  finishSession(appId, requestId, 'error', 'error', message, 'protocol_error')
+}
+
+function handleBusinessError(appId: string, requestId: number, errorMessage: string): void {
+  const session = getActiveSession(appId, requestId)
+  if (!session || session.snapshot.status !== 'streaming') {
+    return
+  }
+  if (session.snapshot.outcome !== 'pending' || session.businessErrorSeen) {
+    markProtocolError(appId, requestId, '生成协议包含冲突的业务错误')
+    return
+  }
+  session.businessErrorSeen = true
+  session.awaitingDone = true
+  session.snapshot.outcome = 'system_error'
+  session.snapshot.errorMessage = errorMessage
+  emit(appId, 'business-error', requestId)
+}
+
+function handleTurnOutcome(appId: string, requestId: number, data: string): void {
+  const session = getActiveSession(appId, requestId)
+  if (!session || session.snapshot.status !== 'streaming') {
+    return
+  }
+  const payload = tryParseJson(data)
+  const wireOutcome = payload ? toStringValue(payload.outcome) : undefined
+  const outcome = wireOutcome ? OUTCOME_MAP[wireOutcome] : undefined
+  const message = payload ? toStringValue(payload.message) : undefined
+  const refreshPreview = payload?.refreshPreview
+  if (
+    session.businessErrorSeen ||
+    session.snapshot.outcome !== 'pending' ||
+    payload?.protocol !== 'vue-turn/v1' ||
+    !outcome ||
+    !message?.trim() ||
+    typeof refreshPreview !== 'boolean' ||
+    (outcome === 'succeeded' ? refreshPreview !== true : refreshPreview !== false)
+  ) {
+    markProtocolError(appId, requestId, '生成业务终态协议不合法')
+    return
+  }
+  session.snapshot.outcome = outcome
+  session.awaitingDone = true
+  if (outcome !== 'succeeded') {
+    session.snapshot.errorMessage = message
+  }
+  emit(appId, 'delta', requestId)
+}
+
 function handleSseEvent(appId: string, requestId: number, event: string, data: string): void {
   const eventName = event || 'message'
+  const session = getActiveSession(appId, requestId)
+  if (!session || session.snapshot.status !== 'streaming') {
+    return
+  }
   if (eventName === 'done') {
     markDone(appId, requestId)
+    return
+  }
+  if (eventName === 'heartbeat') {
+    return
+  }
+  if (session.awaitingDone) {
+    markProtocolError(appId, requestId, '生成业务终态后收到意外事件')
+    return
+  }
+  if (eventName === 'turn-outcome') {
+    handleTurnOutcome(appId, requestId, data)
     return
   }
   if (eventName === 'business-error') {
     const payload = tryParseJson(data)
     const errorMessage = readErrorMessage(payload)
-    finishSession(appId, requestId, 'error', 'business-error', errorMessage)
+    handleBusinessError(appId, requestId, errorMessage)
     return
   }
   if (eventName === 'error') {
     const payload = tryParseJson(data)
     const errorMessage = readErrorMessage(payload)
-    finishSession(appId, requestId, 'error', 'error', errorMessage)
+    finishSession(appId, requestId, 'error', 'error', errorMessage, 'system_error')
     return
   }
   handleMessageData(appId, requestId, data)
@@ -505,7 +651,7 @@ async function startSseStream(
 
   const session = getActiveSession(appId, requestId)
   if (session && session.snapshot.status === 'streaming') {
-    markDone(appId, requestId)
+    markProtocolError(appId, requestId, '生成流意外结束')
   }
 }
 
@@ -522,11 +668,15 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   const requestId = session.requestId
   session.renderMode = renderMode
   session.throttleMs = throttleMs
+  session.expectVueTurnOutcome = options.expectVueTurnOutcome === true
+  session.businessErrorSeen = false
+  session.awaitingDone = false
   session.snapshot = {
     appId,
     content: '',
     loading: true,
     status: 'streaming',
+    outcome: 'pending',
     toolCalls: new Map(),
   }
   emit(appId, 'delta', requestId)
@@ -538,7 +688,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
       return
     }
     const message = error instanceof Error ? error.message : '生成失败'
-    finishSession(appId, requestId, 'error', 'error', message || '生成失败')
+    finishSession(appId, requestId, 'error', 'error', message || '生成失败', 'system_error')
   })
 }
 
