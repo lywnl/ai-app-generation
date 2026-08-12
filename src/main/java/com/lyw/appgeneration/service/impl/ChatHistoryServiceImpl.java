@@ -136,6 +136,29 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     @Override
+    public ChatHistory getLastMessage(Long appId) {
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用ID不能为空");
+        List<ChatHistory> messages = this.list(QueryWrapper.create()
+                .eq("appId", appId)
+                .orderBy("id", false)
+                .limit(1));
+        return CollUtil.isEmpty(messages) ? null : messages.getFirst();
+    }
+
+    @Override
+    public boolean repairOrphanUserTurn(
+            Long appId, Long userId, String aiMessage) {
+        ChatHistory lastMessage = getLastMessage(appId);
+        if (lastMessage == null || !ChatHistoryMessageTypeEnum.USER.getValue()
+                .equals(lastMessage.getMessageType())) {
+            return false;
+        }
+        return addChatMessage(appId, aiMessage,
+                ChatHistoryMessageTypeEnum.AI.getValue(), userId);
+    }
+
+    @Override
     public int loadChatHistoryToMemory(Long appId, ChatMemory chatMemory, int maxCount) {
         try {
             QueryWrapper queryWrapper = QueryWrapper.create()

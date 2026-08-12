@@ -13,6 +13,10 @@ import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
+import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -49,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.UUID;
 
 /**
  * 应用 服务层实现。
@@ -64,6 +69,15 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private AiCodeGeneratorFacade aiCodeGeneratorFacade;
+
+    @Resource
+    private AiGeneratorServiceFactory aiGeneratorServiceFactory;
+
+    @Resource
+    private AppOperationLeaseManager appOperationLeaseManager;
+
+    @Resource
+    private VueBuildSessionManager vueBuildSessionManager;
 
     @Resource
     private ChatHistoryService chatHistoryService;
@@ -164,6 +178,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (codeGenTypeEnum == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型");
         }
+        if (codeGenTypeEnum == CodeGenTypeEnum.VUE_PROJECT) {
+            return generateVueTurn(appId, message, loginUser);
+        }
         //5. 判断是否首次对话（必须在保存用户消息之前，否则 count 永远 >= 1）
         boolean isFirstMessage = !chatHistoryService.existsByAppId(appId);
         //6. 调用AI前, 先将用户消息保存到数据库
@@ -185,6 +202,71 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     MonitorContextHolder.clearContext();
 
                 });
+    }
+
+    private Flux<String> generateVueTurn(
+            long appId, String message, User loginUser) {
+        return Flux.defer(() -> {
+            String turnId = UUID.randomUUID().toString();
+            AppOperationLeaseManager.AppOperationLease operationLease =
+                    appOperationLeaseManager.acquire(
+                            appId,
+                            AppOperationLeaseManager.AppOperationType.GENERATE,
+                            turnId);
+            VueBuildSessionManager.VueBuildLease vueLease = null;
+            VueTurnContext context = null;
+            try {
+                vueLease = vueBuildSessionManager.open(
+                        operationLease, loginUser.getId(), turnId);
+                context = new VueTurnContext(
+                        appId, loginUser.getId(), turnId,
+                        operationLease, vueLease);
+
+                var lastMessage = chatHistoryService.getLastMessage(appId);
+                boolean hasHistory = lastMessage != null;
+                if (hasHistory && ChatHistoryMessageTypeEnum.USER.getValue()
+                        .equals(lastMessage.getMessageType())) {
+                    boolean repaired = chatHistoryService.repairOrphanUserTurn(
+                            appId, loginUser.getId(),
+                            "生成过程中遇到系统异常，请稍后重试。");
+                    if (!repaired) {
+                        throw new BusinessException(
+                                ErrorCode.OPERATION_ERROR,
+                                "修复上一轮未完成对话失败");
+                    }
+                    aiGeneratorServiceFactory.prepareVueColdRebuild(appId);
+                }
+
+                // 必须先取得/创建服务与未启动 TokenStream，再保存当前原始 User。
+                Flux<String> codeStream = aiCodeGeneratorFacade
+                        .generateVueProjectStream(
+                                message, appId, !hasHistory, context);
+                boolean saved = chatHistoryService.addChatMessage(
+                        appId, message,
+                        ChatHistoryMessageTypeEnum.USER.getValue(),
+                        loginUser.getId());
+                if (!saved) {
+                    context.closeResources();
+                    return Flux.error(new BusinessException(
+                            ErrorCode.OPERATION_ERROR, "保存用户消息失败"));
+                }
+                MonitorContextHolder.setContext(MonitorContext.builder()
+                        .userId(loginUser.getId().toString())
+                        .appId(Long.toString(appId)).build());
+                return streamHandlerExecutor.doExecuteVue(codeStream, context)
+                        .doFinally(ignored -> MonitorContextHolder.clearContext());
+            } catch (RuntimeException exception) {
+                if (context != null) {
+                    context.closeResources();
+                } else {
+                    if (vueLease != null) {
+                        vueLease.close();
+                    }
+                    operationLease.close();
+                }
+                return Flux.error(exception);
+            }
+        });
     }
 
     @Override

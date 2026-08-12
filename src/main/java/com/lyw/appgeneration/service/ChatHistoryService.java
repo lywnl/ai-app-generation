@@ -69,6 +69,14 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      */
     boolean existsByAppId(Long appId);
 
+    /** 查询应用最后一条持久化消息；不存在时返回 null。 */
+    ChatHistory getLastMessage(Long appId);
+
+    /**
+     * 将上一轮孤立 User 补成稳定的 SYSTEM_ERROR AI 边界；无孤立 User 时不写入。
+     */
+    boolean repairOrphanUserTurn(Long appId, Long userId, String aiMessage);
+
     /**
      * 查询 appId 下 id 大于 cursorId 的消息，按 id 正序，最多 limit 条。
      * <p>供 L1 滚动摘要增量提炼：游标之后、热窗口之前的「待折叠」消息。

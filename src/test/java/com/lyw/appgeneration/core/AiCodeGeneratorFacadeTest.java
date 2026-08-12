@@ -5,6 +5,9 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
@@ -227,6 +230,33 @@ class AiCodeGeneratorFacadeTest {
         assertDoesNotThrow(() -> facade.generateAndSaveCodeStream(
                 RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false)
                 .then().block());
+    }
+
+    @Test
+    void onlineTurnRunsRealToolThreadInExactScopeAndRecordsTermination() {
+        properties.setEnabled(false);
+        CapturingTokenStream stream = new CapturingTokenStream(
+                CapturingTokenStream.Terminal.COMPLETE, scopeManager);
+        when(serviceFactory.getAiCodeGeneratorService(APP_ID,
+                CodeGenTypeEnum.VUE_PROJECT)).thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE, "turn-online");
+        var lease = sessionManager.open(operation, 9L, "turn-online");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, 9L, "turn-online", operation, lease);
+
+        assertDoesNotThrow(() -> facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, false, context).then().block());
+
+        assertEquals(FileToolExecutionScopeManager.ScopeType.ONLINE,
+                stream.observedScopeType);
+        assertEquals("turn-online", stream.observedScope.ownerToken());
+        assertTrue(context.controlledTermination().isEmpty());
+        context.closeResources();
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.lyw.appgeneration.ai.parser.ToolRequestStreamParser;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
+import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
@@ -151,6 +152,27 @@ public class AiCodeGeneratorFacade {
     }
 
     /**
+     * Vue 在线生成专用入口：服务与 TokenStream 在调用时创建，真正模型请求在订阅后启动。
+     */
+    public Flux<String> generateVueProjectStream(
+            String userMessage, long appId, boolean isFirstMessage,
+            VueTurnContext turnContext) {
+        AiCodeGeneratorService generatorService = aiGeneratorServiceFactory
+                .getAiCodeGeneratorService(appId, CodeGenTypeEnum.VUE_PROJECT);
+        String generationRequest = isFirstMessage
+                ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
+        if (ragProperties.isEnabled()) {
+            VueRagContext context = retrieveVueContext(
+                    userMessage, ragProperties.getHybrid().isEnabled());
+            generationRequest = ragPromptAssembler.assembleVueProject(
+                    generationRequest, context);
+        }
+        TokenStream tokenStream = generatorService.generateVueProjectCodeStream(
+                appId, generationRequest);
+        return processOnlineTokenStream(tokenStream, turnContext);
+    }
+
+    /**
      * 高成本离线质量门禁的真实 Vue 生成入口。
      *
      * <p>返回的检索上下文与生成流来自同一次准备过程，避免报告通过二次检索猜测选中 ID。
@@ -253,6 +275,109 @@ public class AiCodeGeneratorFacade {
     private Flux<String> processTokenStream(TokenStream tokenStream) {
         return processTokenStream(tokenStream, () -> { }, () -> { },
                 this::onlineControlledTerminationError);
+    }
+
+    private Flux<String> processOnlineTokenStream(
+            TokenStream tokenStream, VueTurnContext context) {
+        FileToolExecutionScopeManager.FileToolScope scope =
+                fileToolExecutionScopeManager.online(
+                        context.lease(), context.turnId(), context.appId(),
+                        VueToolNames.ONLINE);
+        ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
+        tokenStream.toolExecutionGuard((toolName, memoryId, action) ->
+                fileToolExecutionScopeManager.callInScope(scope,
+                        () -> directGuard.execute(toolName, memoryId, action)));
+        return Flux.create(sink -> {
+            AtomicBoolean terminated = new AtomicBoolean();
+            Runnable cancelModel = () -> {
+                if (terminated.compareAndSet(false, true)) {
+                    tokenStream.cancel();
+                }
+            };
+            context.registerModelCancellation(cancelModel);
+            sink.onCancel(cancelModel::run);
+            sink.onDispose(() -> {
+                if (!sink.isCancelled()) {
+                    terminated.compareAndSet(false, true);
+                }
+            });
+            Map<String, ToolRequestStreamParser> parsers = new HashMap<>();
+            try {
+                tokenStream.onPartialResponse(partial -> context.tryRunCallback(() -> {
+                            if (!sink.isCancelled()) {
+                                sink.next(JSONUtil.toJsonStr(new AiResponseMessage(partial)));
+                            }
+                        }))
+                        .onPartialToolExecutionRequest((index, request) ->
+                                context.tryRunCallback(() -> {
+                                    if (sink.isCancelled()) {
+                                        return;
+                                    }
+                                    ToolRequestStreamParser parser = parsers.get(request.id());
+                                    if (parser == null) {
+                                        sink.next(JSONUtil.toJsonStr(new ToolRequestMessage(request)));
+                                        parser = new ToolRequestStreamParser(request.name(), evt -> {
+                                            if (sink.isCancelled()) {
+                                                return;
+                                            }
+                                            switch (evt.type) {
+                                                case DELTA -> sink.next(JSONUtil.toJsonStr(
+                                                        new ToolArgumentDeltaMessage(request.id(), request.name(), evt.key, evt.payload)));
+                                                case VALUE_READY -> sink.next(JSONUtil.toJsonStr(
+                                                        new ToolArgumentMessage(request.id(), request.name(), evt.key, evt.payload)));
+                                                case KEY_READY -> { }
+                                            }
+                                        });
+                                        parsers.put(request.id(), parser);
+                                    }
+                                    parser.feed(request.arguments());
+                                }))
+                        .onToolExecuted(execution -> context.tryRunCallback(() -> {
+                            if (sink.isCancelled()) {
+                                return;
+                            }
+                            ToolRequestStreamParser parser = parsers.remove(
+                                    execution.request().id());
+                            if (parser != null) {
+                                parser.finish();
+                            }
+                            sink.next(JSONUtil.toJsonStr(new ToolExecutedMessage(execution)));
+                        }))
+                        .onControlledTermination(termination ->
+                                context.tryRunCallback(() -> {
+                                    if (sink.isCancelled()) {
+                                        return;
+                                    }
+                                    context.recordControlledTermination(termination);
+                                    terminated.set(true);
+                                    Throwable error = onlineControlledTerminationError(termination);
+                                    if (error == null) {
+                                        sink.complete();
+                                    } else {
+                                        sink.error(error);
+                                    }
+                                }))
+                        .onCompleteResponse(response -> context.tryRunCallback(() -> {
+                            if (!sink.isCancelled()) {
+                                parsers.values().forEach(ToolRequestStreamParser::finish);
+                                terminated.set(true);
+                                sink.complete();
+                            }
+                        }))
+                        .onError(error -> context.tryRunCallback(() -> {
+                            if (!sink.isCancelled()) {
+                                terminated.set(true);
+                                sink.error(error);
+                            }
+                        }))
+                        .start();
+            } catch (RuntimeException exception) {
+                terminated.set(true);
+                if (!sink.isCancelled()) {
+                    sink.error(exception);
+                }
+            }
+        });
     }
 
     private Flux<String> processTokenStream(
