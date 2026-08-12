@@ -43,6 +43,9 @@ public class AiServiceTokenStream implements TokenStream {
     private Consumer<Throwable> errorHandler;
     private BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler;
     private BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler;
+    private final StreamingRequestController requestController =
+            new StreamingRequestController();
+    private ToolExecutionGuard toolExecutionGuard = ToolExecutionGuard.direct();
 
     private int onPartialResponseInvoked;
     private int onCompleteResponseInvoked;
@@ -124,6 +127,24 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public void cancel() {
+        requestController.cancel();
+    }
+
+    @Override
+    public TokenStream toolExecutionGuard(ToolExecutionGuard guard) {
+        this.toolExecutionGuard = ensureNotNull(guard, "toolExecutionGuard");
+        return this;
+    }
+
+    @Override
+    public TokenStream onControlledTermination(
+            Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
+        requestController.onControlledTermination(handler);
+        return this;
+    }
+
+    @Override
     public void start() {
         validateConfiguration();
 
@@ -137,6 +158,14 @@ public class AiServiceTokenStream implements TokenStream {
                 .chatRequest(chatRequest)
                 .build();
 
+        if (!requestController.isOpen()) {
+            return;
+        }
+        if (!requestController.beforeModelRequest()) {
+            requestController.dispatchClaimedTermination();
+            return;
+        }
+        long requestGeneration = requestController.latestModelRequestGeneration();
         var handler = new AiServiceStreamingResponseHandler(
                 chatExecutor,
                 context,
@@ -152,13 +181,23 @@ public class AiServiceTokenStream implements TokenStream {
                 toolSpecifications,
                 toolExecutors,
                 commonGuardrailParams,
-                methodKey);
+                methodKey,
+                requestController,
+                toolExecutionGuard,
+                requestGeneration);
 
-        if (contentsHandler != null && retrievedContents != null) {
-            contentsHandler.accept(retrievedContents);
+        if (contentsHandler != null && retrievedContents != null
+                && !requestController.runIfOpen(
+                () -> contentsHandler.accept(retrievedContents))) {
+            return;
         }
 
-        context.streamingChatModel.chat(chatRequest, handler);
+        try {
+            requestController.startModelRequestIfOpen(
+                    () -> context.streamingChatModel.chat(chatRequest, handler));
+        } catch (RuntimeException exception) {
+            handler.onError(exception);
+        }
     }
 
     private void validateConfiguration() {

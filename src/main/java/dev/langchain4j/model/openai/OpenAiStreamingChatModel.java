@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static dev.langchain4j.internal.InternalStreamingChatResponseHandlerUtils.withLoggingExceptions;
 import static dev.langchain4j.internal.Utils.*;
@@ -126,12 +127,20 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
         OpenAiStreamingResponseBuilder openAiResponseBuilder = new OpenAiStreamingResponseBuilder();
         ToolExecutionRequestBuilder toolBuilder = new ToolExecutionRequestBuilder();
 
-        client.chatCompletion(openAiRequest)
+        AtomicBoolean terminalDelivered = new AtomicBoolean();
+        try {
+            var responseHandle = client.chatCompletion(openAiRequest)
                 .onPartialResponse(partialResponse -> {
+                    if (terminalDelivered.get()) {
+                        return;
+                    }
                     openAiResponseBuilder.append(partialResponse);
                     handle(partialResponse, toolBuilder, handler);
                 })
                 .onComplete(() -> {
+                    if (!terminalDelivered.compareAndSet(false, true)) {
+                        return;
+                    }
                     if (toolBuilder.hasToolExecutionRequests()) {
                         try {
                             handler.onCompleteToolExecutionRequest(toolBuilder.index(), toolBuilder.build());
@@ -147,10 +156,25 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
                     }
                 })
                 .onError(throwable -> {
+                    if (!terminalDelivered.compareAndSet(false, true)) {
+                        return;
+                    }
                     RuntimeException mappedException = ExceptionMapper.DEFAULT.mapException(throwable);
                     withLoggingExceptions(() -> handler.onError(mappedException));
                 })
                 .execute();
+            try {
+                registerRequestHandle(handler, responseHandle::cancel);
+            } catch (RuntimeException exception) {
+                responseHandle.cancel();
+                throw exception;
+            }
+        } catch (RuntimeException exception) {
+            if (terminalDelivered.compareAndSet(false, true)) {
+                RuntimeException mappedException = ExceptionMapper.DEFAULT.mapException(exception);
+                withLoggingExceptions(() -> handler.onError(mappedException));
+            }
+        }
     }
 
     static OpenAiChatRequestParameters disableReasoningEffortForDeepSeekV4Flash(OpenAiChatRequestParameters parameters) {
@@ -161,6 +185,11 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
                 .overrideWith(parameters)
                 .reasoningEffort(null)
                 .build();
+    }
+
+    static void registerRequestHandle(
+            StreamingChatResponseHandler handler, Runnable cancellation) {
+        handler.onRequestHandle(cancellation::run);
     }
 
     private static boolean shouldDisableReasoningEffort(OpenAiChatRequestParameters parameters) {

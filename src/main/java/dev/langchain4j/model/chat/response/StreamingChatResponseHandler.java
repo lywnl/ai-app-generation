@@ -11,6 +11,9 @@ import dev.langchain4j.model.chat.StreamingChatModel;
  */
 public interface StreamingChatResponseHandler {
 
+    default void onRequestHandle(StreamingRequestHandle handle) {
+    }
+
     /**
      * Invoked each time the model generates a partial response (usually a single token) in a textual response.
      * If the model decides to execute a tool instead, this method will not be invoked;

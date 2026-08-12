@@ -46,6 +46,12 @@ public interface StreamingChatModel {
         StreamingChatResponseHandler observingHandler = new StreamingChatResponseHandler() {
 
             @Override
+            public void onRequestHandle(
+                    dev.langchain4j.model.chat.response.StreamingRequestHandle handle) {
+                handler.onRequestHandle(handle);
+            }
+
+            @Override
             public void onPartialResponse(String partialResponse) {
                 handler.onPartialResponse(partialResponse);
             }

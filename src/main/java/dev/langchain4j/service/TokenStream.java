@@ -18,6 +18,18 @@ import java.util.function.Consumer;
  */
 public interface TokenStream {
 
+    default void cancel() {
+    }
+
+    default TokenStream toolExecutionGuard(ToolExecutionGuard guard) {
+        return this;
+    }
+
+    default TokenStream onControlledTermination(
+            Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
+        return this;
+    }
+
     /**
      * The provided consumer will be invoked every time a new partial response (usually a single token)
      * from a language model is available.

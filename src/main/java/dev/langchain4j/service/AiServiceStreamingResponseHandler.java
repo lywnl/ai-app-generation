@@ -14,6 +14,7 @@ import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.chat.response.StreamingRequestHandle;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.service.tool.ToolExecutor;
@@ -58,6 +59,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final Map<String, ToolExecutor> toolExecutors;
     private final List<String> responseBuffer = new ArrayList<>();
     private final boolean hasOutputGuardrails;
+    private final StreamingRequestController requestController;
+    private final ToolExecutionGuard toolExecutionGuard;
+    private final long requestGeneration;
 
     AiServiceStreamingResponseHandler(
             ChatExecutor chatExecutor,
@@ -75,6 +79,59 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             Map<String, ToolExecutor> toolExecutors,
             GuardrailRequestParams commonGuardrailParams,
             Object methodKey) {
+        this(chatExecutor, context, memoryId, partialResponseHandler,
+                partialToolExecutionRequestHandler, completeToolExecutionRequestHandler,
+                toolExecutionHandler, completeResponseHandler, errorHandler,
+                temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
+                commonGuardrailParams, methodKey, new StreamingRequestController(),
+                ToolExecutionGuard.direct(), 0L);
+    }
+
+    AiServiceStreamingResponseHandler(
+            ChatExecutor chatExecutor,
+            AiServiceContext context,
+            Object memoryId,
+            Consumer<String> partialResponseHandler,
+            BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler,
+            BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler,
+            Consumer<ToolExecution> toolExecutionHandler,
+            Consumer<ChatResponse> completeResponseHandler,
+            Consumer<Throwable> errorHandler,
+            ChatMemory temporaryMemory,
+            TokenUsage tokenUsage,
+            List<ToolSpecification> toolSpecifications,
+            Map<String, ToolExecutor> toolExecutors,
+            GuardrailRequestParams commonGuardrailParams,
+            Object methodKey,
+            StreamingRequestController requestController,
+            ToolExecutionGuard toolExecutionGuard) {
+        this(chatExecutor, context, memoryId, partialResponseHandler,
+                partialToolExecutionRequestHandler, completeToolExecutionRequestHandler,
+                toolExecutionHandler, completeResponseHandler, errorHandler,
+                temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
+                commonGuardrailParams, methodKey, requestController, toolExecutionGuard,
+                requestController.latestModelRequestGeneration());
+    }
+
+    AiServiceStreamingResponseHandler(
+            ChatExecutor chatExecutor,
+            AiServiceContext context,
+            Object memoryId,
+            Consumer<String> partialResponseHandler,
+            BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler,
+            BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler,
+            Consumer<ToolExecution> toolExecutionHandler,
+            Consumer<ChatResponse> completeResponseHandler,
+            Consumer<Throwable> errorHandler,
+            ChatMemory temporaryMemory,
+            TokenUsage tokenUsage,
+            List<ToolSpecification> toolSpecifications,
+            Map<String, ToolExecutor> toolExecutors,
+            GuardrailRequestParams commonGuardrailParams,
+            Object methodKey,
+            StreamingRequestController requestController,
+            ToolExecutionGuard toolExecutionGuard,
+            long requestGeneration) {
         this.chatExecutor = ensureNotNull(chatExecutor, "chatExecutor");
         this.context = ensureNotNull(context, "context");
         this.memoryId = ensureNotNull(memoryId, "memoryId");
@@ -94,78 +151,200 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         this.toolSpecifications = copy(toolSpecifications);
         this.toolExecutors = copy(toolExecutors);
         this.hasOutputGuardrails = context.guardrailService().hasOutputGuardrails(methodKey);
+        this.requestController = ensureNotNull(requestController, "requestController");
+        this.toolExecutionGuard = ensureNotNull(toolExecutionGuard, "toolExecutionGuard");
+        this.requestGeneration = requestGeneration;
+    }
+
+    @Override
+    public void onRequestHandle(StreamingRequestHandle handle) {
+        requestController.registerRequestHandle(requestGeneration, handle);
     }
 
     @Override
     public void onPartialResponse(String partialResponse) {
-        // If we're using output guardrails, then buffer the partial response until the guardrails have completed
-        if (hasOutputGuardrails) {
-            responseBuffer.add(partialResponse);
-        } else {
-            partialResponseHandler.accept(partialResponse);
+        try (var callback = requestController.enterCallback()) {
+            if (callback == null) {
+                return;
+            }
+            if (hasOutputGuardrails) {
+                requestController.runIfOpen(() -> responseBuffer.add(partialResponse));
+            } else {
+                requestController.runIfOpen(
+                        () -> partialResponseHandler.accept(partialResponse));
+            }
         }
     }
 
     @Override
     public void onPartialToolExecutionRequest(int index, ToolExecutionRequest partialToolExecutionRequest) {
-        // If we're using output guardrails, then buffer the partial response until the guardrails have completed
-        partialToolExecutionRequestHandler.accept(index, partialToolExecutionRequest);
+        try (var callback = requestController.enterCallback()) {
+            if (callback != null && partialToolExecutionRequestHandler != null
+                    && requestController.isOpen()) {
+                requestController.runIfOpen(() -> partialToolExecutionRequestHandler
+                        .accept(index, partialToolExecutionRequest));
+            }
+        }
+    }
+
+    @Override
+    public void onCompleteToolExecutionRequest(
+            int index, ToolExecutionRequest completeToolExecutionRequest) {
+        try (var callback = requestController.enterCallback()) {
+            if (callback != null && completeToolExecutionRequestHandler != null
+                    && requestController.isOpen()) {
+                requestController.runIfOpen(() -> completeToolExecutionRequestHandler
+                        .accept(index, completeToolExecutionRequest));
+            }
+        }
     }
 
     @Override
     public void onCompleteResponse(ChatResponse completeResponse) {
+        try (var callback = requestController.enterCallback()) {
+            if (callback == null) {
+                return;
+            }
+            processCompleteResponse(completeResponse);
+        }
+    }
+
+    private void processCompleteResponse(ChatResponse completeResponse) {
+        if (!requestController.isOpen()) {
+            return;
+        }
         AiMessage aiMessage = completeResponse.aiMessage();
-        addToMemory(aiMessage);
+        if (!aiMessage.hasToolExecutionRequests()) {
+            completeOrdinaryResponse(completeResponse, aiMessage);
+            return;
+        }
+        if (!requestController.runIfOpen(() -> addToMemory(aiMessage))) {
+            return;
+        }
 
         if (aiMessage.hasToolExecutionRequests()) {
-            for (ToolExecutionRequest toolExecutionRequest : aiMessage.toolExecutionRequests()) {
+            List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
+            for (int index = 0; index < requests.size(); index++) {
+                ToolExecutionRequest toolExecutionRequest = requests.get(index);
+                if (!requestController.isOpen()) {
+                    RuntimeException failure = skipRemainingBestEffort(
+                            requests,
+                            index,
+                            "受控跳过：请求已经取消",
+                            null);
+                    rethrow(failure);
+                    return;
+                }
                 ToolExecutionRequest normalizedRequest = normalizeToolExecutionRequest(toolExecutionRequest);
                 if (normalizedRequest == null) {
+                    notifyToolExecuted(toolExecutionRequest,
+                            "受控跳过：工具参数不是合法 JSON");
                     continue;
                 }
                 String toolName = normalizedRequest.name();
                 ToolExecutor toolExecutor = toolExecutors.get(toolName);
                 if (toolExecutor == null) {
                     LOG.warn("Tool executor not found, skip tool call: name={}, id={}", toolName, normalizedRequest.id());
-                    ToolExecutionResultMessage skippedMessage = ToolExecutionResultMessage.from(
-                            normalizedRequest,
-                            String.format("Skipped tool '%s' because no executor is registered", toolName)
-                    );
-                    addToMemory(skippedMessage);
+                    notifyToolExecuted(normalizedRequest,
+                            String.format("受控跳过：工具 '%s' 未注册", toolName));
                     continue;
                 }
-                String toolExecutionResult;
+                if (!requestController.beforeToolExecution()) {
+                    RuntimeException failure = null;
+                    try {
+                        failure = skipRemainingBestEffort(
+                                requests,
+                                index,
+                                requestController.isCancelled()
+                                        ? "受控跳过：请求已经取消"
+                                        : "受控跳过：工具执行次数超过上限",
+                                null);
+                    } finally {
+                        if (!requestController.isCancelled()) {
+                            requestController.dispatchClaimedTermination();
+                        }
+                    }
+                    rethrow(failure);
+                    return;
+                }
+                ToolExecutionGuard.GuardedToolExecution guardedExecution;
                 try {
-                    toolExecutionResult = toolExecutor.execute(normalizedRequest, memoryId);
+                    guardedExecution = toolExecutionGuard.execute(toolName, memoryId,
+                            () -> toolExecutor.execute(normalizedRequest, memoryId));
                 } catch (RuntimeException e) {
                     LOG.warn("Tool execution failed, skip this tool and continue: name={}, id={}",
                             normalizedRequest.name(), normalizedRequest.id(), e);
-                    ToolExecutionResultMessage skippedMessage = ToolExecutionResultMessage.from(
-                            normalizedRequest,
-                            String.format("Skipped tool '%s' due to execution error: %s",
-                                    normalizedRequest.name(), e.getMessage())
-                    );
-                    addToMemory(skippedMessage);
+                    notifyToolExecuted(normalizedRequest,
+                            String.format("受控跳过：工具 '%s' 执行失败：%s",
+                                    normalizedRequest.name(), e.getMessage()));
                     continue;
                 }
-                ToolExecutionResultMessage toolExecutionResultMessage =
-                        ToolExecutionResultMessage.from(normalizedRequest, toolExecutionResult);
-                addToMemory(toolExecutionResultMessage);
-
-                if (toolExecutionHandler != null) {
-                    ToolExecution toolExecution = ToolExecution.builder()
-                            .request(normalizedRequest)
-                            .result(toolExecutionResult)
-                            .build();
-                    toolExecutionHandler.accept(toolExecution);
+                if (!requestController.isOpen()) {
+                    RuntimeException failure = skipRemainingBestEffort(
+                            requests,
+                            index,
+                            "受控跳过：请求已经取消",
+                            null);
+                    rethrow(failure);
+                    return;
+                }
+                ToolLoopTerminationProtocol.ControlledTermination termination =
+                        guardedExecution.controlledTermination();
+                if (termination != null) {
+                    if (!requestController.claimControlledTermination(termination)) {
+                        if (requestController.isCancelled()) {
+                            RuntimeException failure = skipRemainingBestEffort(
+                                    requests,
+                                    index,
+                                    "受控跳过：请求已经取消",
+                                    null);
+                            rethrow(failure);
+                        }
+                        return;
+                    }
+                    RuntimeException failure = null;
+                    try {
+                        try {
+                            notifyToolExecuted(normalizedRequest, guardedExecution.toolResult());
+                        } catch (RuntimeException exception) {
+                            failure = exception;
+                        }
+                        failure = skipRemainingBestEffort(
+                                requests,
+                                index + 1,
+                                "受控跳过：本批次已有工具触发终止",
+                                failure);
+                        if (failure == null) {
+                            try {
+                                completeClaimedTermination(completeResponse, termination);
+                            } catch (RuntimeException exception) {
+                                failure = exception;
+                            }
+                        }
+                    } finally {
+                        requestController.dispatchClaimedTermination();
+                    }
+                    rethrow(failure);
+                    return;
+                }
+                if (!requestController.runIfOpen(() -> notifyToolExecuted(
+                        normalizedRequest, guardedExecution.toolResult()))) {
+                    return;
                 }
             }
-
+            if (!requestController.isOpen()) {
+                return;
+            }
             ChatRequest chatRequest = ChatRequest.builder()
                     .messages(messagesToSend(memoryId))
                     .toolSpecifications(toolSpecifications)
                     .build();
 
+            if (!requestController.beforeModelRequest()) {
+                requestController.dispatchClaimedTermination();
+                return;
+            }
+            long nextGeneration = requestController.latestModelRequestGeneration();
             var handler = new AiServiceStreamingResponseHandler(
                     chatExecutor,
                     context,
@@ -181,11 +360,27 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     toolSpecifications,
                     toolExecutors,
                     commonGuardrailParams,
-                    methodKey);
+                    methodKey,
+                    requestController,
+                    toolExecutionGuard,
+                    nextGeneration);
 
-            context.streamingChatModel.chat(chatRequest, handler);
-        } else {
-            if (completeResponseHandler != null) {
+            try {
+                requestController.startModelRequestIfOpen(
+                        () -> context.streamingChatModel.chat(chatRequest, handler));
+            } catch (RuntimeException exception) {
+                handler.onError(exception);
+            }
+        }
+    }
+
+    private void completeOrdinaryResponse(
+            ChatResponse completeResponse, AiMessage aiMessage) {
+        if (!requestController.completeNormally()) {
+            return;
+        }
+        addToMemory(aiMessage);
+        if (completeResponseHandler != null) {
                 ChatResponse finalChatResponse = ChatResponse.builder()
                         .aiMessage(aiMessage)
                         .metadata(completeResponse.metadata().toBuilder()
@@ -222,7 +417,62 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
                 // TODO should completeResponseHandler accept all ChatResponses that happened?
                 completeResponseHandler.accept(finalChatResponse);
+        }
+    }
+
+    private void completeClaimedTermination(
+            ChatResponse source,
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        String finalResponse = termination.finalResponse();
+        if (finalResponse != null) {
+            AiMessage finalMessage = AiMessage.from(finalResponse);
+            addToMemory(finalMessage);
+            partialResponseHandler.accept(finalResponse);
+            if (completeResponseHandler != null) {
+                ChatResponse finalChatResponse = ChatResponse.builder()
+                        .aiMessage(finalMessage)
+                        .metadata(source.metadata().toBuilder()
+                                .tokenUsage(tokenUsage.add(source.metadata().tokenUsage()))
+                                .build())
+                        .build();
+                completeResponseHandler.accept(finalChatResponse);
             }
+        }
+    }
+
+    private RuntimeException skipRemainingBestEffort(
+            List<ToolExecutionRequest> requests,
+            int startIndex,
+            String reason,
+            RuntimeException firstFailure) {
+        RuntimeException failure = firstFailure;
+        for (int index = startIndex; index < requests.size(); index++) {
+            try {
+                notifyToolExecuted(requests.get(index), reason);
+            } catch (RuntimeException exception) {
+                if (failure == null) {
+                    failure = exception;
+                } else {
+                    failure.addSuppressed(exception);
+                }
+            }
+        }
+        return failure;
+    }
+
+    private void rethrow(RuntimeException failure) {
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private void notifyToolExecuted(ToolExecutionRequest request, String result) {
+        addToMemory(ToolExecutionResultMessage.from(request, result));
+        if (toolExecutionHandler != null) {
+            toolExecutionHandler.accept(ToolExecution.builder()
+                    .request(request)
+                    .result(result)
+                    .build());
         }
     }
 
@@ -244,14 +494,23 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     @Override
     public void onError(Throwable error) {
-        if (errorHandler != null) {
+        try (var callback = requestController.enterCallback()) {
+            if (callback == null) {
+                return;
+            }
+            deliverError(error);
+        }
+    }
+
+    private void deliverError(Throwable error) {
+        if (errorHandler != null && requestController.completeNormally()) {
             try {
                 errorHandler.accept(error);
             } catch (Exception e) {
                 LOG.error("While handling the following error...", error);
                 LOG.error("...the following error happened", e);
             }
-        } else {
+        } else if (errorHandler == null && requestController.completeNormally()) {
             LOG.warn("Ignored error", error);
         }
     }
@@ -261,12 +520,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         if (!normalized.isValid()) {
             LOG.warn("Skip malformed tool arguments: id={}, name={}, reason={}",
                     request.id(), request.name(), normalized.reason());
-            ToolExecutionResultMessage skippedMessage = ToolExecutionResultMessage.from(
-                    request,
-                    String.format("Skipped tool '%s' due to malformed JSON arguments",
-                            request.name())
-            );
-            addToMemory(skippedMessage);
             return null;
         }
         if (normalized.repaired()) {
