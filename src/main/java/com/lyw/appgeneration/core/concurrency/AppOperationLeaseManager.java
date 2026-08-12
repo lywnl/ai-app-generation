@@ -143,10 +143,8 @@ public final class AppOperationLeaseManager {
             CancellationDispatch cancellationDispatch,
             Throwable startFailure) {
         try {
-            source.executeCancellationDispatch(cancellationDispatch, false);
-            Throwable actionFailure = cancellationDispatch.failure.get();
-            if (actionFailure != null && actionFailure != startFailure) {
-                startFailure.addSuppressed(actionFailure);
+            if (source.rollbackFailedDispatchStart(cancellationDispatch)) {
+                operations.remove(source.appId, source);
             }
         } catch (Throwable cleanupFailure) {
             if (cleanupFailure != startFailure) {
@@ -558,6 +556,42 @@ public final class AppOperationLeaseManager {
             }
         }
 
+        private boolean rollbackFailedDispatchStart(CancellationDispatch dispatch) {
+            Throwable invariantFailure = null;
+            boolean removable;
+            synchronized (this) {
+                cancellationDispatchCount--;
+                for (CancellationEntry entry : dispatch.entries) {
+                    switch (entry.lifecycle()) {
+                        case PENDING -> {
+                            CancellationEntry existing =
+                                    cancellationEntries.putIfAbsent(entry.id, entry);
+                            if (existing != null && existing != entry
+                                    && invariantFailure == null) {
+                                invariantFailure = new IllegalStateException(
+                                        "取消动作回退时出现重复标识");
+                            }
+                        }
+                        case RUNNING -> {
+                            if (invariantFailure == null) {
+                                invariantFailure = new IllegalStateException(
+                                        "启动失败的取消分发中存在运行中动作");
+                            }
+                        }
+                        case CANCELLED, DONE -> {
+                            // 已关闭或已完成的动作不能重新进入待执行队列。
+                        }
+                    }
+                }
+                notifyIfQuiescent();
+                removable = removable();
+            }
+            if (invariantFailure != null) {
+                throwUnchecked(invariantFailure);
+            }
+            return removable;
+        }
+
         private synchronized boolean awaitQuiescence(Duration timeout)
                 throws InterruptedException {
             long deadlineNanos = deadlineAfter(timeout);
@@ -672,6 +706,10 @@ public final class AppOperationLeaseManager {
 
         private boolean start() {
             return lifecycle.compareAndSet(Lifecycle.PENDING, Lifecycle.RUNNING);
+        }
+
+        private Lifecycle lifecycle() {
+            return lifecycle.get();
         }
 
         private boolean cancelPending() {

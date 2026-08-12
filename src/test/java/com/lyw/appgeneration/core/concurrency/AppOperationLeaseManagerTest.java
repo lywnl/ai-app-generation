@@ -10,6 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -149,23 +150,41 @@ class AppOperationLeaseManagerTest {
     }
 
     @Test
-    void runtimeFailureStartingDispatchDoesNotLeakOperationState() {
+    void runtimeFailureStartingDispatchDoesNotRunBlockingActionOnDeleteThread()
+            throws Exception {
         AtomicInteger actions = new AtomicInteger();
+        CountDownLatch actionStarted = new CountDownLatch(1);
+        CountDownLatch releaseAction = new CountDownLatch(1);
         IllegalStateException startFailure = new IllegalStateException("启动失败");
         AppOperationLeaseManager manager = new AppOperationLeaseManager(
                 null, task -> { throw startFailure; });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
-        generateLease.registerCancellation(actions::incrementAndGet);
+        generateLease.registerCancellation(() -> {
+            actions.incrementAndGet();
+            actionStarted.countDown();
+            awaitUnchecked(releaseAction);
+        });
 
-        IllegalStateException thrown = assertThrows(
-                IllegalStateException.class,
-                () -> manager.cancelAndAcquireDelete(
-                        7L, "delete-1", Duration.ofSeconds(1)));
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> delete = executor.submit(() -> manager.cancelAndAcquireDelete(
+                    7L, "delete-1", Duration.ofMillis(30)));
+            try {
+                ExecutionException exception = assertThrows(
+                        ExecutionException.class,
+                        () -> delete.get(300, TimeUnit.MILLISECONDS));
+                assertSame(startFailure, exception.getCause());
+                assertEquals(1, actionStarted.getCount());
+                assertEquals(0, actions.get());
 
-        assertSame(startFailure, thrown);
-        assertEquals(1, actions.get());
-        generateLease.close();
-        assertCanAcquireNewTurn(manager);
+                releaseAction.countDown();
+                generateLease.close();
+                assertEquals(1, actions.get());
+                assertCanAcquireNewTurn(manager);
+            } finally {
+                releaseAction.countDown();
+                generateLease.close();
+            }
+        }
     }
 
     @Test
@@ -183,8 +202,9 @@ class AppOperationLeaseManagerTest {
                         7L, "delete-1", Duration.ofSeconds(1)));
 
         assertSame(startFailure, thrown);
-        assertEquals(1, actions.get());
+        assertEquals(0, actions.get());
         generateLease.close();
+        assertEquals(1, actions.get());
         assertCanAcquireNewTurn(manager);
     }
 
@@ -232,7 +252,7 @@ class AppOperationLeaseManagerTest {
     }
 
     @Test
-    void startFailureKeepsOriginalThrowableAndSuppressesActionFailure() {
+    void startFailureDefersActionFailureUntilOwnerClose() {
         IllegalStateException startFailure = new IllegalStateException("启动失败");
         AssertionError actionFailure = new AssertionError("动作失败");
         AppOperationLeaseManager manager = new AppOperationLeaseManager(
@@ -246,9 +266,43 @@ class AppOperationLeaseManagerTest {
                         7L, "delete-1", Duration.ofSeconds(1)));
 
         assertSame(startFailure, thrown);
-        assertEquals(1, thrown.getSuppressed().length);
-        assertSame(actionFailure, thrown.getSuppressed()[0]);
+        assertEquals(0, thrown.getSuppressed().length);
+        AssertionError closeFailure = assertThrows(
+                AssertionError.class, generateLease::close);
+        assertSame(actionFailure, closeFailure);
+        assertCanAcquireNewTurn(manager);
+    }
+
+    @Test
+    void failedDispatchStartDoesNotRestoreCancelledRegistration() {
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger dispatchStarts = new AtomicInteger();
+        AtomicReference<AppOperationLeaseManager.CancellationRegistration> registration =
+                new AtomicReference<>();
+        IllegalStateException startFailure = new IllegalStateException("启动失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(null, task -> {
+            if (dispatchStarts.incrementAndGet() == 1) {
+                registration.get().close();
+                throw startFailure;
+            }
+            task.run();
+        });
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registration.set(generateLease.registerCancellation(actions::incrementAndGet));
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-1", Duration.ofSeconds(1)));
+
+        assertSame(startFailure, thrown);
+        try (var deleteLease = manager.cancelAndAcquireDelete(
+                7L, "delete-2", Duration.ofSeconds(1))) {
+            assertEquals(AppOperationType.DELETE, deleteLease.operationType());
+        }
+        assertEquals(1, dispatchStarts.get());
         generateLease.close();
+        assertEquals(0, actions.get());
         assertCanAcquireNewTurn(manager);
     }
 
