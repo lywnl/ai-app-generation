@@ -306,6 +306,90 @@ class AppOperationLeaseManagerTest {
         assertCanAcquireNewTurn(manager);
     }
 
+    @Test
+    void ownerCloseWaitsForFailedDispatchStartAndDrainsRestoredAction()
+            throws Exception {
+        CountDownLatch starterEntered = new CountDownLatch(1);
+        CountDownLatch releaseStarter = new CountDownLatch(1);
+        AtomicInteger actions = new AtomicInteger();
+        AtomicReference<Thread> ownerCloseThread = new AtomicReference<>();
+        IllegalStateException startFailure = new IllegalStateException("启动失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(null, task -> {
+            starterEntered.countDown();
+            awaitUnchecked(releaseStarter);
+            throw startFailure;
+        });
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(actions::incrementAndGet);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> delete = executor.submit(() -> manager.cancelAndAcquireDelete(
+                    7L, "delete-1", Duration.ofSeconds(1)));
+            assertTrue(starterEntered.await(1, TimeUnit.SECONDS));
+            Future<?> ownerClose = executor.submit(() -> {
+                ownerCloseThread.set(Thread.currentThread());
+                generateLease.close();
+            });
+            awaitThreadWaiting(ownerCloseThread);
+            assertFalse(ownerClose.isDone());
+
+            releaseStarter.countDown();
+            ExecutionException exception = assertThrows(
+                    ExecutionException.class,
+                    () -> delete.get(300, TimeUnit.MILLISECONDS));
+            assertSame(startFailure, exception.getCause());
+            ownerClose.get(1, TimeUnit.SECONDS);
+            assertEquals(1, actions.get());
+            assertCanAcquireNewTurn(manager);
+        } finally {
+            releaseStarter.countDown();
+            generateLease.close();
+        }
+    }
+
+    @Test
+    void interruptedOwnerClosePreservesInterruptWhileDrainingRestoredAction()
+            throws Exception {
+        CountDownLatch starterEntered = new CountDownLatch(1);
+        CountDownLatch releaseStarter = new CountDownLatch(1);
+        AtomicInteger actions = new AtomicInteger();
+        AtomicReference<Thread> ownerCloseThread = new AtomicReference<>();
+        IllegalStateException startFailure = new IllegalStateException("启动失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(null, task -> {
+            starterEntered.countDown();
+            awaitUnchecked(releaseStarter);
+            throw startFailure;
+        });
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerCancellation(actions::incrementAndGet);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> delete = executor.submit(() -> manager.cancelAndAcquireDelete(
+                    7L, "delete-1", Duration.ofSeconds(1)));
+            assertTrue(starterEntered.await(1, TimeUnit.SECONDS));
+            Future<Boolean> ownerClose = executor.submit(() -> {
+                ownerCloseThread.set(Thread.currentThread());
+                Thread.currentThread().interrupt();
+                generateLease.close();
+                return Thread.currentThread().isInterrupted();
+            });
+            awaitThreadWaiting(ownerCloseThread);
+            assertFalse(ownerClose.isDone());
+
+            releaseStarter.countDown();
+            ExecutionException exception = assertThrows(
+                    ExecutionException.class,
+                    () -> delete.get(300, TimeUnit.MILLISECONDS));
+            assertSame(startFailure, exception.getCause());
+            assertTrue(ownerClose.get(1, TimeUnit.SECONDS));
+            assertEquals(1, actions.get());
+            assertCanAcquireNewTurn(manager);
+        } finally {
+            releaseStarter.countDown();
+            generateLease.close();
+        }
+    }
+
     private void assertRegistrationRejected(Future<?> registration) throws Exception {
         ExecutionException exception = assertThrows(
                 ExecutionException.class,
@@ -318,6 +402,17 @@ class AppOperationLeaseManagerTest {
                 7L, AppOperationType.GENERATE, "turn-next")) {
             // 能领取即证明旧操作状态已经释放。
         }
+    }
+
+    private void awaitThreadWaiting(AtomicReference<Thread> threadReference) {
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        Thread thread;
+        while (((thread = threadReference.get()) == null
+                || thread.getState() != Thread.State.WAITING)
+                && System.nanoTime() < deadlineNanos) {
+            Thread.onSpinWait();
+        }
+        assertTrue(thread != null && thread.getState() == Thread.State.WAITING);
     }
 
     private void awaitCancellationGateClosed(

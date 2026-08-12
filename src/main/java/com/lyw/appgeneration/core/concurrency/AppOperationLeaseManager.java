@@ -99,7 +99,7 @@ public final class AppOperationLeaseManager {
 
         OperationState source = sourceReference.get();
         CancellationDispatch cancellationDispatch =
-                source.prepareCancellationDispatch();
+                source.prepareCancellationDispatchForStart();
         if (cancellationDispatch != null) {
             try {
                 cancellationDispatchStarter.start(
@@ -107,6 +107,7 @@ public final class AppOperationLeaseManager {
             } catch (Throwable startFailure) {
                 completeFailedDispatchStart(source, cancellationDispatch, startFailure);
             }
+            source.completeCancellationDispatchStart();
         }
         boolean readyForReplacement;
         try {
@@ -180,13 +181,32 @@ public final class AppOperationLeaseManager {
 
     private void ownerClosed(OperationState state) {
         boolean removable = state.closeOwner();
+        Throwable failure = null;
         try {
-            state.fireCancellationActions();
+            CancellationDispatch dispatch;
+            while ((dispatch =
+                    state.awaitDispatchDecisionAndPrepareNextForClosedOwner()) != null) {
+                state.executeCancellationDispatch(dispatch, false);
+                failure = appendFailure(failure, dispatch.failure.get());
+            }
         } finally {
             if (removable) {
                 operations.remove(state.appId, state);
             }
         }
+        if (failure != null) {
+            throwUnchecked(failure);
+        }
+    }
+
+    private static Throwable appendFailure(Throwable failure, Throwable nextFailure) {
+        if (failure == null) {
+            return nextFailure;
+        }
+        if (nextFailure != null && failure != nextFailure) {
+            failure.addSuppressed(nextFailure);
+        }
+        return failure;
     }
 
     private void callbackClosed(OperationState state) {
@@ -372,6 +392,7 @@ public final class AppOperationLeaseManager {
         private long nextCancellationId;
         private int callbackCount;
         private int cancellationDispatchCount;
+        private int cancellationDispatchStartDecisionCount;
         private int runningCancellationCount;
         private boolean cancellationRequested;
         private boolean ownerClosed;
@@ -483,17 +504,57 @@ public final class AppOperationLeaseManager {
             }
         }
 
+        private CancellationDispatch
+                awaitDispatchDecisionAndPrepareNextForClosedOwner() {
+            boolean interrupted = false;
+            synchronized (this) {
+                while (cancellationEntries.isEmpty()
+                        && cancellationDispatchStartDecisionCount > 0) {
+                    try {
+                        wait();
+                    } catch (InterruptedException exception) {
+                        interrupted = true;
+                    }
+                }
+                CancellationDispatch dispatch = prepareCancellationDispatch();
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                return dispatch;
+            }
+        }
+
         private CancellationDispatch prepareCancellationDispatch() {
+            return prepareCancellationDispatch(false);
+        }
+
+        private CancellationDispatch prepareCancellationDispatchForStart() {
+            return prepareCancellationDispatch(true);
+        }
+
+        private CancellationDispatch prepareCancellationDispatch(
+                boolean startDecisionPending) {
             List<CancellationEntry> entries;
             synchronized (this) {
                 if (!cancellationRequested || cancellationEntries.isEmpty()) {
                     return null;
                 }
                 cancellationDispatchCount++;
+                if (startDecisionPending) {
+                    cancellationDispatchStartDecisionCount++;
+                }
                 entries = new ArrayList<>(cancellationEntries.values());
                 cancellationEntries.clear();
             }
             return new CancellationDispatch(entries);
+        }
+
+        private synchronized void completeCancellationDispatchStart() {
+            if (cancellationDispatchStartDecisionCount <= 0) {
+                throw new IllegalStateException("取消分发启动决策计数不合法");
+            }
+            cancellationDispatchStartDecisionCount--;
+            notifyAll();
         }
 
         private void executeCancellationDispatch(
@@ -548,7 +609,7 @@ public final class AppOperationLeaseManager {
             synchronized (this) {
                 dispatch.failure.set(failure);
                 cancellationDispatchCount--;
-                notifyIfQuiescent();
+                notifyAll();
                 removable = removable();
             }
             if (removable) {
@@ -561,6 +622,12 @@ public final class AppOperationLeaseManager {
             boolean removable;
             synchronized (this) {
                 cancellationDispatchCount--;
+                if (cancellationDispatchStartDecisionCount <= 0) {
+                    invariantFailure = new IllegalStateException(
+                            "取消分发启动回退计数不合法");
+                } else {
+                    cancellationDispatchStartDecisionCount--;
+                }
                 for (CancellationEntry entry : dispatch.entries) {
                     switch (entry.lifecycle()) {
                         case PENDING -> {
@@ -583,7 +650,7 @@ public final class AppOperationLeaseManager {
                         }
                     }
                 }
-                notifyIfQuiescent();
+                notifyAll();
                 removable = removable();
             }
             if (invariantFailure != null) {
