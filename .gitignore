@@ -40,3 +40,4 @@ docker/.data
 tmp
 
 prod/artifacts/backend/
+/logs/

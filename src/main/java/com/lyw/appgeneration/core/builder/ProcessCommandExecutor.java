@@ -21,6 +21,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * 使用真实 {@link ProcessBuilder} 执行构建命令。
@@ -39,6 +40,33 @@ final class ProcessCommandExecutor implements CommandExecutor {
     @Override
     public CommandResult execute(Path workingDirectory, List<String> command, Duration timeout)
             throws IOException, InterruptedException {
+        return CommandExecutor.super.execute(workingDirectory, command, timeout);
+    }
+
+    @Override
+    public CommandResult execute(
+            Path workingDirectory,
+            List<String> command,
+            Duration timeout,
+            Consumer<String> rawOutputConsumer,
+            BuildCancellationSignal cancellation) throws IOException, InterruptedException {
+        java.util.Objects.requireNonNull(rawOutputConsumer, "rawOutputConsumer 不能为空");
+        java.util.Objects.requireNonNull(cancellation, "cancellation 不能为空");
+        try (BuildCancellationSignal.Registration ignored = cancellation.registerCurrentThread()) {
+            if (cancellation.isCancelled()) {
+                return new CommandResult(null, false, true, "");
+            }
+            return executeRegistered(
+                    workingDirectory, command, timeout, rawOutputConsumer, cancellation);
+        }
+    }
+
+    private CommandResult executeRegistered(
+            Path workingDirectory,
+            List<String> command,
+            Duration timeout,
+            Consumer<String> rawOutputConsumer,
+            BuildCancellationSignal cancellation) throws IOException, InterruptedException {
         ProcessBuilder processBuilder = new ProcessBuilder(command)
                 .directory(workingDirectory.toFile())
                 .redirectErrorStream(true);
@@ -47,24 +75,31 @@ final class ProcessCommandExecutor implements CommandExecutor {
         ProcessTracker tracker = new ProcessTracker(process.toHandle());
         CharacterTailBuffer outputTail = new CharacterTailBuffer(
                 BuildResult.MAX_OUTPUT_TAIL_CHARS);
-        TaskResources tasks = startTasks(process, tracker, outputTail);
+        TaskResources tasks = startTasks(process, tracker, outputTail, rawOutputConsumer);
         try {
             boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
             if (!finished) {
                 CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
                 throwIfCleanupInterrupted(cleanup, null);
                 throwIfCleanupFailed(cleanup, null);
-                return new CommandResult(null, true, cleanup.outputTail());
+                return new CommandResult(null, true, false, cleanup.outputTail());
             }
             awaitOutput(tasks.outputReader());
             stopMonitor(tasks, tracker);
             shutdownTasks(tasks.executor());
-            return new CommandResult(process.exitValue(), false, outputTail.toString());
+            return new CommandResult(process.exitValue(), false, false, outputTail.toString());
         } catch (InterruptedException exception) {
             CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
+            Thread.currentThread().interrupt();
+            if (cancellation.isCancelled()) {
+                if (cleanup.failure() != null) {
+                    throw new ProcessCleanupException(
+                            "命令取消后的进程树清理失败", cleanup.failure());
+                }
+                return new CommandResult(null, false, true, cleanup.outputTail());
+            }
             InterruptedException interrupted = interruptedException(
                     "命令执行被中断，已完成有界进程清理", exception, cleanup.failure());
-            Thread.currentThread().interrupt();
             throw interrupted;
         } catch (IOException exception) {
             CleanupResult cleanup = cleanup(process, tracker, tasks, outputTail);
@@ -127,11 +162,12 @@ final class ProcessCommandExecutor implements CommandExecutor {
 
     private TaskResources startTasks(Process process,
                                      ProcessTracker tracker,
-                                     CharacterTailBuffer outputTail) {
+                                     CharacterTailBuffer outputTail,
+                                     Consumer<String> rawOutputConsumer) {
         ExecutorService executor = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name("process-command-monitor-", 0).factory());
         Future<?> outputReader = executor.submit(() -> {
-            readOutput(process, outputTail);
+            readOutput(process, outputTail, rawOutputConsumer);
             return null;
         });
         Future<?> monitor = executor.submit(() -> monitorDescendants(tracker));
@@ -251,11 +287,19 @@ final class ProcessCommandExecutor implements CommandExecutor {
         return aliveProcessIds;
     }
 
-    private void readOutput(Process process, CharacterTailBuffer tail) throws IOException {
+    private void readOutput(
+            Process process,
+            CharacterTailBuffer tail,
+            Consumer<String> rawOutputConsumer) throws IOException {
         try (Reader reader = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)) {
             char[] buffer = new char[READ_BUFFER_CHARS];
             int read;
             while ((read = reader.read(buffer)) != -1) {
+                try {
+                    rawOutputConsumer.accept(new String(buffer, 0, read));
+                } catch (RuntimeException ignored) {
+                    // 日志旁路故障不得改变命令执行结果。
+                }
                 tail.append(buffer, read);
             }
         }
@@ -517,6 +561,9 @@ final class ProcessCommandExecutor implements CommandExecutor {
             StringBuilder output = new StringBuilder(size);
             for (int index = 0; index < size; index++) {
                 output.append(chars[(start + index) % chars.length]);
+            }
+            if (!output.isEmpty() && Character.isLowSurrogate(output.charAt(0))) {
+                output.deleteCharAt(0);
             }
             return output.toString();
         }

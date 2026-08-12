@@ -266,12 +266,17 @@ public final class VueBuildSessionManager {
 
         private synchronized VueBuildSnapshot recordFailure(
                 BuildAttemptTicket ticket, BuildResult result) {
-            validateTicket(ticket);
             Objects.requireNonNull(result, "BuildResult 不能为空");
             if (result.success()) {
                 throw new IllegalArgumentException("recordFailure 只接受失败构建结果");
             }
+            validateTicket(ticket, result.cancelled() && phase == VueBuildPhase.CANCELLED);
             completeTicket(ticket);
+            if (result.cancelled()) {
+                failureKind = null;
+                phase = VueBuildPhase.CANCELLED;
+                return snapshotUnsafe();
+            }
             failureKind = classifyFailure(result);
             phase = failurePhase(ticket.attempt);
             return snapshotUnsafe();
@@ -364,6 +369,11 @@ public final class VueBuildSessionManager {
         }
 
         private void validateTicket(BuildAttemptTicket ticket) {
+            validateTicket(ticket, false);
+        }
+
+        private void validateTicket(
+                BuildAttemptTicket ticket, boolean allowExistingCancellation) {
             Objects.requireNonNull(ticket, "ticket 不能为空");
             if (ticket.owner != this) {
                 throw new IllegalArgumentException("构建票据不属于当前 Vue 回合");
@@ -371,7 +381,7 @@ public final class VueBuildSessionManager {
             if (ticket.closed.get() || ticket.completed || activeTicket != ticket) {
                 throw new IllegalStateException("构建票据已经完成、关闭或失效");
             }
-            if (isTerminal()) {
+            if (isTerminal() && !allowExistingCancellation) {
                 throw new IllegalStateException("当前 Vue 回合不能记录构建结果");
             }
         }
@@ -412,11 +422,8 @@ public final class VueBuildSessionManager {
         }
 
         private static VueBuildFailureKind classifyFailure(BuildResult result) {
-            if (result.timedOut()) {
-                return VueBuildFailureKind.INFRASTRUCTURE;
-            }
-            return result.stage() == BuildStage.NPM_INSTALL
-                    ? VueBuildFailureKind.DEPENDENCY : VueBuildFailureKind.CODE;
+            return Objects.requireNonNull(
+                    result.failureKind(), "失败构建结果必须包含 failureKind");
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.core.builder;
 
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -20,11 +21,13 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VueProjectBuilderTest {
@@ -73,12 +76,11 @@ class VueProjectBuilderTest {
         assertEquals(17, result.exitCode());
         assertFalse(result.timedOut());
         assertEquals("install failed", result.outputTail());
-        assertEquals(new CommandInvocation(
-                        tempDir.toRealPath(),
-                        List.of("npm.cmd", "install", "--ignore-scripts", "--package-lock=false",
-                                "--no-audit", "--no-fund"),
-                        Duration.ofSeconds(300)),
-                executor.invocations.getFirst());
+        CommandInvocation invocation = executor.invocations.getFirst();
+        assertEquals(tempDir.toRealPath(), invocation.workingDirectory());
+        assertEquals(List.of("npm.cmd", "install", "--ignore-scripts", "--package-lock=false",
+                "--no-audit", "--no-fund"), invocation.command());
+        assertEquals(Duration.ofSeconds(300), invocation.timeout());
     }
 
     @Test
@@ -206,20 +208,21 @@ class VueProjectBuilderTest {
     }
 
     @Test
-    void rejectsPreexistingNodeModulesBeforeInstallation() throws IOException {
+    void replacesUntrustedPreexistingNodeModulesBeforeInstallation() throws IOException {
         createPackageJson();
         Path maliciousVite = tempDir.resolve("node_modules/vite/bin/vite.js");
         Files.createDirectories(maliciousVite.getParent());
         Files.writeString(maliciousVite, "throw new Error('模型控制的 Vite CLI')");
-        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+        RecordingCommandExecutor executor = new RecordingCommandExecutor(
+                new CommandResult(1, false, "install failed"));
 
         BuildResult result = new VueProjectBuilder(executor, "npm")
                 .buildProjectDetailed(tempDir.toString());
 
         assertFalse(result.success());
-        assertEquals(BuildStage.VALIDATION, result.stage());
-        assertTrue(result.outputTail().contains("node_modules"));
-        assertTrue(executor.invocations.isEmpty());
+        assertEquals(BuildStage.NPM_INSTALL, result.stage());
+        assertEquals(1, executor.invocations.size());
+        assertFalse(Files.exists(maliciousVite, LinkOption.NOFOLLOW_LINKS));
     }
 
     @ParameterizedTest
@@ -374,6 +377,70 @@ class VueProjectBuilderTest {
     }
 
     @Test
+    void pathEntryUsesExactOnlineContextForRawLogsAndCancellation() throws IOException {
+        createPackageJson();
+        RecordingCommandExecutor executor = successfulExecutorCreatingDist();
+        List<String> logEvents = new ArrayList<>();
+        BuildLogSink rootSink = new BuildLogSink(
+                7L, "turn-1", 2, BuildStage.VALIDATION,
+                logEvents::add, ignored -> { });
+        BuildCancellationSignal cancellation = new BuildCancellationSignal();
+        BuildExecutionContext context = new BuildExecutionContext(
+                7L, "turn-1", 2, cancellation, rootSink);
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir, context);
+
+        assertTrue(result.success());
+        assertEquals(2, executor.invocations.size());
+        executor.invocations.forEach(invocation -> assertSame(
+                cancellation, invocation.cancellation()));
+        assertTrue(logEvents.stream().anyMatch(event -> event.contains("stage=NPM_INSTALL")));
+        assertTrue(logEvents.stream().anyMatch(event -> event.contains("stage=NPM_BUILD")));
+        assertTrue(logEvents.stream().anyMatch(event -> event.contains("原始输出")));
+    }
+
+    @Test
+    void buildAttemptTicketCanCancelConcreteBuildSignal() {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        try (var operation = operationManager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE, "turn-1");
+             var lease = sessionManager.open(operation, 9L, "turn-1");
+             var ticket = lease.beginBuild()) {
+            BuildCancellationSignal signal = new BuildCancellationSignal();
+            ticket.registerCancellation(signal::cancel);
+
+            lease.cancel();
+
+            assertTrue(signal.isCancelled());
+            assertEquals(VueBuildPhase.CANCELLED, lease.snapshot().phase());
+        }
+    }
+
+    @Test
+    void preCancelledOnlineBuildDoesNotMutateProjectOrStartCommand() throws IOException {
+        createPackageJson();
+        Path staleAsset = tempDir.resolve("dist/stale.js");
+        Files.createDirectories(staleAsset.getParent());
+        Files.writeString(staleAsset, "stale");
+        RecordingCommandExecutor executor = new RecordingCommandExecutor();
+        BuildCancellationSignal cancellation = new BuildCancellationSignal();
+        cancellation.cancel();
+        BuildLogSink sink = new BuildLogSink(7L, "turn-1", 1, BuildStage.VALIDATION,
+                ignored -> { }, ignored -> { });
+
+        BuildResult result = new VueProjectBuilder(executor, "npm")
+                .buildProjectDetailed(tempDir, new BuildExecutionContext(
+                        7L, "turn-1", 1, cancellation, sink));
+
+        assertTrue(result.cancelled());
+        assertEquals(BuildStage.VALIDATION, result.stage());
+        assertTrue(Files.isRegularFile(staleAsset));
+        assertTrue(executor.invocations.isEmpty());
+    }
+
+    @Test
     void keepsAsynchronousCompatibilityByDelegatingToDetailedBuild() throws Exception {
         createPackageJson();
         RecordingCommandExecutor executor = successfulExecutorCreatingDist();
@@ -383,6 +450,7 @@ class VueProjectBuilderTest {
         builder.buildProjectAsync(tempDir.toString());
 
         assertTrue(executor.completionLatch.await(2, TimeUnit.SECONDS));
+        awaitVueBuilderCompletion();
         assertEquals(2, executor.invocations.size());
     }
 
@@ -413,7 +481,7 @@ class VueProjectBuilderTest {
         assertNull(result.exitCode());
         assertFalse(result.timedOut());
         assertTrue(result.outputTail().contains("清理旧 dist 目录失败"));
-        assertEquals(1, executor.invocations.size());
+        assertEquals(0, executor.invocations.size());
     }
 
     @Test
@@ -445,6 +513,22 @@ class VueProjectBuilderTest {
 
     private void createPackageJson() throws IOException {
         Files.writeString(tempDir.resolve("package.json"), trustedPackageJson());
+    }
+
+    private void awaitVueBuilderCompletion() throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            boolean running = Thread.getAllStackTraces().keySet().stream()
+                    .anyMatch(thread -> thread.isAlive()
+                            && thread.getName().startsWith("vue-builder-"));
+            if (!running) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        assertFalse(Thread.getAllStackTraces().keySet().stream()
+                .anyMatch(thread -> thread.isAlive()
+                        && thread.getName().startsWith("vue-builder-")));
     }
 
     private static String trustedPackageJson() {
@@ -495,20 +579,27 @@ class VueProjectBuilderTest {
         public synchronized CommandResult execute(
                 Path workingDirectory,
                 List<String> command,
-                Duration timeout) throws IOException {
-            invocations.add(new CommandInvocation(workingDirectory, List.copyOf(command), timeout));
-            if (completionLatch != null) {
-                completionLatch.countDown();
-            }
+                Duration timeout,
+                Consumer<String> rawOutputConsumer,
+                BuildCancellationSignal cancellation) throws IOException {
+            invocations.add(new CommandInvocation(
+                    workingDirectory, List.copyOf(command), timeout, cancellation));
             if (results.isEmpty()) {
                 throw new AssertionError("测试没有配置命令结果");
             }
             CommandResult result = results.remove();
+            rawOutputConsumer.accept("原始输出\n");
+            if (isSuccessfulInstall(command, result)) {
+                Files.createDirectories(workingDirectory.resolve("node_modules/vite/bin"));
+            }
             if (command.size() == 5 && "build".equals(command.get(2))) {
                 buildConfigContents = Files.readString(Path.of(command.get(4)));
             }
             if (isSuccessfulBuild(command, result)) {
                 successfulBuildAction.run(workingDirectory);
+            }
+            if (completionLatch != null) {
+                completionLatch.countDown();
             }
             return result;
         }
@@ -518,6 +609,14 @@ class VueProjectBuilderTest {
                     && "build".equals(command.get(2))
                     && Integer.valueOf(0).equals(result.exitCode())
                     && !result.timedOut();
+        }
+
+        private boolean isSuccessfulInstall(List<String> command, CommandResult result) {
+            return command.size() >= 2
+                    && "install".equals(command.get(1))
+                    && Integer.valueOf(0).equals(result.exitCode())
+                    && !result.timedOut()
+                    && !result.cancelled();
         }
     }
 
@@ -530,7 +629,8 @@ class VueProjectBuilderTest {
     private record CommandInvocation(
             Path workingDirectory,
             List<String> command,
-            Duration timeout
+            Duration timeout,
+            BuildCancellationSignal cancellation
     ) {
     }
 }

@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -47,6 +48,133 @@ class ProcessCommandExecutorTest {
         assertEquals(0, result.exitCode());
         assertEquals(BuildResult.MAX_OUTPUT_TAIL_CHARS, result.outputTail().length());
         assertTrue(result.outputTail().contains("标准错误结束"));
+    }
+
+    @Test
+    void streamsRawChunksAndLogSinkReconstructsBoundaryLines() throws Exception {
+        StringBuilder raw = new StringBuilder();
+        CommandResult result = new ProcessCommandExecutor().execute(
+                tempDir,
+                javaCommand("large-output"),
+                Duration.ofSeconds(10),
+                raw::append,
+                new BuildCancellationSignal());
+
+        assertTrue(raw.length() > BuildResult.MAX_OUTPUT_TAIL_CHARS);
+        assertEquals(BuildResult.MAX_OUTPUT_TAIL_CHARS, result.outputTail().length());
+        assertFalse(result.cancelled());
+
+        List<String> events = new ArrayList<>();
+        BuildLogSink sink = new BuildLogSink(
+                7L, "turn\r\n1", 2, BuildStage.NPM_BUILD,
+                events::add, ignored -> { });
+        sink.accept("第一");
+        sink.accept("行\r\n" + "界".repeat(1_024));
+        sink.close();
+        assertTrue(events.getFirst().endsWith("第一行"));
+        assertTrue(events.stream().noneMatch(event -> event.contains("turn\r\n1")));
+        assertTrue(events.getLast().contains("end=true"));
+        assertEquals("界".repeat(1_024), events.subList(1, events.size()).stream()
+                .map(this::eventBody).collect(java.util.stream.Collectors.joining()));
+
+        events.clear();
+        BuildLogSink carriageReturnSink = new BuildLogSink(
+                7L, "turn-1", 2, BuildStage.NPM_BUILD,
+                events::add, ignored -> { });
+        carriageReturnSink.accept("甲\r");
+        carriageReturnSink.accept("\n乙\r丙");
+        carriageReturnSink.close();
+        assertEquals(List.of("甲", "乙", "丙"), events.stream()
+                .map(this::eventBody).toList());
+
+        events.clear();
+        BuildLogSink unicodeSink = new BuildLogSink(
+                7L, "turn-1", 2, BuildStage.NPM_BUILD,
+                events::add, ignored -> { });
+        String unicodeLine = "界".repeat(1_023) + "😀";
+        unicodeSink.accept(unicodeLine.substring(0, unicodeLine.length() - 1));
+        unicodeSink.accept(unicodeLine.substring(unicodeLine.length() - 1));
+        unicodeSink.close();
+        assertEquals(unicodeLine, events.stream()
+                .map(this::eventBody).collect(java.util.stream.Collectors.joining()));
+        assertTrue(events.stream().noneMatch(event -> {
+            String body = eventBody(event);
+            return (!body.isEmpty() && Character.isLowSurrogate(body.charAt(0)))
+                    || (!body.isEmpty()
+                    && Character.isHighSurrogate(body.charAt(body.length() - 1)));
+        }));
+    }
+
+    @Test
+    void cancellationReturnsControlledResultAndCleansRealProcessTree() throws Exception {
+        Path parentPidFile = tempDir.resolve("cancel-parent.pid");
+        Path childPidFile = tempDir.resolve("cancel-child.pid");
+        BuildCancellationSignal cancellation = new BuildCancellationSignal();
+        AtomicReference<CommandResult> result = new AtomicReference<>();
+        AtomicBoolean interrupted = new AtomicBoolean();
+        Thread worker = Thread.ofVirtual().start(() -> {
+            try {
+                result.set(new ProcessCommandExecutor().execute(
+                        tempDir,
+                        javaCommand("tree-parent", parentPidFile.toString(), childPidFile.toString()),
+                        Duration.ofSeconds(30),
+                        ignored -> { }, cancellation));
+                interrupted.set(Thread.currentThread().isInterrupted());
+            } catch (Exception exception) {
+                throw new AssertionError(exception);
+            }
+        });
+        long parentPid = awaitPid(parentPidFile);
+        long childPid = awaitPid(childPidFile);
+
+        cancellation.cancel();
+        worker.join(Duration.ofSeconds(3));
+
+        assertFalse(worker.isAlive());
+        assertTrue(result.get().cancelled());
+        assertFalse(result.get().timedOut());
+        assertTrue(interrupted.get());
+        assertFalse(isAlive(parentPid));
+        assertFalse(isAlive(childPid));
+    }
+
+    @Test
+    void completedCommandUnregistersThreadFromCancellationSignal() throws Exception {
+        BuildCancellationSignal cancellation = new BuildCancellationSignal();
+
+        CommandResult result = new ProcessCommandExecutor().execute(
+                tempDir,
+                javaCommand("large-output"),
+                Duration.ofSeconds(10),
+                ignored -> { },
+                cancellation);
+        Thread.interrupted();
+
+        assertEquals(0, result.exitCode());
+        cancellation.cancel();
+        assertFalse(Thread.currentThread().isInterrupted(),
+                "命令结束后取消信号不得误中断复用线程");
+    }
+
+    @Test
+    void preCancelledSignalDoesNotStartCommand() throws Exception {
+        BuildCancellationSignal cancellation = new BuildCancellationSignal();
+        cancellation.cancel();
+
+        CommandResult result = new ProcessCommandExecutor().execute(
+                tempDir,
+                List.of("definitely-not-an-executable"),
+                Duration.ofSeconds(1),
+                ignored -> { },
+                cancellation);
+
+        assertTrue(result.cancelled());
+        assertTrue(Thread.interrupted(), "预取消必须保留调用线程的中断状态");
+    }
+
+    private String eventBody(String event) {
+        int separator = event.lastIndexOf(" | ");
+        return event.substring(separator + 3);
     }
 
     @Test

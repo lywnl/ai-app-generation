@@ -9,8 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -40,8 +40,7 @@ public class VueProjectBuilder {
     private static final List<String> FORBIDDEN_NPM_RESOLUTION_FILES = List.of(
             "package-lock.json",
             "npm-shrinkwrap.json",
-            ".npmrc",
-            "node_modules");
+            ".npmrc");
     private static final Map<String, String> TRUSTED_RUNTIME_DEPENDENCIES = Map.of(
             "vue", "3.3.4",
             "vue-router", "4.2.4",
@@ -67,18 +66,28 @@ public class VueProjectBuilder {
 
     private final CommandExecutor commandExecutor;
     private final String npmExecutable;
+    private final VueDependencyManager dependencyManager;
 
     /**
      * 生产环境始终使用真实 ProcessBuilder 命令执行器。
      */
     @Autowired
     public VueProjectBuilder() {
-        this(new ProcessCommandExecutor(), npmExecutable(System.getProperty("os.name")));
+        this(new ProcessCommandExecutor(), npmExecutable(System.getProperty("os.name")),
+                new VueDependencyManager());
     }
 
     VueProjectBuilder(CommandExecutor commandExecutor, String npmExecutable) {
+        this(commandExecutor, npmExecutable, new VueDependencyManager());
+    }
+
+    VueProjectBuilder(
+            CommandExecutor commandExecutor,
+            String npmExecutable,
+            VueDependencyManager dependencyManager) {
         this.commandExecutor = commandExecutor;
         this.npmExecutable = npmExecutable;
+        this.dependencyManager = dependencyManager;
     }
 
     /**
@@ -109,54 +118,127 @@ public class VueProjectBuilder {
      * @return 不会抛出命令异常的结构化结果
      */
     public BuildResult buildProjectDetailed(String projectPath) {
+        Path projectRoot = toProjectDirectory(projectPath);
+        BuildLogSink compatibilitySink = new BuildLogSink(
+                0L, "legacy-build", 1, BuildStage.VALIDATION);
+        BuildExecutionContext compatibilityContext = new BuildExecutionContext(
+                0L, "legacy-build", 1, new BuildCancellationSignal(), compatibilitySink);
+        return buildProjectDetailed(projectRoot, compatibilityContext);
+    }
+
+    /** 使用在线回合提供的可信上下文执行构建。 */
+    public BuildResult buildProjectDetailed(Path projectRoot, BuildExecutionContext context) {
         long startNanos = System.nanoTime();
-        Path projectDirectory = toProjectDirectory(projectPath);
-        String validationError = validate(projectDirectory);
-        if (validationError != null) {
-            return result(false, BuildStage.VALIDATION, null, false,
-                    validationError, startNanos);
+        java.util.Objects.requireNonNull(context, "context 不能为空");
+        if (context.cancellation().isCancelled()) {
+            return cancellationResult(
+                    BuildStage.VALIDATION, new StringBuilder(), startNanos);
         }
+        Path projectDirectory;
         try {
-            projectDirectory = projectDirectory.toRealPath();
+            if (projectRoot == null) {
+                throw new IOException("项目根路径为空或格式无效");
+            }
+            projectDirectory = projectRoot.toRealPath();
+            if (!Files.isDirectory(projectDirectory, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("项目根路径不存在或不是目录");
+            }
         } catch (IOException | RuntimeException exception) {
-            return result(false, BuildStage.VALIDATION, null, false,
+            return result(false, BuildStage.VALIDATION, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE,
                     "项目目录无法规范化: " + safeMessage(exception), startNanos);
+        }
+        String validationError = validateProjectContent(projectDirectory);
+        if (validationError != null) {
+            return result(false, BuildStage.VALIDATION, null, false, false,
+                    VueBuildFailureKind.CODE, validationError, startNanos);
         }
 
         StringBuilder output = new StringBuilder();
+        BuildResult distCleanupResult = cleanPreviousDist(
+                projectDirectory, output, startNanos);
+        if (distCleanupResult != null) {
+            return distCleanupResult;
+        }
+        if (context.cancellation().isCancelled()) {
+            return cancellationResult(BuildStage.NPM_BUILD, output, startNanos);
+        }
+
+        String packageFingerprint;
+        VueDependencyManager.DependencyDecision dependencyDecision;
+        try {
+            packageFingerprint = fingerprint(projectDirectory.resolve("package.json"));
+            dependencyDecision = dependencyManager.prepare(projectDirectory, packageFingerprint);
+        } catch (IOException | RuntimeException exception) {
+            appendOutput(output, "准备依赖目录失败: " + safeMessage(exception));
+            return result(false, BuildStage.NPM_INSTALL, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
+        }
+        if (dependencyDecision.requiresInstall()) {
+            BuildResult installResult = installDependencies(
+                    projectDirectory, packageFingerprint, context, output, startNanos);
+            if (installResult != null) {
+                return installResult;
+            }
+        }
+        if (context.cancellation().isCancelled()) {
+            return cancellationResult(BuildStage.NPM_INSTALL, output, startNanos);
+        }
+
+        BuildResult buildResult = runTrustedViteBuild(
+                projectDirectory, context, output, startNanos);
+        if (buildResult != null) {
+            return buildResult;
+        }
+        if (context.cancellation().isCancelled()) {
+            return cancellationResult(BuildStage.NPM_BUILD, output, startNanos);
+        }
+
+        Path distDirectory = projectDirectory.resolve("dist");
+        if (!Files.isDirectory(distDirectory)) {
+            appendOutput(output, "构建命令成功，但 dist 目录未生成");
+            return result(false, BuildStage.DIST_CHECK, 0, false, false,
+                    VueBuildFailureKind.CODE, output.toString(), startNanos);
+        }
+        return result(true, BuildStage.SUCCESS, 0, false, false,
+                null, output.toString(), startNanos);
+    }
+
+    private BuildResult installDependencies(
+            Path projectDirectory,
+            String packageFingerprint,
+            BuildExecutionContext context,
+            StringBuilder output,
+            long startNanos) {
         BuildResult installResult = runCommand(
                 projectDirectory,
                 List.of(npmExecutable, "install", "--ignore-scripts", "--package-lock=false",
                         "--no-audit", "--no-fund"),
                 NPM_INSTALL_TIMEOUT,
                 BuildStage.NPM_INSTALL,
+                VueBuildFailureKind.DEPENDENCY,
+                context,
                 output,
                 startNanos);
         if (installResult != null) {
             return installResult;
         }
-
-        BuildResult distCleanupResult = cleanPreviousDist(
-                projectDirectory, output, startNanos);
-        if (distCleanupResult != null) {
-            return distCleanupResult;
+        if (context.cancellation().isCancelled()) {
+            return cancellationResult(BuildStage.NPM_INSTALL, output, startNanos);
         }
-
-        BuildResult buildResult = runTrustedViteBuild(projectDirectory, output, startNanos);
-        if (buildResult != null) {
-            return buildResult;
+        try {
+            dependencyManager.markInstallationSucceeded(projectDirectory, packageFingerprint);
+            return null;
+        } catch (IOException | RuntimeException exception) {
+            appendOutput(output, "记录依赖安装状态失败: " + safeMessage(exception));
+            return result(false, BuildStage.NPM_INSTALL, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
         }
-
-        Path distDirectory = projectDirectory.resolve("dist");
-        if (!Files.isDirectory(distDirectory)) {
-            appendOutput(output, "构建命令成功，但 dist 目录未生成");
-            return result(false, BuildStage.DIST_CHECK, 0, false, output.toString(), startNanos);
-        }
-        return result(true, BuildStage.SUCCESS, 0, false, output.toString(), startNanos);
     }
 
     private BuildResult runTrustedViteBuild(
             Path projectDirectory,
+            BuildExecutionContext context,
             StringBuilder output,
             long startNanos) {
         Path trustedConfig = null;
@@ -175,12 +257,14 @@ public class VueProjectBuilder {
                             trustedConfig.toString()),
                     NPM_BUILD_TIMEOUT,
                     BuildStage.NPM_BUILD,
+                    VueBuildFailureKind.CODE,
+                    context,
                     output,
                     startNanos);
         } catch (IOException | RuntimeException exception) {
             appendOutput(output, "准备可信 Vite 构建配置失败: " + safeMessage(exception));
-            return result(false, BuildStage.NPM_BUILD, null, false,
-                    output.toString(), startNanos);
+            return result(false, BuildStage.NPM_BUILD, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
         } finally {
             deleteTrustedConfig(trustedConfig, output);
         }
@@ -201,51 +285,13 @@ public class VueProjectBuilder {
                                           StringBuilder output,
                                           long startNanos) {
         try {
-            deleteDistDirectory(projectDirectory);
+            SafeBuildDirectoryCleaner.deleteDirectChild(projectDirectory, "dist");
             return null;
         } catch (IOException | RuntimeException exception) {
             appendOutput(output, "清理旧 dist 目录失败: " + safeMessage(exception));
-            return result(false, BuildStage.NPM_BUILD, null, false,
-                    output.toString(), startNanos);
+            return result(false, BuildStage.NPM_BUILD, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
         }
-    }
-
-    private void deleteDistDirectory(Path projectDirectory) throws IOException {
-        Path projectRoot = projectDirectory.toRealPath();
-        Path distDirectory = projectRoot.resolve("dist").normalize();
-        if (!projectRoot.equals(distDirectory.getParent())) {
-            throw new IOException("dist 目录超出项目根目录");
-        }
-        if (!Files.exists(distDirectory, LinkOption.NOFOLLOW_LINKS)) {
-            return;
-        }
-
-        Files.walkFileTree(distDirectory, new SimpleFileVisitor<>() {
-            @Override
-            public java.nio.file.FileVisitResult visitFile(
-                    Path file, BasicFileAttributes attributes) throws IOException {
-                deleteWithinDist(distDirectory, file);
-                return java.nio.file.FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public java.nio.file.FileVisitResult postVisitDirectory(
-                    Path directory, IOException exception) throws IOException {
-                if (exception != null) {
-                    throw exception;
-                }
-                deleteWithinDist(distDirectory, directory);
-                return java.nio.file.FileVisitResult.CONTINUE;
-            }
-        });
-    }
-
-    private void deleteWithinDist(Path distDirectory, Path path) throws IOException {
-        Path normalizedPath = path.toAbsolutePath().normalize();
-        if (!normalizedPath.startsWith(distDirectory)) {
-            throw new IOException("拒绝删除 dist 目录之外的路径");
-        }
-        Files.delete(path);
     }
 
     static String npmExecutable(String operatingSystemName) {
@@ -266,10 +312,7 @@ public class VueProjectBuilder {
         }
     }
 
-    private String validate(Path projectDirectory) {
-        if (projectDirectory == null || !Files.isDirectory(projectDirectory)) {
-            return "项目目录不存在或不是目录";
-        }
+    private String validateProjectContent(Path projectDirectory) {
         if (!Files.isRegularFile(projectDirectory.resolve("package.json"))) {
             return "package.json 文件不存在或不是普通文件";
         }
@@ -337,24 +380,52 @@ public class VueProjectBuilder {
                                    List<String> command,
                                    Duration timeout,
                                    BuildStage failureStage,
+                                   VueBuildFailureKind failureKind,
+                                   BuildExecutionContext context,
                                    StringBuilder output,
                                    long startNanos) {
-        try {
-            CommandResult commandResult = commandExecutor.execute(projectDirectory, command, timeout);
+        try (BuildLogSink stageSink = context.logSink().forStage(failureStage)) {
+            CommandResult commandResult = commandExecutor.execute(
+                    projectDirectory, command, timeout, stageSink, context.cancellation());
             appendOutput(output, commandResult.outputTail());
+            if (commandResult.cancelled() || context.cancellation().isCancelled()) {
+                return cancellationResult(failureStage, output, startNanos);
+            }
             if (commandResult.timedOut() || !Integer.valueOf(0).equals(commandResult.exitCode())) {
-                return result(false, failureStage, commandResult.exitCode(), commandResult.timedOut(),
+                VueBuildFailureKind actualFailure = commandResult.timedOut()
+                        ? VueBuildFailureKind.INFRASTRUCTURE : failureKind;
+                return result(false, failureStage, commandResult.exitCode(),
+                        commandResult.timedOut(), false, actualFailure,
                         output.toString(), startNanos);
             }
             return null;
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             appendOutput(output, "构建命令等待被中断");
-            return result(false, failureStage, null, false, output.toString(), startNanos);
+            return result(false, failureStage, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
         } catch (IOException | RuntimeException exception) {
             appendOutput(output, "构建命令启动或执行失败: " + safeMessage(exception));
-            return result(false, failureStage, null, false, output.toString(), startNanos);
+            return result(false, failureStage, null, false, false,
+                    VueBuildFailureKind.INFRASTRUCTURE, output.toString(), startNanos);
         }
+    }
+
+    private String fingerprint(Path packageJson) throws IOException {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(Files.readAllBytes(packageJson));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("JVM 不支持 SHA-256", exception);
+        }
+    }
+
+    private BuildResult cancellationResult(
+            BuildStage stage, StringBuilder output, long startNanos) {
+        appendOutput(output, "构建已取消");
+        return result(false, stage, null, false, true,
+                null, output.toString(), startNanos);
     }
 
     private void appendOutput(StringBuilder output, String text) {
@@ -366,7 +437,12 @@ public class VueProjectBuilder {
         }
         output.append(text);
         if (output.length() > BuildResult.MAX_OUTPUT_TAIL_CHARS) {
-            output.delete(0, output.length() - BuildResult.MAX_OUTPUT_TAIL_CHARS);
+            int start = output.length() - BuildResult.MAX_OUTPUT_TAIL_CHARS;
+            if (Character.isLowSurrogate(output.charAt(start))
+                    && Character.isHighSurrogate(output.charAt(start - 1))) {
+                start++;
+            }
+            output.delete(0, start);
         }
     }
 
@@ -381,10 +457,13 @@ public class VueProjectBuilder {
                                BuildStage stage,
                                Integer exitCode,
                                boolean timedOut,
+                               boolean cancelled,
+                               VueBuildFailureKind failureKind,
                                String output,
                                long startNanos) {
         long durationMillis = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
-        return new BuildResult(success, stage, exitCode, timedOut, output, durationMillis);
+        return new BuildResult(success, stage, exitCode, timedOut, cancelled,
+                failureKind, output, durationMillis);
     }
 
     private void logAsyncResult(String projectPath, BuildResult result) {
@@ -393,7 +472,9 @@ public class VueProjectBuilder {
                     projectPath, result.stage(), result.exitCode(), result.durationMillis());
             return;
         }
-        log.error("Vue 项目异步构建失败: projectPath={},stage={},exitCode={},timedOut={},durationMs={}",
-                projectPath, result.stage(), result.exitCode(), result.timedOut(), result.durationMillis());
+        log.error("Vue 项目异步构建失败: projectPath={},stage={},exitCode={},timedOut={},"
+                        + "cancelled={},failureKind={},durationMs={}",
+                projectPath, result.stage(), result.exitCode(), result.timedOut(),
+                result.cancelled(), result.failureKind(), result.durationMillis());
     }
 }

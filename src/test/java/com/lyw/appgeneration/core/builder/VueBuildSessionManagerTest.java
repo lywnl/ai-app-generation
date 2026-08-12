@@ -372,6 +372,47 @@ class VueBuildSessionManagerTest {
                 assertEquals(VueBuildFailureKind.INFRASTRUCTURE,
                         lease.recordFailure(second, timedOutFailure()).failureKind());
             }
+            try (var third = lease.beginBuild()) {
+                BuildResult infrastructureInstall = new BuildResult(
+                        false, BuildStage.NPM_INSTALL, null, false, false,
+                        VueBuildFailureKind.INFRASTRUCTURE, "启动失败", 1L);
+                assertEquals(VueBuildFailureKind.INFRASTRUCTURE,
+                        lease.recordFailure(third, infrastructureInstall).failureKind());
+            }
+        }
+    }
+
+    @Test
+    void cancelledBuildResultTerminatesRoundWithoutBeingOverwrittenByTicketClose() {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager manager = new VueBuildSessionManager();
+        try (var operation = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+             var lease = manager.open(operation, 9L, "turn-1");
+             var ticket = lease.beginBuild()) {
+            BuildResult cancelled = new BuildResult(
+                    false, BuildStage.NPM_BUILD, null, false, true,
+                    null, "已取消", 1L);
+
+            assertEquals(VueBuildPhase.CANCELLED,
+                    lease.recordFailure(ticket, cancelled).phase());
+        }
+    }
+
+    @Test
+    void resultFromCancelledCommandCanCompleteTicketAfterOperationCancelledSession() {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager manager = new VueBuildSessionManager();
+        try (var operation = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+             var lease = manager.open(operation, 9L, "turn-1");
+             var ticket = lease.beginBuild()) {
+            lease.cancel();
+            BuildResult cancelled = new BuildResult(
+                    false, BuildStage.NPM_BUILD, null, false, true,
+                    null, "已取消", 1L);
+
+            assertEquals(VueBuildPhase.CANCELLED,
+                    lease.recordFailure(ticket, cancelled).phase());
+            assertEquals(VueBuildPhase.CANCELLED, lease.snapshot().phase());
         }
     }
 
