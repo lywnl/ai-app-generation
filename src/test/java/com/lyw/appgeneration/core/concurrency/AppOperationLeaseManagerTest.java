@@ -51,6 +51,38 @@ class AppOperationLeaseManagerTest {
     }
 
     @Test
+    void conditionalCancellationClaimsTerminalAndClosesCallbackGateAtomically()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var lease = manager.acquire(7L, AppOperationType.GENERATE, "turn-atomic");
+        CountDownLatch claimEntered = new CountDownLatch(1);
+        CountDownLatch releaseClaim = new CountDownLatch(1);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> cancellation = executor.submit(() ->
+                    lease.requestCancellationIf(() -> {
+                        claimEntered.countDown();
+                        awaitUnchecked(releaseClaim);
+                        return true;
+                    }));
+            assertTrue(claimEntered.await(1, TimeUnit.SECONDS));
+
+            Future<?> lateCallback = executor.submit(lease::enterCallback);
+            assertFalse(lateCallback.isDone(),
+                    "终态认领尚未提交时，晚到回调只能等待同一原子提交点");
+
+            releaseClaim.countDown();
+            assertTrue(cancellation.get(1, TimeUnit.SECONDS));
+            ExecutionException rejected = assertThrows(
+                    ExecutionException.class,
+                    () -> lateCallback.get(1, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalStateException.class, rejected.getCause());
+        } finally {
+            releaseClaim.countDown();
+            lease.close();
+        }
+    }
+
+    @Test
     void deleteReplacementSealsRegistrationThatPassedOuterCheck() throws Exception {
         CountDownLatch outerCheckPassed = new CountDownLatch(1);
         CountDownLatch resumeRegistration = new CountDownLatch(1);

@@ -39,19 +39,22 @@ public class StreamHandlerExecutor {
      * @param codeGenType        代码生成类型
      * @return 处理后的流
      */
-    public Flux<String> doExecute(Flux<String> originFlux,
+    public Flux<GenerationStreamEvent> doExecute(Flux<String> originFlux,
                                   ChatHistoryService chatHistoryService,
                                   long appId, User loginUser, CodeGenTypeEnum codeGenType) {
         return switch (codeGenType) {
             case VUE_PROJECT -> throw new IllegalArgumentException(
                     "Vue 流必须使用绑定精确回合上下文的 doExecuteVue");
             case HTML, MULTI_FILE -> // 简单文本处理器不需要依赖注入
-                    new SimpleTextStreamHandler().handle(originFlux, chatHistoryService, appId, loginUser, memorySummaryService, userMemoryService);
+                    new SimpleTextStreamHandler().handle(originFlux,
+                                    chatHistoryService, appId, loginUser,
+                                    memorySummaryService, userMemoryService)
+                            .map(GenerationStreamEvent::content);
         };
     }
 
     /** Vue 回合专用执行入口，稳定记忆由 {@link VueTurnFinalizer} 唯一持有。 */
-    public Flux<String> doExecuteVue(
+    public Flux<GenerationStreamEvent> doExecuteVue(
             Flux<String> originFlux, VueTurnContext turnContext) {
         return jsonMessageStreamHandler.handle(originFlux, turnContext);
     }

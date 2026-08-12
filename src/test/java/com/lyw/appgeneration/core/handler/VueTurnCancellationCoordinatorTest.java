@@ -10,7 +10,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.time.Duration;
+import reactor.core.publisher.Mono;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -33,6 +35,7 @@ class VueTurnCancellationCoordinatorTest {
                 operation, 9L, "turn-cancel");
         VueTurnContext context = new VueTurnContext(
                 7L, 9L, "turn-cancel", operation, lease);
+        context.markUserCommitted();
         AtomicInteger modelCancellations = new AtomicInteger();
         context.registerModelCancellation(modelCancellations::incrementAndGet);
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
@@ -69,6 +72,7 @@ class VueTurnCancellationCoordinatorTest {
         var lease = new VueBuildSessionManager().open(operation, 9L, "turn-blocked");
         VueTurnContext context = new VueTurnContext(
                 7L, 9L, "turn-blocked", operation, lease);
+        context.markUserCommitted();
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
         Thread callback = Thread.startVirtualThread(() -> context.tryRunCallback(() -> {
@@ -160,6 +164,7 @@ class VueTurnCancellationCoordinatorTest {
         var lease = new VueBuildSessionManager().open(operation, 9L, "turn-quiet");
         VueTurnContext context = new VueTurnContext(
                 7L, 9L, "turn-quiet", operation, lease);
+        context.markUserCommitted();
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome outcome = invocation.getArgument(1);
@@ -179,5 +184,114 @@ class VueTurnCancellationCoordinatorTest {
         verify(finalizer).finalizeOnce(eq(context), any());
         manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-safe-fallback").close();
+    }
+
+    @Test
+    void timeoutWaitsForRealQuiescenceBeforePublishingTimedOutOutcome()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var operation = manager.acquire(7L,
+                AppOperationLeaseManager.AppOperationType.GENERATE, "turn-timeout");
+        var lease = new VueBuildSessionManager().open(
+                operation, 9L, "turn-timeout");
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, "turn-timeout", operation, lease);
+        context.markUserCommitted();
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        Thread callback = Thread.startVirtualThread(() -> context.tryRunCallback(() -> {
+            callbackEntered.countDown();
+            try {
+                releaseCallback.await();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
+                    requested.outcome());
+            context.closeResources();
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, executor, Duration.ofMillis(20))) {
+            Mono<VueTurnFinalizer.FinalizationResult> result = coordinator
+                    .requestTimeout(context, () -> "部分")
+                    .orElseThrow();
+            assertThrows(IllegalStateException.class,
+                    () -> result.block(Duration.ofMillis(80)));
+            assertThrows(RuntimeException.class, () -> manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "too-early-after-timeout"));
+            assertFalse(coordinator.requestCancellation(context, () -> "断开"));
+            assertEquals(VueTurnContext.TerminalTrigger.TIMED_OUT,
+                    context.terminalWinner().orElseThrow());
+            releaseCallback.countDown();
+            var completed = result.block(Duration.ofSeconds(2));
+            assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
+                    completed.outcome().outcome());
+        }
+        callback.join();
+        manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-timeout-quiescence").close();
+    }
+
+    @Test
+    void timeoutClaimClosesOuterToolGateBeforeBackgroundTaskStarts() {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var operation = manager.acquire(7L,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-timeout-linearized");
+        var lease = new VueBuildSessionManager().open(
+                operation, 9L, "turn-timeout-linearized");
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, "turn-timeout-linearized", operation, lease);
+        AtomicReference<Runnable> background = new AtomicReference<>();
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, background::set, Duration.ofMillis(20))) {
+            assertTrue(coordinator.requestTimeout(context, () -> "")
+                    .isPresent());
+            assertThrows(IllegalStateException.class, lease::enterCallback,
+                    "requestTimeout 返回前必须同步关闭文件工具使用的外层门");
+            assertTrue(background.get() != null);
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void cancellationBeforeUserCommitReleasesQuietTurnWithoutPersistingAi() {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var operation = manager.acquire(7L,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-pre-user-cancel");
+        var lease = new VueBuildSessionManager().open(
+                operation, 9L, "turn-pre-user-cancel");
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, "turn-pre-user-cancel", operation, lease);
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, executor, Duration.ofMillis(20))) {
+            assertTrue(coordinator.requestCancellation(context, () -> ""));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (coordinator.pendingCount() != 0
+                    && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(0, coordinator.pendingCount());
+        }
+
+        verify(finalizer, org.mockito.Mockito.never()).finalizeOnce(any(), any());
+        manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-pre-user-cancel").close();
     }
 }

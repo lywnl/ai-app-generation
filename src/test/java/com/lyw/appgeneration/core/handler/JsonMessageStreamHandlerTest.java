@@ -2,10 +2,11 @@ package com.lyw.appgeneration.core.handler;
 
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,11 +15,21 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -55,16 +66,15 @@ class JsonMessageStreamHandlerTest {
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
-        List<String> output = handler.handle(Flux.just(
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(
                 "{\"type\":\"ai_response\",\"data\":\"正文\"}"), context)
                 .collectList().block();
 
-        assertEquals("正文", output.getFirst());
-        TurnOutcomeMessage outcome = JSONUtil.toBean(output.getLast(),
-                TurnOutcomeMessage.class);
+        assertEquals("正文", contentText(output.getFirst()));
+        VueTurnOutcome outcome = outcomeOf(output.getLast());
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                outcome.getOutcome());
-        assertFalse(outcome.isShouldRefreshPreview());
+                outcome.outcome());
+        assertFalse(outcome.shouldRefreshPreview());
     }
 
     @Test
@@ -88,11 +98,12 @@ class JsonMessageStreamHandlerTest {
                 + "\"result\":\"{\\\"success\\\":false,"
                 + "\\\"secretLog\\\":\\\"raw\\\"}\"}";
 
-        List<String> output = handler.handle(Flux.just(event), context)
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(event), context)
                 .collectList().block();
 
-        assertEquals(event, output.get(0));
-        assertEquals("\n\n第 1 次构建失败，正在修复\n\n", output.get(1));
+        assertEquals(event, contentText(output.get(0)));
+        assertEquals("\n\n第 1 次构建失败，正在修复\n\n",
+                contentText(output.get(1)));
         verify(tool).generateToolExecutedResult(any(JSONObject.class),
                 eq("{\"success\":false,\"secretLog\":\"raw\"}"));
     }
@@ -110,7 +121,7 @@ class JsonMessageStreamHandlerTest {
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
-        List<String> output = handler.handle(
+        List<GenerationStreamEvent> output = handler.handle(
                 Flux.error(new AiCodeGeneratorFacade
                         .OnlineControlledTerminationException(
                         ToolLoopTerminationProtocol.ControlledTerminationReason
@@ -118,16 +129,16 @@ class JsonMessageStreamHandlerTest {
                 .collectList().block();
 
         assertEquals(1, output.size());
-        TurnOutcomeMessage outcome = JSONUtil.toBean(output.getFirst(),
-                TurnOutcomeMessage.class);
+        VueTurnOutcome outcome = outcomeOf(output.getFirst());
         assertEquals(JsonMessageStreamHandler.LOOP_LIMIT_MESSAGE,
-                outcome.getMessage());
+                outcome.clientMessage());
     }
 
     @Test
     void terminalBuildTimeoutUsesTimedOutOutcomeAndFixedMessage() {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-timeout", VueBuildPhase.FAILED, true);
+        context.markUserCommitted();
         context.recordControlledTermination(new ToolLoopTerminationProtocol
                 .ControlledTermination(ToolLoopTerminationProtocol
                 .ControlledTerminationReason.BUILD_FAILED,
@@ -141,16 +152,15 @@ class JsonMessageStreamHandlerTest {
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
-        TurnOutcomeMessage outcome = JSONUtil.toBean(handler.handle(
+        VueTurnOutcome outcome = outcomeOf(handler.handle(
                         Flux.just("{\"type\":\"ai_response\",\"data\":\""
                                 + JsonMessageStreamHandler.BUILD_FAILED_MESSAGE
-                                + "\"}"), context).blockLast(),
-                TurnOutcomeMessage.class);
+                                + "\"}"), context).blockLast());
 
         assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
-                outcome.getOutcome());
+                outcome.outcome());
         assertEquals(JsonMessageStreamHandler.TIMEOUT_MESSAGE,
-                outcome.getMessage());
+                outcome.clientMessage());
     }
 
     @Test
@@ -167,7 +177,7 @@ class JsonMessageStreamHandlerTest {
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
-        List<String> output = handler.handle(Flux.concat(
+        List<GenerationStreamEvent> output = handler.handle(Flux.concat(
                 Flux.just("{\"type\":\"ai_response\",\"data\":\""
                         + JsonMessageStreamHandler.BUILD_FAILED_MESSAGE + "\"}"),
                 Flux.error(new AiCodeGeneratorFacade
@@ -175,13 +185,188 @@ class JsonMessageStreamHandlerTest {
                         ToolLoopTerminationProtocol.ControlledTerminationReason
                                 .PROTOCOL_ERROR))), context).collectList().block();
 
-        TurnOutcomeMessage outcome = JSONUtil.toBean(output.getLast(),
-                TurnOutcomeMessage.class);
+        VueTurnOutcome outcome = outcomeOf(output.getLast());
         assertEquals(JsonMessageStreamHandler.SCOPE_PROTOCOL_MESSAGE,
-                outcome.getMessage());
+                outcome.clientMessage());
+    }
+
+    @Test
+    void continuousTokensStillReachAbsoluteDeadlineAtThirtyMinutes() {
+        VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-absolute-timeout",
+                VueBuildPhase.GENERATING, Duration.ofMinutes(30),
+                () -> scheduler.now(TimeUnit.NANOSECONDS));
+        context.markUserCommitted();
+        VueTurnOutcome timedOut = new VueTurnOutcome(
+                VueBuildPhase.GENERATING,
+                VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
+                JsonMessageStreamHandler.TIMEOUT_MESSAGE,
+                false, JsonMessageStreamHandler.TIMEOUT_MESSAGE);
+        var finalization = new VueTurnFinalizer.FinalizationResult(
+                timedOut, true);
+        when(cancellationCoordinator.requestTimeout(eq(context), any()))
+                .thenReturn(Optional.of(Mono.just(finalization)));
+        JsonMessageStreamHandler timedHandler = new JsonMessageStreamHandler(
+                toolManager, finalizer, cancellationCoordinator, scheduler);
+        Flux<String> continuous = Flux.interval(
+                        Duration.ofMinutes(1), scheduler)
+                .map(index -> "{\"type\":\"ai_response\",\"data\":\"x\"}");
+
+        StepVerifier.withVirtualTime(
+                        () -> timedHandler.handle(continuous, context),
+                        () -> scheduler, Long.MAX_VALUE)
+                .thenAwait(Duration.ofMinutes(29))
+                .expectNextCount(29)
+                .expectNoEvent(Duration.ofSeconds(59))
+                .thenAwait(Duration.ofSeconds(1))
+                .assertNext(event -> {
+                    VueTurnOutcome outcome = outcomeOf(event);
+                    assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
+                            outcome.outcome());
+                })
+                .verifyComplete();
+        verify(cancellationCoordinator).requestTimeout(eq(context), any());
+    }
+
+    @Test
+    void rejectedTimeoutTaskMustNotReleaseLeaseBeforeCoordinatorOwnsCleanup()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var operation = manager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-timeout-rejected");
+        var lease = new VueBuildSessionManager().open(
+                operation, USER_ID, "turn-timeout-rejected");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, "turn-timeout-rejected", operation, lease);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        Thread callback = Thread.startVirtualThread(() ->
+                context.tryRunCallback(() -> {
+                    callbackEntered.countDown();
+                    try {
+                        releaseCallback.await();
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                    }
+                }));
+        assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
+
+        java.util.concurrent.Executor rejecting = task -> {
+            throw new RejectedExecutionException("executor closed");
+        };
+        VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, rejecting, Duration.ofMillis(20))) {
+            JsonMessageStreamHandler timedHandler = new JsonMessageStreamHandler(
+                    toolManager, finalizer, coordinator, scheduler);
+            var result = timedHandler.handle(Flux.never(), context)
+                    .collectList().toFuture();
+            scheduler.advanceTimeBy(Duration.ofMinutes(30));
+            boolean leaseStillOwned;
+            AppOperationLeaseManager.AppOperationLease unexpected = null;
+            try {
+                unexpected = manager.acquire(APP_ID,
+                        AppOperationLeaseManager.AppOperationType.GENERATE,
+                        "turn-must-remain-owned");
+                leaseStillOwned = false;
+            } catch (AppOperationLeaseManager.ActiveAppOperationException expected) {
+                leaseStillOwned = true;
+            } finally {
+                if (unexpected != null) {
+                    unexpected.close();
+                }
+            }
+            assertTrue(leaseStillOwned,
+                    "协调器拒绝后台任务后，Handler 不得越权释放其待处理租约");
+            releaseCallback.countDown();
+            callback.join();
+            assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> result.get(2, TimeUnit.SECONDS));
+        } finally {
+            releaseCallback.countDown();
+            callback.join();
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void rejectedTimeoutTaskAfterUserCommitFinalizesSynchronouslyWhenQuiescent()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var operation = manager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-timeout-rejected-post-user");
+        var lease = new VueBuildSessionManager().open(
+                operation, USER_ID, "turn-timeout-rejected-post-user");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, "turn-timeout-rejected-post-user",
+                operation, lease);
+        context.markUserCommitted();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            context.closeResources();
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        java.util.concurrent.Executor rejecting = task -> {
+            throw new RejectedExecutionException("executor saturated");
+        };
+        VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
+
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, rejecting, Duration.ofMillis(20))) {
+            JsonMessageStreamHandler timedHandler = new JsonMessageStreamHandler(
+                    toolManager, finalizer, coordinator, scheduler);
+            var result = timedHandler.handle(Flux.never(), context)
+                    .collectList().toFuture();
+            scheduler.advanceTimeBy(Duration.ofMinutes(30));
+            List<GenerationStreamEvent> output = result.get(2, TimeUnit.SECONDS);
+            assertEquals(1, output.size());
+            assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
+                    outcomeOf(output.getFirst()).outcome());
+            verify(finalizer).finalizeOnce(eq(context), any());
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void claimedTimeoutFinalizationErrorMustPropagateInsteadOfCompleting() {
+        VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-timeout-finalization-error",
+                VueBuildPhase.GENERATING, Duration.ofMinutes(30),
+                () -> scheduler.now(TimeUnit.NANOSECONDS));
+        context.markUserCommitted();
+        assertTrue(context.tryClaimTerminal(
+                VueTurnContext.TerminalTrigger.TIMED_OUT));
+        when(cancellationCoordinator.requestTimeout(eq(context), any()))
+                .thenReturn(Optional.of(Mono.error(
+                        new IllegalStateException("超时收尾失败"))));
+        JsonMessageStreamHandler timedHandler = new JsonMessageStreamHandler(
+                toolManager, finalizer, cancellationCoordinator, scheduler);
+
+        StepVerifier.withVirtualTime(
+                        () -> timedHandler.handle(Flux.never(), context),
+                        () -> scheduler, Long.MAX_VALUE)
+                .thenAwait(Duration.ofMinutes(30))
+                .expectErrorMessage("超时收尾失败")
+                .verify();
     }
 
     private VueTurnContext context(String turnId, VueBuildPhase phase) {
-        return VueTurnContext.testing(APP_ID, USER_ID, turnId, phase);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, turnId, phase);
+        context.markUserCommitted();
+        return context;
+    }
+
+    private static String contentText(GenerationStreamEvent event) {
+        return ((GenerationStreamEvent.Content) event).text();
+    }
+
+    private static VueTurnOutcome outcomeOf(GenerationStreamEvent event) {
+        return ((GenerationStreamEvent.VueOutcome) event).outcome();
     }
 }

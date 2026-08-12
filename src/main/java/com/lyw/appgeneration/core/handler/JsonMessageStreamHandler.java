@@ -8,18 +8,22 @@ import com.lyw.appgeneration.ai.model.message.StreamMessage;
 import com.lyw.appgeneration.ai.model.message.StreamMessageTypeEnum;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
-import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 维护 Vue 正文/工具事件顺序，并把所有信号汇合为唯一稳定终态。 */
 @Slf4j
@@ -37,7 +41,9 @@ public final class JsonMessageStreamHandler {
     private final ToolManager toolManager;
     private final VueTurnFinalizer finalizer;
     private final VueTurnCancellationCoordinator cancellationCoordinator;
+    private final Scheduler deadlineScheduler;
 
+    @Autowired
     public JsonMessageStreamHandler(
             ToolManager toolManager,
             VueTurnFinalizer finalizer,
@@ -45,34 +51,81 @@ public final class JsonMessageStreamHandler {
         this.toolManager = toolManager;
         this.finalizer = finalizer;
         this.cancellationCoordinator = cancellationCoordinator;
+        this.deadlineScheduler = Schedulers.parallel();
     }
 
-    public Flux<String> handle(Flux<String> originFlux, VueTurnContext context) {
+    JsonMessageStreamHandler(
+            ToolManager toolManager,
+            VueTurnFinalizer finalizer,
+            VueTurnCancellationCoordinator cancellationCoordinator,
+            Scheduler deadlineScheduler) {
+        this.toolManager = toolManager;
+        this.finalizer = finalizer;
+        this.cancellationCoordinator = cancellationCoordinator;
+        this.deadlineScheduler = deadlineScheduler;
+    }
+
+    public Flux<GenerationStreamEvent> handle(
+            Flux<String> originFlux, VueTurnContext context) {
         return Flux.defer(() -> {
             StringBuilder canonical = new StringBuilder();
             Set<String> seenToolIds = new HashSet<>();
-            Flux<String> body = originFlux.concatMap(chunk -> Flux.fromIterable(
-                            handleJsonMessageChunk(chunk, canonical, seenToolIds)))
-                    .filter(StrUtil::isNotEmpty);
-            Flux<String> completed = body.concatWith(Flux.defer(() ->
-                    finalizeSignal(context, canonical.toString(), null)));
+            Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
+                            Flux.fromIterable(handleJsonMessageChunk(
+                                    chunk, canonical, seenToolIds)))
+                    .filter(StrUtil::isNotEmpty)
+                    .map(GenerationStreamEvent::content);
+            AtomicBoolean deadlineReached = new AtomicBoolean();
+            Mono<Long> deadline = Mono.delay(
+                            context.remainingUntilDeadline(), deadlineScheduler)
+                    .doOnNext(ignored -> deadlineReached.set(true));
+            Flux<GenerationStreamEvent> completed = body.takeUntilOther(deadline)
+                    .concatWith(Flux.defer(() -> deadlineReached.get()
+                            ? finalizeTimeout(context, canonical.toString())
+                            : finalizeSignal(context, canonical.toString(), null)));
             return completed
-                    .onErrorResume(error -> finalizeSignal(
-                            context, canonical.toString(), error))
+                    .onErrorResume(error -> {
+                        if (!context.isUserCommitted()) {
+                            if (context.terminalWinner().isEmpty()) {
+                                context.closeResources();
+                            }
+                            return Flux.error(error);
+                        }
+                        if (context.terminalWinner().isPresent()) {
+                            return Flux.error(error);
+                        }
+                        return finalizeSignal(
+                                context, canonical.toString(), error);
+                    })
                     .doOnCancel(() -> cancellationCoordinator.requestCancellation(
                             context, canonical::toString));
         });
     }
 
-    private Flux<String> finalizeSignal(
+    private Flux<GenerationStreamEvent> finalizeTimeout(
+            VueTurnContext context, String canonicalPrefix) {
+        return cancellationCoordinator.requestTimeout(
+                        context, () -> canonicalPrefix)
+                .map(result -> result.<GenerationStreamEvent>map(finalized ->
+                        GenerationStreamEvent.vueOutcome(
+                                finalized.outcome())).flux())
+                .orElseGet(Flux::empty);
+    }
+
+    private Flux<GenerationStreamEvent> finalizeSignal(
             VueTurnContext context, String canonicalPrefix, Throwable error) {
-        if (!context.tryClaimTerminal()) {
+        VueTurnContext.TerminalTrigger trigger = error == null
+                ? VueTurnContext.TerminalTrigger.COMPLETED
+                : VueTurnContext.TerminalTrigger.FAILED;
+        if (!context.tryClaimTerminal(trigger)) {
             return Flux.empty();
         }
         VueTurnOutcome requested = resolveOutcome(context, canonicalPrefix, error);
         VueTurnFinalizer.FinalizationResult result =
                 finalizer.finalizeOnce(context, requested);
-        return Flux.just(JSONUtil.toJsonStr(new TurnOutcomeMessage(result.outcome())));
+        GenerationStreamEvent event = GenerationStreamEvent.vueOutcome(
+                result.outcome());
+        return Flux.just(event);
     }
 
     private VueTurnOutcome resolveOutcome(

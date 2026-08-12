@@ -14,6 +14,7 @@ import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
@@ -44,6 +45,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.File;
 import java.io.Serializable;
@@ -161,7 +163,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     @Override
     @RateLimit(limitType = RateLimitType.USER, rate = 5, rateInterval = 60, message = "AI请求过于频繁，请稍后再试")
     @PromptSafetyCheck
-    public Flux<String> chatToGenCode(Long appId, String message, User loginUser) {
+    public Flux<GenerationStreamEvent> chatToGenCode(
+            Long appId, String message, User loginUser) {
         // 1. 参数校验
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
         ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "用户消息不能为空");
@@ -204,7 +207,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 });
     }
 
-    private Flux<String> generateVueTurn(
+    private Flux<GenerationStreamEvent> generateVueTurn(
             long appId, String message, User loginUser) {
         return Flux.defer(() -> {
             String turnId = UUID.randomUUID().toString();
@@ -221,37 +224,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 context = new VueTurnContext(
                         appId, loginUser.getId(), turnId,
                         operationLease, vueLease);
-
-                var lastMessage = chatHistoryService.getLastMessage(appId);
-                boolean hasHistory = lastMessage != null;
-                if (hasHistory && ChatHistoryMessageTypeEnum.USER.getValue()
-                        .equals(lastMessage.getMessageType())) {
-                    boolean repaired = chatHistoryService.repairOrphanUserTurn(
-                            appId, loginUser.getId(),
-                            "生成过程中遇到系统异常，请稍后重试。");
-                    if (!repaired) {
-                        throw new BusinessException(
-                                ErrorCode.OPERATION_ERROR,
-                                "修复上一轮未完成对话失败");
-                    }
-                    aiGeneratorServiceFactory.prepareVueColdRebuild(appId);
-                }
-
-                // 保存 User 前只允许缓存命中或从旧历史冷重建服务。
-                var generatorService = aiCodeGeneratorFacade.prepareVueGenerator(appId);
-                boolean saved = chatHistoryService.addChatMessage(
-                        appId, message,
-                        ChatHistoryMessageTypeEnum.USER.getValue(),
-                        loginUser.getId());
-                if (!saved) {
-                    context.closeResources();
-                    return Flux.error(new BusinessException(
-                            ErrorCode.OPERATION_ERROR, "保存用户消息失败"));
-                }
-                Flux<String> codeStream = aiCodeGeneratorFacade
-                        .generateVueProjectStream(
-                                message, appId, !hasHistory, context,
-                                generatorService);
+                VueTurnContext finalContext = context;
+                Flux<String> codeStream = Flux.defer(() -> finalContext
+                        .tryCallCallback(() -> prepareVueTurn(
+                                appId, message, loginUser, finalContext))
+                        .orElseGet(() -> Flux.error(new IllegalStateException(
+                                "Vue 回合准备阶段已取消"))))
+                        .subscribeOn(Schedulers.boundedElastic());
                 MonitorContextHolder.setContext(MonitorContext.builder()
                         .userId(loginUser.getId().toString())
                         .appId(Long.toString(appId)).build());
@@ -269,6 +248,40 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 return Flux.error(exception);
             }
         });
+    }
+
+    private Flux<String> prepareVueTurn(
+            long appId, String message, User loginUser,
+            VueTurnContext context) {
+        var lastMessage = chatHistoryService.getLastMessage(appId);
+        context.ensureTerminalOpen();
+        boolean hasHistory = lastMessage != null;
+        if (hasHistory && ChatHistoryMessageTypeEnum.USER.getValue()
+                .equals(lastMessage.getMessageType())) {
+            boolean repaired = chatHistoryService.repairOrphanUserTurn(
+                    appId, loginUser.getId(),
+                    "生成过程中遇到系统异常，请稍后重试。");
+            if (!repaired) {
+                throw new BusinessException(
+                        ErrorCode.OPERATION_ERROR,
+                        "修复上一轮未完成对话失败");
+            }
+            aiGeneratorServiceFactory.prepareVueColdRebuild(appId);
+            context.ensureTerminalOpen();
+        }
+        var generatorService = aiCodeGeneratorFacade.prepareVueGenerator(appId);
+        context.ensureTerminalOpen();
+        boolean saved = chatHistoryService.addChatMessage(
+                appId, message, ChatHistoryMessageTypeEnum.USER.getValue(),
+                loginUser.getId());
+        if (!saved) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR, "保存用户消息失败");
+        }
+        context.markUserCommitted();
+        context.ensureTerminalOpen();
+        return aiCodeGeneratorFacade.generateVueProjectStream(
+                message, appId, !hasHistory, context, generatorService);
     }
 
     @Override

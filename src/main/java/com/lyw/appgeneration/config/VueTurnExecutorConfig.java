@@ -17,7 +17,8 @@ public class VueTurnExecutorConfig {
                 new SimpleAsyncTaskExecutor("vue-turn-cancel-");
         executor.setVirtualThreads(true);
         executor.setConcurrencyLimit(MAX_CONCURRENCY);
-        executor.setRejectTasksWhenLimitReached(true);
+        // 达到上限时阻塞提交者，避免拒绝后转入不受 Spring 生命周期管理的线程。
+        executor.setRejectTasksWhenLimitReached(false);
         executor.setTaskTerminationTimeout(TERMINATION_TIMEOUT_MILLIS);
         return executor;
     }

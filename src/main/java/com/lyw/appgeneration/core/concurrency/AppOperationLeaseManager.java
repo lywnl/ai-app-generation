@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 /**
  * 统一管理同一应用上的生成、部署、下载和删除互斥关系。
@@ -270,6 +271,11 @@ public final class AppOperationLeaseManager {
             return state.ownerToken;
         }
 
+        /** 领取租约时记录的单调时钟时间，用于回合绝对截止时间。 */
+        public long startedAtNanos() {
+            return state.startedAtNanos;
+        }
+
         public boolean isActive() {
             return !closed.get() && state.isActiveInstance();
         }
@@ -302,6 +308,19 @@ public final class AppOperationLeaseManager {
             ensureActiveOrCancellationRequested();
             boolean changed = state.requestCancellation();
             state.fireCancellationActions();
+            return changed;
+        }
+
+        /**
+         * 在应用取消门的同一监视器内执行终态认领并关门。
+         * 认领失败时不改变租约；认领成功后，晚到回调不可能再取得票据。
+         */
+        public boolean requestCancellationIf(BooleanSupplier claimAction) {
+            ensureActiveOrCancellationRequested();
+            boolean changed = state.requestCancellationIf(claimAction);
+            if (changed) {
+                state.fireCancellationActions();
+            }
             return changed;
         }
 
@@ -390,6 +409,7 @@ public final class AppOperationLeaseManager {
         private final long appId;
         private final AppOperationType operationType;
         private final String ownerToken;
+        private final long startedAtNanos;
         private final Map<Long, CancellationEntry> cancellationEntries =
                 new LinkedHashMap<>();
 
@@ -415,6 +435,7 @@ public final class AppOperationLeaseManager {
             this.appId = appId;
             this.operationType = operationType;
             this.ownerToken = ownerToken;
+            this.startedAtNanos = System.nanoTime();
         }
 
         private synchronized boolean isActiveInstance() {
@@ -505,6 +526,20 @@ public final class AppOperationLeaseManager {
 
         private synchronized boolean requestCancellation() {
             if (cancellationRequested) {
+                return false;
+            }
+            cancellationRequested = true;
+            notifyAll();
+            return true;
+        }
+
+        private synchronized boolean requestCancellationIf(
+                BooleanSupplier claimAction) {
+            Objects.requireNonNull(claimAction, "终态认领动作不能为空");
+            if (ownerClosed || replaced) {
+                throw new IllegalStateException("应用操作租约已经失效");
+            }
+            if (cancellationRequested || !claimAction.getAsBoolean()) {
                 return false;
             }
             cancellationRequested = true;

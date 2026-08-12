@@ -6,6 +6,7 @@ import com.lyw.appgeneration.model.dto.app.AppQueryRequest;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.vo.app.AppVO;
+import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
 import reactor.core.publisher.Flux;
@@ -47,7 +48,8 @@ public interface AppService extends IService<App> {
      * @param loginUser
      * @return
      */
-    Flux<String> chatToGenCode(Long appId, String message, User loginUser);
+    Flux<GenerationStreamEvent> chatToGenCode(
+            Long appId, String message, User loginUser);
 
     /**
      * 应用部署

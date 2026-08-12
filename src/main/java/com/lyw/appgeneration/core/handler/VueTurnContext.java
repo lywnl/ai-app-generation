@@ -11,9 +11,13 @@ import java.util.Optional;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /** 精确绑定一次 app 操作租约和 Vue 构建租约的在线回合上下文。 */
 public final class VueTurnContext {
+
+    public static final Duration TURN_DEADLINE = Duration.ofMinutes(30);
 
     private final long appId;
     private final long userId;
@@ -22,18 +26,25 @@ public final class VueTurnContext {
     private final VueBuildLease lease;
     private final VueBuildPhase testingPhase;
     private final boolean testingTimedOut;
+    private final long startedAtNanos;
+    private final long deadlineNanos;
+    private final LongSupplier nanoTicker;
     private final AtomicReference<ControlledTermination> controlledTermination =
             new AtomicReference<>();
     private final AtomicReference<VueTurnFinalizer.FinalizationResult> finalization =
             new AtomicReference<>();
     private final AtomicBoolean finalizing = new AtomicBoolean();
-    private final AtomicBoolean terminalClaimed = new AtomicBoolean();
+    private final AtomicReference<TerminalTrigger> terminalWinner =
+            new AtomicReference<>();
     private final AtomicBoolean resourcesClosed = new AtomicBoolean();
+    private final AtomicBoolean userCommitted = new AtomicBoolean();
     private final CallbackGate callbackGate = new CallbackGate();
 
     public VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease) {
-        this(appId, userId, turnId, operationLease, lease, null, false);
+        this(appId, userId, turnId, operationLease, lease, null, false,
+                operationLease.startedAtNanos(), TURN_DEADLINE,
+                System::nanoTime);
         VueBuildSnapshot snapshot = lease.snapshot();
         if (operationLease.appId() != appId || snapshot.appId() != appId
                 || snapshot.userId() != userId
@@ -45,7 +56,9 @@ public final class VueTurnContext {
 
     private VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
-            VueBuildPhase testingPhase, boolean testingTimedOut) {
+            VueBuildPhase testingPhase, boolean testingTimedOut,
+            long startedAtNanos, Duration deadlineDuration,
+            LongSupplier nanoTicker) {
         if (appId <= 0 || userId <= 0) {
             throw new IllegalArgumentException("appId 和 userId 必须大于 0");
         }
@@ -59,19 +72,39 @@ public final class VueTurnContext {
         this.lease = lease;
         this.testingPhase = testingPhase;
         this.testingTimedOut = testingTimedOut;
+        this.startedAtNanos = startedAtNanos;
+        this.nanoTicker = Objects.requireNonNull(nanoTicker, "nanoTicker 不能为空");
+        Objects.requireNonNull(deadlineDuration, "deadlineDuration 不能为空");
+        if (deadlineDuration.isZero() || deadlineDuration.isNegative()) {
+            throw new IllegalArgumentException("回合截止时间必须大于 0");
+        }
+        this.deadlineNanos = saturatingAdd(
+                startedAtNanos, deadlineDuration.toNanos());
     }
 
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase) {
         return new VueTurnContext(appId, userId, turnId, null, null,
-                Objects.requireNonNull(phase), false);
+                Objects.requireNonNull(phase), false,
+                System.nanoTime(), TURN_DEADLINE, System::nanoTime);
     }
 
     static VueTurnContext testing(
             long appId, long userId, String turnId,
             VueBuildPhase phase, boolean timedOut) {
         return new VueTurnContext(appId, userId, turnId, null, null,
-                Objects.requireNonNull(phase), timedOut);
+                Objects.requireNonNull(phase), timedOut,
+                System.nanoTime(), TURN_DEADLINE, System::nanoTime);
+    }
+
+    static VueTurnContext testing(
+            long appId, long userId, String turnId, VueBuildPhase phase,
+            Duration deadlineDuration, LongSupplier nanoTicker) {
+        LongSupplier ticker = Objects.requireNonNull(nanoTicker);
+        long startedAt = ticker.getAsLong();
+        return new VueTurnContext(appId, userId, turnId, null, null,
+                Objects.requireNonNull(phase), false,
+                startedAt, deadlineDuration, ticker);
     }
 
     public long appId() {
@@ -84,6 +117,27 @@ public final class VueTurnContext {
 
     public String turnId() {
         return turnId;
+    }
+
+    public long startedAtNanos() {
+        return startedAtNanos;
+    }
+
+    public long deadlineNanos() {
+        return deadlineNanos;
+    }
+
+    public Duration remainingUntilDeadline() {
+        return Duration.ofNanos(Math.max(
+                0L, deadlineNanos - nanoTicker.getAsLong()));
+    }
+
+    public void markUserCommitted() {
+        userCommitted.set(true);
+    }
+
+    public boolean isUserCommitted() {
+        return userCommitted.get();
     }
 
     public VueBuildLease lease() {
@@ -111,8 +165,39 @@ public final class VueTurnContext {
     }
 
     /** complete、error 与 cancel 竞争时，只允许一个分支决定规范终态。 */
-    public boolean tryClaimTerminal() {
-        return terminalClaimed.compareAndSet(false, true);
+    public boolean tryClaimTerminal(TerminalTrigger trigger) {
+        return terminalWinner.compareAndSet(
+                null, Objects.requireNonNull(trigger, "终态触发原因不能为空"));
+    }
+
+    /**
+     * 原子认领取消类终态并关闭应用外层回调门，再撤销回合内层门和生成动作。
+     */
+    public boolean tryClaimTerminalAndCancel(TerminalTrigger trigger) {
+        Objects.requireNonNull(trigger, "终态触发原因不能为空");
+        boolean claimed = operationLease == null
+                ? terminalWinner.compareAndSet(null, trigger)
+                : operationLease.requestCancellationIf(
+                        () -> terminalWinner.compareAndSet(null, trigger));
+        if (!claimed) {
+            return false;
+        }
+        callbackGate.revoke();
+        if (lease != null) {
+            lease.cancel();
+        }
+        return true;
+    }
+
+    public Optional<TerminalTrigger> terminalWinner() {
+        return Optional.ofNullable(terminalWinner.get());
+    }
+
+    public void ensureTerminalOpen() {
+        TerminalTrigger winner = terminalWinner.get();
+        if (winner != null) {
+            throw new IllegalStateException("Vue 回合终态已由 " + winner + " 占用");
+        }
     }
 
     /**
@@ -120,9 +205,18 @@ public final class VueTurnContext {
      */
     public boolean tryRunCallback(Runnable action) {
         Objects.requireNonNull(action, "回调不能为空");
+        return tryCallCallback(() -> {
+            action.run();
+            return Boolean.TRUE;
+        }).isPresent();
+    }
+
+    /** 在回调双门内执行准备或模型动作；关门后拒绝迟到动作。 */
+    public <T> Optional<T> tryCallCallback(Supplier<T> action) {
+        Objects.requireNonNull(action, "回调不能为空");
         CallbackGate.Ticket inner = callbackGate.tryEnter();
         if (inner == null) {
-            return false;
+            return Optional.empty();
         }
         AutoCloseable outer = null;
         try (inner) {
@@ -130,12 +224,11 @@ public final class VueTurnContext {
                 try {
                     outer = lease.enterCallback();
                 } catch (IllegalStateException rejected) {
-                    return false;
+                    return Optional.empty();
                 }
             }
             try {
-                action.run();
-                return true;
+                return Optional.ofNullable(action.get());
             } finally {
                 if (outer != null) {
                     outer.close();
@@ -244,6 +337,11 @@ public final class VueTurnContext {
         }
     }
 
+    private static long saturatingAdd(long value, long increment) {
+        return increment > 0 && value > Long.MAX_VALUE - increment
+                ? Long.MAX_VALUE : value + increment;
+    }
+
     private static final class CallbackGate {
 
         private boolean active = true;
@@ -303,5 +401,12 @@ public final class VueTurnContext {
                 }
             }
         }
+    }
+
+    public enum TerminalTrigger {
+        COMPLETED,
+        FAILED,
+        CANCELLED,
+        TIMED_OUT
     }
 }

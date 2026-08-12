@@ -13,6 +13,10 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.Optional;
+
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 /** 在客户端断开后仍受应用生命周期管理地完成 Vue 回合稳定收尾。 */
 @Slf4j
@@ -48,22 +52,42 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
 
     public boolean requestCancellation(
             VueTurnContext context, Supplier<String> canonicalPrefix) {
+        return request(context, canonicalPrefix,
+                VueTurnOutcome.TurnOutcomeType.CANCELLED, null);
+    }
+
+    /** 绝对截止时间专用入口；只有赢得终态 CAS 才返回可等待的最终结果。 */
+    public Optional<Mono<VueTurnFinalizer.FinalizationResult>> requestTimeout(
+            VueTurnContext context, Supplier<String> canonicalPrefix) {
+        Sinks.One<VueTurnFinalizer.FinalizationResult> result = Sinks.one();
+        boolean claimed = request(context, canonicalPrefix,
+                VueTurnOutcome.TurnOutcomeType.TIMED_OUT, result);
+        return claimed ? Optional.of(result.asMono()) : Optional.empty();
+    }
+
+    private boolean request(
+            VueTurnContext context, Supplier<String> canonicalPrefix,
+            VueTurnOutcome.TurnOutcomeType outcomeType,
+            Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
         Objects.requireNonNull(context, "context 不能为空");
         Objects.requireNonNull(canonicalPrefix, "canonicalPrefix 不能为空");
         if (!accepting.get()) {
             throw new RejectedExecutionException("Vue 取消协调器正在关闭");
         }
-        if (!context.tryClaimTerminal()) {
+        VueTurnContext.TerminalTrigger trigger = outcomeType
+                == VueTurnOutcome.TurnOutcomeType.TIMED_OUT
+                ? VueTurnContext.TerminalTrigger.TIMED_OUT
+                : VueTurnContext.TerminalTrigger.CANCELLED;
+        if (!context.tryClaimTerminalAndCancel(trigger)) {
             return false;
         }
-        context.revokeCallbacks();
         PendingCancellation cancellation =
-                new PendingCancellation(context, canonicalPrefix);
+                new PendingCancellation(
+                        context, canonicalPrefix, outcomeType, result);
         pending.put(context.turnId(), cancellation);
         try {
             executor.execute(() -> finalizeCancellation(cancellation));
         } catch (RejectedExecutionException exception) {
-            context.cancelGeneration();
             if (context.awaitQuiescence(Duration.ZERO)) {
                 finalizeQuiescentCancellation(cancellation);
                 return true;
@@ -78,7 +102,6 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     private void finalizeCancellation(PendingCancellation cancellation) {
         VueTurnContext context = cancellation.context();
         try {
-            context.cancelGeneration();
             while (!context.awaitQuiescence(quiescenceTimeout)) {
                 if (Thread.currentThread().isInterrupted()) {
                     log.warn("Vue 取消后台任务在静默前中断,保留租约,appId={},turnId={}",
@@ -90,6 +113,9 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             }
             finalizeQuiescentCancellation(cancellation);
         } catch (RuntimeException exception) {
+            if (cancellation.result() != null) {
+                cancellation.result().tryEmitError(exception);
+            }
             log.error("Vue 取消后台收尾异常,保留租约,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
         }
@@ -97,13 +123,29 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
 
     private void finalizeQuiescentCancellation(PendingCancellation cancellation) {
         VueTurnContext context = cancellation.context();
-        String message = "本次生成已取消。";
+        if (!context.isUserCommitted()) {
+            context.closeResources();
+            pending.remove(context.turnId(), cancellation);
+            if (cancellation.result() != null) {
+                cancellation.result().tryEmitError(new IllegalStateException(
+                        "Vue 回合在用户消息提交前结束"));
+            }
+            return;
+        }
+        String message = cancellation.outcomeType()
+                == VueTurnOutcome.TurnOutcomeType.TIMED_OUT
+                ? JsonMessageStreamHandler.TIMEOUT_MESSAGE
+                : "本次生成已取消。";
         String canonical = JsonMessageStreamHandler.appendTerminalText(
                 cancellation.canonicalPrefix().get(), message);
-        finalizer.finalizeOnce(context, new VueTurnOutcome(
-                context.phase(), VueTurnOutcome.TurnOutcomeType.CANCELLED,
+        VueTurnFinalizer.FinalizationResult finalized =
+                finalizer.finalizeOnce(context, new VueTurnOutcome(
+                context.phase(), cancellation.outcomeType(),
                 canonical, false, message));
         pending.remove(context.turnId(), cancellation);
+        if (cancellation.result() != null) {
+            cancellation.result().tryEmitValue(finalized);
+        }
     }
 
     @Override
@@ -121,6 +163,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     }
 
     private record PendingCancellation(
-            VueTurnContext context, Supplier<String> canonicalPrefix) {
+            VueTurnContext context, Supplier<String> canonicalPrefix,
+            VueTurnOutcome.TurnOutcomeType outcomeType,
+            Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
     }
 }

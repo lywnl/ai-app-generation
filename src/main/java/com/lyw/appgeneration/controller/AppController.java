@@ -13,6 +13,7 @@ import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
+import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.model.dto.app.*;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
@@ -32,8 +33,10 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.io.File;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +49,9 @@ import java.util.Map;
 @RestController
 @RequestMapping("/app")
 public class AppController {
+
+    private static final Duration SSE_HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
+    private static final String VUE_TURN_PROTOCOL = "vue-turn/v1";
 
     @Autowired
     private AppService appService;
@@ -95,41 +101,82 @@ public class AppController {
     public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
             @RequestParam String message,
             HttpServletRequest request) {
-        // 参数校验
-        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID无效");
-        ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "用户消息不能为空");
-        // 获取当前登录用户
-        User loginUser = userService.getLoginUser(request);
-        // 调用服务生成代码（流式）
-        Flux<String> contentFlux = appService.chatToGenCode(appId, message, loginUser);
-        // 转换为 ServerSentEvent 格式
-        return contentFlux
-                .map(chunk -> {
-                    // 将内容包装成JSON对象
-                    Map<String, String> wrapper = Map.of("d", chunk);
-                    String jsonData = JSONUtil.toJsonStr(wrapper);
-                    return ServerSentEvent.<String>builder()
-                            .data(jsonData)
-                            .build();
-                })
-                .onErrorResume(ex -> {
-                    Map<String, Object> errorData = Map.of(
-                            "error", true,
-                            "code", ErrorCode.SYSTEM_ERROR.getCode(),
-                            "message", ex.getMessage() == null ? "系统错误" : ex.getMessage()
-                    );
-                    String errorJson = JSONUtil.toJsonStr(errorData);
-                    return Flux.just(
-                            ServerSentEvent.<String>builder()
-                                    .event("business-error")
-                                    .data(errorJson)
-                                    .build(),
-                            ServerSentEvent.<String>builder()
-                                    .event("done")
-                                    .data("")
-                                    .build()
-                    );
-                });
+        Flux<ServerSentEvent<String>> protocol = Flux.defer(() -> {
+            ThrowUtils.throwIf(appId == null || appId <= 0,
+                    ErrorCode.PARAMS_ERROR, "应用ID无效");
+            ThrowUtils.throwIf(StrUtil.isBlank(message),
+                    ErrorCode.PARAMS_ERROR, "用户消息不能为空");
+            User loginUser = userService.getLoginUser(request);
+            Flux<GenerationStreamEvent> business = appService.chatToGenCode(
+                    appId, message, loginUser);
+            return encodeBusinessWithHeartbeat(business);
+        }).onErrorResume(this::businessErrorEvent);
+        return protocol.concatWithValues(doneEvent());
+    }
+
+    private Flux<ServerSentEvent<String>> encodeBusinessWithHeartbeat(
+            Flux<GenerationStreamEvent> business) {
+        return business.publish(shared -> {
+            Flux<ServerSentEvent<String>> body = shared.map(this::encodeBusinessEvent);
+            Flux<ServerSentEvent<String>> heartbeat = shared
+                    .map(ignored -> 0L)
+                    .onErrorComplete()
+                    .startWith(0L)
+                    .switchMap(ignored -> Mono.delay(SSE_HEARTBEAT_INTERVAL)
+                            .repeat()
+                            .map(tick -> heartbeatEvent()))
+                    .takeUntilOther(shared.ignoreElements().onErrorComplete());
+            return Flux.merge(body, heartbeat);
+        });
+    }
+
+    private ServerSentEvent<String> encodeBusinessEvent(
+            GenerationStreamEvent event) {
+        if (event instanceof GenerationStreamEvent.VueOutcome vueEvent) {
+            var outcome = vueEvent.outcome();
+            Map<String, Object> data = Map.of(
+                    "protocol", VUE_TURN_PROTOCOL,
+                    "outcome", outcome.outcome().name(),
+                    "message", outcome.clientMessage(),
+                    "refreshPreview", outcome.shouldRefreshPreview());
+            return ServerSentEvent.<String>builder()
+                    .event("turn-outcome")
+                    .data(JSONUtil.toJsonStr(data))
+                    .build();
+        }
+        String chunk = ((GenerationStreamEvent.Content) event).text();
+        return ServerSentEvent.<String>builder()
+                .data(JSONUtil.toJsonStr(Map.of("d", chunk)))
+                .build();
+    }
+
+    private Flux<ServerSentEvent<String>> businessErrorEvent(Throwable error) {
+        int code = error instanceof BusinessException businessException
+                ? businessException.getCode()
+                : ErrorCode.SYSTEM_ERROR.getCode();
+        Map<String, Object> data = Map.of(
+                "error", true,
+                "code", code,
+                "message", error.getMessage() == null ? "系统错误" : error.getMessage());
+        return Flux.just(ServerSentEvent.<String>builder()
+                .event("business-error")
+                .data(JSONUtil.toJsonStr(data))
+                .build());
+    }
+
+    private ServerSentEvent<String> heartbeatEvent() {
+        return ServerSentEvent.<String>builder()
+                .event("heartbeat")
+                .data(JSONUtil.toJsonStr(Map.of(
+                        "timestamp", System.currentTimeMillis())))
+                .build();
+    }
+
+    private ServerSentEvent<String> doneEvent() {
+        return ServerSentEvent.<String>builder()
+                .event("done")
+                .data("")
+                .build();
     }
 
     /**

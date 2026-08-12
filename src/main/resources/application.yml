@@ -9,7 +9,7 @@ server:
 spring:
   mvc:
     async:
-      request-timeout: 600000  # SSE 流式接口异步超时时间：10分钟
+      request-timeout: 1860000  # SSE 运输层 31 分钟，略大于 Vue 业务绝对截止时间
   application:
     name: ai-app-generation
   datasource:
