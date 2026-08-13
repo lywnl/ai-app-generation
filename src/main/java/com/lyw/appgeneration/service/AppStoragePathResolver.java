@@ -55,6 +55,14 @@ public final class AppStoragePathResolver {
                 deployRoot, validApp.getDeployKey(), "部署"));
     }
 
+    public Path resolveDeployDirectory(App app, String deployKey) {
+        App validApp = requireApp(app);
+        if (StrUtil.isBlank(deployKey)) {
+            throw new IllegalArgumentException("部署标识不能为空");
+        }
+        return resolveDirectChild(deployRoot, deployKey, "部署");
+    }
+
     private App requireApp(App app) {
         Objects.requireNonNull(app, "应用不能为空");
         if (app.getId() == null || app.getId() <= 0) {

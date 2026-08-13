@@ -12,6 +12,11 @@ import com.lyw.appgeneration.ai.guardrail.annotation.PromptSafetyCheck;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
+import com.lyw.appgeneration.core.builder.BuildCancellationSignal;
+import com.lyw.appgeneration.core.builder.BuildExecutionContext;
+import com.lyw.appgeneration.core.builder.BuildLogSink;
+import com.lyw.appgeneration.core.builder.BuildResult;
+import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
@@ -35,6 +40,7 @@ import com.lyw.appgeneration.monitor.MonitorContextHolder;
 import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
+import com.lyw.appgeneration.service.AppDeploymentFileService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.ProjectDownloadService;
@@ -50,8 +56,10 @@ import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.File;
 import java.io.Serializable;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -95,6 +103,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private ScreenshotService screenshotService;
+
+    @Resource
+    private AppDeploymentFileService appDeploymentFileService;
 
     @Resource
     private AppStoragePathResolver appStoragePathResolver;
@@ -295,63 +306,102 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Override
     public String deployApp(Long appId, User loginUser) {
-        //1. 参数校验
-        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
-        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR, "用户未登录");
-        //2. 查询用户信息
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null
+                        || loginUser.getId() <= 0,
+                ErrorCode.NOT_LOGIN_ERROR, "用户未登录");
         App app = getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR, "应用不存在");
-        //3. 验证用户是否有权限访问该应用，仅本人可以部署应用
-        if (!app.getUserId().equals(loginUser.getId())) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权限部署该应用");
+        ThrowUtils.throwIf(app == null,
+                ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+        if (!loginUser.getId().equals(app.getUserId())) {
+            throw new BusinessException(
+                    ErrorCode.NO_AUTH_ERROR, "无权限部署该应用");
         }
-        //4. 检查是否已经存在deploy key
+        CodeGenTypeEnum codeGenType = CodeGenTypeEnum.getEnumByValue(
+                app.getCodeGenType());
+        ThrowUtils.throwIf(codeGenType == null,
+                ErrorCode.PARAMS_ERROR, "代码生成类型无效");
         String deployKey = app.getDeployKey();
-        //如果不存在deploy key，则生成deploy key
         if (StrUtil.isBlank(deployKey)) {
             deployKey = RandomUtil.randomString(6);
         }
-        //5. 获取代码生成类型, 获取原始的代码生成路径
-        String codeGenType = app.getCodeGenType();
-        String sourceDirName = codeGenType + "_" + appId;
-        String sourceDirPath = AppConstant.CODE_OUTPUT_ROOT_DIR + File.separator + sourceDirName;
-        //6. 检验文件是否存在
-        File file = new File(sourceDirPath);
-        if (!file.exists() || !file.isDirectory()) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "代码生成目录不存在");
+
+        String ownerToken = "deploy-" + UUID.randomUUID();
+        try (AppOperationLeaseManager.AppOperationLease ignored =
+                     acquireDeployLease(appId, ownerToken)) {
+            return deployWithinLease(
+                    app, codeGenType, deployKey, ownerToken);
         }
-        //7. Vue项目特殊处理：执行构建
-        CodeGenTypeEnum enumByValue = CodeGenTypeEnum.getEnumByValue(codeGenType);
-        if (enumByValue == CodeGenTypeEnum.VUE_PROJECT) {
-            //vue项目构建
-            boolean result = vueProjectBuilder.buildProject(sourceDirPath);
-            ThrowUtils.throwIf(!result, ErrorCode.SYSTEM_ERROR, "Vue项目构建失败 请重试");
-            //检查dist目录是否存在
-            File distDir = new File(sourceDirPath, "dist");
-            ThrowUtils.throwIf(!distDir.exists() || !distDir.isDirectory(), ErrorCode.SYSTEM_ERROR, "Vue项目构建失败 请重试");
-            //构建成功 复制到部署目录
-            file = distDir;
-        }
-        //8. 拷贝文件到部署目录
-        String deployPath = AppConstant.CODE_DEPLOY_ROOT_DIR + File.separator + deployKey;
-        try {
-            FileUtil.copyContent(file, new File(deployPath), true);
-        } catch (Exception e) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "部署目录拷贝失败: " + e.getMessage());
-        }
-        //9. 更新数据库
+    }
+
+    private String deployWithinLease(
+            App app,
+            CodeGenTypeEnum codeGenType,
+            String deployKey,
+            String ownerToken) {
+        Path sourceDirectory = appStoragePathResolver.resolveSourceDirectory(app);
+        Path deployDirectory = appStoragePathResolver.resolveDeployDirectory(
+                app, deployKey);
+        requireDirectory(sourceDirectory, "代码生成目录不存在");
+        Path contentDirectory = codeGenType == CodeGenTypeEnum.VUE_PROJECT
+                ? buildVueDeployment(app.getId(), sourceDirectory, ownerToken)
+                : sourceDirectory;
+        appDeploymentFileService.copyDirectory(
+                contentDirectory, deployDirectory);
+
         App updateApp = new App();
         updateApp.setDeployKey(deployKey);
-        updateApp.setId(appId);
+        updateApp.setId(app.getId());
         updateApp.setDeployedTime(LocalDateTime.now());
-        boolean result = updateById(updateApp);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新部署失败");
-        //10. 返回可访问的地址
-        String formatUrl = String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
-        //11. 异步生成截图并且更新应用封面
-        generateAppScreenshotAsync(appId, formatUrl);
-
+        boolean updated = updateById(updateApp);
+        ThrowUtils.throwIf(!updated,
+                ErrorCode.OPERATION_ERROR, "更新部署失败");
+        String formatUrl = String.format(
+                "%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        generateAppScreenshotAsync(app.getId(), formatUrl);
         return formatUrl;
+    }
+
+    private Path buildVueDeployment(
+            long appId, Path sourceDirectory, String ownerToken) {
+        BuildResult result;
+        try (BuildLogSink logSink = new BuildLogSink(
+                appId, ownerToken, 1, BuildStage.VALIDATION)) {
+            BuildExecutionContext context = new BuildExecutionContext(
+                    appId,
+                    ownerToken,
+                    1,
+                    new BuildCancellationSignal(),
+                    logSink);
+            result = vueProjectBuilder.buildProjectDetailed(
+                    sourceDirectory, context);
+        }
+        ThrowUtils.throwIf(!result.success(),
+                ErrorCode.SYSTEM_ERROR, "Vue 项目构建失败，请稍后重试");
+        Path distDirectory = sourceDirectory.resolve("dist");
+        requireDirectory(distDirectory, "Vue 项目构建失败，请稍后重试");
+        return distDirectory;
+    }
+
+    private void requireDirectory(Path directory, String message) {
+        if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, message);
+        }
+    }
+
+    private AppOperationLeaseManager.AppOperationLease acquireDeployLease(
+            long appId, String ownerToken) {
+        try {
+            return appOperationLeaseManager.acquire(
+                    appId,
+                    AppOperationLeaseManager.AppOperationType.DEPLOY,
+                    ownerToken);
+        } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "项目正在生成或修复，请稍后再部署");
+        }
     }
 
     @Override
@@ -426,8 +476,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
         // 文件操作 — 尽力清理，失败不影响事务
         try {
-            FileUtil.del(AppConstant.CODE_OUTPUT_ROOT_DIR + File.separator + app.getCodeGenType() + "_" + appId);
-            FileUtil.del(AppConstant.CODE_DEPLOY_ROOT_DIR + File.separator + app.getDeployKey());
+            FileUtil.del(AppConstant.CODE_OUTPUT_ROOT_DIR + java.io.File.separator + app.getCodeGenType() + "_" + appId);
+            FileUtil.del(AppConstant.CODE_DEPLOY_ROOT_DIR + java.io.File.separator + app.getDeployKey());
         } catch (Exception e) {
             log.warn("应用记录已删除，但文件清理失败: appId={}, error={}", appId, e.getMessage());
         }
