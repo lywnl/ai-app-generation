@@ -7,6 +7,8 @@ import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.AppDeletionFileService;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
@@ -61,10 +63,12 @@ class AppServiceDeletionLifecycleTest {
     private AppDataLifecycleFence fence;
     private AppServiceImpl service;
     private App app;
+    private SimpleMeterRegistry metricsRegistry;
 
     @BeforeEach
     void setUp() throws Exception {
         leases = new AppOperationLeaseManager();
+        metricsRegistry = new SimpleMeterRegistry();
         fence = new AppDataLifecycleFence();
         Path source = temporaryDirectory.resolve("source");
         Path deploy = temporaryDirectory.resolve("deploy");
@@ -75,6 +79,8 @@ class AppServiceDeletionLifecycleTest {
                 .deployKey("deploy7").build();
         service = spy(new AppServiceImpl());
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", leases);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(metricsRegistry));
         ReflectionTestUtils.setField(service, "appDataLifecycleFence", fence);
         ReflectionTestUtils.setField(service, "appStoragePathResolver",
                 new AppStoragePathResolver(source, deploy));
@@ -119,6 +125,9 @@ class AppServiceDeletionLifecycleTest {
             assertEquals("应用正在部署或下载，暂时无法删除", exception.getMessage());
             assertFalse(deploy.isCancellationRequested());
             verifyNoInteractions(fileService, persistence, aiFactory, summaries, userMemory);
+            assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                    .tags("operation", "delete", "result", "rejected",
+                            "conflict_with", "deploy").counter().count());
         }
     }
 
@@ -133,6 +142,9 @@ class AppServiceDeletionLifecycleTest {
             assertEquals("应用正在部署或下载，暂时无法删除", exception.getMessage());
             assertFalse(download.isCancellationRequested());
             verifyNoInteractions(fileService, persistence, aiFactory, summaries, userMemory);
+            assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                    .tags("operation", "delete", "result", "rejected",
+                            "conflict_with", "download").counter().count());
         }
     }
 
@@ -182,6 +194,9 @@ class AppServiceDeletionLifecycleTest {
                 APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         verify(summaries).invalidateCache(APP_ID);
         verify(userMemory).invalidateCaches(APP_ID, USER_ID);
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "delete", "result", "acquired",
+                        "conflict_with", "none").counter().count());
         InOrder order = inOrder(
                 fileService, persistence, aiFactory, summaries, userMemory);
         order.verify(fileService).delete(any());

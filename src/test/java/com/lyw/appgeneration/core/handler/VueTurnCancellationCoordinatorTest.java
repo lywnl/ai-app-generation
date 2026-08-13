@@ -3,6 +3,8 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
@@ -28,6 +30,9 @@ class VueTurnCancellationCoordinatorTest {
 
     @Test
     void cancellationClosesGateCancelsModelWaitsAndFinalizesOnce() throws Exception {
+        SimpleMeterRegistry metricsRegistry = new SimpleMeterRegistry();
+        VueBuildRepairMetricsCollector metrics =
+                new VueBuildRepairMetricsCollector(metricsRegistry);
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         var operation = manager.acquire(7L,
                 AppOperationLeaseManager.AppOperationType.GENERATE, "turn-cancel");
@@ -51,7 +56,9 @@ class VueTurnCancellationCoordinatorTest {
 
         try (var executor = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().factory());
-             var coordinator = new VueTurnCancellationCoordinator(finalizer, executor)) {
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, executor,
+                     VueTurnCancellationCoordinator.QUIESCENCE_TIMEOUT, metrics)) {
             assertTrue(coordinator.requestCancellation(context, () -> "已生成部分"));
             assertFalse(coordinator.requestCancellation(context, () -> "重复"));
             assertTrue(finalized.await(2, TimeUnit.SECONDS));
@@ -60,6 +67,10 @@ class VueTurnCancellationCoordinatorTest {
         assertEquals(1, modelCancellations.get());
         assertFalse(context.tryRunCallback(() -> { }));
         verify(finalizer).finalizeOnce(eq(context), any());
+        assertEquals(1.0, cancellationCount(metricsRegistry,
+                "subscriber_cancelled", "requested"));
+        assertEquals(1.0, cancellationCount(metricsRegistry,
+                "subscriber_cancelled", "completed"));
         manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "turn-next").close();
     }
@@ -293,5 +304,16 @@ class VueTurnCancellationCoordinatorTest {
         verify(finalizer, org.mockito.Mockito.never()).finalizeOnce(any(), any());
         manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-pre-user-cancel").close();
+    }
+
+    private static double cancellationCount(
+            SimpleMeterRegistry registry, String trigger, String result) {
+        return registry.getMeters().stream()
+                .filter(meter -> meter.getId().getName()
+                        .equals("vue_turn_cancellations_total"))
+                .filter(meter -> trigger.equals(meter.getId().getTag("trigger")))
+                .filter(meter -> result.equals(meter.getId().getTag("result")))
+                .mapToDouble(meter -> meter.measure().iterator().next().getValue())
+                .sum();
     }
 }

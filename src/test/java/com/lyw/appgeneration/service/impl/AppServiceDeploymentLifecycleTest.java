@@ -10,6 +10,7 @@ import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.service.AppDeploymentFileService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,6 +65,7 @@ class AppServiceDeploymentLifecycleTest {
     private final AiGeneratorServiceFactory aiFactory =
             mock(AiGeneratorServiceFactory.class);
     private AppOperationLeaseManager leaseManager;
+    private SimpleMeterRegistry metricsRegistry;
     private AppServiceImpl service;
     private Path sourceDirectory;
     private Path deployDirectory;
@@ -70,6 +73,7 @@ class AppServiceDeploymentLifecycleTest {
     @BeforeEach
     void setUp() throws Exception {
         leaseManager = new AppOperationLeaseManager();
+        metricsRegistry = new SimpleMeterRegistry();
         Path sourceRoot = temporaryDirectory.resolve("source");
         Path deployRoot = temporaryDirectory.resolve("deploy");
         sourceDirectory = sourceRoot.resolve("vue_project_" + APP_ID)
@@ -82,6 +86,8 @@ class AppServiceDeploymentLifecycleTest {
 
         service = spy(new AppServiceImpl());
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", leaseManager);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(metricsRegistry));
         ReflectionTestUtils.setField(service, "appStoragePathResolver", resolver);
         ReflectionTestUtils.setField(service, "vueProjectBuilder", builder);
         ReflectionTestUtils.setField(
@@ -155,6 +161,9 @@ class AppServiceDeploymentLifecycleTest {
 
             assertEquals("项目正在生成或修复，请稍后再部署", exception.getMessage());
             verifyNoInteractions(builder, deploymentFileService, screenshotService);
+            assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                    .tags("operation", "deploy", "result", "rejected",
+                            "conflict_with", "generate").counter().count());
         }
     }
 
@@ -228,6 +237,9 @@ class AppServiceDeploymentLifecycleTest {
         assertEquals(
                 List.of("build", "copy", "database", "screenshot", "database"),
                 stages);
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "deploy", "result", "acquired",
+                        "conflict_with", "none").counter().count());
         verifyNoInteractions(chatHistoryService, aiFactory);
         leaseManager.acquire(
                 APP_ID, AppOperationLeaseManager.AppOperationType.DEPLOY,

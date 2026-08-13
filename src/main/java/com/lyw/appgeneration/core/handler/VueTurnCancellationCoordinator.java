@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -28,6 +29,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     private final VueTurnFinalizer finalizer;
     private final Executor executor;
     private final Duration quiescenceTimeout;
+    private final VueBuildRepairMetricsCollector metricsCollector;
     private final ConcurrentMap<String, PendingCancellation> pending =
             new ConcurrentHashMap<>();
     private final AtomicBoolean accepting = new AtomicBoolean(true);
@@ -35,16 +37,25 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     @Autowired
     public VueTurnCancellationCoordinator(
             VueTurnFinalizer finalizer,
-            @Qualifier("vueTurnCancellationExecutor") Executor executor) {
-        this(finalizer, executor, QUIESCENCE_TIMEOUT);
+            @Qualifier("vueTurnCancellationExecutor") Executor executor,
+            VueBuildRepairMetricsCollector metricsCollector) {
+        this(finalizer, executor, QUIESCENCE_TIMEOUT, metricsCollector);
     }
 
     VueTurnCancellationCoordinator(
             VueTurnFinalizer finalizer, Executor executor,
             Duration quiescenceTimeout) {
+        this(finalizer, executor, quiescenceTimeout, null);
+    }
+
+    VueTurnCancellationCoordinator(
+            VueTurnFinalizer finalizer, Executor executor,
+            Duration quiescenceTimeout,
+            VueBuildRepairMetricsCollector metricsCollector) {
         this.finalizer = Objects.requireNonNull(finalizer);
         this.executor = Objects.requireNonNull(executor);
         this.quiescenceTimeout = Objects.requireNonNull(quiescenceTimeout);
+        this.metricsCollector = metricsCollector;
         if (quiescenceTimeout.isZero() || quiescenceTimeout.isNegative()) {
             throw new IllegalArgumentException("静默等待时间必须大于 0");
         }
@@ -81,17 +92,30 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         if (!context.tryClaimTerminalAndCancel(trigger)) {
             return false;
         }
+        VueBuildRepairMetricsCollector.CancellationTrigger metricTrigger =
+                cancellationTrigger(outcomeType);
+        recordCancellation(metricTrigger,
+                VueBuildRepairMetricsCollector.CancellationResult.REQUESTED);
         PendingCancellation cancellation =
                 new PendingCancellation(
-                        context, canonicalPrefix, outcomeType, result);
+                        context, canonicalPrefix, outcomeType,
+                        metricTrigger, result);
         pending.put(context.turnId(), cancellation);
         try {
             executor.execute(() -> finalizeCancellation(cancellation));
         } catch (RejectedExecutionException exception) {
             if (context.awaitQuiescence(Duration.ZERO)) {
-                finalizeQuiescentCancellation(cancellation);
+                try {
+                    finalizeQuiescentCancellation(cancellation);
+                } catch (RuntimeException finalizationFailure) {
+                    recordCancellation(metricTrigger,
+                            VueBuildRepairMetricsCollector.CancellationResult.FAILED);
+                    throw finalizationFailure;
+                }
                 return true;
             }
+            recordCancellation(metricTrigger,
+                    VueBuildRepairMetricsCollector.CancellationResult.FAILED);
             log.error("Vue 取消后台任务被拒绝且回调未静默,保留终态门与租约,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
             throw exception;
@@ -104,10 +128,14 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         try {
             while (!context.awaitQuiescence(quiescenceTimeout)) {
                 if (Thread.currentThread().isInterrupted()) {
+                    recordCancellation(cancellation.metricTrigger(),
+                            VueBuildRepairMetricsCollector.CancellationResult.FAILED);
                     log.warn("Vue 取消后台任务在静默前中断,保留租约,appId={},turnId={}",
                             context.appId(), context.turnId());
                     return;
                 }
+                recordCancellation(cancellation.metricTrigger(),
+                        VueBuildRepairMetricsCollector.CancellationResult.TIMED_OUT);
                 log.warn("Vue 取消等待回调静默超时,继续跟踪,appId={},turnId={}",
                         context.appId(), context.turnId());
             }
@@ -118,6 +146,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             }
             log.error("Vue 取消后台收尾异常,保留租约,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
+            recordCancellation(cancellation.metricTrigger(),
+                    VueBuildRepairMetricsCollector.CancellationResult.FAILED);
         }
     }
 
@@ -130,6 +160,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 cancellation.result().tryEmitError(new IllegalStateException(
                         "Vue 回合在用户消息提交前结束"));
             }
+            recordCancellation(cancellation.metricTrigger(),
+                    VueBuildRepairMetricsCollector.CancellationResult.COMPLETED);
             return;
         }
         String message = cancellation.outcomeType()
@@ -145,6 +177,23 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         pending.remove(context.turnId(), cancellation);
         if (cancellation.result() != null) {
             cancellation.result().tryEmitValue(finalized);
+        }
+        recordCancellation(cancellation.metricTrigger(),
+                VueBuildRepairMetricsCollector.CancellationResult.COMPLETED);
+    }
+
+    private VueBuildRepairMetricsCollector.CancellationTrigger cancellationTrigger(
+            VueTurnOutcome.TurnOutcomeType outcomeType) {
+        return outcomeType == VueTurnOutcome.TurnOutcomeType.TIMED_OUT
+                ? VueBuildRepairMetricsCollector.CancellationTrigger.ABSOLUTE_DEADLINE
+                : VueBuildRepairMetricsCollector.CancellationTrigger.SUBSCRIBER_CANCELLED;
+    }
+
+    private void recordCancellation(
+            VueBuildRepairMetricsCollector.CancellationTrigger trigger,
+            VueBuildRepairMetricsCollector.CancellationResult result) {
+        if (metricsCollector != null) {
+            metricsCollector.recordCancellation(trigger, result);
         }
     }
 
@@ -165,6 +214,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     private record PendingCancellation(
             VueTurnContext context, Supplier<String> canonicalPrefix,
             VueTurnOutcome.TurnOutcomeType outcomeType,
+            VueBuildRepairMetricsCollector.CancellationTrigger metricTrigger,
             Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
     }
 }

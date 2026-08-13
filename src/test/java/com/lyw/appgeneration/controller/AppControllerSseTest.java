@@ -7,6 +7,8 @@ import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.UserService;
@@ -18,6 +20,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Hooks;
 import reactor.test.StepVerifier;
 
@@ -42,6 +45,9 @@ class AppControllerSseTest {
 
     private final AppService appService = mock(AppService.class);
     private final UserService userService = mock(UserService.class);
+    private final SimpleMeterRegistry metricsRegistry = new SimpleMeterRegistry();
+    private final AppLifecycleMetricsCollector lifecycleMetrics =
+            new AppLifecycleMetricsCollector(metricsRegistry);
     private final HttpServletRequest request = new MockHttpServletRequest();
     private AppController controller;
 
@@ -50,6 +56,7 @@ class AppControllerSseTest {
         controller = new AppController();
         ReflectionTestUtils.setField(controller, "appService", appService);
         ReflectionTestUtils.setField(controller, "userService", userService);
+        ReflectionTestUtils.setField(controller, "appLifecycleMetricsCollector", lifecycleMetrics);
         when(userService.getLoginUser(request)).thenReturn(LOGIN_USER);
     }
 
@@ -169,6 +176,50 @@ class AppControllerSseTest {
     }
 
     @Test
+    void systemFailureRecordsSystemProtocolResultAndPublisherCompletionSeparately() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.error(new IllegalStateException("系统降级")));
+
+        controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
+
+        assertEquals(1.0, metricsRegistry.get("generation_sse_protocol_results_total")
+                .tag("result", "system_error").counter().count());
+        assertEquals(1.0, metricsRegistry.get("generation_sse_publisher_terminations_total")
+                .tag("result", "completed").counter().count());
+    }
+
+    @Test
+    void vueProtocolErrorRecordsProtocolResultBeforeDone() {
+        VueTurnOutcome outcome = new VueTurnOutcome(
+                VueBuildPhase.FINAL_DIAGNOSIS,
+                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                "协议异常", false, "协议异常");
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(GenerationStreamEvent.vueOutcome(outcome)));
+
+        controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
+
+        assertEquals(1.0, metricsRegistry.get("generation_sse_protocol_results_total")
+                .tag("result", "protocol_error").counter().count());
+        assertEquals(0.0, protocolCount("done"));
+    }
+
+    @Test
+    void vueSystemErrorRecordsSystemResultBeforeDone() {
+        VueTurnOutcome outcome = new VueTurnOutcome(
+                VueBuildPhase.GENERATING,
+                VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                "系统异常", false, "系统异常");
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(GenerationStreamEvent.vueOutcome(outcome)));
+
+        controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
+
+        assertEquals(1.0, protocolCount("system_error"));
+        assertEquals(0.0, protocolCount("done"));
+    }
+
+    @Test
     void asynchronousFailureBeforeUserCommitBecomesBusinessErrorThenDone() {
         var dropped = new CopyOnWriteArrayList<Throwable>();
         Hooks.onErrorDropped(dropped::add);
@@ -274,5 +325,14 @@ class AppControllerSseTest {
 
     private Flux<GenerationStreamEvent> content(String text) {
         return Flux.just(GenerationStreamEvent.content(text));
+    }
+
+    private double protocolCount(String result) {
+        return metricsRegistry.getMeters().stream()
+                .filter(meter -> meter.getId().getName()
+                        .equals("generation_sse_protocol_results_total"))
+                .filter(meter -> result.equals(meter.getId().getTag("result")))
+                .mapToDouble(meter -> meter.measure().iterator().next().getValue())
+                .sum();
     }
 }

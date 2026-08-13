@@ -11,6 +11,8 @@ import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -34,6 +36,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -64,10 +67,12 @@ class AppServiceSimpleTurnLifecycleTest {
     private AppOperationLeaseManager leases;
     private AppDataLifecycleFence fence;
     private AppServiceImpl service;
+    private SimpleMeterRegistry metricsRegistry;
 
     @BeforeEach
     void setUp() {
         leases = new AppOperationLeaseManager();
+        metricsRegistry = new SimpleMeterRegistry();
         fence = new AppDataLifecycleFence();
         StreamHandlerExecutor executor = new StreamHandlerExecutor();
         ReflectionTestUtils.setField(executor, "memorySummaryService", summaries);
@@ -79,6 +84,8 @@ class AppServiceSimpleTurnLifecycleTest {
         ReflectionTestUtils.setField(service, "chatHistoryService", history);
         ReflectionTestUtils.setField(service, "streamHandlerExecutor", executor);
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", leases);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(metricsRegistry));
         ReflectionTestUtils.setField(service, "appDataLifecycleFence", fence);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
@@ -115,6 +122,10 @@ class AppServiceSimpleTurnLifecycleTest {
         verify(history, never()).addChatMessage(APP_ID, "需求", "user", USER_ID);
         verify(facade, never()).generateAndSaveCodeStream(
                 any(), any(), eq(APP_ID), anyBoolean(), any(), any());
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "generate", "result", "rejected",
+                        "conflict_with", operationType.name().toLowerCase())
+                .counter().count());
     }
 
     @Test
@@ -139,6 +150,9 @@ class AppServiceSimpleTurnLifecycleTest {
         order.verify(generator).generateHtmlCodeStream("需求");
         verify(aiFactory, times(1)).getAiCodeGeneratorService(
                 APP_ID, CodeGenTypeEnum.HTML);
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "generate", "result", "acquired",
+                        "conflict_with", "none").counter().count());
         client.dispose();
     }
 

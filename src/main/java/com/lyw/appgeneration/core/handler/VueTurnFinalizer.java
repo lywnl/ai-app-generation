@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -29,19 +30,22 @@ public class VueTurnFinalizer {
     private final UserMemoryService userMemoryService;
     private final AiGeneratorServiceFactory serviceFactory;
     private final AppDataLifecycleFence lifecycleFence;
+    private final VueBuildRepairMetricsCollector metricsCollector;
 
     public VueTurnFinalizer(ChatHistoryService chatHistoryService,
             ToolMessageCollapser toolMessageCollapser,
             MemorySummaryService memorySummaryService,
             UserMemoryService userMemoryService,
             AiGeneratorServiceFactory serviceFactory,
-            AppDataLifecycleFence lifecycleFence) {
+            AppDataLifecycleFence lifecycleFence,
+            VueBuildRepairMetricsCollector metricsCollector) {
         this.chatHistoryService = chatHistoryService;
         this.toolMessageCollapser = toolMessageCollapser;
         this.memorySummaryService = memorySummaryService;
         this.userMemoryService = userMemoryService;
         this.serviceFactory = serviceFactory;
         this.lifecycleFence = lifecycleFence;
+        this.metricsCollector = metricsCollector;
     }
 
     public FinalizationResult finalizeOnce(
@@ -50,6 +54,7 @@ public class VueTurnFinalizer {
             return context.awaitFinalization();
         }
         FinalizationResult result = persistWithinWriterPermit(context, requestedOutcome);
+        metricsCollector.recordTurnOutcome(result.outcome());
         try {
             context.closeResources();
         } catch (RuntimeException exception) {
@@ -104,6 +109,7 @@ public class VueTurnFinalizer {
         ToolMessageCollapser.CollapseResult collapse =
                 toolMessageCollapser.collapseLastTurn(
                         context.appId(), requestedOutcome.canonicalAiText());
+        recordCollapse(collapse.status());
         if (collapse.status() != COLLAPSED) {
             log.warn("Vue 回合 L0 未稳定同步,appId={},turnId={},stage={}",
                     context.appId(), context.turnId(), collapse.status());
@@ -135,13 +141,34 @@ public class VueTurnFinalizer {
                     .invalidateAndClearMemory(
                             context.appId(), CodeGenTypeEnum.VUE_PROJECT);
             if (result != null && !result.failedTargets().isEmpty()) {
+                metricsCollector.recordMemoryL0Sync(
+                        VueBuildRepairMetricsCollector.MemoryAction.INVALIDATE,
+                        VueBuildRepairMetricsCollector.MemoryResult.FAILED);
                 log.error("Vue 不可信 L0 清理不完整,appId={},turnId={},targets={}",
                         context.appId(), context.turnId(), result.failedTargets());
+            } else {
+                metricsCollector.recordMemoryL0Sync(
+                        VueBuildRepairMetricsCollector.MemoryAction.INVALIDATE,
+                        VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED);
             }
         } catch (RuntimeException exception) {
+            metricsCollector.recordMemoryL0Sync(
+                    VueBuildRepairMetricsCollector.MemoryAction.INVALIDATE,
+                    VueBuildRepairMetricsCollector.MemoryResult.FAILED);
             log.error("Vue 不可信 L0 清理失败,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
         }
+    }
+
+    private void recordCollapse(ToolMessageCollapser.CollapseStatus status) {
+        VueBuildRepairMetricsCollector.MemoryResult result = switch (status) {
+            case COLLAPSED -> VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED;
+            case NO_MESSAGES, NO_USER_BOUNDARY, INVALID_TEXT ->
+                    VueBuildRepairMetricsCollector.MemoryResult.EMPTY;
+            case STORE_FAILED -> VueBuildRepairMetricsCollector.MemoryResult.FAILED;
+        };
+        metricsCollector.recordMemoryL0Sync(
+                VueBuildRepairMetricsCollector.MemoryAction.COLLAPSE, result);
     }
 
     private VueTurnOutcome systemError(VueTurnContext context) {

@@ -5,6 +5,8 @@ import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -33,6 +35,8 @@ class VueTurnFinalizerTest {
     private MemorySummaryService summary;
     private UserMemoryService preference;
     private AiGeneratorServiceFactory factory;
+    private SimpleMeterRegistry metricsRegistry;
+    private VueBuildRepairMetricsCollector metrics;
     private AppDataLifecycleFence lifecycleFence;
     private VueTurnFinalizer finalizer;
 
@@ -43,9 +47,11 @@ class VueTurnFinalizerTest {
         summary = mock(MemorySummaryService.class);
         preference = mock(UserMemoryService.class);
         factory = mock(AiGeneratorServiceFactory.class);
+        metricsRegistry = new SimpleMeterRegistry();
+        metrics = new VueBuildRepairMetricsCollector(metricsRegistry);
         lifecycleFence = new AppDataLifecycleFence();
         finalizer = new VueTurnFinalizer(
-                history, collapser, summary, preference, factory, lifecycleFence);
+                history, collapser, summary, preference, factory, lifecycleFence, metrics);
         when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
                 .thenReturn(true);
         when(collapser.collapseLastTurn(anyLong(), anyString()))
@@ -71,8 +77,34 @@ class VueTurnFinalizerTest {
             verify(collapser).collapseLastTurn(APP_ID, outcome.canonicalAiText());
             verify(summary).triggerSummarizationAsync(APP_ID);
             verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+            assertEquals(1.0, metricsRegistry.get("vue_turn_outcomes_total")
+                    .tags("outcome", outcome.outcome().name().toLowerCase(),
+                            "phase", outcome.phase().name().toLowerCase())
+                    .counter().count());
             clearInvocations(history, collapser, summary, preference, factory);
         }
+    }
+
+    @Test
+    void collapseFailureRecordsFailedInvalidateWithoutChangingPersistedOutcome() {
+        when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(STORE_FAILED, java.util.List.of()));
+        when(factory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
+                .thenReturn(MemoryCacheInvalidationResult.success());
+        VueTurnOutcome outcome = outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                "项目已生成并构建成功。", true);
+
+        VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
+                VueTurnContext.testing(APP_ID, USER_ID, "turn-metrics",
+                        VueBuildPhase.SUCCEEDED), outcome);
+
+        assertEquals(outcome, result.outcome());
+        assertEquals(1.0, metricsRegistry.get("vue_memory_l0_sync_total")
+                .tags("action", "collapse", "result", "failed")
+                .counter().count());
+        assertEquals(1.0, metricsRegistry.get("vue_memory_l0_sync_total")
+                .tags("action", "invalidate", "result", "succeeded")
+                .counter().count());
     }
 
     @Test

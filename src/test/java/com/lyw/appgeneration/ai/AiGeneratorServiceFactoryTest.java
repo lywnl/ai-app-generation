@@ -8,10 +8,14 @@ import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Set;
@@ -150,17 +154,44 @@ class AiGeneratorServiceFactoryTest {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
         RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
         ChatHistoryService history = mock(ChatHistoryService.class);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
+                new VueBuildRepairMetricsCollector(registry));
         when(history.loadChatHistoryToMemory(any(), any(), any(Integer.class)))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
 
         assertThrows(IllegalStateException.class, () -> factory
-                .getAiCodeGeneratorService(7L, com.lyw.appgeneration.model.enums.CodeGenTypeEnum.VUE_PROJECT));
+                .getAiCodeGeneratorService(7L, CodeGenTypeEnum.VUE_PROJECT));
         assertThrows(IllegalStateException.class, () -> factory
-                .getAiCodeGeneratorService(7L, com.lyw.appgeneration.model.enums.CodeGenTypeEnum.VUE_PROJECT));
+                .getAiCodeGeneratorService(7L, CodeGenTypeEnum.VUE_PROJECT));
 
         verify(history, times(2)).loadChatHistoryToMemory(any(), any(), any(Integer.class));
+        assertEquals(2.0, registry.get("vue_memory_l0_sync_total")
+                .tags("action", "rebuild", "result", "failed")
+                .counter().count());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CodeGenTypeEnum.class, names = {"HTML", "MULTI_FILE"})
+    void nonVueColdHistoryLoadFailureDoesNotRecordVueMetric(
+            CodeGenTypeEnum codeGenType) {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore",
+                mock(RedisChatMemoryStore.class));
+        ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
+                new VueBuildRepairMetricsCollector(registry));
+        when(history.loadChatHistoryToMemory(any(), any(), any(Integer.class)))
+                .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
+
+        assertThrows(IllegalStateException.class, () -> factory
+                .getAiCodeGeneratorService(7L, codeGenType));
+
+        assertEquals(null, registry.find("vue_memory_l0_sync_total").counter());
     }
 
     private static final class EvaluationTools extends BaseTool {

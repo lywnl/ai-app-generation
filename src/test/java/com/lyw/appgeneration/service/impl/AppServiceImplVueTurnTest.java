@@ -14,6 +14,8 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -52,16 +55,20 @@ class AppServiceImplVueTurnTest {
     private final AiCodeGeneratorService generator = mock(AiCodeGeneratorService.class);
     private AppOperationLeaseManager operationManager;
     private AppServiceImpl service;
+    private SimpleMeterRegistry metricsRegistry;
 
     @BeforeEach
     void setUp() {
         operationManager = new AppOperationLeaseManager();
+        metricsRegistry = new SimpleMeterRegistry();
         service = new AppServiceImpl();
         ReflectionTestUtils.setField(service, "aiCodeGeneratorFacade", facade);
         ReflectionTestUtils.setField(service, "aiGeneratorServiceFactory", factory);
         ReflectionTestUtils.setField(service, "chatHistoryService", history);
         ReflectionTestUtils.setField(service, "streamHandlerExecutor", executor);
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", operationManager);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(metricsRegistry));
         ReflectionTestUtils.setField(service, "vueBuildSessionManager",
                 new VueBuildSessionManager());
         App app = App.builder().id(APP_ID).userId(USER_ID)
@@ -96,12 +103,33 @@ class AppServiceImplVueTurnTest {
         assertEquals("raw", ((GenerationStreamEvent.Content)
                 result.blockFirst()).text());
         assertEquals(1, starts.get());
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "generate", "result", "acquired",
+                        "conflict_with", "none").counter().count());
         InOrder order = inOrder(history, facade, executor);
         order.verify(executor).doExecuteVue(any(), any());
         order.verify(facade).prepareVueGenerator(APP_ID);
         order.verify(history).addChatMessage(APP_ID, "需求", "user", USER_ID);
         order.verify(facade).generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
+    }
+
+    @Test
+    void activeDeployRejectsVueGenerationAndRecordsConflict() {
+        Flux<GenerationStreamEvent> result = service.chatToGenCode(
+                APP_ID, "需求", User.builder().id(USER_ID).build());
+        try (var ignored = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.DEPLOY,
+                "部署中")) {
+            StepVerifier.create(result)
+                    .expectErrorMessage("应用正在执行其他操作，请稍后再生成")
+                    .verify();
+        }
+
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "generate", "result", "rejected",
+                        "conflict_with", "deploy").counter().count());
+        verifyNoInteractions(history, facade, executor);
     }
 
     @Test

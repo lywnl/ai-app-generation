@@ -11,8 +11,10 @@ import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -72,6 +74,27 @@ class BuildProjectToolTest {
             assertNull(terminalRetry.get("attempt"));
             verify(builder, org.mockito.Mockito.times(3))
                     .buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class));
+        }
+    }
+
+    @Test
+    void committedBuildResultRecordsOneVueAttemptMetricWithoutChangingToolResult() {
+        VueProjectBuilder builder = mock(VueProjectBuilder.class);
+        when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
+                .thenReturn(codeFailure());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        VueBuildRepairMetricsCollector metrics =
+                new VueBuildRepairMetricsCollector(registry);
+        Harness harness = harness(builder, new FileToolExecutionScopeManager(), metrics);
+
+        try (harness) {
+            JSONObject result = invoke(harness);
+
+            assertCompletedFailure(result, 1, "REPAIR", true, false, false);
+            assertEquals(1.0, registry.get("vue_build_attempts_total")
+                    .tags("attempt", "1", "result", "failed",
+                            "stage", "npm_build", "failure_kind", "code")
+                    .counter().count());
         }
     }
 
@@ -268,7 +291,8 @@ class BuildProjectToolTest {
     void stableMarkdownNeverCopiesErrorSummary() {
         BuildProjectTool tool = new BuildProjectTool(
                 mock(VueProjectBuilder.class), new BuildErrorSanitizer(),
-                new FileToolExecutionScopeManager());
+                new FileToolExecutionScopeManager(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()));
         BuildProjectToolResult result = BuildProjectToolResult.completedFailure(
                 1, BuildStage.NPM_BUILD, VueBuildFailureKind.CODE,
                 false, "绝密原始诊断 /private/project");
@@ -285,7 +309,8 @@ class BuildProjectToolTest {
     void stableMarkdownDistinguishesRetryBuildFromCodeRepair() {
         BuildProjectTool tool = new BuildProjectTool(
                 mock(VueProjectBuilder.class), new BuildErrorSanitizer(),
-                new FileToolExecutionScopeManager());
+                new FileToolExecutionScopeManager(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()));
         BuildProjectToolResult result = BuildProjectToolResult.completedFailure(
                 1, BuildStage.NPM_INSTALL, VueBuildFailureKind.DEPENDENCY,
                 false, "绝密依赖诊断 /private/project");
@@ -401,15 +426,31 @@ class BuildProjectToolTest {
     private Harness harness(
             VueProjectBuilder builder,
             java.util.function.BiFunction<Path, BuildResult, String> sanitizer) {
+        return harness(builder, new FileToolExecutionScopeManager(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()), sanitizer);
+    }
+
+    private Harness harness(
+            VueProjectBuilder builder,
+            FileToolExecutionScopeManager scopeManager,
+            VueBuildRepairMetricsCollector metrics) {
+        return harness(builder, scopeManager, metrics,
+                (path, result) -> "清洗诊断");
+    }
+
+    private Harness harness(
+            VueProjectBuilder builder,
+            FileToolExecutionScopeManager scopeManager,
+            VueBuildRepairMetricsCollector metrics,
+            java.util.function.BiFunction<Path, BuildResult, String> sanitizer) {
         AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
         var operation = operationManager.acquire(
                 APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE, TURN_ID);
         var lease = new VueBuildSessionManager().open(operation, USER_ID, TURN_ID);
-        FileToolExecutionScopeManager scopeManager = new FileToolExecutionScopeManager();
         var scope = scopeManager.online(
                 lease, TURN_ID, APP_ID, Set.of("buildProject"));
         BuildProjectTool tool = new BuildProjectTool(
-                builder, sanitizer, scopeManager);
+                builder, sanitizer, scopeManager, metrics);
         return new Harness(operation, lease, scopeManager, scope, tool);
     }
 

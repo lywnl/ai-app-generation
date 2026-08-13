@@ -14,6 +14,7 @@ import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
 import lombok.extern.slf4j.Slf4j;
@@ -31,22 +32,27 @@ public final class BuildProjectTool extends BaseTool {
     private final VueProjectBuilder vueProjectBuilder;
     private final BiFunction<Path, BuildResult, String> errorSanitizer;
     private final FileToolExecutionScopeManager scopeManager;
+    private final VueBuildRepairMetricsCollector metricsCollector;
 
     @Autowired
     public BuildProjectTool(
             VueProjectBuilder vueProjectBuilder,
             BuildErrorSanitizer errorSanitizer,
-            FileToolExecutionScopeManager scopeManager) {
-        this(vueProjectBuilder, errorSanitizer::sanitize, scopeManager);
+            FileToolExecutionScopeManager scopeManager,
+            VueBuildRepairMetricsCollector metricsCollector) {
+        this(vueProjectBuilder, errorSanitizer::sanitize, scopeManager,
+                metricsCollector);
     }
 
     BuildProjectTool(
             VueProjectBuilder vueProjectBuilder,
             BiFunction<Path, BuildResult, String> errorSanitizer,
-            FileToolExecutionScopeManager scopeManager) {
+            FileToolExecutionScopeManager scopeManager,
+            VueBuildRepairMetricsCollector metricsCollector) {
         this.vueProjectBuilder = vueProjectBuilder;
         this.errorSanitizer = errorSanitizer;
         this.scopeManager = scopeManager;
+        this.metricsCollector = metricsCollector;
     }
 
     @Tool("构建当前Vue项目。完成文件修改后调用；失败时根据返回诊断修复，成功或达到上限时系统自动结束。")
@@ -80,6 +86,8 @@ public final class BuildProjectTool extends BaseTool {
 
         BuildCancellationSignal cancellation = new BuildCancellationSignal();
         try (ticket) {
+            VueBuildRepairMetricsCollector.BuildAttemptObservation observation =
+                    metricsCollector.startBuildAttempt(ticket.attempt());
             CommittedBuild committedBuild;
             try {
                 committedBuild = buildAndCommit(scope, ticket, cancellation);
@@ -87,8 +95,9 @@ public final class BuildProjectTool extends BaseTool {
                 log.error("执行受控 Vue 构建失败: appId={}, attempt={}",
                         scope.appId(), ticket.attempt(), exception);
                 return recordInfrastructureFailure(
-                        scope, ticket, cancellation, exception);
+                        scope, ticket, cancellation, observation, exception);
             }
+            observation.complete(committedBuild.result());
             return renderCommittedResult(scope, ticket, committedBuild);
         }
     }
@@ -150,6 +159,7 @@ public final class BuildProjectTool extends BaseTool {
             FileToolExecutionScopeManager.FileToolScope scope,
             BuildAttemptTicket ticket,
             BuildCancellationSignal cancellation,
+            VueBuildRepairMetricsCollector.BuildAttemptObservation observation,
             RuntimeException exception) {
         BuildResult failure = new BuildResult(false, BuildStage.VALIDATION,
                 null, false, false,
@@ -166,6 +176,7 @@ public final class BuildProjectTool extends BaseTool {
             return json(BuildProjectToolResult.rejected(
                     "PROTOCOL_ERROR: 无法提交构建失败状态", true));
         }
+        observation.complete(failure);
         return renderCommittedResult(
                 scope, ticket, new CommittedBuild(failure, snapshot));
     }

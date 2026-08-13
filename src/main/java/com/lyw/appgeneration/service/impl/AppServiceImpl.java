@@ -23,6 +23,7 @@ import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.exception.BusinessException;
@@ -97,6 +98,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private AppOperationLeaseManager appOperationLeaseManager;
+
+    @Resource
+    private AppLifecycleMetricsCollector appLifecycleMetricsCollector;
 
     @Resource
     private VueBuildSessionManager vueBuildSessionManager;
@@ -269,8 +273,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             var lease = appOperationLeaseManager.acquire(
                     appId, AppOperationLeaseManager.AppOperationType.GENERATE,
                     "simple-generate-" + UUID.randomUUID());
+            recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
+                    AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
             return new SimpleGenerationTurnContext(lease);
         } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
+                    AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                    exception.activeOperation());
             throw new BusinessException(
                     ErrorCode.OPERATION_ERROR,
                     "应用正在执行其他操作，请稍后再生成");
@@ -345,6 +354,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                             appId,
                             AppOperationLeaseManager.AppOperationType.GENERATE,
                             turnId);
+            recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
+                    AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
             VueBuildSessionManager.VueBuildLease vueLease = null;
             VueTurnContext context = null;
             try {
@@ -376,7 +387,14 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 }
                 return Flux.error(exception);
             }
-        });
+        }).onErrorMap(AppOperationLeaseManager.ActiveAppOperationException.class,
+                exception -> {
+                    recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
+                            AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                            exception.activeOperation());
+                    return new BusinessException(ErrorCode.OPERATION_ERROR,
+                            "应用正在执行其他操作，请稍后再生成");
+                });
     }
 
     private Flux<String> prepareVueTurn(
@@ -438,7 +456,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
         String ownerToken = "deploy-" + UUID.randomUUID();
         try (AppOperationLeaseManager.AppOperationLease ignored =
-                     acquireDeployLease(appId, ownerToken)) {
+                     recordAcquiredDeployLease(appId, ownerToken)) {
             return deployWithinLease(
                     app, codeGenType, deployKey, ownerToken);
         }
@@ -507,9 +525,50 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     AppOperationLeaseManager.AppOperationType.DEPLOY,
                     ownerToken);
         } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            recordOperation(AppOperationLeaseManager.AppOperationType.DEPLOY,
+                    AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                    exception.activeOperation());
             throw new BusinessException(
                     ErrorCode.OPERATION_ERROR,
                     "项目正在生成或修复，请稍后再部署");
+        }
+    }
+
+    private AppOperationLeaseManager.AppOperationLease recordAcquiredDeployLease(
+            long appId, String ownerToken) {
+        AppOperationLeaseManager.AppOperationLease lease =
+                acquireDeployLease(appId, ownerToken);
+        recordOperation(AppOperationLeaseManager.AppOperationType.DEPLOY,
+                AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
+        return lease;
+    }
+
+    private void recordOperation(
+            AppOperationLeaseManager.AppOperationType operation,
+            AppLifecycleMetricsCollector.OperationResult result,
+            AppOperationLeaseManager.AppOperationType conflictWith) {
+        if (appLifecycleMetricsCollector != null) {
+            appLifecycleMetricsCollector.recordOperation(operation, result, conflictWith);
+        }
+    }
+
+    private AppOperationLeaseManager.AppOperationLease acquireDownloadLease(
+            long appId, String ownerToken) {
+        try {
+            AppOperationLeaseManager.AppOperationLease lease = appOperationLeaseManager.acquire(
+                    appId,
+                    AppOperationLeaseManager.AppOperationType.DOWNLOAD,
+                    ownerToken);
+            recordOperation(AppOperationLeaseManager.AppOperationType.DOWNLOAD,
+                    AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
+            return lease;
+        } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            recordOperation(AppOperationLeaseManager.AppOperationType.DOWNLOAD,
+                    AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                    exception.activeOperation());
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用正在生成中，暂时无法下载");
         }
     }
 
@@ -545,19 +604,6 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
     }
 
-    private AppOperationLeaseManager.AppOperationLease acquireDownloadLease(
-            long appId, String ownerToken) {
-        try {
-            return appOperationLeaseManager.acquire(
-                    appId,
-                    AppOperationLeaseManager.AppOperationType.DOWNLOAD,
-                    ownerToken);
-        } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
-            throw new BusinessException(
-                    ErrorCode.OPERATION_ERROR,
-                    "应用正在生成中，暂时无法下载");
-        }
-    }
 
     @Override
     public boolean deleteApp(Long appId, User operator) {
@@ -622,13 +668,23 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private AppOperationLeaseManager.AppOperationLease acquireDeleteLease(
             long appId, String ownerToken) {
         try {
-            return appOperationLeaseManager.cancelAndAcquireDelete(
+            AppOperationLeaseManager.AppOperationLease lease =
+                    appOperationLeaseManager.cancelAndAcquireDelete(
                     appId, ownerToken, deleteWaitTimeout);
+            recordOperation(AppOperationLeaseManager.AppOperationType.DELETE,
+                    AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
+            return lease;
         } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            recordOperation(AppOperationLeaseManager.AppOperationType.DELETE,
+                    AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                    exception.activeOperation());
             throw new BusinessException(
                     ErrorCode.OPERATION_ERROR,
                     "应用正在部署或下载，暂时无法删除");
         } catch (AppOperationLeaseManager.OperationQuiescenceTimeoutException exception) {
+            recordOperation(AppOperationLeaseManager.AppOperationType.DELETE,
+                    AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                    AppOperationLeaseManager.AppOperationType.GENERATE);
             throw new BusinessException(
                     ErrorCode.OPERATION_ERROR,
                     "应用生成正在结束，暂时无法删除");

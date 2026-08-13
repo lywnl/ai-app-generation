@@ -1,5 +1,7 @@
 package com.lyw.appgeneration.core.concurrency;
 
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -26,6 +28,9 @@ public final class AppOperationLeaseManager {
             new ConcurrentHashMap<>();
     private final Runnable registrationTestHook;
     private final CancellationDispatchStarter cancellationDispatchStarter;
+
+    @Resource
+    private AppLifecycleMetricsCollector appLifecycleMetricsCollector;
 
     public AppOperationLeaseManager() {
         this(null, task -> Thread.ofVirtual()
@@ -116,17 +121,23 @@ public final class AppOperationLeaseManager {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             abortDeleteTakeover(source);
+            recordDeleteTakeoverCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationResult.FAILED);
             throw new OperationQuiescenceTimeoutException(
                     appId, "等待静默时线程被中断", exception);
         }
         if (!readyForReplacement) {
             abortDeleteTakeover(source);
+            recordDeleteTakeoverCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationResult.TIMED_OUT);
             throw new OperationQuiescenceTimeoutException(
                     appId, "等待生成回调静默超时", null);
         }
         Throwable cancellationFailure = source.consumeCancellationFailure();
         if (cancellationFailure != null) {
             abortDeleteTakeover(source);
+            recordDeleteTakeoverCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationResult.FAILED);
             throwUnchecked(cancellationFailure);
         }
         OperationState delete = new OperationState(
@@ -136,6 +147,8 @@ public final class AppOperationLeaseManager {
             throw new IllegalStateException("生成租约在删除接管期间发生了非法替换");
         }
         source.completeDeleteTakeover();
+        recordDeleteTakeoverCancellation(
+                AppLifecycleMetricsCollector.OperationCancellationResult.COMPLETED);
         return new AppOperationLease(delete);
     }
 
@@ -159,7 +172,18 @@ public final class AppOperationLeaseManager {
                 startFailure.addSuppressed(cleanupFailure);
             }
         }
+        recordDeleteTakeoverCancellation(
+                AppLifecycleMetricsCollector.OperationCancellationResult.FAILED);
         throwUnchecked(startFailure);
+    }
+
+    private void recordDeleteTakeoverCancellation(
+            AppLifecycleMetricsCollector.OperationCancellationResult result) {
+        if (appLifecycleMetricsCollector != null) {
+            appLifecycleMetricsCollector.recordOperationCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationTrigger.DELETE_TAKEOVER,
+                    result);
+        }
     }
 
     private static void throwUnchecked(Throwable failure) {
@@ -389,9 +413,16 @@ public final class AppOperationLeaseManager {
 
     public static final class ActiveAppOperationException extends IllegalStateException {
 
+        private final AppOperationType activeOperation;
+
         private ActiveAppOperationException(
                 long appId, AppOperationType type, String ownerToken) {
             super("应用 " + appId + " 已有活跃操作: " + type + ", owner=" + ownerToken);
+            this.activeOperation = type;
+        }
+
+        public AppOperationType activeOperation() {
+            return activeOperation;
         }
     }
 

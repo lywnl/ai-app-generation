@@ -5,6 +5,7 @@ import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ProjectDownloadService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,10 +41,12 @@ class AppServiceDownloadLifecycleTest {
     private AppStoragePathResolver pathResolver;
     private AppOperationLeaseManager leaseManager;
     private AppServiceImpl service;
+    private SimpleMeterRegistry metricsRegistry;
 
     @BeforeEach
     void setUp() {
         leaseManager = new AppOperationLeaseManager();
+        metricsRegistry = new SimpleMeterRegistry();
         Path sourceRoot = temporaryDirectory.resolve("source");
         Path deployRoot = temporaryDirectory.resolve("deploy");
         pathResolver = new AppStoragePathResolver(sourceRoot, deployRoot);
@@ -50,6 +54,8 @@ class AppServiceDownloadLifecycleTest {
                 .toAbsolutePath().normalize();
         service = spy(new AppServiceImpl());
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", leaseManager);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(metricsRegistry));
         ReflectionTestUtils.setField(service, "appStoragePathResolver", pathResolver);
         ReflectionTestUtils.setField(service, "projectDownloadService", downloadService);
     }
@@ -125,6 +131,9 @@ class AppServiceDownloadLifecycleTest {
                     () -> service.downloadApp(APP_ID, loginUser(), response));
 
             assertEquals("应用正在生成中，暂时无法下载", exception.getMessage());
+            assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                    .tags("operation", "download", "result", "rejected",
+                            "conflict_with", "generate").counter().count());
             verifyNoInteractions(downloadService);
         }
     }
@@ -183,6 +192,9 @@ class AppServiceDownloadLifecycleTest {
 
         verify(downloadService).downloadProjectAsZip(
                 sourceDirectory, String.valueOf(APP_ID), response);
+        assertEquals(1.0, metricsRegistry.get("app_operations_total")
+                .tags("operation", "download", "result", "acquired",
+                        "conflict_with", "none").counter().count());
         leaseManager.acquire(
                 APP_ID,
                 AppOperationLeaseManager.AppOperationType.DOWNLOAD,

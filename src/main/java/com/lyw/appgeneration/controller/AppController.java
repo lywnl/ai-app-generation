@@ -18,6 +18,7 @@ import com.lyw.appgeneration.model.dto.app.*;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.UserService;
@@ -33,6 +34,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -57,6 +59,9 @@ public class AppController {
     @Resource
     private UserService userService;
 
+    @Resource
+    private AppLifecycleMetricsCollector appLifecycleMetricsCollector;
+
     /**
      * 下载应用代码
      *
@@ -76,17 +81,67 @@ public class AppController {
     public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
             @RequestParam String message,
             HttpServletRequest request) {
-        Flux<ServerSentEvent<String>> protocol = Flux.defer(() -> {
-            ThrowUtils.throwIf(appId == null || appId <= 0,
-                    ErrorCode.PARAMS_ERROR, "应用ID无效");
-            ThrowUtils.throwIf(StrUtil.isBlank(message),
-                    ErrorCode.PARAMS_ERROR, "用户消息不能为空");
-            User loginUser = userService.getLoginUser(request);
-            Flux<GenerationStreamEvent> business = appService.chatToGenCode(
-                    appId, message, loginUser);
-            return encodeBusinessWithHeartbeat(business);
-        }).onErrorResume(this::businessErrorEvent);
-        return protocol.concatWithValues(doneEvent());
+        return Flux.defer(() -> {
+            AppLifecycleMetricsCollector.SseProtocolObservation protocolObservation =
+                    appLifecycleMetricsCollector.startSseProtocolObservation();
+            AppLifecycleMetricsCollector.SsePublisherObservation publisherObservation =
+                    appLifecycleMetricsCollector.startSsePublisherObservation();
+            Flux<ServerSentEvent<String>> protocol = Flux.defer(() -> {
+                ThrowUtils.throwIf(appId == null || appId <= 0,
+                        ErrorCode.PARAMS_ERROR, "应用ID无效");
+                ThrowUtils.throwIf(StrUtil.isBlank(message),
+                        ErrorCode.PARAMS_ERROR, "用户消息不能为空");
+                User loginUser = userService.getLoginUser(request);
+                Flux<GenerationStreamEvent> business = appService.chatToGenCode(
+                        appId, message, loginUser);
+                return encodeBusinessWithHeartbeat(
+                        observeVueProtocolOutcome(business, protocolObservation));
+            }).onErrorResume(error -> {
+                protocolObservation.complete(protocolResult(error));
+                return businessErrorEvent(error);
+            });
+            return protocol.concatWithValues(doneEvent())
+                    .doOnComplete(() -> protocolObservation.complete(
+                            AppLifecycleMetricsCollector.SseProtocolResult.DONE))
+                    .doFinally(signal -> publisherObservation.complete(
+                            publisherResult(signal)));
+        });
+    }
+
+    private AppLifecycleMetricsCollector.SseProtocolResult protocolResult(
+            Throwable error) {
+        return error instanceof BusinessException
+                ? AppLifecycleMetricsCollector.SseProtocolResult.BUSINESS_ERROR
+                : AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR;
+    }
+
+    private Flux<GenerationStreamEvent> observeVueProtocolOutcome(
+            Flux<GenerationStreamEvent> business,
+            AppLifecycleMetricsCollector.SseProtocolObservation observation) {
+        return business.doOnNext(event -> {
+            if (event instanceof GenerationStreamEvent.VueOutcome vueEvent) {
+                AppLifecycleMetricsCollector.SseProtocolResult result = switch (
+                        vueEvent.outcome().outcome()) {
+                    case PROTOCOL_ERROR ->
+                            AppLifecycleMetricsCollector.SseProtocolResult.PROTOCOL_ERROR;
+                    case SYSTEM_ERROR ->
+                            AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR;
+                    default -> null;
+                };
+                if (result != null) {
+                    observation.complete(result);
+                }
+            }
+        });
+    }
+
+    private AppLifecycleMetricsCollector.SsePublisherResult publisherResult(
+            SignalType signal) {
+        return switch (signal) {
+            case CANCEL -> AppLifecycleMetricsCollector.SsePublisherResult.SUBSCRIBER_CANCELLED;
+            case ON_ERROR -> AppLifecycleMetricsCollector.SsePublisherResult.PUBLISHER_ERROR;
+            default -> AppLifecycleMetricsCollector.SsePublisherResult.COMPLETED;
+        };
     }
 
     private Flux<ServerSentEvent<String>> encodeBusinessWithHeartbeat(

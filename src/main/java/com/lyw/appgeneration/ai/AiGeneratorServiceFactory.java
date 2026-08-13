@@ -9,6 +9,7 @@ import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
@@ -54,6 +55,9 @@ public class AiGeneratorServiceFactory {
 
     @Resource
     private ToolManager toolManager;
+
+    @Resource
+    private VueBuildRepairMetricsCollector vueBuildRepairMetricsCollector;
 
     /**
      * AI 服务实例缓存
@@ -139,8 +143,14 @@ public class AiGeneratorServiceFactory {
         ChatHistoryService.HistoryLoadResult historyLoad =
                 chatHistoryService.loadChatHistoryToMemory(appId, delegate, 20);
         if (historyLoad.status() == ChatHistoryService.HistoryLoadStatus.FAILED) {
+            recordVueColdRebuild(
+                    VueBuildRepairMetricsCollector.MemoryResult.FAILED, codeGenType);
             throw new IllegalStateException("从 MySQL 重建对话历史失败,appId=" + appId);
         }
+        recordVueColdRebuild(historyLoad.status()
+                == ChatHistoryService.HistoryLoadStatus.EMPTY
+                ? VueBuildRepairMetricsCollector.MemoryResult.EMPTY
+                : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
         // 分层装饰器:messages() 返回前前置 L2 用户偏好 + L1 摘要;add/clear/id 全部委托 delegate
         LayeredChatMemory chatMemory = new LayeredChatMemory(delegate, memorySummaryService, userMemoryService);
         // 根据代码生成类型选择不同的模型配置
@@ -175,6 +185,16 @@ public class AiGeneratorServiceFactory {
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR,
                     "不支持的代码生成类型: " + codeGenType.getValue());
         };
+    }
+
+    private void recordVueColdRebuild(
+            VueBuildRepairMetricsCollector.MemoryResult result,
+            CodeGenTypeEnum codeGenType) {
+        if (codeGenType == CodeGenTypeEnum.VUE_PROJECT
+                && vueBuildRepairMetricsCollector != null) {
+            vueBuildRepairMetricsCollector.recordMemoryL0Sync(
+                    VueBuildRepairMetricsCollector.MemoryAction.REBUILD, result);
+        }
     }
 
     /**

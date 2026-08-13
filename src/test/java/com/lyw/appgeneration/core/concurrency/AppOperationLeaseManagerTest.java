@@ -1,7 +1,10 @@
 package com.lyw.appgeneration.core.concurrency;
 
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationType;
+import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -20,6 +23,54 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AppOperationLeaseManagerTest {
+
+    @Test
+    void deleteTakeoverRecordsCompletedOnceAndInactiveDeleteRecordsNothing() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        ReflectionTestUtils.setField(manager, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(registry));
+        var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+
+        try (var delete = manager.cancelAndAcquireDelete(
+                7L, "delete-1", Duration.ofSeconds(1))) {
+            assertEquals(AppOperationType.DELETE, delete.operationType());
+        }
+        generate.close();
+        try (var inactiveDelete = manager.cancelAndAcquireDelete(
+                8L, "delete-2", Duration.ofSeconds(1))) {
+            assertEquals(AppOperationType.DELETE, inactiveDelete.operationType());
+        }
+
+        assertEquals(1.0, operationCancellationCount(
+                registry, "completed"));
+        assertEquals(0.0, operationCancellationCount(
+                registry, "timed_out"));
+    }
+
+    @Test
+    void deleteTakeoverTimeoutRecordsTimedOutOnce() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        ReflectionTestUtils.setField(manager, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(registry));
+        var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        var callback = generate.enterCallback();
+
+        try {
+            assertThrows(
+                    AppOperationLeaseManager.OperationQuiescenceTimeoutException.class,
+                    () -> manager.cancelAndAcquireDelete(
+                            7L, "delete-1", Duration.ZERO));
+            assertEquals(1.0, operationCancellationCount(
+                    registry, "timed_out"));
+            assertEquals(0.0, operationCancellationCount(
+                    registry, "completed"));
+        } finally {
+            callback.close();
+            generate.close();
+        }
+    }
 
     @Test
     void ownerCloseSealsRegistrationThatPassedOuterCheck() throws Exception {
@@ -534,5 +585,17 @@ class AppOperationLeaseManagerTest {
             Thread.currentThread().interrupt();
             throw new AssertionError(exception);
         }
+    }
+
+    private static double operationCancellationCount(
+            SimpleMeterRegistry registry, String result) {
+        return registry.getMeters().stream()
+                .filter(meter -> meter.getId().getName()
+                        .equals("app_operation_cancellations_total"))
+                .filter(meter -> "delete_takeover".equals(
+                        meter.getId().getTag("trigger")))
+                .filter(meter -> result.equals(meter.getId().getTag("result")))
+                .mapToDouble(meter -> meter.measure().iterator().next().getValue())
+                .sum();
     }
 }
