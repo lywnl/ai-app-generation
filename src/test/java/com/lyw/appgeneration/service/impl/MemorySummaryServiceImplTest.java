@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.impl;
 
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
@@ -17,7 +18,11 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -41,15 +46,17 @@ class MemorySummaryServiceImplTest {
     StringRedisTemplate redisTemplate;
     @Mock
     ValueOperations<String, String> valueOps;
+    AppDataLifecycleFence lifecycleFence;
     MemorySummaryServiceImpl service;
 
     @BeforeEach
     void setup() {
         MockitoAnnotations.openMocks(this);
+        lifecycleFence = new AppDataLifecycleFence();
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         // 测试构造器:minNewMessages=1、maxPerRun=60;同步单线程池便于断言
         service = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper, summarizationModel,
-                Executors.newSingleThreadExecutor(), redisTemplate, 1, 60);
+                Executors.newSingleThreadExecutor(), redisTemplate, lifecycleFence, 1, 60);
     }
 
     private ChatHistory msg(long id, String type, String text) {
@@ -166,7 +173,7 @@ class MemorySummaryServiceImplTest {
                 .thenThrow(new RejectedExecutionException("queue full"))
                 .thenReturn(null);
         MemorySummaryServiceImpl s = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper,
-                summarizationModel, rejecting, redisTemplate, 1, 60);
+                summarizationModel, rejecting, redisTemplate, lifecycleFence, 1, 60);
 
         // 第一次:提交被拒 → catch 清理 inFlight 锁(且不抛)
         assertDoesNotThrow(() -> s.triggerSummarizationAsync(1L));
@@ -175,5 +182,132 @@ class MemorySummaryServiceImplTest {
 
         // 提交两次 == 拒绝后 inFlight 锁被正确释放(否则第二次被 single-flight 永久挡住,仅 1 次)
         verify(rejecting, times(2)).submit(any(Runnable.class));
+    }
+
+    @Test
+    void deleteGateRejectsLateSummaryBeforeExecutorSubmission() {
+        ExecutorService executor = mock(ExecutorService.class);
+        MemorySummaryServiceImpl gated = new MemorySummaryServiceImpl(
+                chatHistoryService, summaryMapper, summarizationModel,
+                executor, redisTemplate, lifecycleFence, 1, 60);
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(1L, Duration.ofSeconds(1));
+        assertNotNull(deletion);
+
+        gated.triggerSummarizationAsync(1L);
+
+        verifyNoInteractions(executor, summaryMapper, chatHistoryService, summarizationModel);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void deleteWaitsForQueuedSummaryAndPermitCoversCacheWrite() throws Exception {
+        ExecutorService executor = mock(ExecutorService.class);
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            submitted.set(invocation.getArgument(0));
+            return mock(Future.class);
+        });
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(1L), eq(0L), anyInt()))
+                .thenReturn(List.of(msg(1L, "user", "偏好")));
+        when(summarizationModel.chat(anyString())).thenReturn("摘要");
+        MemorySummaryServiceImpl gated = new MemorySummaryServiceImpl(
+                chatHistoryService, summaryMapper, summarizationModel,
+                executor, redisTemplate, lifecycleFence, 1, 60);
+
+        gated.triggerSummarizationAsync(1L);
+        assertNotNull(submitted.get());
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppDataLifecycleFence.DeletePermit> deletion = threads.submit(() ->
+                    lifecycleFence.beginDelete(1L, Duration.ofSeconds(2)));
+            assertThrows(TimeoutException.class,
+                    () -> deletion.get(100, TimeUnit.MILLISECONDS));
+
+            submitted.get().run();
+
+            AppDataLifecycleFence.DeletePermit permit =
+                    deletion.get(1, TimeUnit.SECONDS);
+            assertNotNull(permit);
+            verify(summaryMapper).insert(any());
+            verify(valueOps).set(eq("mem:summary:1"), eq("摘要"), any(Duration.class));
+            permit.abortAndReopen();
+        }
+    }
+
+    @Test
+    void rejectedSubmitReleasesWriterPermit() {
+        ExecutorService rejecting = mock(ExecutorService.class);
+        when(rejecting.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"));
+        MemorySummaryServiceImpl gated = new MemorySummaryServiceImpl(
+                chatHistoryService, summaryMapper, summarizationModel,
+                rejecting, redisTemplate, lifecycleFence, 1, 60);
+
+        gated.triggerSummarizationAsync(1L);
+
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(1L, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void singleFlightConflictReleasesExtraWriterPermit() {
+        ExecutorService executor = mock(ExecutorService.class);
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            submitted.set(invocation.getArgument(0));
+            return mock(Future.class);
+        });
+        MemorySummaryServiceImpl gated = new MemorySummaryServiceImpl(
+                chatHistoryService, summaryMapper, summarizationModel,
+                executor, redisTemplate, lifecycleFence, 1, 60);
+        gated.triggerSummarizationAsync(1L);
+
+        gated.triggerSummarizationAsync(1L);
+
+        verify(executor, times(1)).submit(any(Runnable.class));
+        submitted.get().run();
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(1L, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void modelFailureTaskStillReleasesWriterPermit() {
+        ExecutorService executor = mock(ExecutorService.class);
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            invocation.<Runnable>getArgument(0).run();
+            return mock(Future.class);
+        });
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(1L), eq(0L), anyInt()))
+                .thenReturn(List.of(msg(1L, "user", "偏好")));
+        when(summarizationModel.chat(anyString()))
+                .thenThrow(new IllegalStateException("model down"));
+        MemorySummaryServiceImpl gated = new MemorySummaryServiceImpl(
+                chatHistoryService, summaryMapper, summarizationModel,
+                executor, redisTemplate, lifecycleFence, 1, 60);
+
+        gated.triggerSummarizationAsync(1L);
+
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(1L, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void deleteGateAlsoRejectsPublicSynchronousSummary() {
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(1L, Duration.ofSeconds(1));
+        assertNotNull(deletion);
+
+        service.summarizeNow(1L);
+
+        verifyNoInteractions(summaryMapper, chatHistoryService, summarizationModel);
+        deletion.abortAndReopen();
     }
 }

@@ -3,6 +3,7 @@ package com.lyw.appgeneration.service.impl;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.MemorySummaryPromptBuilder;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
@@ -53,6 +54,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private final ChatModel summarizationModel;
     private final ExecutorService executor;
     private final StringRedisTemplate redisTemplate;
+    private final AppDataLifecycleFence lifecycleFence;
     private final int minNewMessagesToSummarize;
     private final int maxMessagesPerRun;
 
@@ -68,8 +70,10 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                                     AppMemorySummaryMapper summaryMapper,
                                     @Qualifier("openAiChatModel") ChatModel summarizationModel,
                                     @Qualifier("memorySummarizationExecutor") ExecutorService executor,
-                                    StringRedisTemplate redisTemplate) {
+                                    StringRedisTemplate redisTemplate,
+                                    AppDataLifecycleFence lifecycleFence) {
         this(chatHistoryService, summaryMapper, summarizationModel, executor, redisTemplate,
+                lifecycleFence,
                 DEFAULT_MIN_NEW_MESSAGES_TO_SUMMARIZE, DEFAULT_MAX_MESSAGES_PER_RUN);
     }
 
@@ -79,6 +83,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                              ChatModel summarizationModel,
                              ExecutorService executor,
                              StringRedisTemplate redisTemplate,
+                             AppDataLifecycleFence lifecycleFence,
                              int minNewMessagesToSummarize,
                              int maxMessagesPerRun) {
         this.chatHistoryService = chatHistoryService;
@@ -86,6 +91,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         this.summarizationModel = summarizationModel;
         this.executor = executor;
         this.redisTemplate = redisTemplate;
+        this.lifecycleFence = lifecycleFence;
         this.minNewMessagesToSummarize = minNewMessagesToSummarize;
         this.maxMessagesPerRun = maxMessagesPerRun;
     }
@@ -95,25 +101,49 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         if (appId == null || appId <= 0) {
             return;
         }
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                lifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            log.info("摘要任务被应用数据删除门拒绝 appId={}", appId);
+            return;
+        }
         if (!inFlight.add(appId)) {
+            writerPermit.close();
             return; // single-flight:已在提炼则跳过
         }
         try {
             executor.submit(() -> {
                 try {
-                    summarizeNow(appId);
+                    summarizeWithinPermit(appId);
                 } finally {
                     inFlight.remove(appId);
+                    writerPermit.close();
                 }
             });
         } catch (Exception e) { // 线程池拒绝等
             inFlight.remove(appId);
+            writerPermit.close();
             log.warn("提交摘要任务失败 appId={}: {}", appId, e.getMessage());
         }
     }
 
     /** 同步提炼一次(供测试与 {@link #triggerSummarizationAsync} 内部调用)。best-effort,不抛异常。 */
     public void summarizeNow(Long appId) {
+        if (appId == null || appId <= 0) {
+            return;
+        }
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                lifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            log.info("同步摘要被应用数据删除门拒绝 appId={}", appId);
+            return;
+        }
+        try (writerPermit) {
+            summarizeWithinPermit(appId);
+        }
+    }
+
+    private void summarizeWithinPermit(Long appId) {
         try {
             AppMemorySummary current = summaryMapper.selectOneByQuery(
                     QueryWrapper.create().eq("appId", appId));

@@ -6,6 +6,7 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.memory.UserPreferencePromptBuilder;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
@@ -60,6 +61,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
     private final ChatModel extractionModel;
     private final ExecutorService executor;
     private final StringRedisTemplate redisTemplate;
+    private final AppDataLifecycleFence lifecycleFence;
     private final int minNewMessages;
     private final int maxMessagesPerRun;
 
@@ -75,9 +77,11 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                                  AppMapper appMapper,
                                  @Qualifier("openAiChatModel") ChatModel extractionModel,
                                  @Qualifier("memorySummarizationExecutor") ExecutorService executor,
-                                 StringRedisTemplate redisTemplate) {
+                                 StringRedisTemplate redisTemplate,
+                                 AppDataLifecycleFence lifecycleFence) {
         this(chatHistoryService, appMemoryMapper, cursorMapper, appMapper, extractionModel, executor,
-                redisTemplate, DEFAULT_MIN_NEW_MESSAGES, DEFAULT_MAX_MESSAGES_PER_RUN);
+                redisTemplate, lifecycleFence,
+                DEFAULT_MIN_NEW_MESSAGES, DEFAULT_MAX_MESSAGES_PER_RUN);
     }
 
     /** 全参构造器:显式阈值,供单测注入小阈值聚焦核心逻辑。 */
@@ -88,6 +92,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                           ChatModel extractionModel,
                           ExecutorService executor,
                           StringRedisTemplate redisTemplate,
+                          AppDataLifecycleFence lifecycleFence,
                           int minNewMessages,
                           int maxMessagesPerRun) {
         this.chatHistoryService = chatHistoryService;
@@ -97,6 +102,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         this.extractionModel = extractionModel;
         this.executor = executor;
         this.redisTemplate = redisTemplate;
+        this.lifecycleFence = lifecycleFence;
         this.minNewMessages = minNewMessages;
         this.maxMessagesPerRun = maxMessagesPerRun;
     }
@@ -106,25 +112,51 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         if (userId == null || userId <= 0 || appId == null || appId <= 0) {
             return;
         }
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                lifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            log.info("偏好抽取任务被应用数据删除门拒绝 userId={} appId={}",
+                    userId, appId);
+            return;
+        }
         if (!inFlightUserIds.add(userId)) {
+            writerPermit.close();
             return; // single-flight:同 user 正在抽取则跳过
         }
         try {
             executor.submit(() -> {
                 try {
-                    extractNow(userId, appId);
+                    extractWithinPermit(userId, appId);
                 } finally {
                     inFlightUserIds.remove(userId);
+                    writerPermit.close();
                 }
             });
         } catch (Exception e) {
             inFlightUserIds.remove(userId);
+            writerPermit.close();
             log.warn("提交偏好抽取任务失败 userId={} appId={}: {}", userId, appId, e.getMessage());
         }
     }
 
     /** 同步抽取一次。best-effort,不抛异常。 */
     public void extractNow(Long userId, Long appId) {
+        if (userId == null || userId <= 0 || appId == null || appId <= 0) {
+            return;
+        }
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                lifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            log.info("同步偏好抽取被应用数据删除门拒绝 userId={} appId={}",
+                    userId, appId);
+            return;
+        }
+        try (writerPermit) {
+            extractWithinPermit(userId, appId);
+        }
+    }
+
+    private void extractWithinPermit(Long userId, Long appId) {
         try {
             AppMemoryExtractCursor cursor = cursorMapper.selectOneByQuery(
                     QueryWrapper.create().eq("appId", appId));

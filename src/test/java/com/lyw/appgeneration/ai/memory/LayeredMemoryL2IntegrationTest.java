@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.mapper.AppMapper;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.model.entity.App;
@@ -49,7 +50,8 @@ class LayeredMemoryL2IntegrationTest {
 
         // 用公共生产构造器(默认阈值 8),对齐 L1 集成测试范式——跨包无法访问包级测试构造器
         UserMemoryServiceImpl l2 = new UserMemoryServiceImpl(chatHistory, memMapper, cursorMapper,
-                appMapper, model, Executors.newSingleThreadExecutor(), redis);
+                appMapper, model, Executors.newSingleThreadExecutor(), redis,
+                new AppDataLifecycleFence());
 
         // —— appA:用户表达跨 app 偏好,抽取落库 ——
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);

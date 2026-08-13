@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.impl;
 
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.model.entity.AppMemory;
@@ -13,10 +14,15 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -31,6 +37,7 @@ class UserMemoryServiceImplTest {
     private ChatModel model;
     private StringRedisTemplate redisTemplate;
     private ValueOperations<String, String> valueOps;
+    private AppDataLifecycleFence lifecycleFence;
     private UserMemoryServiceImpl service;
 
     private static final Long USER = 7L;
@@ -46,10 +53,12 @@ class UserMemoryServiceImplTest {
         model = mock(ChatModel.class);
         redisTemplate = mock(StringRedisTemplate.class);
         valueOps = mock(ValueOperations.class);
+        lifecycleFence = new AppDataLifecycleFence();
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
         // 同步直调 extractNow,executor 不被触发,仅满足构造器类型(对齐 L1 测试用 newSingleThreadExecutor)
         service = new UserMemoryServiceImpl(chatHistoryService, appMemoryMapper, cursorMapper,
-                appMapper, model, Executors.newSingleThreadExecutor(), redisTemplate, 1, 60);
+                appMapper, model, Executors.newSingleThreadExecutor(), redisTemplate,
+                lifecycleFence, 1, 60);
     }
 
     private ChatHistory msg(long id, String type, String text) {
@@ -96,7 +105,8 @@ class UserMemoryServiceImplTest {
     @Test
     void belowThresholdSkips() {
         UserMemoryServiceImpl s = new UserMemoryServiceImpl(chatHistoryService, appMemoryMapper,
-                cursorMapper, appMapper, model, Executors.newSingleThreadExecutor(), redisTemplate, 5, 60); // 阈值 5
+                cursorMapper, appMapper, model, Executors.newSingleThreadExecutor(), redisTemplate,
+                lifecycleFence, 5, 60); // 阈值 5
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
         when(chatHistoryService.listMessagesAfterCursor(eq(APP), eq(0L), anyInt()))
                 .thenReturn(List.of(msg(1L, "user", "a"), msg(2L, "ai", "b"))); // 仅 2 条 < 5
@@ -169,7 +179,8 @@ class UserMemoryServiceImplTest {
                 .thenThrow(new RejectedExecutionException("queue full"))
                 .thenReturn(null);
         UserMemoryServiceImpl s = new UserMemoryServiceImpl(chatHistoryService, appMemoryMapper,
-                cursorMapper, appMapper, model, rejecting, redisTemplate, 1, 60);
+                cursorMapper, appMapper, model, rejecting, redisTemplate,
+                lifecycleFence, 1, 60);
 
         // 第一次:提交被拒 → catch 清理 inFlightUserIds 锁(且不抛)
         assertDoesNotThrow(() -> s.triggerPreferenceExtractionAsync(USER, APP));
@@ -178,6 +189,135 @@ class UserMemoryServiceImplTest {
 
         // 提交两次 == 拒绝后 inFlight 锁被正确释放(否则第二次被 single-flight 永久挡住,仅 1 次)
         verify(rejecting, times(2)).submit(any(Runnable.class));
+    }
+
+    @Test
+    void deleteGateRejectsLateExtractionBeforeExecutorSubmission() {
+        ExecutorService executor = mock(ExecutorService.class);
+        UserMemoryServiceImpl gated = new UserMemoryServiceImpl(
+                chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                model, executor, redisTemplate, lifecycleFence, 1, 60);
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP, Duration.ofSeconds(1));
+        assertNotNull(deletion);
+
+        gated.triggerPreferenceExtractionAsync(USER, APP);
+
+        verifyNoInteractions(executor, cursorMapper, chatHistoryService,
+                appMemoryMapper, model);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void deleteWaitsForQueuedExtractionAndPermitCoversCacheInvalidation()
+            throws Exception {
+        ExecutorService executor = mock(ExecutorService.class);
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            submitted.set(invocation.getArgument(0));
+            return mock(Future.class);
+        });
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(eq(APP), eq(0L), anyInt()))
+                .thenReturn(List.of(msg(1L, "user", "以后用中文")));
+        when(appMemoryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(model.chat(anyString()))
+                .thenReturn("[{\"name\":\"语言\",\"content\":\"中文\"}]");
+        UserMemoryServiceImpl gated = new UserMemoryServiceImpl(
+                chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                model, executor, redisTemplate, lifecycleFence, 1, 60);
+
+        gated.triggerPreferenceExtractionAsync(USER, APP);
+        assertNotNull(submitted.get());
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppDataLifecycleFence.DeletePermit> deletion = threads.submit(() ->
+                    lifecycleFence.beginDelete(APP, Duration.ofSeconds(2)));
+            assertThrows(TimeoutException.class,
+                    () -> deletion.get(100, TimeUnit.MILLISECONDS));
+
+            submitted.get().run();
+
+            AppDataLifecycleFence.DeletePermit permit =
+                    deletion.get(1, TimeUnit.SECONDS);
+            assertNotNull(permit);
+            verify(appMemoryMapper).insert(any());
+            verify(cursorMapper).insert(any());
+            verify(redisTemplate).delete("mem:pref:" + USER);
+            permit.abortAndReopen();
+        }
+    }
+
+    @Test
+    void rejectedSubmitReleasesWriterPermit() {
+        ExecutorService rejecting = mock(ExecutorService.class);
+        when(rejecting.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"));
+        UserMemoryServiceImpl gated = new UserMemoryServiceImpl(
+                chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                model, rejecting, redisTemplate, lifecycleFence, 1, 60);
+
+        gated.triggerPreferenceExtractionAsync(USER, APP);
+
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void singleFlightConflictReleasesExtraWriterPermit() {
+        ExecutorService executor = mock(ExecutorService.class);
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            submitted.set(invocation.getArgument(0));
+            return mock(Future.class);
+        });
+        UserMemoryServiceImpl gated = new UserMemoryServiceImpl(
+                chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                model, executor, redisTemplate, lifecycleFence, 1, 60);
+        gated.triggerPreferenceExtractionAsync(USER, APP);
+
+        gated.triggerPreferenceExtractionAsync(USER, APP);
+
+        verify(executor, times(1)).submit(any(Runnable.class));
+        submitted.get().run();
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void databaseFailureTaskStillReleasesWriterPermit() {
+        ExecutorService executor = mock(ExecutorService.class);
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            invocation.<Runnable>getArgument(0).run();
+            return mock(Future.class);
+        });
+        when(cursorMapper.selectOneByQuery(any()))
+                .thenThrow(new IllegalStateException("database down"));
+        UserMemoryServiceImpl gated = new UserMemoryServiceImpl(
+                chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                model, executor, redisTemplate, lifecycleFence, 1, 60);
+
+        gated.triggerPreferenceExtractionAsync(USER, APP);
+
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void deleteGateAlsoRejectsPublicSynchronousExtraction() {
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP, Duration.ofSeconds(1));
+        assertNotNull(deletion);
+
+        service.extractNow(USER, APP);
+
+        verifyNoInteractions(cursorMapper, chatHistoryService, appMemoryMapper, model);
+        deletion.abortAndReopen();
     }
 
     /** 测试辅助:与实现中 PREF_CACHE_PREFIX 对齐。 */

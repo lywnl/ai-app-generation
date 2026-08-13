@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -82,7 +83,8 @@ class LayeredMemoryIntegrationTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOps); // 缓存未命中(get→null)→回退 store(MySQL mock)
         // 5 参生产构造器(默认阈值 8);直接 new 时 @Qualifier 被忽略,按位置绑定 mock
         summaryService = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper, summarizationModel,
-                Executors.newSingleThreadExecutor(), redisTemplate);
+                Executors.newSingleThreadExecutor(), redisTemplate,
+                new AppDataLifecycleFence());
     }
 
     private ChatHistory msg(long id, String type, String text) {
