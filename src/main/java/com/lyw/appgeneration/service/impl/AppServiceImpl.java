@@ -3,7 +3,6 @@ package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
@@ -22,6 +21,7 @@ import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
@@ -41,9 +41,14 @@ import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.AppDeploymentFileService;
+import com.lyw.appgeneration.service.AppDeletionFileService;
+import com.lyw.appgeneration.service.AppDeletionPersistenceService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.ProjectDownloadService;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
+import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.ScreenshotService;
 import com.lyw.appgeneration.service.UserService;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -52,15 +57,14 @@ import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -76,6 +80,8 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppService {
+
+    private static final int DELETE_CACHE_MAX_ATTEMPTS = 3;
 
     @Resource
     private UserService userService;
@@ -106,6 +112,23 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private AppDeploymentFileService appDeploymentFileService;
+
+    @Resource
+    private AppDeletionFileService appDeletionFileService;
+
+    @Resource
+    private AppDeletionPersistenceService appDeletionPersistenceService;
+
+    @Resource
+    private AppDataLifecycleFence appDataLifecycleFence;
+
+    @Resource
+    private MemorySummaryService memorySummaryService;
+
+    @Resource
+    private UserMemoryService userMemoryService;
+
+    private Duration deleteWaitTimeout = Duration.ofSeconds(10);
 
     @Resource
     private AppStoragePathResolver appStoragePathResolver;
@@ -450,39 +473,123 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
     }
 
-    /**
-     * 重写删除方法，删除应用时，需要删除应用相关的所有数据，包括代码生成目录、部署目录、数据库记录等
-     * @param id
-     * @return
-     */
     @Override
-    @Transactional(rollbackFor = Exception.class)
-    public boolean removeById(Serializable id) {
-        if (id == null) {
-            return false;
-        }
-        Long appId = Long.parseLong(id.toString());
-        if (appId <= 0) {
-            return false;
-        }
+    public boolean deleteApp(Long appId, User operator) {
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
+        ThrowUtils.throwIf(operator == null || operator.getId() == null
+                        || operator.getId() <= 0,
+                ErrorCode.NOT_LOGIN_ERROR, "用户未登录");
         App app = getById(appId);
-        if (app == null) {
-            return false;
+        ThrowUtils.throwIf(app == null,
+                ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+        boolean admin = com.lyw.appgeneration.constants.UserConstant.ADMIN_ROLE
+                .equals(operator.getUserRole());
+        if (!operator.getId().equals(app.getUserId()) && !admin) {
+            throw new BusinessException(
+                    ErrorCode.NO_AUTH_ERROR, "无权限删除该应用");
         }
+        CodeGenTypeEnum codeGenType = CodeGenTypeEnum.getEnumByValue(
+                app.getCodeGenType());
+        ThrowUtils.throwIf(codeGenType == null,
+                ErrorCode.PARAMS_ERROR, "代码生成类型无效");
 
-        // DB 操作 — 事务保护，失败自动回滚
-        chatHistoryService.deleteByAppId(appId);
-        super.removeById(appId);
+        String ownerToken = "delete-" + UUID.randomUUID();
+        try (AppOperationLeaseManager.AppOperationLease ignored =
+                     acquireDeleteLease(appId, ownerToken)) {
+            return deleteWithinLease(appId, app.getUserId(), codeGenType);
+        }
+    }
 
-        // 文件操作 — 尽力清理，失败不影响事务
+    private boolean deleteWithinLease(
+            long appId, long userId, CodeGenTypeEnum codeGenType) {
+        AppDataLifecycleFence.DeletePermit deletePermit =
+                appDataLifecycleFence.beginDelete(appId, deleteWaitTimeout);
+        if (deletePermit == null) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用数据正在写入，暂时无法删除");
+        }
+        try (deletePermit) {
+            App frozenApp = getById(appId);
+            ThrowUtils.throwIf(frozenApp == null,
+                    ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+            if (!userIdEquals(userId, frozenApp.getUserId())
+                    || !codeGenType.getValue().equals(frozenApp.getCodeGenType())) {
+                throw new BusinessException(
+                        ErrorCode.OPERATION_ERROR, "应用信息已变化，请重试删除");
+            }
+            AppStoragePathResolver.FrozenAppPaths paths =
+                    appStoragePathResolver.resolveForDeletion(frozenApp);
+            appDeletionFileService.delete(paths);
+            appDeletionPersistenceService.deleteAppData(appId);
+            deletePermit.commitTombstone();
+            invalidateDeletedAppCaches(appId, userId, codeGenType);
+            return true;
+        }
+    }
+
+    private boolean userIdEquals(long expected, Long actual) {
+        return actual != null && expected == actual;
+    }
+
+    private AppOperationLeaseManager.AppOperationLease acquireDeleteLease(
+            long appId, String ownerToken) {
         try {
-            FileUtil.del(AppConstant.CODE_OUTPUT_ROOT_DIR + java.io.File.separator + app.getCodeGenType() + "_" + appId);
-            FileUtil.del(AppConstant.CODE_DEPLOY_ROOT_DIR + java.io.File.separator + app.getDeployKey());
-        } catch (Exception e) {
-            log.warn("应用记录已删除，但文件清理失败: appId={}, error={}", appId, e.getMessage());
+            return appOperationLeaseManager.cancelAndAcquireDelete(
+                    appId, ownerToken, deleteWaitTimeout);
+        } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用正在部署或下载，暂时无法删除");
+        } catch (AppOperationLeaseManager.OperationQuiescenceTimeoutException exception) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用生成正在结束，暂时无法删除");
         }
+    }
 
-        return true;
+    private void invalidateDeletedAppCaches(
+            long appId, long userId, CodeGenTypeEnum codeGenType) {
+        retryCacheInvalidation(
+                "L0/Caffeine",
+                appId,
+                () -> aiGeneratorServiceFactory.invalidateAndClearMemory(
+                        appId, codeGenType));
+        retryCacheInvalidation(
+                "L1",
+                appId,
+                () -> memorySummaryService.invalidateCache(appId));
+        retryCacheInvalidation(
+                "L2",
+                appId,
+                () -> userMemoryService.invalidateCaches(appId, userId));
+    }
+
+    private void retryCacheInvalidation(
+            String target,
+            long appId,
+            java.util.function.Supplier<MemoryCacheInvalidationResult> action) {
+        MemoryCacheInvalidationResult lastResult = null;
+        for (int attempt = 1; attempt <= DELETE_CACHE_MAX_ATTEMPTS; attempt++) {
+            try {
+                lastResult = action.get();
+                if (lastResult != null && lastResult.failedTargets().isEmpty()) {
+                    return;
+                }
+            } catch (RuntimeException exception) {
+                lastResult = MemoryCacheInvalidationResult.failure(target, exception);
+            }
+        }
+        log.error("应用删除已提交，但缓存清理最终失败: appId={}, target={}, failures={}",
+                appId, target,
+                lastResult == null ? Set.of(target) : lastResult.failedTargets());
+    }
+
+    @Override
+    public boolean removeById(java.io.Serializable id) {
+        throw new BusinessException(
+                ErrorCode.FORBIDDEN_ERROR, "请使用受控应用删除入口");
     }
 
     public void generateAppScreenshotAsync(Long appId, String appUrl) {

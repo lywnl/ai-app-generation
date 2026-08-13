@@ -234,14 +234,7 @@ public class AppController {
         }
         User loginUser = userService.getLoginUser(request);
         long id = deleteRequest.getId();
-        // 判断是否存在
-        App oldApp = appService.getById(id);
-        ThrowUtils.throwIf(oldApp == null, ErrorCode.NOT_FOUND_ERROR);
-        // 仅本人或管理员可删除
-        if (!oldApp.getUserId().equals(loginUser.getId()) && !UserConstant.ADMIN_ROLE.equals(loginUser.getUserRole())) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
-        }
-        boolean result = appService.removeById(id);
+        boolean result = appService.deleteApp(id, loginUser);
         return ResultUtils.success(result);
     }
 
@@ -326,15 +319,15 @@ public class AppController {
      */
     @PostMapping("/admin/delete")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
-    public BaseResponse<Boolean> deleteAppByAdmin(@RequestBody DeleteRequest deleteRequest) {
+    public BaseResponse<Boolean> deleteAppByAdmin(
+            @RequestBody DeleteRequest deleteRequest,
+            HttpServletRequest request) {
         if (deleteRequest == null || deleteRequest.getId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         long id = deleteRequest.getId();
-        // 判断是否存在
-        App oldApp = appService.getById(id);
-        ThrowUtils.throwIf(oldApp == null, ErrorCode.NOT_FOUND_ERROR);
-        boolean result = appService.removeById(id);
+        User admin = userService.getLoginUser(request);
+        boolean result = appService.deleteApp(id, admin);
         return ResultUtils.success(result);
     }
 

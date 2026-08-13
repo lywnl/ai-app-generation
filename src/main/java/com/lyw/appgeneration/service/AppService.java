@@ -69,6 +69,9 @@ public interface AppService extends IService<App> {
      */
     void downloadApp(Long appId, User loginUser, HttpServletResponse response);
 
+    /** 由应用所有者或管理员执行受控删除。 */
+    boolean deleteApp(Long appId, User operator);
+
     /**
      * 添加应用
      * @param appAddRequest
