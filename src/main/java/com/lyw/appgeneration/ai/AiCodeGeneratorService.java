@@ -8,7 +8,6 @@ import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
-import reactor.core.publisher.Flux;
 
 /**
  * AI 代码生成服务
@@ -49,7 +48,7 @@ public interface AiCodeGeneratorService {
      */
     @SystemMessage(fromResource = "prompt/codegen-html-system-prompt.txt")
     @UserMessage("{{content}}")
-    Flux<String> generateHtmlCodeStream(@V("content") String userMessage);
+    TokenStream generateHtmlCodeStream(@V("content") String userMessage);
 
     /**
      * 生成多文件代码（流式）
@@ -59,7 +58,7 @@ public interface AiCodeGeneratorService {
      */
     @SystemMessage(fromResource = "prompt/codegen-multi-file-system-prompt.txt")
     @UserMessage("{{content}}")
-    Flux<String> generateMultiFileCodeStream(@V("content") String userMessage);
+    TokenStream generateMultiFileCodeStream(@V("content") String userMessage);
 
     /**
      * 生成 Vue 项目代码（流式）

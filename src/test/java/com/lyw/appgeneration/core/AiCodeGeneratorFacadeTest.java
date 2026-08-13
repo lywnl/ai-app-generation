@@ -7,6 +7,8 @@ import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -28,8 +30,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -80,6 +84,18 @@ class AiCodeGeneratorFacadeTest {
     private RagProperties properties;
     private AiCodeGeneratorFacade facade;
     private FileToolExecutionScopeManager scopeManager;
+
+    @Test
+    void 普通流式入口必须暴露可取消的TokenStream() throws Exception {
+        assertEquals(TokenStream.class,
+                AiCodeGeneratorService.class.getMethod(
+                        "generateHtmlCodeStream", String.class)
+                        .getReturnType());
+        assertEquals(TokenStream.class,
+                AiCodeGeneratorService.class.getMethod(
+                        "generateMultiFileCodeStream", String.class)
+                        .getReturnType());
+    }
 
     @BeforeEach
     void setUp() {
@@ -266,7 +282,8 @@ class AiCodeGeneratorFacadeTest {
         List<RetrievedSnippet> snippets = List.of(snippet("html"));
         when(retrievalService.retrieve(RAW_QUERY, CodeGenTypeEnum.HTML)).thenReturn(snippets);
         when(promptAssembler.assemble(RAW_QUERY, snippets)).thenReturn("HTML 拼装");
-        when(generatorService.generateHtmlCodeStream("HTML 拼装")).thenReturn(Flux.empty());
+        when(generatorService.generateHtmlCodeStream("HTML 拼装"))
+                .thenReturn(tokenStream);
 
         facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, true);
 
@@ -287,7 +304,8 @@ class AiCodeGeneratorFacadeTest {
         when(retrievalService.retrieve(ENHANCED_QUERY, CodeGenTypeEnum.MULTI_FILE))
                 .thenReturn(snippets);
         when(promptAssembler.assemble(ENHANCED_QUERY, snippets)).thenReturn("多文件拼装");
-        when(generatorService.generateMultiFileCodeStream("多文件拼装")).thenReturn(Flux.empty());
+        when(generatorService.generateMultiFileCodeStream("多文件拼装"))
+                .thenReturn(tokenStream);
 
         facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, true);
 
@@ -297,6 +315,78 @@ class AiCodeGeneratorFacadeTest {
         order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
         order.verify(generatorService).generateMultiFileCodeStream("多文件拼装");
         verify(retrievalService, never()).retrieveVueProject(any());
+    }
+
+    @Test
+    void 普通文件保存异常向流传播() {
+        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.MULTI_FILE))
+                .thenReturn(generatorService);
+        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(RAW_QUERY);
+        when(retrievalService.retrieve(RAW_QUERY, CodeGenTypeEnum.MULTI_FILE))
+                .thenReturn(List.of());
+        when(promptAssembler.assemble(RAW_QUERY, List.of())).thenReturn(RAW_QUERY);
+        when(generatorService.generateMultiFileCodeStream(RAW_QUERY))
+                .thenReturn(SimpleTokenStream.completed("没有可保存的代码块"));
+        AppDataLifecycleFence fence = new AppDataLifecycleFence();
+        ReflectionTestUtils.setField(facade, "appDataLifecycleFence", fence);
+        var operation = new AppOperationLeaseManager().acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE, "普通回合");
+        SimpleGenerationTurnContext context =
+                new SimpleGenerationTurnContext(operation);
+
+        StepVerifier.create(facade.generateAndSaveCodeStream(
+                        RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, true, context))
+                .expectNext("没有可保存的代码块")
+                .expectErrorMessage("HTML代码内容不能为空")
+                .verify();
+
+        context.close();
+    }
+
+    @Test
+    void 删除早于订阅时取消真实TokenStream且禁止启动模型() {
+        ManualSimpleTokenStream stream = new ManualSimpleTokenStream();
+        stubSimpleHtmlGenerator(stream);
+        AppOperationLeaseManager leases = new AppOperationLeaseManager();
+        var operation = leases.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "普通回合");
+        SimpleGenerationTurnContext context =
+                new SimpleGenerationTurnContext(operation);
+        Flux<String> result = facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false, context);
+        operation.requestCancellation();
+
+        StepVerifier.create(result).verifyComplete();
+
+        assertEquals(1, stream.cancellations.get());
+        assertEquals(0, stream.starts.get(), "已取消回合不能再启动模型");
+        context.close();
+    }
+
+    @Test
+    void 客户端取消传播到真实TokenStream且丢弃晚到回调() {
+        ManualSimpleTokenStream stream = new ManualSimpleTokenStream();
+        stubSimpleHtmlGenerator(stream);
+        var operation = new AppOperationLeaseManager().acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "普通回合");
+        SimpleGenerationTurnContext context =
+                new SimpleGenerationTurnContext(operation);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        reactor.core.Disposable client = facade.generateAndSaveCodeStream(
+                        RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false, context)
+                .subscribe(received::add);
+        stream.emitPartial("已发送");
+
+        client.dispose();
+        stream.emitPartial("晚到内容");
+        stream.complete();
+
+        assertEquals(List.of("已发送"), received);
+        assertEquals(1, stream.starts.get());
+        assertEquals(1, stream.cancellations.get());
+        context.close();
     }
 
     @Test
@@ -498,6 +588,19 @@ class AiCodeGeneratorFacadeTest {
                 .thenReturn(stream);
     }
 
+    private void stubSimpleHtmlGenerator(TokenStream stream) {
+        when(serviceFactory.getAiCodeGeneratorService(
+                APP_ID, CodeGenTypeEnum.HTML)).thenReturn(generatorService);
+        when(retrievalService.retrieve(RAW_QUERY, CodeGenTypeEnum.HTML))
+                .thenReturn(List.of());
+        when(promptAssembler.assemble(RAW_QUERY, List.of()))
+                .thenReturn(RAW_QUERY);
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
+                .thenReturn(stream);
+        ReflectionTestUtils.setField(
+                facade, "appDataLifecycleFence", new AppDataLifecycleFence());
+    }
+
     private static final class OnlineControlledTokenStream implements TokenStream {
 
         private final ToolLoopTerminationProtocol.ControlledTerminationReason reason;
@@ -548,10 +651,189 @@ class AiCodeGeneratorFacadeTest {
                 ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
             return switch (reason) {
                 case BUILD_SUCCEEDED -> "项目已生成并构建成功。";
-                case BUILD_FAILED, CANCELLED, PROTOCOL_ERROR ->
+                case BUILD_FAILED ->
                         "抱歉，系统遇到了一些问题，请您稍后重试修复";
-                case LOOP_LIMIT_EXCEEDED, EVALUATION_COMPLETED -> null;
+                case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
+                        EVALUATION_COMPLETED -> null;
             };
+        }
+    }
+
+    private static final class SimpleTokenStream implements TokenStream {
+
+        private final List<String> chunks;
+        private final Throwable failure;
+        private Consumer<String> partialHandler;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeHandler;
+        private Consumer<Throwable> errorHandler;
+
+        private SimpleTokenStream(List<String> chunks, Throwable failure) {
+            this.chunks = chunks;
+            this.failure = failure;
+        }
+
+        private static SimpleTokenStream completed(String... chunks) {
+            return new SimpleTokenStream(List.of(chunks), null);
+        }
+
+        @Override
+        public TokenStream onPartialResponse(Consumer<String> handler) {
+            partialHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            completeHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onError(Consumer<Throwable> handler) {
+            errorHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream ignoreErrors() {
+            return this;
+        }
+
+        @Override
+        public void start() {
+            chunks.forEach(partialHandler);
+            if (failure == null) {
+                completeHandler.accept(null);
+            } else {
+                errorHandler.accept(failure);
+            }
+        }
+    }
+
+    private static final class ManualSimpleTokenStream implements TokenStream {
+
+        private final AtomicInteger starts = new AtomicInteger();
+        private final AtomicInteger cancellations = new AtomicInteger();
+        private Consumer<String> partialHandler;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeHandler;
+        private Consumer<Throwable> errorHandler;
+        private Consumer<ToolLoopTerminationProtocol.ControlledTermination>
+                controlledHandler;
+
+        @Override
+        public void cancel() {
+            cancellations.incrementAndGet();
+            if (controlledHandler != null) {
+                controlledHandler.accept(
+                        new ToolLoopTerminationProtocol.ControlledTermination(
+                                ToolLoopTerminationProtocol
+                                        .ControlledTerminationReason.CANCELLED,
+                                null));
+            }
+        }
+
+        @Override
+        public TokenStream onPartialResponse(Consumer<String> handler) {
+            partialHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            completeHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onError(Consumer<Throwable> handler) {
+            errorHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onControlledTermination(
+                Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
+            controlledHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream ignoreErrors() {
+            return this;
+        }
+
+        @Override
+        public void start() {
+            starts.incrementAndGet();
+        }
+
+        private void emitPartial(String chunk) {
+            partialHandler.accept(chunk);
+        }
+
+        private void complete() {
+            completeHandler.accept(null);
+        }
+
+        @SuppressWarnings("unused")
+        private void fail(Throwable failure) {
+            errorHandler.accept(failure);
         }
     }
 

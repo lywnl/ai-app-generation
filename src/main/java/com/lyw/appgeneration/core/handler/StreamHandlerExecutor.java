@@ -5,6 +5,7 @@ import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -29,6 +30,9 @@ public class StreamHandlerExecutor {
     @Resource
     private UserMemoryService userMemoryService;
 
+    @Resource
+    private AppDataLifecycleFence appDataLifecycleFence;
+
     /**
      * 创建流处理器并处理聊天历史记录
      *
@@ -41,14 +45,16 @@ public class StreamHandlerExecutor {
      */
     public Flux<GenerationStreamEvent> doExecute(Flux<String> originFlux,
                                   ChatHistoryService chatHistoryService,
-                                  long appId, User loginUser, CodeGenTypeEnum codeGenType) {
+                                  long appId, User loginUser, CodeGenTypeEnum codeGenType,
+                                  SimpleGenerationTurnContext context) {
         return switch (codeGenType) {
             case VUE_PROJECT -> throw new IllegalArgumentException(
                     "Vue 流必须使用绑定精确回合上下文的 doExecuteVue");
             case HTML, MULTI_FILE -> // 简单文本处理器不需要依赖注入
                     new SimpleTextStreamHandler().handle(originFlux,
                                     chatHistoryService, appId, loginUser,
-                                    memorySummaryService, userMemoryService)
+                                    memorySummaryService, userMemoryService,
+                                    appDataLifecycleFence, context)
                             .map(GenerationStreamEvent::content);
         };
     }

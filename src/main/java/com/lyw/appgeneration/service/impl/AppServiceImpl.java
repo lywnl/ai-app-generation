@@ -7,6 +7,7 @@ import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingServiceFactory;
+import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.guardrail.annotation.PromptSafetyCheck;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
@@ -19,6 +20,7 @@ import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
+import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
@@ -58,6 +60,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
 
 import java.nio.file.Files;
@@ -227,27 +230,110 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (codeGenTypeEnum == CodeGenTypeEnum.VUE_PROJECT) {
             return generateVueTurn(appId, message, loginUser);
         }
-        //5. 判断是否首次对话（必须在保存用户消息之前，否则 count 永远 >= 1）
-        boolean isFirstMessage = !chatHistoryService.existsByAppId(appId);
-        //6. 调用AI前, 先将用户消息保存到数据库
-        chatHistoryService.addChatMessage(appId, message, ChatHistoryMessageTypeEnum.USER.getValue(), loginUser.getId());
-        //7. 设置监控上下文
-        MonitorContextHolder.setContext(
-                MonitorContext.builder()
+        return generateSimpleTurn(appId, message, loginUser, codeGenTypeEnum);
+    }
+
+    private Flux<GenerationStreamEvent> generateSimpleTurn(
+            long appId, String message, User loginUser,
+            CodeGenTypeEnum codeGenType) {
+        return Flux.defer(() -> {
+            SimpleGenerationTurnContext context = openSimpleTurn(appId);
+            try {
+                AiCodeGeneratorService generatorService =
+                        aiCodeGeneratorFacade.prepareSimpleGenerator(
+                                appId, codeGenType);
+                boolean firstMessage = prepareSimpleTurn(
+                        appId, message, loginUser, context);
+                MonitorContextHolder.setContext(MonitorContext.builder()
                         .userId(loginUser.getId().toString())
-                        .appId(appId.toString())
-                        .build()
+                        .appId(Long.toString(appId)).build());
+                Flux<String> codeStream = Flux.defer(() ->
+                        aiCodeGeneratorFacade.generateAndSaveCodeStream(
+                                message, codeGenType, appId,
+                                firstMessage, context, generatorService));
+                return streamHandlerExecutor.doExecute(
+                                codeStream, chatHistoryService, appId,
+                                loginUser, codeGenType, context)
+                        .takeUntilOther(context.cancellationSignal())
+                        .doFinally(signal -> finishSimpleTurn(
+                                context, codeGenType, signal));
+            } catch (RuntimeException exception) {
+                context.close();
+                return Flux.error(exception);
+            }
+        });
+    }
 
-        );
-        //8. 调用 AI 生成代码；仅首次对话时触发图片收集
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId, isFirstMessage);
-        //9. 收集AI响应的内容并且在完成后保存到数据库;
-        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum)
-                .doFinally(signalType -> {
-                    // 流结束时清理（无论成功/失败/取消）
-                    MonitorContextHolder.clearContext();
+    private SimpleGenerationTurnContext openSimpleTurn(long appId) {
+        try {
+            var lease = appOperationLeaseManager.acquire(
+                    appId, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "simple-generate-" + UUID.randomUUID());
+            return new SimpleGenerationTurnContext(lease);
+        } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用正在执行其他操作，请稍后再生成");
+        }
+    }
 
-                });
+    private boolean prepareSimpleTurn(
+            long appId, String message, User loginUser,
+            SimpleGenerationTurnContext context) {
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                appDataLifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用已进入删除流程，无法继续生成");
+        }
+        try (writerPermit) {
+            if (context.isCancelled()) {
+                throw new BusinessException(
+                        ErrorCode.OPERATION_ERROR, "本次生成已取消");
+            }
+            boolean firstMessage = !chatHistoryService.existsByAppId(appId);
+            boolean saved = chatHistoryService.addChatMessage(
+                    appId, message, ChatHistoryMessageTypeEnum.USER.getValue(),
+                    loginUser.getId());
+            ThrowUtils.throwIf(!saved,
+                    ErrorCode.OPERATION_ERROR, "保存用户消息失败");
+            return firstMessage;
+        }
+    }
+
+    private void finishSimpleTurn(
+            SimpleGenerationTurnContext context,
+            CodeGenTypeEnum codeGenType,
+            SignalType signal) {
+        try {
+            if (signal == SignalType.ON_ERROR
+                    || signal == SignalType.CANCEL
+                    || context.isCancelled()) {
+                invalidateUnstableSimpleMemory(context.appId(), codeGenType);
+            }
+        } finally {
+            try {
+                context.close();
+            } finally {
+                MonitorContextHolder.clearContext();
+            }
+        }
+    }
+
+    private void invalidateUnstableSimpleMemory(
+            long appId, CodeGenTypeEnum codeGenType) {
+        try {
+            MemoryCacheInvalidationResult result = aiGeneratorServiceFactory
+                    .invalidateAndClearMemory(appId, codeGenType);
+            if (result != null && !result.failedTargets().isEmpty()) {
+                log.error("普通生成异常终态清理 L0 失败,appId={},type={},targets={}",
+                        appId, codeGenType, result.failedTargets());
+            }
+        } catch (RuntimeException exception) {
+            log.error("普通生成异常终态清理 L0 失败,appId={},type={}",
+                    appId, codeGenType, exception);
+        }
     }
 
     private Flux<GenerationStreamEvent> generateVueTurn(

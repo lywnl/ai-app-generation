@@ -18,6 +18,8 @@ import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
@@ -42,6 +44,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
@@ -54,6 +57,9 @@ import java.util.function.Function;
 @Slf4j
 @Service
 public class AiCodeGeneratorFacade {
+
+    @Resource
+    private AppDataLifecycleFence appDataLifecycleFence;
 
     private static final Duration EVALUATION_DRAIN_TIMEOUT = Duration.ofMillis(100);
 
@@ -122,13 +128,17 @@ public class AiCodeGeneratorFacade {
         return switch (codeGenTypeEnum) {
             case HTML -> {
                 String augmentedMessage = ragAugment(userMessage, CodeGenTypeEnum.HTML);
-                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(augmentedMessage);
+                Flux<String> codeStream = processSimpleTokenStream(
+                        aiCodeGeneratorService.generateHtmlCodeStream(
+                                augmentedMessage), null);
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.HTML, appId);
             }
             case MULTI_FILE -> {
                 String enhancedPrompt = isFirstMessage ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
                 String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.MULTI_FILE);
-                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(augmentedMessage);
+                Flux<String> codeStream = processSimpleTokenStream(
+                        aiCodeGeneratorService.generateMultiFileCodeStream(
+                                augmentedMessage), null);
                 yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
             }
             case VUE_PROJECT -> {
@@ -149,6 +159,128 @@ public class AiCodeGeneratorFacade {
                 throw new BusinessException(ErrorCode.SYSTEM_ERROR, errorMsg);
             }
         };
+    }
+
+    /** 普通在线回合专用入口，文件写入受精确租约和删除栅栏共同保护。 */
+    public Flux<String> generateAndSaveCodeStream(
+            String userMessage, CodeGenTypeEnum codeGenTypeEnum, long appId,
+            boolean isFirstMessage, SimpleGenerationTurnContext context) {
+        AiCodeGeneratorService generatorService = prepareSimpleGenerator(
+                appId, codeGenTypeEnum);
+        return generateAndSaveCodeStream(
+                userMessage, codeGenTypeEnum, appId, isFirstMessage,
+                context, generatorService);
+    }
+
+    /** 只完成普通生成服务的缓存命中或 MySQL 冷重建，不启动本轮模型。 */
+    public AiCodeGeneratorService prepareSimpleGenerator(
+            long appId, CodeGenTypeEnum codeGenTypeEnum) {
+        if (codeGenTypeEnum == null
+                || codeGenTypeEnum == CodeGenTypeEnum.VUE_PROJECT) {
+            throw new IllegalArgumentException(
+                    "普通生成入口只支持 HTML 和 MULTI_FILE");
+        }
+        return aiGeneratorServiceFactory.getAiCodeGeneratorService(
+                appId, codeGenTypeEnum);
+    }
+
+    /** User 已稳定持久化后，使用预先重建的普通生成服务启动本轮模型。 */
+    public Flux<String> generateAndSaveCodeStream(
+            String userMessage, CodeGenTypeEnum codeGenTypeEnum, long appId,
+            boolean isFirstMessage, SimpleGenerationTurnContext context,
+            AiCodeGeneratorService generatorService) {
+        Objects.requireNonNull(context, "普通生成回合上下文不能为空");
+        Objects.requireNonNull(generatorService, "普通生成服务不能为空");
+        if (context.appId() != appId) {
+            throw new IllegalArgumentException("普通生成回合上下文与应用不匹配");
+        }
+        if (codeGenTypeEnum == null || codeGenTypeEnum == CodeGenTypeEnum.VUE_PROJECT) {
+            throw new IllegalArgumentException("普通生成入口只支持 HTML 和 MULTI_FILE");
+        }
+        TokenStream tokenStream = createSimpleCodeStream(
+                userMessage, codeGenTypeEnum, isFirstMessage, generatorService);
+        Flux<String> source = processSimpleTokenStream(tokenStream, context);
+        return progressCodeStream(source, codeGenTypeEnum, appId, context);
+    }
+
+    private TokenStream createSimpleCodeStream(
+            String userMessage, CodeGenTypeEnum codeGenTypeEnum,
+            boolean isFirstMessage, AiCodeGeneratorService generatorService) {
+        return switch (codeGenTypeEnum) {
+            case HTML -> generatorService.generateHtmlCodeStream(
+                    ragAugment(userMessage, CodeGenTypeEnum.HTML));
+            case MULTI_FILE -> {
+                String enhanced = isFirstMessage
+                        ? imageCollectionService.enhancePrompt(userMessage)
+                        : userMessage;
+                yield generatorService.generateMultiFileCodeStream(
+                        ragAugment(enhanced, CodeGenTypeEnum.MULTI_FILE));
+            }
+            default -> throw new IllegalArgumentException(
+                    "普通生成入口只支持 HTML 和 MULTI_FILE");
+        };
+    }
+
+    /**
+     * 普通 TokenStream 的可取消 Reactor 适配器。
+     *
+     * <p>上游 Reactor 适配器不会把订阅取消传播到 {@link TokenStream#cancel()}，
+     * 因此在线回合必须在这里显式绑定真实模型取消，并拒绝所有晚到回调。
+     */
+    private Flux<String> processSimpleTokenStream(
+            TokenStream tokenStream, SimpleGenerationTurnContext context) {
+        Objects.requireNonNull(tokenStream, "普通生成 TokenStream 不能为空");
+        return Flux.create(sink -> {
+            AtomicBoolean terminated = new AtomicBoolean();
+            Runnable cancelModel = () -> {
+                if (terminated.compareAndSet(false, true)) {
+                    try {
+                        tokenStream.cancel();
+                    } finally {
+                        if (!sink.isCancelled()) {
+                            sink.complete();
+                        }
+                    }
+                }
+            };
+            try {
+                sink.onCancel(cancelModel::run);
+                tokenStream.onPartialResponse(partial -> {
+                            if (!terminated.get() && !sink.isCancelled()) {
+                                sink.next(partial);
+                            }
+                        })
+                        .onControlledTermination(ignored -> {
+                            if (terminated.compareAndSet(false, true)
+                                    && !sink.isCancelled()) {
+                                sink.complete();
+                            }
+                        })
+                        .onCompleteResponse(ignored -> {
+                            if (terminated.compareAndSet(false, true)
+                                    && !sink.isCancelled()) {
+                                sink.complete();
+                            }
+                        })
+                        .onError(error -> {
+                            if (terminated.compareAndSet(false, true)
+                                    && !sink.isCancelled()) {
+                                sink.error(error);
+                            }
+                        });
+                if (context != null) {
+                    context.bindUpstream(cancelModel);
+                }
+                if (!terminated.get()) {
+                    tokenStream.start();
+                }
+            } catch (RuntimeException exception) {
+                if (terminated.compareAndSet(false, true)
+                        && !sink.isCancelled()) {
+                    sink.error(exception);
+                }
+            }
+        });
     }
 
     /**
@@ -561,6 +693,43 @@ public class AiCodeGeneratorFacade {
             }
         });
 
+    }
+
+    private Flux<String> progressCodeStream(
+            Flux<String> codeStream, CodeGenTypeEnum codeGenTypeEnum,
+            long appId, SimpleGenerationTurnContext context) {
+        StringBuilder codeBuilder = new StringBuilder();
+        return codeStream
+                .doOnNext(codeBuilder::append)
+                .concatWith(Flux.defer(() -> {
+                    saveSimpleCode(codeBuilder.toString(), codeGenTypeEnum,
+                            appId, context);
+                    return Flux.empty();
+                }));
+    }
+
+    private void saveSimpleCode(
+            String code, CodeGenTypeEnum codeGenTypeEnum, long appId,
+            SimpleGenerationTurnContext context) {
+        if (context.isCancelled()) {
+            return;
+        }
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                appDataLifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR, "应用已进入删除流程，无法保存生成文件");
+        }
+        try (writerPermit) {
+            if (context.isCancelled()) {
+                return;
+            }
+            Object parsed = CodeParserExecutor.executeParse(code, codeGenTypeEnum);
+            File savedDirectory = CodeFileSaverExecutor.executeSaver(
+                    parsed, codeGenTypeEnum, appId);
+            log.info("普通生成文件保存成功,appId={},type={},path={}",
+                    appId, codeGenTypeEnum, savedDirectory.getAbsolutePath());
+        }
     }
 
 }
