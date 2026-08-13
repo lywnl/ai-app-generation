@@ -10,6 +10,7 @@ import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -253,6 +254,26 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             current.setFailCount((current.getFailCount() == null ? 0 : current.getFailCount()) + 1);
             current.setUpdateTime(LocalDateTime.now());
             summaryMapper.update(current); // 注意:不改 lastSummarizedId(游标不前进)
+        }
+    }
+
+    @Override
+    public MemoryCacheInvalidationResult invalidateCache(Long appId) {
+        requirePositiveId(appId, "应用 ID");
+        try {
+            redisTemplate.delete(CACHE_KEY_PREFIX + appId);
+            return MemoryCacheInvalidationResult.success();
+        } catch (Exception exception) {
+            log.warn("清理 L1 摘要缓存失败 appId={}: {}",
+                    appId, exception.getMessage());
+            return MemoryCacheInvalidationResult.failure(
+                    "L1_SUMMARY_REDIS", exception);
+        }
+    }
+
+    private void requirePositiveId(Long id, String name) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException(name + " 必须为正数");
         }
     }
 }

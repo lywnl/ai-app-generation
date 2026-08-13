@@ -1,10 +1,13 @@
 package com.lyw.appgeneration.ai;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
+import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -18,7 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -26,6 +31,69 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AiGeneratorServiceFactoryTest {
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void invalidationTargetsOneServiceKeyAndStillClearsCaffeineWhenRedisFails() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        Cache<String, AiCodeGeneratorService> cache =
+                (Cache<String, AiCodeGeneratorService>) ReflectionTestUtils.getField(
+                        factory, "serviceCache");
+        AiCodeGeneratorService vue = mock(AiCodeGeneratorService.class);
+        AiCodeGeneratorService html = mock(AiCodeGeneratorService.class);
+        AiCodeGeneratorService multiFile = mock(AiCodeGeneratorService.class);
+        AiCodeGeneratorService otherAppVue = mock(AiCodeGeneratorService.class);
+        cache.put("7_vue_project", vue);
+        cache.put("7_html", html);
+        cache.put("7_multi_file", multiFile);
+        cache.put("8_vue_project", otherAppVue);
+        doThrow(new IllegalStateException("redis down"))
+                .when(redisStore).deleteMessages(7L);
+
+        MemoryCacheInvalidationResult result = factory.invalidateAndClearMemory(
+                7L, CodeGenTypeEnum.VUE_PROJECT);
+
+        assertEquals(null, cache.getIfPresent("7_vue_project"));
+        assertEquals(html, cache.getIfPresent("7_html"));
+        assertEquals(multiFile, cache.getIfPresent("7_multi_file"));
+        assertEquals(otherAppVue, cache.getIfPresent("8_vue_project"));
+        assertEquals(Set.of("L0_REDIS"), result.failedTargets());
+        verify(redisStore).deleteMessages(7L);
+        verify(redisStore, never()).deleteMessages(8L);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void caffeineFailureDoesNotPreventAppRedisCleanup() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        Cache<String, AiCodeGeneratorService> cache = mock(Cache.class);
+        doThrow(new IllegalStateException("caffeine down"))
+                .when(cache).invalidate("7_vue_project");
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "serviceCache", cache);
+
+        MemoryCacheInvalidationResult result = factory.invalidateAndClearMemory(
+                7L, CodeGenTypeEnum.VUE_PROJECT);
+
+        assertEquals(Set.of("L0_SERVICE_CAFFEINE"), result.failedTargets());
+        verify(redisStore).deleteMessages(7L);
+    }
+
+    @Test
+    void invalidationRejectsInvalidScopeBeforeSideEffects() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                factory.invalidateAndClearMemory(0L, CodeGenTypeEnum.VUE_PROJECT));
+        assertThrows(IllegalArgumentException.class, () ->
+                factory.invalidateAndClearMemory(7L, null));
+        verifyNoInteractions(redisStore);
+    }
 
     @Test
     void onlineAndEvaluationUseExplicitDisjointTerminalToolWhitelists() {

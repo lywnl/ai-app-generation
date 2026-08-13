@@ -24,4 +24,6 @@ public interface MemorySummaryService {
      * @return 摘要正文,或空串
      */
     String getCurrentSummary(Long appId);
+
+    MemoryCacheInvalidationResult invalidateCache(Long appId);
 }

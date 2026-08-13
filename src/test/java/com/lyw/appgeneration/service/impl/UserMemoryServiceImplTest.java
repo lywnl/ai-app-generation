@@ -172,6 +172,33 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
+    void cacheInvalidationRemovesAppLookupEvenWhenPreferenceRedisFails() {
+        when(appMapper.selectOneById(APP)).thenReturn(
+                com.lyw.appgeneration.model.entity.App.builder()
+                        .id(APP).userId(USER).build());
+        when(valueOps.get(PREF_CACHE_KEY())).thenReturn("cached");
+        assertEquals("cached", service.recallByApp(APP));
+        doThrow(new IllegalStateException("redis down"))
+                .when(redisTemplate).delete(PREF_CACHE_KEY());
+
+        var result = service.invalidateCaches(APP, USER);
+        assertEquals("cached", service.recallByApp(APP));
+
+        assertEquals(java.util.Set.of("L2_PREFERENCE_REDIS"),
+                result.failedTargets());
+        verify(appMapper, times(2)).selectOneById(APP);
+    }
+
+    @Test
+    void cacheInvalidationRejectsInvalidIdsBeforeRedis() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.invalidateCaches(null, USER));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.invalidateCaches(APP, 0L));
+        verify(redisTemplate, never()).delete(anyString());
+    }
+
+    @Test
     void rejectedSubmitReleasesInFlightLockSoNextTriggerResubmits() {
         // 模拟 AbortPolicy:executor 拒绝时抛 RejectedExecutionException(而非静默丢弃)
         ExecutorService rejecting = mock(ExecutorService.class);

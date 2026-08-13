@@ -15,4 +15,6 @@ public interface UserMemoryService {
 
     /** 召回:messages() 调用,内部 appId→userId 反查后取 top-N 偏好拼成文本(无则空串)。 */
     String recallByApp(Long appId);
+
+    MemoryCacheInvalidationResult invalidateCaches(Long appId, Long userId);
 }

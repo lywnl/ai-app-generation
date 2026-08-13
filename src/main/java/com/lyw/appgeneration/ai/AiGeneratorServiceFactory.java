@@ -11,6 +11,7 @@ import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.utils.SpringContextUtil;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
@@ -92,6 +93,35 @@ public class AiGeneratorServiceFactory {
     public void prepareVueColdRebuild(long appId) {
         invalidateVueService(appId);
         redisChatMemoryStore.deleteMessages(appId);
+    }
+
+    public MemoryCacheInvalidationResult invalidateAndClearMemory(
+            long appId, CodeGenTypeEnum codeGenType) {
+        if (appId <= 0) {
+            throw new IllegalArgumentException("应用 ID 必须为正数");
+        }
+        if (codeGenType == null) {
+            throw new IllegalArgumentException("代码生成类型不能为空");
+        }
+        MemoryCacheInvalidationResult result =
+                MemoryCacheInvalidationResult.success();
+        try {
+            serviceCache.invalidate(buildCacheKey(appId, codeGenType));
+        } catch (Exception exception) {
+            log.warn("清理 AI 服务进程缓存失败 appId={} codeGenType={}: {}",
+                    appId, codeGenType.getValue(), exception.getMessage());
+            result = result.merge(MemoryCacheInvalidationResult.failure(
+                    "L0_SERVICE_CAFFEINE", exception));
+        }
+        try {
+            redisChatMemoryStore.deleteMessages(appId);
+        } catch (Exception exception) {
+            log.warn("清理 L0 Redis 记忆失败 appId={} codeGenType={}: {}",
+                    appId, codeGenType.getValue(), exception.getMessage());
+            result = result.merge(MemoryCacheInvalidationResult.failure(
+                    "L0_REDIS", exception));
+        }
+        return result;
     }
 
     /**

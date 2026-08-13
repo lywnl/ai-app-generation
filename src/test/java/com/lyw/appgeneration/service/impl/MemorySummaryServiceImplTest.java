@@ -114,6 +114,27 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
+    void cacheInvalidationReportsRedisFailure() {
+        doThrow(new IllegalStateException("redis down"))
+                .when(redisTemplate).delete("mem:summary:1");
+
+        var result = service.invalidateCache(1L);
+
+        assertEquals(java.util.Set.of("L1_SUMMARY_REDIS"),
+                result.failedTargets());
+        verify(redisTemplate).delete("mem:summary:1");
+    }
+
+    @Test
+    void cacheInvalidationRejectsInvalidAppIdBeforeRedis() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.invalidateCache(null));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.invalidateCache(0L));
+        verify(redisTemplate, never()).delete(anyString());
+    }
+
+    @Test
     void getCurrentSummaryReturnsCachedAndSkipsDb() {
         when(valueOps.get("mem:summary:1")).thenReturn("# 应用目标\n缓存命中");
         assertEquals("# 应用目标\n缓存命中", service.getCurrentSummary(1L));

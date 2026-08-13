@@ -17,6 +17,7 @@ import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.UserMemoryService;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -368,6 +369,38 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             redisTemplate.opsForValue().set(cacheKey, text, CACHE_TTL);
         } catch (Exception e) {
             log.warn("写偏好缓存失败 key={}: {}", cacheKey, e.getMessage());
+        }
+    }
+
+    @Override
+    public MemoryCacheInvalidationResult invalidateCaches(
+            Long appId, Long userId) {
+        requirePositiveId(appId, "应用 ID");
+        requirePositiveId(userId, "用户 ID");
+        MemoryCacheInvalidationResult result =
+                MemoryCacheInvalidationResult.success();
+        try {
+            appIdToUserId.remove(appId);
+        } catch (Exception exception) {
+            log.warn("清理 L2 应用归属进程缓存失败 appId={}: {}",
+                    appId, exception.getMessage());
+            result = result.merge(MemoryCacheInvalidationResult.failure(
+                    "L2_APP_USER_LOCAL", exception));
+        }
+        try {
+            redisTemplate.delete(PREF_CACHE_PREFIX + userId);
+        } catch (Exception exception) {
+            log.warn("清理 L2 偏好缓存失败 appId={} userId={}: {}",
+                    appId, userId, exception.getMessage());
+            result = result.merge(MemoryCacheInvalidationResult.failure(
+                    "L2_PREFERENCE_REDIS", exception));
+        }
+        return result;
+    }
+
+    private void requirePositiveId(Long id, String name) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException(name + " 必须为正数");
         }
     }
 }
