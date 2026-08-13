@@ -9,6 +9,7 @@ import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
+import jakarta.servlet.http.HttpServletResponse;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -58,6 +59,15 @@ public interface AppService extends IService<App> {
      * @return
      */
     String deployApp(Long appId, User loginUser);
+
+    /**
+     * 下载应用源码。
+     *
+     * @param appId 应用 ID
+     * @param loginUser 登录用户
+     * @param response HTTP 响应
+     */
+    void downloadApp(Long appId, User loginUser, HttpServletResponse response);
 
     /**
      * 添加应用

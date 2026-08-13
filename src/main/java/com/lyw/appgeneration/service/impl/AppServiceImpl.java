@@ -35,12 +35,15 @@ import com.lyw.appgeneration.monitor.MonitorContextHolder;
 import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
+import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.ProjectDownloadService;
 import com.lyw.appgeneration.service.ScreenshotService;
 import com.lyw.appgeneration.service.UserService;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -92,6 +95,12 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private ScreenshotService screenshotService;
+
+    @Resource
+    private AppStoragePathResolver appStoragePathResolver;
+
+    @Resource
+    private ProjectDownloadService projectDownloadService;
 
     @Resource
     private AiCodeGenTypeRoutingServiceFactory aiCodeGenTypeRoutingServiceFactory;
@@ -343,6 +352,52 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         generateAppScreenshotAsync(appId, formatUrl);
 
         return formatUrl;
+    }
+
+    @Override
+    public void downloadApp(
+            Long appId, User loginUser, HttpServletResponse response) {
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null
+                        || loginUser.getId() <= 0,
+                ErrorCode.NOT_LOGIN_ERROR, "用户未登录");
+        ThrowUtils.throwIf(response == null,
+                ErrorCode.PARAMS_ERROR, "响应对象不能为空");
+        App app = getById(appId);
+        ThrowUtils.throwIf(app == null,
+                ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+        if (!loginUser.getId().equals(app.getUserId())) {
+            throw new BusinessException(
+                    ErrorCode.NO_AUTH_ERROR, "无权限下载该应用代码");
+        }
+        CodeGenTypeEnum codeGenType = CodeGenTypeEnum.getEnumByValue(
+                app.getCodeGenType());
+        ThrowUtils.throwIf(codeGenType == null,
+                ErrorCode.PARAMS_ERROR, "代码生成类型无效");
+
+        String ownerToken = "download-" + UUID.randomUUID();
+        try (AppOperationLeaseManager.AppOperationLease ignored =
+                     acquireDownloadLease(appId, ownerToken)) {
+            var sourceDirectory = appStoragePathResolver
+                    .resolveSourceDirectory(app);
+            projectDownloadService.downloadProjectAsZip(
+                    sourceDirectory, String.valueOf(appId), response);
+        }
+    }
+
+    private AppOperationLeaseManager.AppOperationLease acquireDownloadLease(
+            long appId, String ownerToken) {
+        try {
+            return appOperationLeaseManager.acquire(
+                    appId,
+                    AppOperationLeaseManager.AppOperationType.DOWNLOAD,
+                    ownerToken);
+        } catch (AppOperationLeaseManager.ActiveAppOperationException exception) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR,
+                    "应用正在生成中，暂时无法下载");
+        }
     }
 
     /**
