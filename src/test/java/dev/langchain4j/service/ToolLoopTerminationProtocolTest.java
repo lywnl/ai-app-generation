@@ -120,6 +120,37 @@ class ToolLoopTerminationProtocolTest {
 
         assertTrue(cancellation.terminate());
         assertEquals(CANCELLED, cancellation.reason());
+        assertNull(cancellation.finalResponse());
+    }
+
+    @Test
+    void cancellationAndProtocolRejectionCannotCarryBuildFailureResponse() {
+        String cancelledWithFailureResponse = """
+                {"protocol":"vue-build-tool/v1","invocationStatus":"CANCELLED",
+                "success":null,"attempt":1,"maxAttempts":3,"stage":"NPM_BUILD",
+                "failureKind":null,"timedOut":null,"repairable":false,
+                "reflectionRequired":false,"nextAction":"STOP","message":"构建已取消",
+                "errorSummary":null,"terminateToolLoop":true,
+                "finalResponse":"抱歉，系统遇到了一些问题，请您稍后重试修复"}
+                """;
+        String rejectedWithFailureResponse = """
+                {"protocol":"vue-build-tool/v1","invocationStatus":"REJECTED",
+                "success":null,"attempt":null,"maxAttempts":3,"stage":null,
+                "failureKind":null,"timedOut":null,"repairable":false,
+                "reflectionRequired":false,"nextAction":null,
+                "message":"PROTOCOL_ERROR: 旧租约已经失效","errorSummary":null,
+                "terminateToolLoop":true,
+                "finalResponse":"抱歉，系统遇到了一些问题，请您稍后重试修复"}
+                """;
+
+        assertFalse(ToolLoopTerminationProtocol.parseTrusted(
+                "buildProject", cancelledWithFailureResponse).terminate());
+        assertFalse(ToolLoopTerminationProtocol.parseTrusted(
+                "buildProject", rejectedWithFailureResponse).terminate());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ToolLoopTerminationProtocol.ControlledTermination(
+                        CANCELLED,
+                        "抱歉，系统遇到了一些问题，请您稍后重试修复"));
     }
 
     @Test

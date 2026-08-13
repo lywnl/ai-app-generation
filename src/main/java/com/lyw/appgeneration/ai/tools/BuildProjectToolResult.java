@@ -67,8 +67,7 @@ public record BuildProjectToolResult(
     }
 
     public static BuildProjectToolResult rejected(String message, boolean terminate) {
-        return transientResult(BuildInvocationStatus.REJECTED, message, terminate,
-                terminate ? FAILURE_RESPONSE : null);
+        return transientResult(BuildInvocationStatus.REJECTED, message, terminate, null);
     }
 
     public static BuildProjectToolResult cancelled(
@@ -76,7 +75,7 @@ public record BuildProjectToolResult(
         return new BuildProjectToolResult(PROTOCOL, BuildInvocationStatus.CANCELLED,
                 null, attempt, MAX_ATTEMPTS, stage, null, null,
                 false, false, BuildNextAction.STOP, message, null,
-                true, FAILURE_RESPONSE);
+                true, null);
     }
 
     private static BuildProjectToolResult completed(
@@ -160,7 +159,7 @@ public record BuildProjectToolResult(
                     || failureKind != null || repairable || reflectionRequired
                     || errorSummary != null || !terminateToolLoop
                     || (attempt == null) != (stage == null)
-                    || !FAILURE_RESPONSE.equals(finalResponse)) {
+                    || finalResponse != null) {
                 throw new IllegalArgumentException("取消结果字段组合不合法");
             }
             if (attempt != null && (attempt < 1 || attempt > MAX_ATTEMPTS)) {
@@ -178,8 +177,7 @@ public record BuildProjectToolResult(
             throw new IllegalArgumentException("构建占用状态不能终止工具循环");
         }
         if (status == BuildInvocationStatus.REJECTED
-                && (terminateToolLoop != (finalResponse != null)
-                || (terminateToolLoop && !FAILURE_RESPONSE.equals(finalResponse)))) {
+                && finalResponse != null) {
             throw new IllegalArgumentException("拒绝结果的终止字段组合不合法");
         }
     }

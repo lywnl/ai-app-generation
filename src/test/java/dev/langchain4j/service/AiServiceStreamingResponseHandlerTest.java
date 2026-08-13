@@ -157,6 +157,8 @@ class AiServiceStreamingResponseHandlerTest {
         context.streamingChatModel = model;
         AtomicInteger executorCalls = new AtomicInteger();
         AtomicInteger terminations = new AtomicInteger();
+        List<String> events = new ArrayList<>();
+        RecordingChatMemory memory = new RecordingChatMemory(events);
         StreamingRequestController controller = new StreamingRequestController();
         controller.onControlledTermination(termination -> {
             assertEquals(ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR,
@@ -175,14 +177,20 @@ class AiServiceStreamingResponseHandlerTest {
                     executorCalls.incrementAndGet();
                     return "secret";
                 }),
-                new RecordingChatMemory(new ArrayList<>()),
-                new ArrayList<>(), controller, rejectingGuard);
+                memory, events, controller, rejectingGuard);
 
         handler.onCompleteResponse(responseWithTools(tool("read", "readFile")));
 
         assertEquals(0, executorCalls.get());
         assertEquals(0, model.chatInvocations);
         assertEquals(1, terminations.get());
+        assertEquals(List.of(
+                "memory:add-tool-result:read",
+                "callback:on-tool-executed:readFile"), events);
+        assertEquals(2, memory.messages().size(),
+                "内存只应包含原工具请求和协议拒绝工具结果，不能提前写入终态文案");
+        assertTrue(memory.messages().stream().noneMatch(message ->
+                message instanceof AiMessage ai && !ai.hasToolExecutionRequests()));
     }
 
     @Test

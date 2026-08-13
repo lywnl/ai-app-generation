@@ -170,6 +170,7 @@ class BuildProjectToolTest {
             assertNull(json.get("attempt"));
             assertNull(json.get("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
+            assertNull(json.get("finalResponse"));
             verify(builder, never()).buildProjectDetailed(any(), any());
         }
     }
@@ -191,6 +192,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("NPM_BUILD", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
+            assertNull(json.get("finalResponse"));
         }
     }
 
@@ -211,6 +213,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("NPM_BUILD", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
+            assertNull(json.get("finalResponse"));
         }
     }
 
@@ -230,6 +233,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("SUCCESS", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
+            assertNull(json.get("finalResponse"));
         }
     }
 
@@ -310,8 +314,7 @@ class BuildProjectToolTest {
             assertEquals("REJECTED", json.getStr("invocationStatus"));
             assertTrue(json.getBool("terminateToolLoop"));
             assertTrue(json.getStr("message").contains("PROTOCOL_ERROR"));
-            assertEquals(BuildProjectToolResult.FAILURE_RESPONSE,
-                    json.getStr("finalResponse"));
+            assertNull(json.get("finalResponse"));
             assertEquals(VueBuildPhase.REPAIRING, harness.lease.snapshot().phase());
             assertEquals(VueBuildFailureKind.CODE, harness.lease.snapshot().failureKind());
             assertEquals(1, harness.lease.snapshot().buildAttempt());
@@ -350,6 +353,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("VALIDATION", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
+            assertNull(json.get("finalResponse"));
         }
     }
 
@@ -382,6 +386,7 @@ class BuildProjectToolTest {
         assertNull(json.get("success"));
         assertTrue(json.getBool("terminateToolLoop"));
         assertTrue(json.getStr("message").contains("PROTOCOL_ERROR"));
+        assertNull(json.get("finalResponse"));
     }
 
     private Harness harness(VueProjectBuilder builder) {

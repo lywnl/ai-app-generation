@@ -98,7 +98,7 @@ public final class ToolLoopTerminationProtocol {
                 && "STOP".equals(fields.get("nextAction"))
                 && fields.get("errorSummary") == null
                 && Boolean.TRUE.equals(fields.get("terminateToolLoop"))
-                && validOptionalFailureResponse(fields.get("finalResponse"));
+                && fields.get("finalResponse") == null;
     }
 
     private static boolean validRejected(Map<?, ?> fields) {
@@ -113,11 +113,7 @@ public final class ToolLoopTerminationProtocol {
                 && fields.get("errorSummary") == null
                 && Boolean.TRUE.equals(fields.get("terminateToolLoop"))
                 && string(fields.get("message")).startsWith("PROTOCOL_ERROR")
-                && validOptionalFailureResponse(fields.get("finalResponse"));
-    }
-
-    private static boolean validOptionalFailureResponse(Object value) {
-        return value == null || FAILURE_RESPONSE.equals(value);
+                && fields.get("finalResponse") == null;
     }
 
     private static Integer number(Object value) {
@@ -165,6 +161,15 @@ public final class ToolLoopTerminationProtocol {
         public ControlledTermination {
             if (reason == null) {
                 throw new IllegalArgumentException("受控终止原因不能为空");
+            }
+            boolean validFinalResponse = switch (reason) {
+                case BUILD_SUCCEEDED -> SUCCESS_RESPONSE.equals(finalResponse);
+                case BUILD_FAILED -> FAILURE_RESPONSE.equals(finalResponse);
+                case EVALUATION_COMPLETED, CANCELLED, PROTOCOL_ERROR,
+                        LOOP_LIMIT_EXCEEDED -> finalResponse == null;
+            };
+            if (!validFinalResponse) {
+                throw new IllegalArgumentException("受控终止原因与最终响应不匹配");
             }
         }
     }

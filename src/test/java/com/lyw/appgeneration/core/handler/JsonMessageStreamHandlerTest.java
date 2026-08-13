@@ -164,12 +164,11 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
-    void protocolTerminationReplacesLegacyFinalResponseInsteadOfDuplicatingTerminalText() {
+    void protocolTerminationOwnsFinalMessageAndStripsAnyLegacyTerminalText() {
         VueTurnContext context = context("turn-protocol", VueBuildPhase.GENERATING);
         context.recordControlledTermination(new ToolLoopTerminationProtocol
                 .ControlledTermination(ToolLoopTerminationProtocol
-                .ControlledTerminationReason.PROTOCOL_ERROR,
-                JsonMessageStreamHandler.BUILD_FAILED_MESSAGE));
+                .ControlledTerminationReason.PROTOCOL_ERROR, null));
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
             assertEquals(JsonMessageStreamHandler.SCOPE_PROTOCOL_MESSAGE,
