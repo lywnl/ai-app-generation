@@ -4,6 +4,8 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
@@ -105,9 +107,11 @@ class VueTurnFinalizerTest {
     }
 
     @Test
-    void redisFailureKeepsBuildOutcomeButInvalidatesVueService() {
+    void redisFailureKeepsBuildOutcomeAndClearsUnsafeL0ForColdRebuild() {
         when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(STORE_FAILED, java.util.List.of()));
+        when(factory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
+                .thenReturn(MemoryCacheInvalidationResult.success());
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-store", VueBuildPhase.SUCCEEDED);
 
@@ -115,7 +119,8 @@ class VueTurnFinalizerTest {
                 outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED, "项目已生成并构建成功。", true));
 
         assertEquals(SUCCEEDED, result.outcome().outcome());
-        verify(factory).invalidateVueService(APP_ID);
+        verify(factory).invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
+        verify(factory, never()).invalidateVueService(APP_ID);
         verify(summary).triggerSummarizationAsync(APP_ID);
         verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
     }
@@ -133,7 +138,8 @@ class VueTurnFinalizerTest {
         assertEquals(SYSTEM_ERROR, result.outcome().outcome());
         assertFalse(result.persisted());
         verifyNoInteractions(collapser, summary, preference);
-        verify(factory).invalidateVueService(APP_ID);
+        verify(factory).invalidateAndClearMemory(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT);
     }
 
     @Test
@@ -233,7 +239,8 @@ class VueTurnFinalizerTest {
             invalidationEntered.countDown();
             assertTrue(releaseInvalidation.await(1, TimeUnit.SECONDS));
             return null;
-        }).when(factory).invalidateVueService(APP_ID);
+        }).when(factory).invalidateAndClearMemory(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-invalidation-race", VueBuildPhase.SUCCEEDED);
 

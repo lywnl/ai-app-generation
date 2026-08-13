@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 public final class JsonMessageStreamHandler {
 
+    private static final Set<String> READ_TOOLS = Set.of("readFile", "readDir");
+
     static final String SUCCESS_MESSAGE = "项目已生成并构建成功。";
     static final String BUILD_FAILED_MESSAGE = "抱歉，系统遇到了一些问题，请您稍后重试修复";
     static final String SYSTEM_ERROR_MESSAGE = "生成过程中遇到系统异常，请稍后重试。";
@@ -238,10 +240,21 @@ public final class JsonMessageStreamHandler {
                         arguments, executed.getResult());
                 String output = String.format("\n\n%s\n\n", markdown);
                 canonical.append(output);
-                yield List.of(chunk, output);
+                yield List.of(realtimeToolExecutedChunk(chunk, executed), output);
             }
             case TOOL_ARGUMENT, TOOL_ARGUMENT_DELTA -> List.of(chunk);
             case TURN_OUTCOME -> List.of();
         };
+    }
+
+    /** 读取正文已经返回当前模型，实时事件只保留工具元数据。 */
+    private String realtimeToolExecutedChunk(
+            String rawChunk, ToolExecutedMessage executed) {
+        if (!READ_TOOLS.contains(executed.getName())) {
+            return rawChunk;
+        }
+        JSONObject realtime = JSONUtil.parseObj(rawChunk);
+        realtime.set("result", cn.hutool.json.JSONNull.NULL);
+        return JSONUtil.toJsonStr(realtime);
     }
 }

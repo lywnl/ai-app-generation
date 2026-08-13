@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -106,6 +108,40 @@ class JsonMessageStreamHandlerTest {
                 contentText(output.get(1)));
         verify(tool).generateToolExecutedResult(any(JSONObject.class),
                 eq("{\"success\":false,\"secretLog\":\"raw\"}"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"readFile", "readDir"})
+    void readToolContentIsVisibleToModelButRedactedFromRealtimeSse(
+            String toolName) {
+        VueTurnContext context = context("turn-read", VueBuildPhase.GENERATING);
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool(toolName)).thenReturn(tool);
+        String rawResult = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"" + toolName + "\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
+                + "\"message\":\"已读取\",\"content\":\"绝密读取正文\"}";
+        when(tool.generateToolExecutedResult(any(JSONObject.class), eq(rawResult)))
+                .thenReturn("[工具调用] 读取文件 src/App.vue（已应用）");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertFalse(requested.canonicalAiText().contains("绝密读取正文"));
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        String event = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "tool-read")
+                .set("name", toolName)
+                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
+                .set("result", rawResult));
+
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(event), context)
+                .collectList().block();
+
+        String realtimeEvent = contentText(output.getFirst());
+        assertFalse(realtimeEvent.contains("绝密读取正文"), realtimeEvent);
+        assertTrue(realtimeEvent.contains("\"result\":null"), realtimeEvent);
+        verify(tool).generateToolExecutedResult(any(JSONObject.class), eq(rawResult));
     }
 
     @Test

@@ -4,7 +4,9 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
+import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import lombok.extern.slf4j.Slf4j;
@@ -73,7 +75,7 @@ public class VueTurnFinalizer {
             } catch (RuntimeException exception) {
                 log.error("Vue 回合终态持久化异常,appId={},turnId={}",
                         context.appId(), context.turnId(), exception);
-                invalidateService(context);
+                invalidateUnstableMemory(context);
                 return new FinalizationResult(systemError(context), false);
             }
         }
@@ -89,13 +91,13 @@ public class VueTurnFinalizer {
         } catch (RuntimeException exception) {
             log.error("Vue 回合 AI 消息保存异常,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
-            invalidateService(context);
+            invalidateUnstableMemory(context);
             return new FinalizationResult(systemError(context), false);
         }
         if (!saved) {
             log.error("Vue 回合 AI 消息保存返回 false,appId={},turnId={}",
                     context.appId(), context.turnId());
-            invalidateService(context);
+            invalidateUnstableMemory(context);
             return new FinalizationResult(systemError(context), false);
         }
 
@@ -105,7 +107,7 @@ public class VueTurnFinalizer {
         if (collapse.status() != COLLAPSED) {
             log.warn("Vue 回合 L0 未稳定同步,appId={},turnId={},stage={}",
                     context.appId(), context.turnId(), collapse.status());
-            invalidateService(context);
+            invalidateUnstableMemory(context);
         }
         triggerStableMemoryHooks(context);
         return new FinalizationResult(requestedOutcome, true);
@@ -127,11 +129,17 @@ public class VueTurnFinalizer {
         }
     }
 
-    private void invalidateService(VueTurnContext context) {
+    private void invalidateUnstableMemory(VueTurnContext context) {
         try {
-            serviceFactory.invalidateVueService(context.appId());
+            MemoryCacheInvalidationResult result = serviceFactory
+                    .invalidateAndClearMemory(
+                            context.appId(), CodeGenTypeEnum.VUE_PROJECT);
+            if (result != null && !result.failedTargets().isEmpty()) {
+                log.error("Vue 不可信 L0 清理不完整,appId={},turnId={},targets={}",
+                        context.appId(), context.turnId(), result.failedTargets());
+            }
         } catch (RuntimeException exception) {
-            log.error("Vue 服务缓存失效失败,appId={},turnId={}",
+            log.error("Vue 不可信 L0 清理失败,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
         }
     }
