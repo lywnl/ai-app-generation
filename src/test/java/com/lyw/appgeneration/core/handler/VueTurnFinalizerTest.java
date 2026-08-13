@@ -3,14 +3,18 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.COLLAPSED;
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.STORE_FAILED;
@@ -27,6 +31,7 @@ class VueTurnFinalizerTest {
     private MemorySummaryService summary;
     private UserMemoryService preference;
     private AiGeneratorServiceFactory factory;
+    private AppDataLifecycleFence lifecycleFence;
     private VueTurnFinalizer finalizer;
 
     @BeforeEach
@@ -36,7 +41,9 @@ class VueTurnFinalizerTest {
         summary = mock(MemorySummaryService.class);
         preference = mock(UserMemoryService.class);
         factory = mock(AiGeneratorServiceFactory.class);
-        finalizer = new VueTurnFinalizer(history, collapser, summary, preference, factory);
+        lifecycleFence = new AppDataLifecycleFence();
+        finalizer = new VueTurnFinalizer(
+                history, collapser, summary, preference, factory, lifecycleFence);
         when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
                 .thenReturn(true);
         when(collapser.collapseLastTurn(anyLong(), anyString()))
@@ -87,7 +94,8 @@ class VueTurnFinalizerTest {
                 return finalizer.finalizeOnce(context, protocol);
             });
             start.countDown();
-            assertSame(first.get(), second.get());
+            assertSame(first.get(1, TimeUnit.SECONDS),
+                    second.get(1, TimeUnit.SECONDS));
         }
 
         verify(history, times(1)).addChatMessage(eq(APP_ID), anyString(), eq("ai"), eq(USER_ID));
@@ -159,6 +167,93 @@ class VueTurnFinalizerTest {
         assertEquals(SUCCEEDED, result.outcome().outcome());
         assertTrue(result.persisted());
         verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+    }
+
+    @Test
+    void deleteGateRejectsLateFinalizerWithoutAnyDataOrCacheSideEffect() {
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP_ID, Duration.ofSeconds(1));
+        assertNotNull(deletion);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-after-delete", VueBuildPhase.CANCELLED);
+        VueTurnOutcome cancelled = outcome(
+                VueBuildPhase.CANCELLED, CANCELLED, "本次生成已取消。", false);
+
+        VueTurnFinalizer.FinalizationResult result =
+                finalizer.finalizeOnce(context, cancelled);
+
+        assertEquals(CANCELLED, result.outcome().outcome());
+        assertFalse(result.persisted());
+        verifyNoInteractions(history, collapser, summary, preference, factory);
+        deletion.abortAndReopen();
+    }
+
+    @Test
+    void deleteWaitsUntilFinalizerCompletesAllStableMemoryHooks() throws Exception {
+        CountDownLatch historyEntered = new CountDownLatch(1);
+        CountDownLatch releaseHistory = new CountDownLatch(1);
+        when(history.addChatMessage(APP_ID, "项目已生成并构建成功。", "ai", USER_ID))
+                .thenAnswer(invocation -> {
+                    historyEntered.countDown();
+                    assertTrue(releaseHistory.await(1, TimeUnit.SECONDS));
+                    return true;
+                });
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-delete-race", VueBuildPhase.SUCCEEDED);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var finalization = executor.submit(() -> finalizer.finalizeOnce(context,
+                    outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                            "项目已生成并构建成功。", true)));
+            assertTrue(historyEntered.await(1, TimeUnit.SECONDS));
+            var deletion = executor.submit(() ->
+                    lifecycleFence.beginDelete(APP_ID, Duration.ofSeconds(2)));
+
+            assertThrows(TimeoutException.class,
+                    () -> deletion.get(100, TimeUnit.MILLISECONDS));
+            releaseHistory.countDown();
+            assertTrue(finalization.get(1, TimeUnit.SECONDS).persisted());
+            AppDataLifecycleFence.DeletePermit deletePermit =
+                    deletion.get(1, TimeUnit.SECONDS);
+            assertNotNull(deletePermit);
+            verify(summary).triggerSummarizationAsync(APP_ID);
+            verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+            deletePermit.abortAndReopen();
+        }
+    }
+
+    @Test
+    void unexpectedPersistenceFailureKeepsWriterUntilCacheInvalidationCompletes()
+            throws Exception {
+        CountDownLatch invalidationEntered = new CountDownLatch(1);
+        CountDownLatch releaseInvalidation = new CountDownLatch(1);
+        when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
+                .thenThrow(new IllegalStateException("redis unexpected"));
+        doAnswer(invocation -> {
+            invalidationEntered.countDown();
+            assertTrue(releaseInvalidation.await(1, TimeUnit.SECONDS));
+            return null;
+        }).when(factory).invalidateVueService(APP_ID);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-invalidation-race", VueBuildPhase.SUCCEEDED);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var finalization = executor.submit(() -> finalizer.finalizeOnce(context,
+                    outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                            "项目已生成并构建成功。", true)));
+            assertTrue(invalidationEntered.await(1, TimeUnit.SECONDS));
+            var deletion = executor.submit(() ->
+                    lifecycleFence.beginDelete(APP_ID, Duration.ofSeconds(2)));
+
+            assertThrows(TimeoutException.class,
+                    () -> deletion.get(100, TimeUnit.MILLISECONDS));
+            releaseInvalidation.countDown();
+            assertFalse(finalization.get(1, TimeUnit.SECONDS).persisted());
+            AppDataLifecycleFence.DeletePermit deletePermit =
+                    deletion.get(1, TimeUnit.SECONDS);
+            assertNotNull(deletePermit);
+            deletePermit.abortAndReopen();
+        }
     }
 
     private VueTurnOutcome outcome(VueBuildPhase phase,

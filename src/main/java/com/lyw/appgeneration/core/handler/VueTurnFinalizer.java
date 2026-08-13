@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -25,17 +26,20 @@ public class VueTurnFinalizer {
     private final MemorySummaryService memorySummaryService;
     private final UserMemoryService userMemoryService;
     private final AiGeneratorServiceFactory serviceFactory;
+    private final AppDataLifecycleFence lifecycleFence;
 
     public VueTurnFinalizer(ChatHistoryService chatHistoryService,
             ToolMessageCollapser toolMessageCollapser,
             MemorySummaryService memorySummaryService,
             UserMemoryService userMemoryService,
-            AiGeneratorServiceFactory serviceFactory) {
+            AiGeneratorServiceFactory serviceFactory,
+            AppDataLifecycleFence lifecycleFence) {
         this.chatHistoryService = chatHistoryService;
         this.toolMessageCollapser = toolMessageCollapser;
         this.memorySummaryService = memorySummaryService;
         this.userMemoryService = userMemoryService;
         this.serviceFactory = serviceFactory;
+        this.lifecycleFence = lifecycleFence;
     }
 
     public FinalizationResult finalizeOnce(
@@ -43,15 +47,7 @@ public class VueTurnFinalizer {
         if (!context.tryStartFinalization()) {
             return context.awaitFinalization();
         }
-        FinalizationResult result;
-        try {
-            result = persist(context, requestedOutcome);
-        } catch (RuntimeException exception) {
-            log.error("Vue 回合终态持久化异常,appId={},turnId={}",
-                    context.appId(), context.turnId(), exception);
-            invalidateService(context);
-            result = new FinalizationResult(systemError(context), false);
-        }
+        FinalizationResult result = persistWithinWriterPermit(context, requestedOutcome);
         try {
             context.closeResources();
         } catch (RuntimeException exception) {
@@ -60,6 +56,27 @@ public class VueTurnFinalizer {
         }
         context.completeFinalization(result);
         return result;
+    }
+
+    private FinalizationResult persistWithinWriterPermit(
+            VueTurnContext context, VueTurnOutcome requestedOutcome) {
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                lifecycleFence.tryAcquireWriter(context.appId());
+        if (writerPermit == null) {
+            log.info("Vue 回合终态被应用数据删除门拒绝,appId={},turnId={}",
+                    context.appId(), context.turnId());
+            return new FinalizationResult(requestedOutcome, false);
+        }
+        try (writerPermit) {
+            try {
+                return persist(context, requestedOutcome);
+            } catch (RuntimeException exception) {
+                log.error("Vue 回合终态持久化异常,appId={},turnId={}",
+                        context.appId(), context.turnId(), exception);
+                invalidateService(context);
+                return new FinalizationResult(systemError(context), false);
+            }
+        }
     }
 
     private FinalizationResult persist(
