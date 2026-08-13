@@ -34,8 +34,9 @@ public class FileReadTool extends BaseTool {
                 return FileToolProtocolSupport.json(FileToolResult.notFound(
                         getToolName(), relativeFilePath, "文件不存在或不是普通文件"));
             }
-            return FileToolProtocolSupport.json(FileToolResult.applied(
-                    getToolName(), relativeFilePath, false, Files.readString(path)));
+            return FileToolProtocolSupport.json(FileToolResult.readApplied(
+                    getToolName(), relativeFilePath,
+                    "文件读取成功", Files.readString(path)));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
             return FileToolProtocolSupport.rejected(
                     getToolName(), relativeFilePath, exception);

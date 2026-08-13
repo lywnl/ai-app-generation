@@ -30,6 +30,21 @@ import static org.mockito.Mockito.*;
 
 class UserMemoryServiceImplTest {
 
+    @Test
+    void preferencePromptRejectsBuildAndSingleProjectNoise() {
+        String prompt = com.lyw.appgeneration.ai.memory.UserPreferencePromptBuilder
+                .build("已有偏好", "新增对话");
+
+        assertTrue(prompt.contains("构建错误"));
+        assertTrue(prompt.contains("工具选择"));
+        assertTrue(prompt.contains("修复尝试"));
+        assertTrue(prompt.contains("依赖安装"));
+        assertTrue(prompt.contains("框架堆栈"));
+        assertTrue(prompt.contains("单项目代码决策"));
+        assertTrue(prompt.contains("用户主动表达"));
+        assertTrue(prompt.contains("跨应用稳定成立"));
+    }
+
     private ChatHistoryService chatHistoryService;
     private AppMemoryMapper appMemoryMapper;
     private AppMemoryExtractCursorMapper cursorMapper;

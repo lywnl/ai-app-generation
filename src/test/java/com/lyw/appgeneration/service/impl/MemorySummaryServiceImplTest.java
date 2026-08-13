@@ -36,6 +36,20 @@ import static org.mockito.Mockito.*;
  */
 class MemorySummaryServiceImplTest {
 
+    @Test
+    void summaryPromptKeepsOnlyFinalBuildStateAndExcludesRepairNoise() {
+        String prompt = com.lyw.appgeneration.ai.memory.MemorySummaryPromptBuilder
+                .build("旧摘要", "新增对话");
+
+        assertTrue(prompt.contains("最终构建成功"));
+        assertTrue(prompt.contains("最终构建失败"));
+        assertTrue(prompt.contains("最终被取消"));
+        assertTrue(prompt.contains("不复制错误摘要"));
+        assertTrue(prompt.contains("构建日志"));
+        assertTrue(prompt.contains("逐次修复过程"));
+        assertTrue(prompt.contains("vue_project_<appId> 当前文件"));
+    }
+
     @Mock
     ChatHistoryService chatHistoryService;
     @Mock

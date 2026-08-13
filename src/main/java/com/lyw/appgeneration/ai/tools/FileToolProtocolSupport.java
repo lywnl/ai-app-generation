@@ -1,38 +1,53 @@
 package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONConfig;
+import cn.hutool.json.JSONNull;
 import cn.hutool.json.JSONUtil;
 
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Set;
 
 /** 文件工具共享的协议序列化与稳定文本解析。 */
 final class FileToolProtocolSupport {
+
+    private static final Set<String> PROTOCOL_FIELDS = Set.of(
+            "protocol", "operation", "status", "relativePath",
+            "changed", "message", "content");
 
     private FileToolProtocolSupport() {
     }
 
     static String json(FileToolResult result) {
-        JSONObject json = new JSONObject();
+        JSONObject json = new JSONObject(
+                JSONConfig.create().setIgnoreNullValue(false));
         json.set("protocol", result.protocol());
         json.set("operation", result.operation());
         json.set("status", result.status().name());
         json.set("relativePath", result.relativePath());
         json.set("changed", result.changed());
         json.set("message", result.message());
+        json.set("content", result.content());
         return JSONUtil.toJsonStr(json);
     }
 
     static FileToolResult parse(String rawResult, String operation, String relativePath) {
         try {
-            JSONObject json = JSONUtil.parseObj(rawResult);
+            JSONObject json = JSONUtil.parseObj(
+                    rawResult, JSONConfig.create()
+                            .setCheckDuplicate(true)
+                            .setIgnoreNullValue(false));
+            validateFields(json);
             FileToolResult result = new FileToolResult(
-                    json.getStr("protocol"),
-                    json.getStr("operation"),
-                    FileToolResult.FileToolStatus.valueOf(json.getStr("status")),
-                    json.getStr("relativePath"),
-                    Boolean.TRUE.equals(json.getBool("changed")),
-                    json.getStr("message"));
+                    requiredString(json, "protocol"),
+                    requiredString(json, "operation"),
+                    FileToolResult.FileToolStatus.valueOf(
+                            requiredString(json, "status")),
+                    nullableString(json, "relativePath"),
+                    requiredBoolean(json, "changed"),
+                    requiredString(json, "message"),
+                    nullableString(json, "content"));
             if (!FileToolResult.PROTOCOL.equals(result.protocol())
                     || !operation.equals(result.operation())
                     || !Objects.equals(normalizePath(relativePath),
@@ -43,6 +58,39 @@ final class FileToolProtocolSupport {
         } catch (RuntimeException exception) {
             return FileToolResult.failed(operation, relativePath, "工具结果协议解析失败");
         }
+    }
+
+    private static void validateFields(JSONObject json) {
+        if (!PROTOCOL_FIELDS.equals(json.keySet())) {
+            throw new IllegalArgumentException("文件工具协议字段不完整或包含未知字段");
+        }
+    }
+
+    private static String requiredString(JSONObject json, String field) {
+        Object value = json.get(field);
+        if (!(value instanceof String text)) {
+            throw new IllegalArgumentException("文件工具协议字段必须是字符串: " + field);
+        }
+        return text;
+    }
+
+    private static String nullableString(JSONObject json, String field) {
+        Object value = json.get(field);
+        if (value == null || value == JSONNull.NULL) {
+            return null;
+        }
+        if (value instanceof String text) {
+            return text;
+        }
+        throw new IllegalArgumentException("文件工具协议字段必须是字符串或 null: " + field);
+    }
+
+    private static boolean requiredBoolean(JSONObject json, String field) {
+        Object value = json.get(field);
+        if (!(value instanceof Boolean bool)) {
+            throw new IllegalArgumentException("文件工具协议字段必须是布尔值: " + field);
+        }
+        return bool;
     }
 
     private static String normalizePath(String relativePath) {
@@ -61,7 +109,8 @@ final class FileToolProtocolSupport {
     }
 
     static String stableSummary(BaseTool tool, FileToolResult result) {
-        String path = result.relativePath() == null ? "" : " " + result.relativePath();
+        String path = result.relativePath() == null || result.relativePath().isBlank()
+                ? "" : " " + result.relativePath();
         return "[工具调用] " + tool.getDisplayName() + path
                 + "（" + statusText(result.status()) + "）";
     }

@@ -44,8 +44,9 @@ public class FileDirReadTool extends BaseTool {
             }
             List<Path> files = projectPathResolver.collectSafeDirectoryEntries(
                     path, appId, this::shouldIgnore);
-            return result(FileToolResult.applied(
-                    getToolName(), relativeDirPath, false, formatStructure(path, files)));
+            return result(FileToolResult.readApplied(
+                    getToolName(), relativeDirPath,
+                    "目录读取成功", formatStructure(path, files)));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
             return FileToolProtocolSupport.rejected(
                     getToolName(), relativeDirPath, exception);

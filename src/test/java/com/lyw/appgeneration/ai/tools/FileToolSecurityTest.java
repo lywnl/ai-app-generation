@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -97,11 +98,18 @@ class FileToolSecurityTest {
         JSONObject delete = inEvaluation(() -> fileDeleteTool.deleteFile("delete.txt", APP_ID));
         JSONObject directory = inEvaluation(() -> fileDirReadTool.readDir("", APP_ID));
 
-        assertEquals("旧内容", read.getStr("message"));
+        assertEquals("旧内容", read.getStr("content"));
+        assertFalse(read.getStr("message").isBlank());
+        assertFalse(read.getStr("message").contains("旧内容"));
         assertEquals("APPLIED", write.getStr("status"));
+        assertNullContent(write);
         assertEquals("APPLIED", modify.getStr("status"));
+        assertNullContent(modify);
         assertEquals("APPLIED", delete.getStr("status"));
-        assertTrue(directory.getStr("message").contains("read.txt"), directory.toString());
+        assertNullContent(delete);
+        assertTrue(directory.getStr("content").contains("read.txt"), directory.toString());
+        assertFalse(directory.getStr("message").isBlank());
+        assertFalse(directory.getStr("message").contains("read.txt"));
         assertEquals("新内容", Files.readString(root.resolve("nested/write.txt")));
         assertEquals("新内容", Files.readString(root.resolve("modify.txt")));
         assertFalse(Files.exists(root.resolve("delete.txt")));
@@ -185,9 +193,9 @@ class FileToolSecurityTest {
         JSONObject directory = inEvaluation(() -> fileDirReadTool.readDir("", APP_ID));
 
         assertEquals("APPLIED", directory.getStr("status"));
-        assertTrue(directory.getStr("message").contains("visible.txt"));
-        assertFalse(directory.getStr("message").contains(".ai-build-dependency-state.json"));
-        assertFalse(directory.getStr("message").contains("secret.js"));
+        assertTrue(directory.getStr("content").contains("visible.txt"));
+        assertFalse(directory.getStr("content").contains(".ai-build-dependency-state.json"));
+        assertFalse(directory.getStr("content").contains("secret.js"));
     }
 
     @Test
@@ -231,6 +239,129 @@ class FileToolSecurityTest {
         assertStatus(noMatch, "NO_CHANGE", false);
         assertEquals("相同内容", Files.readString(projectRoot().resolve("same.txt")));
         assertFalse(Files.exists(projectRoot().resolve("null.txt")));
+    }
+
+    @Test
+    void serializedProtocolAlwaysCarriesExplicitContentField() {
+        JSONObject write = JSONUtil.parseObj(FileToolProtocolSupport.json(
+                FileToolResult.applied(
+                        "writeFile", "src/App.vue", true, "文件写入成功")));
+
+        assertNullContent(write);
+        assertEquals(Set.of(
+                        "protocol", "operation", "status", "relativePath",
+                        "changed", "message", "content"),
+                write.keySet());
+    }
+
+    @Test
+    void everyNonAppliedStatusSerializesNullContent() {
+        List<FileToolResult> results = List.of(
+                FileToolResult.noChange("writeFile", "src/App.vue", "未变更"),
+                FileToolResult.rejected("readFile", "src/App.vue", "已拒绝"),
+                FileToolResult.notFound("readFile", "src/App.vue", "未找到"),
+                FileToolResult.cancelled("readFile", "src/App.vue", "已取消"),
+                FileToolResult.failed("readFile", "src/App.vue", "失败"));
+
+        for (FileToolResult result : results) {
+            JSONObject json = JSONUtil.parseObj(FileToolProtocolSupport.json(result));
+            assertEquals(result.status().name(), json.getStr("status"));
+            assertNullContent(json);
+        }
+    }
+
+    @Test
+    void everyMutationAppliedResultSerializesNullContent() {
+        for (String operation : List.of("writeFile", "modifyFile", "deleteFile")) {
+            JSONObject json = JSONUtil.parseObj(FileToolProtocolSupport.json(
+                    FileToolResult.applied(
+                            operation, "src/App.vue", true, "已应用")));
+
+            assertTrue(json.getBool("changed"));
+            assertNullContent(json);
+        }
+    }
+
+    @Test
+    void protocolParserRejectsMissingOrContradictoryContentSemantics() {
+        assertProtocolParseFailed("writeFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"writeFile",\
+                "status":"APPLIED","relativePath":"src/App.vue",\
+                "changed":true,"message":"已写入"}
+                """);
+        assertProtocolParseFailed("writeFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"writeFile",\
+                "status":"APPLIED","relativePath":"src/App.vue",\
+                "changed":true,"message":"已写入","content":"伪造内容"}
+                """);
+        assertProtocolParseFailed("readFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"readFile",\
+                "status":"APPLIED","relativePath":"src/App.vue",\
+                "changed":false,"message":"已读取","content":null}
+                """);
+        assertProtocolParseFailed("readFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"readFile",\
+                "status":"APPLIED","relativePath":"src/App.vue",\
+                "changed":true,"message":"已读取","content":"正文"}
+                """);
+        assertProtocolParseFailed("writeFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"writeFile",\
+                "status":"APPLIED","relativePath":"src/App.vue",\
+                "changed":false,"message":"已写入","content":null}
+                """);
+    }
+
+    @Test
+    void protocolParserRejectsContentOnEveryNonAppliedStatus() {
+        for (String status : List.of(
+                "NO_CHANGE", "REJECTED", "NOT_FOUND", "CANCELLED", "FAILED")) {
+            String raw = """
+                    {"protocol":"file-tool/v1","operation":"readFile",\
+                    "status":"%s","relativePath":"src/App.vue",\
+                    "changed":false,"message":"状态说明","content":"不应出现的正文"}
+                    """.formatted(status);
+
+            assertProtocolParseFailed("readFile", "src/App.vue", raw);
+        }
+    }
+
+    @Test
+    void protocolParserRejectsUnsupportedOperationsAndUnknownFieldShape() {
+        assertThrows(IllegalArgumentException.class, () -> FileToolResult.applied(
+                "unknownTool", "src/App.vue", false, "伪造操作"));
+        assertThrows(IllegalArgumentException.class, () -> FileToolResult.failed(
+                "readFile", "src/App.vue", " "));
+        assertProtocolParseFailed("readFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"readFile",\
+                "status":"APPLIED","relativePath":"src/App.vue",\
+                "changed":false,"message":"已读取","content":"正文",\
+                "inventedField":"不应被接受"}
+                """);
+        assertProtocolParseFailed("readFile", "src/App.vue", """
+                {"protocol":"file-tool/v1","operation":"readFile",\
+                "status":"FAILED","status":"APPLIED",\
+                "relativePath":"src/App.vue","changed":false,\
+                "message":"已读取","content":"正文"}
+                """);
+    }
+
+    @Test
+    void protocolParserEnforcesOperationSpecificStatusAndChangedSemantics() {
+        assertProtocolParseFailed("readDir", "", """
+                {"protocol":"file-tool/v1","operation":"readDir",\
+                "status":"NO_CHANGE","relativePath":"",\
+                "changed":false,"message":"伪造未变更","content":null}
+                """);
+        assertProtocolParseFailed("deleteFile", "src/old.js", """
+                {"protocol":"file-tool/v1","operation":"deleteFile",\
+                "status":"NO_CHANGE","relativePath":"src/old.js",\
+                "changed":false,"message":"伪造未变更","content":null}
+                """);
+        assertProtocolParseFailed("exit", null, """
+                {"protocol":"file-tool/v1","operation":"exit",\
+                "status":"APPLIED","relativePath":null,\
+                "changed":true,"message":"伪造变更","content":null}
+                """);
     }
 
     @Test
@@ -318,6 +449,30 @@ class FileToolSecurityTest {
                         "writeFile", "src/Other.vue", true, "另一路径已写入")));
         assertFalse(mismatchedPath.contains("绝密参数代码"), mismatchedPath);
         assertTrue(mismatchedPath.contains("失败"), mismatchedPath);
+    }
+
+    @Test
+    void readStableMarkdownNeverCopiesRealtimeContent() throws IOException {
+        Path root = createProjectRoot();
+        Files.writeString(root.resolve("secret.txt"), "仅当前模型可见的读取正文");
+        JSONObject fileResult = inEvaluation(() ->
+                fileReadTool.readFile("secret.txt", APP_ID));
+        JSONObject directoryResult = inEvaluation(() ->
+                fileDirReadTool.readDir("", APP_ID));
+
+        String fileStable = fileReadTool.generateToolExecutedResult(
+                new JSONObject().set("relativeFilePath", "secret.txt"),
+                fileResult.toString());
+        String directoryStable = fileDirReadTool.generateToolExecutedResult(
+                new JSONObject().set("relativeDirPath", ""),
+                directoryResult.toString());
+
+        assertEquals("仅当前模型可见的读取正文", fileResult.getStr("content"));
+        assertFalse(fileStable.contains("仅当前模型可见的读取正文"), fileStable);
+        assertEquals("[工具调用] 读取文件 secret.txt（已应用）", fileStable);
+        assertTrue(directoryResult.getStr("content").contains("secret.txt"));
+        assertFalse(directoryStable.contains("secret.txt"), directoryStable);
+        assertEquals("[工具调用] 读取目录（已应用）", directoryStable);
     }
 
     @Test
@@ -451,6 +606,21 @@ class FileToolSecurityTest {
         assertEquals("file-tool/v1", json.getStr("protocol"));
         assertEquals(status, json.getStr("status"));
         assertEquals(changed, json.getBool("changed"));
+        assertNullContent(json);
+    }
+
+    private void assertNullContent(JSONObject json) {
+        assertTrue(json.containsKey("content"), json.toString());
+        assertTrue(json.isNull("content"), json.toString());
+        assertNull(json.getStr("content"));
+    }
+
+    private void assertProtocolParseFailed(
+            String operation, String relativePath, String rawResult) {
+        FileToolResult result = FileToolProtocolSupport.parse(
+                rawResult, operation, relativePath);
+        assertEquals(FileToolResult.FileToolStatus.FAILED, result.status());
+        assertEquals("工具结果协议解析失败", result.message());
     }
 
     private Path createProjectRoot() throws IOException {
