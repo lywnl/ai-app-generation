@@ -32,16 +32,65 @@ class VueBuildSessionManagerTest {
                 assertEquals(VueBuildPhase.REPAIRING,
                         lease.recordFailure(attempt1, failure(BuildStage.NPM_BUILD)).phase());
             }
+            lease.recordSuccessfulMutation();
             try (var attempt2 = lease.beginBuild()) {
                 assertEquals(VueBuildPhase.FINAL_DIAGNOSIS,
                         lease.recordFailure(attempt2, failure(BuildStage.NPM_BUILD)).phase());
             }
+            lease.recordSuccessfulMutation();
             try (var attempt3 = lease.beginBuild()) {
                 assertEquals(VueBuildPhase.FAILED,
                         lease.recordFailure(attempt3, failure(BuildStage.NPM_BUILD)).phase());
             }
             assertFalse(lease.canBuild());
             assertThrows(IllegalStateException.class, lease::beginBuild);
+        }
+    }
+
+    @Test
+    void 代码失败后必须有新成功变更且拒绝不消耗构建次数() {
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager manager = new VueBuildSessionManager();
+        try (var operation = operationManager.acquire(
+                71L, AppOperationType.GENERATE, "turn-mutation");
+             var lease = manager.open(operation, 9L, "turn-mutation")) {
+            try (var first = lease.beginBuild()) {
+                lease.recordFailure(first, failure(BuildStage.NPM_BUILD));
+            }
+
+            assertThrows(VueBuildSessionManager.BuildMutationRequiredException.class,
+                    lease::beginBuild);
+            assertEquals(1, lease.snapshot().buildAttempt());
+            assertEquals(0L, lease.snapshot().mutationRevision());
+
+            assertEquals(1L, lease.recordSuccessfulMutation());
+            try (var second = lease.beginBuild()) {
+                assertEquals(2, second.attempt());
+            }
+        }
+    }
+
+    @Test
+    void 首次非代码失败必须进入直接重试阶段且无需文件变更() {
+        for (VueBuildFailureKind kind : List.of(
+                VueBuildFailureKind.DEPENDENCY,
+                VueBuildFailureKind.INFRASTRUCTURE)) {
+            AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+            VueBuildSessionManager manager = new VueBuildSessionManager();
+            try (var operation = operationManager.acquire(
+                    72L, AppOperationType.GENERATE, "turn-retry-" + kind);
+                 var lease = manager.open(operation, 9L, "turn-retry-" + kind)) {
+                BuildResult failure = new BuildResult(
+                        false, BuildStage.NPM_INSTALL, 1,
+                        false, false, kind, "安装失败", 1L);
+                try (var first = lease.beginBuild()) {
+                    assertEquals(VueBuildPhase.RETRYING,
+                            lease.recordFailure(first, failure).phase());
+                }
+                try (var second = lease.beginBuild()) {
+                    assertEquals(2, second.attempt());
+                }
+            }
         }
     }
 
@@ -147,6 +196,7 @@ class VueBuildSessionManagerTest {
             assertThrows(VueBuildSessionManager.BuildInProgressException.class,
                     lease::beginBuild);
             lease.recordFailure(first, failure(BuildStage.NPM_BUILD));
+            lease.recordSuccessfulMutation();
             try (var second = lease.beginBuild()) {
                 assertEquals(2, second.attempt());
             }
@@ -198,6 +248,7 @@ class VueBuildSessionManagerTest {
                 first.registerCancellation(oldCancellation::incrementAndGet);
                 lease.recordFailure(first, failure(BuildStage.NPM_BUILD));
             }
+            lease.recordSuccessfulMutation();
             try (var second = lease.beginBuild()) {
                 second.registerCancellation(currentCancellation::incrementAndGet);
                 lease.cancel();

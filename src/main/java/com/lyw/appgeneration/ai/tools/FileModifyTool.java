@@ -31,13 +31,24 @@ public class FileModifyTool extends BaseTool {
             @P("替换后的新内容") String newContent,
             @ToolMemoryId Long appId) {
         try {
-            scopeManager.requireCurrent(requireAppId(appId), getToolName());
+            FileToolExecutionScopeManager.FileToolScope scope =
+                    scopeManager.requireCurrent(requireAppId(appId), getToolName());
+            String policyRejection = scopeManager.rejectForbiddenMutation(
+                    scope, getToolName(), relativeFilePath);
+            if (policyRejection != null) {
+                return policyRejection;
+            }
             Path path = projectPathResolver.resolveExisting(appId, relativeFilePath, false);
             if (!Files.exists(path) || !Files.isRegularFile(path)) {
                 return result(FileToolResult.notFound(
                         getToolName(), relativeFilePath, "文件不存在或不是普通文件"));
             }
-            String original = Files.readString(path);
+            String original = FileReadTool.readUtf8WithinBudget(
+                    path, scope.budgetSession().newSingleFileAccumulator());
+            if (original == null) {
+                return result(FileToolResult.resourceLimitExceeded(
+                        getToolName(), relativeFilePath));
+            }
             if (oldContent == null || !original.contains(oldContent)) {
                 return result(FileToolResult.noChange(
                         getToolName(), relativeFilePath, "未找到要替换的内容，文件未修改"));
@@ -47,8 +58,17 @@ public class FileModifyTool extends BaseTool {
                 return result(FileToolResult.noChange(
                         getToolName(), relativeFilePath, "替换后文件内容未发生变化"));
             }
-            Files.writeString(path, modified,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            try (FileToolBudgetGuard.MutationReservation reservation =
+                         scope.budgetSession().reserveMutation(
+                                 modified, newContent == null ? "" : newContent)) {
+                if (!reservation.accepted()) {
+                    return result(FileToolResult.resourceLimitExceeded(
+                            getToolName(), relativeFilePath));
+                }
+                Files.writeString(path, modified,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                reservation.commit();
+            }
             return result(FileToolResult.applied(
                     getToolName(), relativeFilePath, true, "文件修改成功"));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {

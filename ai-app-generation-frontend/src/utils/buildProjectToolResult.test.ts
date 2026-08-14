@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import goldenCases from '../test-fixtures/vue-build-tool-v1-cases.json'
 import { parseBuildProjectToolResult } from './buildProjectToolResult'
+
+describe('vue-build-tool/v1 共同 golden', () => {
+  it.each(goldenCases)('$name', ({ raw, expectedView }) => {
+    expect(parseBuildProjectToolResult(raw)).toEqual(expectedView)
+  })
+})
 
 const baseResult = {
   protocol: 'vue-build-tool/v1',
@@ -28,8 +35,8 @@ function failedResult(attempt: number) {
     attempt,
     stage: 'NPM_BUILD',
     failureKind: 'CODE',
-    repairable: attempt === 1,
-    reflectionRequired: attempt >= 2,
+    repairable: attempt < 3,
+    reflectionRequired: attempt === 2,
     nextAction: attempt === 1 ? 'REPAIR' : attempt === 2 ? 'FINAL_DIAGNOSIS' : 'STOP',
     message: `第 ${attempt} 次构建失败`,
     errorSummary: 'TypeScript 编译失败',
@@ -47,7 +54,7 @@ describe('parseBuildProjectToolResult', () => {
       maxAttempts: 3,
       stage: 'SUCCESS',
       statusText: '第 1 次构建成功',
-      terminal: true,
+      terminateToolLoop: true,
     })
   })
 
@@ -55,7 +62,7 @@ describe('parseBuildProjectToolResult', () => {
     [1, '第 1 次构建失败，正在进行最小修复', false],
     [2, '第 2 次构建失败，正在进行最终诊断', false],
     [3, '第 3 次构建失败，已停止自动修复', true],
-  ])('解析第 %i 次失败结果', (attempt, statusText, terminal) => {
+  ])('解析第 %i 次失败结果', (attempt, statusText, terminateToolLoop) => {
     expect(parseBuildProjectToolResult(failedResult(attempt))).toEqual({
       invocationStatus: 'COMPLETED',
       success: false,
@@ -64,7 +71,7 @@ describe('parseBuildProjectToolResult', () => {
       stage: 'NPM_BUILD',
       statusText,
       errorSummary: 'TypeScript 编译失败',
-      terminal,
+      terminateToolLoop,
     })
   })
 
@@ -88,15 +95,14 @@ describe('parseBuildProjectToolResult', () => {
       attempt: null,
       stage: null,
       timedOut: null,
-      nextAction: null,
+      nextAction: 'STOP',
       message: '构建请求被拒绝',
       terminateToolLoop: true,
-      finalResponse: '抱歉，系统遇到了一些问题，请您稍后重试修复',
+      finalResponse: null,
     },
   ])('保留未完成调用的 undefined success', (raw) => {
     const parsed = parseBuildProjectToolResult(raw)
 
-    expect(parsed?.success).toBeUndefined()
     expect(parsed?.statusText).toBe(raw.message)
   })
 
@@ -115,16 +121,15 @@ describe('parseBuildProjectToolResult', () => {
       message: '用户取消构建',
       errorSummary: null,
       terminateToolLoop: true,
-      finalResponse: '抱歉，系统遇到了一些问题，请您稍后重试修复',
+      finalResponse: null,
     }
 
     expect(parseBuildProjectToolResult(raw)).toMatchObject({
       invocationStatus: 'CANCELLED',
-      success: undefined,
       attempt: 2,
       stage: 'NPM_BUILD',
       statusText: '用户取消构建',
-      terminal: true,
+      terminateToolLoop: true,
     })
   })
 

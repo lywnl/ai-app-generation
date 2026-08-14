@@ -108,11 +108,32 @@ public final class StreamingRequestController {
     }
 
     public boolean terminate(ControlledTermination controlledTermination) {
-        if (!claimControlledTermination(controlledTermination)) {
+        HandleSlot handle = claimControlledTerminationAndGetHandle(
+                controlledTermination);
+        if (handle == REJECTED_TERMINATION) {
             return false;
+        }
+        if (handle != null) {
+            handle.cancel();
         }
         dispatchTermination(controlledTermination);
         return true;
+    }
+
+    private static final HandleSlot REJECTED_TERMINATION = new HandleSlot(() -> { });
+
+    private HandleSlot claimControlledTerminationAndGetHandle(
+            ControlledTermination controlledTermination) {
+        Objects.requireNonNull(controlledTermination, "受控终止不能为空");
+        synchronized (this) {
+            if (state != State.ACTIVE) {
+                return REJECTED_TERMINATION;
+            }
+            state = State.CONTROLLED_TERMINATION;
+            termination = controlledTermination;
+            notifyAll();
+            return latestHandle;
+        }
     }
 
     boolean claimControlledTermination(ControlledTermination controlledTermination) {

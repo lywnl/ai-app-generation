@@ -1,5 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
@@ -39,7 +41,7 @@ class VueTurnCancellationCoordinatorTest {
         var lease = new VueBuildSessionManager().open(
                 operation, 9L, "turn-cancel");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-cancel", operation, lease);
+                7L, 9L, "turn-cancel", operation, lease, budgetSession());
         context.markUserCommitted();
         AtomicInteger modelCancellations = new AtomicInteger();
         context.registerModelCancellation(modelCancellations::incrementAndGet);
@@ -82,7 +84,7 @@ class VueTurnCancellationCoordinatorTest {
                 AppOperationLeaseManager.AppOperationType.GENERATE, "turn-blocked");
         var lease = new VueBuildSessionManager().open(operation, 9L, "turn-blocked");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-blocked", operation, lease);
+                7L, 9L, "turn-blocked", operation, lease, budgetSession());
         context.markUserCommitted();
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
@@ -128,7 +130,7 @@ class VueTurnCancellationCoordinatorTest {
                 AppOperationLeaseManager.AppOperationType.GENERATE, "turn-rejected");
         var lease = new VueBuildSessionManager().open(operation, 9L, "turn-rejected");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-rejected", operation, lease);
+                7L, 9L, "turn-rejected", operation, lease, budgetSession());
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
@@ -174,7 +176,7 @@ class VueTurnCancellationCoordinatorTest {
                 AppOperationLeaseManager.AppOperationType.GENERATE, "turn-quiet");
         var lease = new VueBuildSessionManager().open(operation, 9L, "turn-quiet");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-quiet", operation, lease);
+                7L, 9L, "turn-quiet", operation, lease, budgetSession());
         context.markUserCommitted();
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
@@ -206,7 +208,7 @@ class VueTurnCancellationCoordinatorTest {
         var lease = new VueBuildSessionManager().open(
                 operation, 9L, "turn-timeout");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-timeout", operation, lease);
+                7L, 9L, "turn-timeout", operation, lease, budgetSession());
         context.markUserCommitted();
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
@@ -261,7 +263,8 @@ class VueTurnCancellationCoordinatorTest {
         var lease = new VueBuildSessionManager().open(
                 operation, 9L, "turn-timeout-linearized");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-timeout-linearized", operation, lease);
+                7L, 9L, "turn-timeout-linearized", operation, lease,
+                budgetSession());
         AtomicReference<Runnable> background = new AtomicReference<>();
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
 
@@ -286,7 +289,8 @@ class VueTurnCancellationCoordinatorTest {
         var lease = new VueBuildSessionManager().open(
                 operation, 9L, "turn-pre-user-cancel");
         VueTurnContext context = new VueTurnContext(
-                7L, 9L, "turn-pre-user-cancel", operation, lease);
+                7L, 9L, "turn-pre-user-cancel", operation, lease,
+                budgetSession());
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -315,5 +319,8 @@ class VueTurnCancellationCoordinatorTest {
                 .filter(meter -> result.equals(meter.getId().getTag("result")))
                 .mapToDouble(meter -> meter.measure().iterator().next().getValue())
                 .sum();
+    }
+    private FileToolBudgetGuard.Session budgetSession() {
+        return new FileToolBudgetGuard().newSession();
     }
 }

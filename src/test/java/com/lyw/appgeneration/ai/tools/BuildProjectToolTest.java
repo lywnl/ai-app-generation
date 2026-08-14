@@ -18,6 +18,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -52,20 +54,37 @@ class BuildProjectToolTest {
     }
 
     @Test
+    void javaFactoriesMatchSharedFrontendGoldenCases() throws Exception {
+        String fixture = Files.readString(Path.of(
+                "ai-app-generation-frontend/src/test-fixtures/"
+                        + "vue-build-tool-v1-cases.json"), StandardCharsets.UTF_8);
+        for (Object item : JSONUtil.parseArray(fixture)) {
+            JSONObject entry = JSONUtil.parseObj(item);
+            BuildProjectToolResult expected = goldenFactory(entry.getStr("name"));
+            BuildProjectToolResult actual = BuildProjectProtocolSupport.parse(
+                    JSONUtil.toJsonStr(entry.getJSONObject("raw")));
+
+            assertEquals(expected, actual, entry.getStr("name"));
+        }
+    }
+
+    @Test
     void mapsCompletedAttemptsToStableRepairPolicyAndStopsOnThirdFailure() {
         VueProjectBuilder builder = mock(VueProjectBuilder.class);
         when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
-                .thenReturn(codeFailure(), dependencyFailure(), infrastructureFailure());
+                .thenReturn(codeFailure(), codeFailure(), infrastructureFailure());
         Harness harness = harness(builder);
         try (harness) {
             JSONObject first = invoke(harness);
             assertCompletedFailure(first, 1, "REPAIR", true, false, false);
 
+            harness.lease.recordSuccessfulMutation();
             JSONObject second = invoke(harness);
-            assertCompletedFailure(second, 2, "FINAL_DIAGNOSIS", false, true, false);
+            assertCompletedFailure(second, 2, "FINAL_DIAGNOSIS", true, true, false);
 
+            harness.lease.recordSuccessfulMutation();
             JSONObject third = invoke(harness);
-            assertCompletedFailure(third, 3, "STOP", false, true, true);
+            assertCompletedFailure(third, 3, "STOP", false, false, true);
             assertEquals("抱歉，系统遇到了一些问题，请您稍后重试修复",
                     third.getStr("finalResponse"));
 
@@ -78,6 +97,31 @@ class BuildProjectToolTest {
     }
 
     @Test
+    void codeFailureRequiresNewAppliedMutationBeforeNextBuild() {
+        VueProjectBuilder builder = mock(VueProjectBuilder.class);
+        when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
+                .thenReturn(codeFailure());
+        Harness harness = harness(builder);
+        try (harness) {
+            assertCompletedFailure(invoke(harness), 1, "REPAIR", true, false, false);
+
+            JSONObject rejected = invoke(harness);
+
+            assertEquals("REJECTED", rejected.getStr("invocationStatus"));
+            assertNull(rejected.get("success"));
+            assertNull(rejected.get("attempt"));
+            assertEquals("REPAIR", rejected.getStr("nextAction"));
+            assertFalse(rejected.getBool("repairable"));
+            assertFalse(rejected.getBool("reflectionRequired"));
+            assertFalse(rejected.getBool("terminateToolLoop"));
+            assertNull(rejected.get("finalResponse"));
+            assertEquals(1, harness.lease.snapshot().buildAttempt());
+            verify(builder, org.mockito.Mockito.times(1))
+                    .buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class));
+        }
+    }
+
+    @Test
     void committedBuildResultRecordsOneVueAttemptMetricWithoutChangingToolResult() {
         VueProjectBuilder builder = mock(VueProjectBuilder.class);
         when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
@@ -85,7 +129,7 @@ class BuildProjectToolTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         VueBuildRepairMetricsCollector metrics =
                 new VueBuildRepairMetricsCollector(registry);
-        Harness harness = harness(builder, new FileToolExecutionScopeManager(), metrics);
+        Harness harness = harness(builder, scopeManager(), metrics);
 
         try (harness) {
             JSONObject result = invoke(harness);
@@ -171,7 +215,7 @@ class BuildProjectToolTest {
             assertProtocolRejection(missing);
 
             String mismatched = harness.scopeManager.callInScope(
-                    harness.scope,
+                    harness.scope, "buildProject",
                     () -> harness.tool.buildProject(APP_ID + 1));
             assertProtocolRejection(JSONUtil.parseObj(mismatched));
             verify(builder, never()).buildProjectDetailed(any(), any());
@@ -183,7 +227,8 @@ class BuildProjectToolTest {
         VueProjectBuilder builder = mock(VueProjectBuilder.class);
         Harness harness = harness(builder);
         try (harness) {
-            String raw = harness.scopeManager.callInScope(harness.scope, () -> {
+            String raw = harness.scopeManager.callInScope(
+                    harness.scope, "buildProject", () -> {
                 harness.lease.cancel();
                 return harness.tool.buildProject(APP_ID);
             });
@@ -291,7 +336,7 @@ class BuildProjectToolTest {
     void stableMarkdownNeverCopiesErrorSummary() {
         BuildProjectTool tool = new BuildProjectTool(
                 mock(VueProjectBuilder.class), new BuildErrorSanitizer(),
-                new FileToolExecutionScopeManager(),
+                scopeManager(),
                 new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()));
         BuildProjectToolResult result = BuildProjectToolResult.completedFailure(
                 1, BuildStage.NPM_BUILD, VueBuildFailureKind.CODE,
@@ -309,7 +354,7 @@ class BuildProjectToolTest {
     void stableMarkdownDistinguishesRetryBuildFromCodeRepair() {
         BuildProjectTool tool = new BuildProjectTool(
                 mock(VueProjectBuilder.class), new BuildErrorSanitizer(),
-                new FileToolExecutionScopeManager(),
+                scopeManager(),
                 new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()));
         BuildProjectToolResult result = BuildProjectToolResult.completedFailure(
                 1, BuildStage.NPM_INSTALL, VueBuildFailureKind.DEPENDENCY,
@@ -384,7 +429,40 @@ class BuildProjectToolTest {
 
     private JSONObject invoke(Harness harness) {
         return JSONUtil.parseObj(harness.scopeManager.callInScope(
-                harness.scope, () -> harness.tool.buildProject(APP_ID)));
+                harness.scope, "buildProject",
+                () -> harness.tool.buildProject(APP_ID)));
+    }
+
+    private BuildProjectToolResult goldenFactory(String name) {
+        return switch (name) {
+            case "构建成功" -> BuildProjectToolResult.completedSuccess(1);
+            case "第1次代码失败" -> BuildProjectToolResult.completedFailure(
+                    1, BuildStage.NPM_BUILD, VueBuildFailureKind.CODE,
+                    false, "TypeScript 编译失败");
+            case "第1次非代码失败" -> BuildProjectToolResult.completedFailure(
+                    1, BuildStage.NPM_INSTALL, VueBuildFailureKind.DEPENDENCY,
+                    false, "依赖安装失败");
+            case "第2次代码失败" -> BuildProjectToolResult.completedFailure(
+                    2, BuildStage.NPM_BUILD, VueBuildFailureKind.CODE,
+                    false, "TypeScript 编译仍失败");
+            case "第2次非代码失败" -> BuildProjectToolResult.completedFailure(
+                    2, BuildStage.VALIDATION, VueBuildFailureKind.INFRASTRUCTURE,
+                    true, "构建环境超时");
+            case "第3次失败" -> BuildProjectToolResult.completedFailure(
+                    3, BuildStage.NPM_BUILD, VueBuildFailureKind.CODE,
+                    false, "最终构建仍失败");
+            case "构建进行中" -> BuildProjectToolResult.buildInProgress();
+            case "非终止拒绝" -> BuildProjectToolResult.mutationRequired(
+                    "尚未检测到新的有效代码修改，请先修复构建错误后再构建");
+            case "终止拒绝" -> BuildProjectToolResult.rejected(
+                    "PROTOCOL_ERROR: 当前构建回合不能继续构建");
+            case "预留前取消" -> BuildProjectToolResult.cancelled(
+                    null, null, "构建回合已取消");
+            case "预留后取消" -> BuildProjectToolResult.cancelled(
+                    2, BuildStage.NPM_BUILD, "构建已取消");
+            default -> throw new IllegalArgumentException(
+                    "未知构建协议 golden case: " + name);
+        };
     }
 
     private void assertCompletedFailure(
@@ -426,8 +504,12 @@ class BuildProjectToolTest {
     private Harness harness(
             VueProjectBuilder builder,
             java.util.function.BiFunction<Path, BuildResult, String> sanitizer) {
-        return harness(builder, new FileToolExecutionScopeManager(),
+        return harness(builder, scopeManager(),
                 new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()), sanitizer);
+    }
+
+    private FileToolExecutionScopeManager scopeManager() {
+        return new FileToolExecutionScopeManager(new FileToolBudgetGuard());
     }
 
     private Harness harness(

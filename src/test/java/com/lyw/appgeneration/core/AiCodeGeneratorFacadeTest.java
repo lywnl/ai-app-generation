@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
@@ -40,14 +41,19 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -100,7 +106,7 @@ class AiCodeGeneratorFacadeTest {
     @BeforeEach
     void setUp() {
         properties = new RagProperties();
-        scopeManager = new FileToolExecutionScopeManager();
+        scopeManager = new FileToolExecutionScopeManager(new FileToolBudgetGuard());
         facade = new AiCodeGeneratorFacade();
         ReflectionTestUtils.setField(facade, "aiGeneratorServiceFactory", serviceFactory);
         ReflectionTestUtils.setField(facade, "imageCollectionService", imageCollectionService);
@@ -218,7 +224,7 @@ class AiCodeGeneratorFacadeTest {
     @ParameterizedTest
     @EnumSource(value = ToolLoopTerminationProtocol.ControlledTerminationReason.class,
             names = {"CANCELLED", "PROTOCOL_ERROR", "LOOP_LIMIT_EXCEEDED",
-                    "EVALUATION_COMPLETED"})
+                    "RESOURCE_LIMIT_EXCEEDED", "EVALUATION_COMPLETED"})
     void onlineNonSuccessfulControlledTerminationFailsFlux(
             ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
         OnlineControlledTokenStream stream = new OnlineControlledTokenStream(reason);
@@ -263,7 +269,8 @@ class AiCodeGeneratorFacadeTest {
                 AppOperationLeaseManager.AppOperationType.GENERATE, "turn-online");
         var lease = sessionManager.open(operation, 9L, "turn-online");
         VueTurnContext context = new VueTurnContext(
-                APP_ID, 9L, "turn-online", operation, lease);
+                APP_ID, 9L, "turn-online", operation, lease,
+                new FileToolBudgetGuard().newSession());
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, false, context).then().block());
@@ -272,6 +279,137 @@ class AiCodeGeneratorFacadeTest {
                 stream.observedScopeType);
         assertEquals("turn-online", stream.observedScope.ownerToken());
         assertTrue(context.controlledTermination().isEmpty());
+        context.closeResources();
+    }
+
+    @Test
+    void onlineStreamingMutationStopsBeforeBroadcastLimitAndCompletesToolCard() {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(4);
+        guard.setMaxCumulativeMutationCodePoints(6);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(4);
+        guard.setMaxReadDirCodePoints(4);
+        scopeManager = new FileToolExecutionScopeManager(guard);
+        ReflectionTestUtils.setField(
+                facade, "fileToolExecutionScopeManager", scopeManager);
+        ResourceLimitedTokenStream stream = new ResourceLimitedTokenStream();
+        properties.setEnabled(false);
+        when(serviceFactory.getAiCodeGeneratorService(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT)).thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-resource-limit");
+        var lease = sessionManager.open(operation, 9L, "turn-resource-limit");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, 9L, "turn-resource-limit", operation, lease,
+                guard.newSession());
+
+        List<String> output = new CopyOnWriteArrayList<>();
+        RuntimeException error = assertThrows(RuntimeException.class, () ->
+                facade.generateVueProjectStream(
+                                RAW_QUERY, APP_ID, false, context)
+                        .doOnNext(output::add).then().block());
+
+        assertTrue(error instanceof AiCodeGeneratorFacade
+                .OnlineControlledTerminationException);
+        assertEquals(ToolLoopTerminationProtocol.ControlledTerminationReason
+                        .RESOURCE_LIMIT_EXCEEDED,
+                ((AiCodeGeneratorFacade.OnlineControlledTerminationException)
+                        error).reason());
+        String all = String.join("\n", output);
+        assertFalse(all.contains("A😀BCD"), all);
+        assertTrue(all.contains("A😀BC"), all);
+        assertTrue(all.contains("RESOURCE_LIMIT_EXCEEDED"), all);
+        assertEquals(1, stream.resourceTerminations.get());
+        assertEquals(1, stream.cancellations.get());
+        context.closeResources();
+    }
+
+    @Test
+    void modifyFile旧内容必须在完整值进入SSE前受预算终止() {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(4);
+        guard.setMaxCumulativeMutationCodePoints(6);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(4);
+        guard.setMaxReadDirCodePoints(4);
+        scopeManager = new FileToolExecutionScopeManager(guard);
+        ReflectionTestUtils.setField(
+                facade, "fileToolExecutionScopeManager", scopeManager);
+        ResourceLimitedTokenStream stream = new ResourceLimitedTokenStream(
+                "modifyFile",
+                "{\"relativeFilePath\":\"src/App.vue\","
+                        + "\"oldContent\":\"A😀BCD\",\"newContent\":\"X\"}");
+        properties.setEnabled(false);
+        when(serviceFactory.getAiCodeGeneratorService(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT)).thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-old-content-limit");
+        var lease = sessionManager.open(
+                operation, 9L, "turn-old-content-limit");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, 9L, "turn-old-content-limit", operation, lease,
+                guard.newSession());
+
+        List<String> output = new CopyOnWriteArrayList<>();
+        RuntimeException error = assertThrows(RuntimeException.class, () ->
+                facade.generateVueProjectStream(
+                                RAW_QUERY, APP_ID, false, context)
+                        .doOnNext(output::add).then().block());
+
+        assertTrue(error instanceof AiCodeGeneratorFacade
+                .OnlineControlledTerminationException);
+        String all = String.join("\n", output);
+        assertFalse(all.contains("A😀BCD"), all);
+        assertTrue(all.contains("A😀BC"), all);
+        assertTrue(all.contains("RESOURCE_LIMIT_EXCEEDED"), all);
+        assertEquals(1, stream.resourceTerminations.get());
+        assertEquals(1, stream.cancellations.get());
+        assertEquals(1, output.stream()
+                .filter(message -> message.contains("\"type\":\"tool_executed\""))
+                .count());
+        context.closeResources();
+    }
+
+    @Test
+    void executedResourceLimitResultRedactsOriginalArgumentsFromSse() {
+        ExecutedResourceLimitTokenStream stream =
+                new ExecutedResourceLimitTokenStream();
+        properties.setEnabled(false);
+        when(serviceFactory.getAiCodeGeneratorService(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT)).thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-executed-resource-limit");
+        var lease = sessionManager.open(
+                operation, 9L, "turn-executed-resource-limit");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, 9L, "turn-executed-resource-limit", operation, lease,
+                new FileToolBudgetGuard().newSession());
+
+        List<String> output = new CopyOnWriteArrayList<>();
+        assertThrows(RuntimeException.class, () -> facade.generateVueProjectStream(
+                        RAW_QUERY, APP_ID, false, context)
+                .doOnNext(output::add).then().block());
+
+        String all = String.join("\n", output);
+        assertFalse(all.contains(ExecutedResourceLimitTokenStream.SECRET), all);
+        assertTrue(all.contains("RESOURCE_LIMIT_EXCEEDED"), all);
+        assertTrue(all.contains("\"arguments\":\"{}\""), all);
         context.closeResources();
     }
 
@@ -407,10 +545,10 @@ class AiCodeGeneratorFacadeTest {
 
         assertEquals(context, generation.context());
         verify(imageCollectionService, never()).enhancePrompt(any());
-        verify(evaluationGeneratorService).generate(APP_ID, "评测生成提示词");
         verify(serviceFactory, never()).getAiCodeGeneratorService(
                 APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         generation.stream().then().block();
+        verify(evaluationGeneratorService).generate(APP_ID, "评测生成提示词");
         assertEquals(FileToolExecutionScopeManager.ScopeType.EVALUATION,
                 evaluationStream.observedScopeType);
         assertThrows(FileToolExecutionScopeManager.ScopeViolationException.class,
@@ -529,6 +667,44 @@ class AiCodeGeneratorFacadeTest {
         assertEquals(0, firstStream.staleActions.get());
         assertEquals(1, secondStream.staleActions.get(),
                 "第二个 scope 关闭前只应执行一次显式验证动作");
+    }
+
+    @Test
+    void sameEvaluationColdFluxCreatesIndependentResourcesForEverySubscription() {
+        CapturingTokenStream firstStream = new CapturingTokenStream(
+                CapturingTokenStream.Terminal.COMPLETE, scopeManager);
+        CapturingTokenStream secondStream = new CapturingTokenStream(
+                CapturingTokenStream.Terminal.COMPLETE, scopeManager);
+        properties.setEnabled(true);
+        properties.getHybrid().setEnabled(true);
+        VueRagContext context = context("evaluation-skeleton");
+        when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
+        when(promptAssembler.assembleVueProject(RAW_QUERY, context))
+                .thenReturn("评测生成提示词");
+        when(serviceFactory.getVueEvaluationCodeGeneratorService(APP_ID))
+                .thenReturn(evaluationGeneratorService);
+        when(evaluationGeneratorService.generate(APP_ID, "评测生成提示词"))
+                .thenReturn(firstStream, secondStream);
+
+        AiCodeGeneratorFacade.VueProjectGeneration generation =
+                facade.generateVueProjectForEvaluation(RAW_QUERY, APP_ID);
+
+        verify(evaluationGeneratorService, never()).generate(anyLong(), anyString());
+        generation.stream().then().block();
+        generation.stream().then().block();
+
+        verify(evaluationGeneratorService, times(2))
+                .generate(APP_ID, "评测生成提示词");
+        assertNotSame(firstStream.guard, secondStream.guard);
+        assertNotSame(firstStream.observedScope, secondStream.observedScope);
+        assertNotSame(firstStream.observedBudgetSession,
+                secondStream.observedBudgetSession);
+        assertNotEquals(firstStream.observedScope.ownerToken(),
+                secondStream.observedScope.ownerToken());
+        assertThrows(FileToolExecutionScopeManager.ScopeViolationException.class,
+                firstStream::executeCapturedScopeAgain);
+        assertThrows(FileToolExecutionScopeManager.ScopeViolationException.class,
+                secondStream::executeCapturedScopeAgain);
     }
 
     @Test
@@ -654,6 +830,7 @@ class AiCodeGeneratorFacadeTest {
                 case BUILD_FAILED ->
                         "抱歉，系统遇到了一些问题，请您稍后重试修复";
                 case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
+                        RESOURCE_LIMIT_EXCEEDED,
                         EVALUATION_COMPLETED -> null;
             };
         }
@@ -735,6 +912,174 @@ class AiCodeGeneratorFacadeTest {
             } else {
                 errorHandler.accept(failure);
             }
+        }
+    }
+
+    private static final class ResourceLimitedTokenStream implements TokenStream {
+
+        private final AtomicInteger resourceTerminations = new AtomicInteger();
+        private final AtomicInteger cancellations = new AtomicInteger();
+        private final String toolName;
+        private final String arguments;
+        private BiConsumer<Integer,
+                dev.langchain4j.agent.tool.ToolExecutionRequest> partialHandler;
+        private Consumer<ToolLoopTerminationProtocol.ControlledTermination>
+                controlledHandler;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeHandler;
+
+        private ResourceLimitedTokenStream() {
+            this("writeFile", "{\"relativeFilePath\":\"src/App.vue\","
+                    + "\"content\":\"A😀BCD\"}");
+        }
+
+        private ResourceLimitedTokenStream(String toolName, String arguments) {
+            this.toolName = toolName;
+            this.arguments = arguments;
+        }
+
+        @Override
+        public TokenStream onPartialResponse(Consumer<String> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            partialHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            completeHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onError(Consumer<Throwable> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onControlledTermination(
+                Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
+            controlledHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream requestControlledTermination(
+                ToolLoopTerminationProtocol.ControlledTermination termination) {
+            resourceTerminations.incrementAndGet();
+            cancel();
+            controlledHandler.accept(termination);
+            return this;
+        }
+
+        @Override
+        public void cancel() {
+            cancellations.incrementAndGet();
+        }
+
+        @Override
+        public TokenStream ignoreErrors() {
+            return this;
+        }
+
+        @Override
+        public void start() {
+            partialHandler.accept(0,
+                    dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                            .id("tool-large")
+                            .name(toolName)
+                            .arguments(arguments)
+                            .build());
+            if (resourceTerminations.get() == 0) {
+                completeHandler.accept(null);
+            }
+        }
+    }
+
+    private static final class ExecutedResourceLimitTokenStream
+            implements TokenStream {
+
+        private static final String SECRET = "绝不能进入SSE的完整超限代码";
+        private Consumer<dev.langchain4j.service.tool.ToolExecution> toolHandler;
+        private Consumer<ToolLoopTerminationProtocol.ControlledTermination>
+                controlledHandler;
+
+        @Override public TokenStream onPartialResponse(Consumer<String> handler) { return this; }
+        @Override public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer, dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer, dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) { return this; }
+        @Override public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            toolHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            return this;
+        }
+        @Override public TokenStream onError(Consumer<Throwable> handler) { return this; }
+        @Override public TokenStream onControlledTermination(
+                Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
+            controlledHandler = handler;
+            return this;
+        }
+        @Override public TokenStream ignoreErrors() { return this; }
+
+        @Override
+        public void start() {
+            var request = dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                    .id("executed-large")
+                    .name("writeFile")
+                    .arguments("{\"content\":\"" + SECRET + "\"}")
+                    .build();
+            String result = """
+                    {"protocol":"file-tool/v1","operation":"writeFile",\
+                    "status":"REJECTED","relativePath":null,"changed":false,\
+                    "message":"工具内容超过本轮资源上限",\
+                    "failureReason":"RESOURCE_LIMIT_EXCEEDED","content":null}
+                    """;
+            toolHandler.accept(dev.langchain4j.service.tool.ToolExecution.builder()
+                    .request(request).result(result).build());
+        }
+
+        @Override
+        public TokenStream requestControlledTermination(
+                ToolLoopTerminationProtocol.ControlledTermination termination) {
+            controlledHandler.accept(termination);
+            return this;
         }
     }
 
@@ -851,6 +1196,7 @@ class AiCodeGeneratorFacadeTest {
                 controlledTerminationHandler;
         private FileToolExecutionScopeManager.ScopeType observedScopeType;
         private FileToolExecutionScopeManager.FileToolScope observedScope;
+        private FileToolBudgetGuard.Session observedBudgetSession;
         private ToolLoopTerminationProtocol.ControlledTermination observedTermination;
 
         private CapturingTokenStream(
@@ -912,6 +1258,7 @@ class AiCodeGeneratorFacadeTest {
                         guard.execute(toolName, APP_ID, () -> {
                     observedScope = scopeManager.requireCurrent(APP_ID, toolName);
                     observedScopeType = observedScope.type();
+                    observedBudgetSession = observedScope.budgetSession();
                     return terminal == Terminal.CONTROLLED
                             ? "{\"protocol\":\"file-tool/v1\",\"operation\":\"exit\","
                             + "\"status\":\"APPLIED\",\"relativePath\":null,"
@@ -948,7 +1295,7 @@ class AiCodeGeneratorFacadeTest {
         }
 
         private void executeCapturedScopeAgain() {
-            scopeManager.callInScope(observedScope, () -> {
+            scopeManager.callInScope(observedScope, "writeFile", () -> {
                 staleActions.incrementAndGet();
                 scopeManager.requireCurrent(APP_ID, "writeFile");
                 return "{}";

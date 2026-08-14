@@ -35,7 +35,14 @@ public class FileDeleteTool extends BaseTool {
             @P("文件的相对路径") String relativeFilePath,
             @ToolMemoryId Long appId) {
         try {
-            scopeManager.requireCurrent(appId == null ? Long.MIN_VALUE : appId, getToolName());
+            FileToolExecutionScopeManager.FileToolScope scope =
+                    scopeManager.requireCurrent(
+                            appId == null ? Long.MIN_VALUE : appId, getToolName());
+            String policyRejection = scopeManager.rejectForbiddenMutation(
+                    scope, getToolName(), relativeFilePath);
+            if (policyRejection != null) {
+                return policyRejection;
+            }
             Path path = projectPathResolver.resolveExisting(appId, relativeFilePath, false);
             if (!Files.exists(path)) {
                 return result(FileToolResult.notFound(

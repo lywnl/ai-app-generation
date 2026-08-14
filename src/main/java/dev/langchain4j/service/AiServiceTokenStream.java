@@ -145,6 +145,13 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream requestControlledTermination(
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        requestController.terminate(termination);
+        return this;
+    }
+
+    @Override
     public void start() {
         validateConfiguration();
 

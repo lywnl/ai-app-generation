@@ -77,6 +77,12 @@ public final class VueBuildSessionManager {
             return session.beginBuild();
         }
 
+        /** 记录一次已经真实落盘的文件变更，并返回本回合最新版本号。 */
+        public long recordSuccessfulMutation() {
+            ensureOpen();
+            return session.recordSuccessfulMutation();
+        }
+
         public VueBuildSnapshot recordSuccess(
                 BuildAttemptTicket ticket, BuildResult result) {
             ensureOpen();
@@ -148,9 +154,12 @@ public final class VueBuildSessionManager {
         private boolean cancellationRegistered;
         private boolean completed;
 
-        private BuildAttemptTicket(Session owner, int attempt) {
+        private final long mutationRevision;
+
+        private BuildAttemptTicket(Session owner, int attempt, long mutationRevision) {
             this.owner = owner;
             this.attempt = attempt;
+            this.mutationRevision = mutationRevision;
         }
 
         public int attempt() {
@@ -204,7 +213,8 @@ public final class VueBuildSessionManager {
             VueBuildPhase phase,
             int buildAttempt,
             VueBuildFailureKind failureKind,
-            boolean timedOut) {
+            boolean timedOut,
+            long mutationRevision) {
     }
 
     /** 同一回合已有真实构建占用。 */
@@ -212,6 +222,14 @@ public final class VueBuildSessionManager {
 
         private BuildInProgressException() {
             super("当前 Vue 回合已有构建正在执行");
+        }
+    }
+
+    /** CODE 构建失败后尚无新文件变更。 */
+    public static final class BuildMutationRequiredException extends IllegalStateException {
+
+        private BuildMutationRequiredException() {
+            super("尚未检测到新的有效代码修改，请先修复构建错误后再构建");
         }
     }
 
@@ -225,6 +243,8 @@ public final class VueBuildSessionManager {
         private int buildAttempt;
         private VueBuildFailureKind failureKind;
         private boolean timedOut;
+        private long mutationRevision;
+        private long failedBuildMutationRevision = -1L;
         private BuildAttemptTicket activeTicket;
         private CancellationRegistration operationCancellation;
         private CancellationRegistration modelCancellation;
@@ -249,7 +269,7 @@ public final class VueBuildSessionManager {
 
         private synchronized boolean canBuild() {
             return !closed && !isTerminal() && buildAttempt < MAX_BUILD_ATTEMPTS
-                    && activeTicket == null;
+                    && activeTicket == null && !requiresMutation();
         }
 
         private synchronized BuildAttemptTicket beginBuild() {
@@ -260,11 +280,24 @@ public final class VueBuildSessionManager {
             if (activeTicket != null) {
                 throw new BuildInProgressException();
             }
+            if (requiresMutation()) {
+                throw new BuildMutationRequiredException();
+            }
             buildAttempt++;
             // 新构建票据开始后，上一尝试的超时事实不再代表当前尝试。
             timedOut = false;
-            activeTicket = new BuildAttemptTicket(this, buildAttempt);
+            activeTicket = new BuildAttemptTicket(
+                    this, buildAttempt, mutationRevision);
             return activeTicket;
+        }
+
+        private synchronized long recordSuccessfulMutation() {
+            ensureOpen();
+            if (isTerminal()) {
+                throw new IllegalStateException("当前 Vue 回合已经终止");
+            }
+            mutationRevision++;
+            return mutationRevision;
         }
 
         private synchronized VueBuildSnapshot recordSuccess(
@@ -296,8 +329,9 @@ public final class VueBuildSessionManager {
                 return snapshotUnsafe();
             }
             failureKind = classifyFailure(result);
+            failedBuildMutationRevision = ticket.mutationRevision;
             timedOut = result.timedOut();
-            phase = failurePhase(ticket.attempt);
+            phase = failurePhase(ticket.attempt, failureKind);
             return snapshotUnsafe();
         }
 
@@ -335,8 +369,9 @@ public final class VueBuildSessionManager {
                 return snapshotUnsafe();
             }
             failureKind = classifyFailure(result);
+            failedBuildMutationRevision = ticket.mutationRevision;
             timedOut = result.timedOut();
-            phase = failurePhase(ticket.attempt);
+            phase = failurePhase(ticket.attempt, failureKind);
             return snapshotUnsafe();
         }
 
@@ -422,8 +457,9 @@ public final class VueBuildSessionManager {
             }
             if (!ticket.completed && !isTerminal()) {
                 failureKind = VueBuildFailureKind.INFRASTRUCTURE;
+                failedBuildMutationRevision = ticket.mutationRevision;
                 timedOut = false;
-                phase = failurePhase(ticket.attempt);
+                phase = failurePhase(ticket.attempt, failureKind);
             }
             ticket.closeCancellationRegistration();
             activeTicket = null;
@@ -456,7 +492,7 @@ public final class VueBuildSessionManager {
         private VueBuildSnapshot snapshotUnsafe() {
             return new VueBuildSnapshot(
                     operationLease.appId(), userId, turnId,
-                    phase, buildAttempt, failureKind, timedOut);
+                    phase, buildAttempt, failureKind, timedOut, mutationRevision);
         }
 
         private boolean isTerminal() {
@@ -473,9 +509,16 @@ public final class VueBuildSessionManager {
             }
         }
 
-        private static VueBuildPhase failurePhase(int attempt) {
+        private boolean requiresMutation() {
+            return failureKind == VueBuildFailureKind.CODE
+                    && mutationRevision <= failedBuildMutationRevision;
+        }
+
+        private static VueBuildPhase failurePhase(
+                int attempt, VueBuildFailureKind failureKind) {
             return switch (attempt) {
-                case 1 -> VueBuildPhase.REPAIRING;
+                case 1 -> failureKind == VueBuildFailureKind.CODE
+                        ? VueBuildPhase.REPAIRING : VueBuildPhase.RETRYING;
                 case 2 -> VueBuildPhase.FINAL_DIAGNOSIS;
                 case 3 -> VueBuildPhase.FAILED;
                 default -> throw new IllegalStateException("构建次数不能超过 3 次");

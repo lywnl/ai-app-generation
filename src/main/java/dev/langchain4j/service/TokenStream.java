@@ -30,6 +30,12 @@ public interface TokenStream {
         return this;
     }
 
+    /** 从流式适配层触发框架级受控终止，不能降级为普通取消。 */
+    default TokenStream requestControlledTermination(
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        return this;
+    }
+
     /**
      * The provided consumer will be invoked every time a new partial response (usually a single token)
      * from a language model is available.

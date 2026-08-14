@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.handler;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.tools.BaseTool;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
@@ -80,6 +81,46 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
+    void canonicalLimitStopsBroadcastAndPersistsOnlyResourceLimitOutcome() {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(8);
+        guard.setMaxCumulativeMutationCodePoints(16);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(8);
+        guard.setMaxReadDirCodePoints(8);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-canonical-limit",
+                VueBuildPhase.GENERATING, guard.newSession());
+        context.markUserCommitted();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                    requested.outcome());
+            assertTrue(requested.canonicalAiText().endsWith(
+                    JsonMessageStreamHandler.RESOURCE_LIMIT_MESSAGE));
+            assertTrue(FileToolBudgetGuard.codePointCount(
+                    requested.canonicalAiText()) <= 64);
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        String oversized = "A".repeat(80);
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(
+                        "{\"type\":\"ai_response\",\"data\":\""
+                                + oversized + "\"}"), context)
+                .collectList().block();
+
+        String visible = output.stream()
+                .filter(GenerationStreamEvent.Content.class::isInstance)
+                .map(JsonMessageStreamHandlerTest::contentText)
+                .reduce("", String::concat);
+        assertFalse(visible.contains(oversized));
+        assertTrue(FileToolBudgetGuard.codePointCount(visible) < 64);
+        assertEquals(ToolLoopTerminationProtocol.ControlledTerminationReason
+                        .RESOURCE_LIMIT_EXCEEDED,
+                context.controlledTermination().orElseThrow().reason());
+    }
+
+    @Test
     void toolExecutedKeepsRawResultInRealtimeEventButCanonicalUsesStableMarkdown() {
         VueTurnContext context = context("turn-tool", VueBuildPhase.GENERATING);
         BaseTool tool = mock(BaseTool.class);
@@ -117,10 +158,13 @@ class JsonMessageStreamHandlerTest {
         VueTurnContext context = context("turn-read", VueBuildPhase.GENERATING);
         BaseTool tool = mock(BaseTool.class);
         when(toolManager.getTool(toolName)).thenReturn(tool);
+        String pathArgument = "readDir".equals(toolName)
+                ? "relativeDirPath" : "relativeFilePath";
         String rawResult = "{\"protocol\":\"file-tool/v1\","
                 + "\"operation\":\"" + toolName + "\",\"status\":\"APPLIED\","
                 + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
-                + "\"message\":\"已读取\",\"content\":\"绝密读取正文\"}";
+                + "\"message\":\"已读取\",\"failureReason\":null,"
+                + "\"content\":\"绝密读取正文\"}";
         when(tool.generateToolExecutedResult(any(JSONObject.class), eq(rawResult)))
                 .thenReturn("[工具调用] 读取文件 src/App.vue（已应用）");
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
@@ -132,7 +176,8 @@ class JsonMessageStreamHandlerTest {
                 .set("type", "tool_executed")
                 .set("id", "tool-read")
                 .set("name", toolName)
-                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
+                .set("arguments", "{\"" + pathArgument
+                        + "\":\"src/App.vue\"}")
                 .set("result", rawResult));
 
         List<GenerationStreamEvent> output = handler.handle(Flux.just(event), context)
@@ -140,7 +185,14 @@ class JsonMessageStreamHandlerTest {
 
         String realtimeEvent = contentText(output.getFirst());
         assertFalse(realtimeEvent.contains("绝密读取正文"), realtimeEvent);
-        assertTrue(realtimeEvent.contains("\"result\":null"), realtimeEvent);
+        JSONObject clientEvent = JSONUtil.parseObj(realtimeEvent);
+        JSONObject clientResult = JSONUtil.parseObj(clientEvent.getStr("result"));
+        assertEquals("file-tool/v1", clientResult.getStr("protocol"));
+        assertEquals(toolName, clientResult.getStr("operation"));
+        assertEquals("APPLIED", clientResult.getStr("status"));
+        assertEquals("src/App.vue", clientResult.getStr("relativePath"));
+        assertTrue(clientResult.containsKey("content"));
+        assertEquals(cn.hutool.json.JSONNull.NULL, clientResult.get("content"));
         verify(tool).generateToolExecutedResult(any(JSONObject.class), eq(rawResult));
     }
 
@@ -274,7 +326,8 @@ class JsonMessageStreamHandlerTest {
         var lease = new VueBuildSessionManager().open(
                 operation, USER_ID, "turn-timeout-rejected");
         VueTurnContext context = new VueTurnContext(
-                APP_ID, USER_ID, "turn-timeout-rejected", operation, lease);
+                APP_ID, USER_ID, "turn-timeout-rejected", operation, lease,
+                new FileToolBudgetGuard().newSession());
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
         Thread callback = Thread.startVirtualThread(() ->
@@ -337,7 +390,7 @@ class JsonMessageStreamHandlerTest {
                 operation, USER_ID, "turn-timeout-rejected-post-user");
         VueTurnContext context = new VueTurnContext(
                 APP_ID, USER_ID, "turn-timeout-rejected-post-user",
-                operation, lease);
+                operation, lease, new FileToolBudgetGuard().newSession());
         context.markUserCommitted();
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);

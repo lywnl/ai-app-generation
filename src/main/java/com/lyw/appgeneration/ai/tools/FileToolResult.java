@@ -11,6 +11,7 @@ public record FileToolResult(
         String relativePath,
         boolean changed,
         String message,
+        String failureReason,
         String content
 ) {
 
@@ -35,6 +36,7 @@ public record FileToolResult(
         }
         validateStatus(operation, status);
         validateChanged(operation, status, changed);
+        validateFailureReason(status, failureReason);
         validateContent(operation, status, content);
     }
 
@@ -42,14 +44,14 @@ public record FileToolResult(
             String operation, String path, boolean changed, String message) {
         return new FileToolResult(
                 PROTOCOL, operation, FileToolStatus.APPLIED,
-                path, changed, message, null);
+                path, changed, message, null, null);
     }
 
     public static FileToolResult readApplied(
             String operation, String path, String message, String content) {
         return new FileToolResult(
                 PROTOCOL, operation, FileToolStatus.APPLIED,
-                path, false, message, content);
+                path, false, message, null, content);
     }
 
     public static FileToolResult noChange(String operation, String path, String message) {
@@ -58,6 +60,13 @@ public record FileToolResult(
 
     public static FileToolResult rejected(String operation, String path, String message) {
         return result(operation, FileToolStatus.REJECTED, path, message);
+    }
+
+    public static FileToolResult resourceLimitExceeded(
+            String operation, String path) {
+        return new FileToolResult(
+                PROTOCOL, operation, FileToolStatus.REJECTED, path, false,
+                "工具内容超过本轮资源上限", "RESOURCE_LIMIT_EXCEEDED", null);
     }
 
     public static FileToolResult notFound(String operation, String path, String message) {
@@ -75,7 +84,7 @@ public record FileToolResult(
     private static FileToolResult result(
             String operation, FileToolStatus status, String path, String message) {
         return new FileToolResult(
-                PROTOCOL, operation, status, path, false, message, null);
+                PROTOCOL, operation, status, path, false, message, null, null);
     }
 
     private static void validateStatus(String operation, FileToolStatus status) {
@@ -107,6 +116,17 @@ public record FileToolResult(
                 && READ_OPERATIONS.contains(operation);
         if (shouldContainContent != (content != null)) {
             throw new IllegalArgumentException("文件工具操作与内容载荷不匹配");
+        }
+    }
+
+    private static void validateFailureReason(
+            FileToolStatus status, String failureReason) {
+        if (failureReason == null) {
+            return;
+        }
+        if (status != FileToolStatus.REJECTED
+                || !"RESOURCE_LIMIT_EXCEEDED".equals(failureReason)) {
+            throw new IllegalArgumentException("文件工具失败原因与状态不匹配");
         }
     }
 

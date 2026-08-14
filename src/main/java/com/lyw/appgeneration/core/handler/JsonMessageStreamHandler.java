@@ -9,6 +9,7 @@ import com.lyw.appgeneration.ai.model.message.StreamMessageTypeEnum;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
@@ -30,15 +31,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 public final class JsonMessageStreamHandler {
 
-    private static final Set<String> READ_TOOLS = Set.of("readFile", "readDir");
+    private static final Set<String> CLIENT_REDACTED_FILE_TOOLS = Set.of(
+            "readFile", "readDir", "writeFile", "modifyFile", "deleteFile");
 
-    static final String SUCCESS_MESSAGE = "项目已生成并构建成功。";
-    static final String BUILD_FAILED_MESSAGE = "抱歉，系统遇到了一些问题，请您稍后重试修复";
-    static final String SYSTEM_ERROR_MESSAGE = "生成过程中遇到系统异常，请稍后重试。";
-    static final String PROTOCOL_MESSAGE = "项目尚未通过真实构建，请重新生成。";
-    static final String SCOPE_PROTOCOL_MESSAGE = "生成状态异常，系统已停止本次生成，请重新发起。";
-    static final String LOOP_LIMIT_MESSAGE = "生成步骤过多，系统已停止本次生成，请稍后重试。";
-    static final String TIMEOUT_MESSAGE = "生成与构建超时，请稍后重试。";
+    static final String SUCCESS_MESSAGE = VueTurnFinalizer.SUCCESS_MESSAGE;
+    static final String BUILD_FAILED_MESSAGE = VueTurnFinalizer.BUILD_FAILED_MESSAGE;
+    static final String SYSTEM_ERROR_MESSAGE = VueTurnFinalizer.SYSTEM_ERROR_MESSAGE;
+    static final String PROTOCOL_MESSAGE = VueTurnFinalizer.PROTOCOL_MESSAGE;
+    static final String SCOPE_PROTOCOL_MESSAGE = VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE;
+    static final String LOOP_LIMIT_MESSAGE = VueTurnFinalizer.LOOP_LIMIT_MESSAGE;
+    static final String TIMEOUT_MESSAGE = VueTurnFinalizer.TIMEOUT_MESSAGE;
+    static final String RESOURCE_LIMIT_MESSAGE = VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE;
+    static final String CANCELLED_MESSAGE = VueTurnFinalizer.CANCELLED_MESSAGE;
+    private static final int TERMINAL_RESERVE_CODE_POINTS =
+            VueTurnFinalizer.terminalReserveCodePoints();
 
     private final ToolManager toolManager;
     private final VueTurnFinalizer finalizer;
@@ -70,11 +76,13 @@ public final class JsonMessageStreamHandler {
     public Flux<GenerationStreamEvent> handle(
             Flux<String> originFlux, VueTurnContext context) {
         return Flux.defer(() -> {
-            StringBuilder canonical = new StringBuilder();
+            FileToolBudgetGuard.CanonicalAccumulator canonical =
+                    context.budgetSession().newCanonicalAccumulator(
+                            TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
-                            Flux.fromIterable(handleJsonMessageChunk(
-                                    chunk, canonical, seenToolIds)))
+                            handleJsonMessageChunk(
+                                    chunk, canonical, seenToolIds, context))
                     .filter(StrUtil::isNotEmpty)
                     .map(GenerationStreamEvent::content);
             AtomicBoolean deadlineReached = new AtomicBoolean();
@@ -83,8 +91,8 @@ public final class JsonMessageStreamHandler {
                     .doOnNext(ignored -> deadlineReached.set(true));
             Flux<GenerationStreamEvent> completed = body.takeUntilOther(deadline)
                     .concatWith(Flux.defer(() -> deadlineReached.get()
-                            ? finalizeTimeout(context, canonical.toString())
-                            : finalizeSignal(context, canonical.toString(), null)));
+                            ? finalizeTimeout(context, canonical.content())
+                            : finalizeSignal(context, canonical.content(), null)));
             return completed
                     .onErrorResume(error -> {
                         if (!context.isUserCommitted()) {
@@ -97,10 +105,10 @@ public final class JsonMessageStreamHandler {
                             return Flux.error(error);
                         }
                         return finalizeSignal(
-                                context, canonical.toString(), error);
+                                context, canonical.content(), error);
                     })
                     .doOnCancel(() -> cancellationCoordinator.requestCancellation(
-                            context, canonical::toString));
+                            context, canonical::content));
         });
     }
 
@@ -155,11 +163,16 @@ public final class JsonMessageStreamHandler {
                     stripUntrustedControlledTerminal(prefix),
                     LOOP_LIMIT_MESSAGE, false);
         }
+        if (reason == ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED) {
+            return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                    stripUntrustedControlledTerminal(prefix),
+                    RESOURCE_LIMIT_MESSAGE, false);
+        }
         if (reason == ControlledTerminationReason.CANCELLED
                 || phase == VueBuildPhase.CANCELLED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.CANCELLED,
                     stripUntrustedControlledTerminal(prefix),
-                    "本次生成已取消。", false);
+                    CANCELLED_MESSAGE, false);
         }
         if (reason == ControlledTerminationReason.PROTOCOL_ERROR
                 || reason == ControlledTerminationReason.EVALUATION_COMPLETED) {
@@ -207,29 +220,33 @@ public final class JsonMessageStreamHandler {
         return stripTrustedTerminal(withoutFailure, SUCCESS_MESSAGE);
     }
 
-    private List<String> handleJsonMessageChunk(
-            String chunk, StringBuilder canonical, Set<String> seenToolIds) {
+    private Flux<String> handleJsonMessageChunk(
+            String chunk, FileToolBudgetGuard.CanonicalAccumulator canonical,
+            Set<String> seenToolIds, VueTurnContext context) {
         StreamMessage streamMessage = JSONUtil.toBean(chunk, StreamMessage.class);
         StreamMessageTypeEnum type = StreamMessageTypeEnum.getEnumByValue(
                 streamMessage.getType());
         if (type == null) {
             log.error("不支持的消息类型: {}", streamMessage.getType());
-            return List.of();
+            return Flux.empty();
         }
         return switch (type) {
             case AI_RESPONSE -> {
                 String data = JSONUtil.toBean(chunk, AiResponseMessage.class).getData();
-                canonical.append(data);
-                yield List.of(data);
+                FileToolBudgetGuard.AppendDecision decision = canonical.append(data);
+                recordResourceLimit(context, decision);
+                yield decision.resourceLimitExceeded()
+                        ? resourceLimitAfter(decision.acceptedPrefix())
+                        : Flux.just(decision.acceptedPrefix());
             }
             case TOOL_REQUEST -> {
                 ToolRequestMessage request = JSONUtil.toBean(
                         chunk, ToolRequestMessage.class);
                 if (request.getId() != null && seenToolIds.add(request.getId())) {
-                    yield List.of(toolManager.getTool(request.getName())
+                    yield Flux.just(toolManager.getTool(request.getName())
                             .generateToolRequestResponse());
                 }
-                yield List.of();
+                yield Flux.empty();
             }
             case TOOL_EXECUTED -> {
                 ToolExecutedMessage executed = JSONUtil.toBean(
@@ -239,22 +256,52 @@ public final class JsonMessageStreamHandler {
                 String markdown = tool.generateToolExecutedResult(
                         arguments, executed.getResult());
                 String output = String.format("\n\n%s\n\n", markdown);
-                canonical.append(output);
-                yield List.of(realtimeToolExecutedChunk(chunk, executed), output);
+                FileToolBudgetGuard.AppendDecision decision = canonical.append(output);
+                recordResourceLimit(context, decision);
+                yield decision.resourceLimitExceeded()
+                        ? Flux.just(realtimeToolExecutedChunk(chunk, executed))
+                        .concatWith(Flux.error(new ResourceLimitExceededException()))
+                        : Flux.just(realtimeToolExecutedChunk(chunk, executed),
+                        decision.acceptedPrefix());
             }
-            case TOOL_ARGUMENT, TOOL_ARGUMENT_DELTA -> List.of(chunk);
-            case TURN_OUTCOME -> List.of();
+            case TOOL_ARGUMENT, TOOL_ARGUMENT_DELTA -> Flux.just(chunk);
+            case TURN_OUTCOME -> Flux.empty();
         };
     }
 
-    /** 读取正文已经返回当前模型，实时事件只保留工具元数据。 */
+    private Flux<String> resourceLimitAfter(String acceptedPrefix) {
+        Flux<String> prefix = acceptedPrefix == null || acceptedPrefix.isEmpty()
+                ? Flux.empty() : Flux.just(acceptedPrefix);
+        return prefix.concatWith(Flux.error(new ResourceLimitExceededException()));
+    }
+
+    private void recordResourceLimit(
+            VueTurnContext context,
+            FileToolBudgetGuard.AppendDecision decision) {
+        if (decision.resourceLimitExceeded()
+                && context.budgetSession().claimResourceLimit()) {
+            context.recordControlledTermination(
+                    new dev.langchain4j.service.ToolLoopTerminationProtocol
+                            .ControlledTermination(
+                            ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED,
+                            null));
+        }
+    }
+
+    private static final class ResourceLimitExceededException
+            extends IllegalStateException {
+
+        private ResourceLimitExceededException() {
+            super("Vue 稳定正文超过本轮资源上限");
+        }
+    }
+
+    /** 模型继续使用原始消息，浏览器只接收脱敏副本。 */
     private String realtimeToolExecutedChunk(
             String rawChunk, ToolExecutedMessage executed) {
-        if (!READ_TOOLS.contains(executed.getName())) {
+        if (!CLIENT_REDACTED_FILE_TOOLS.contains(executed.getName())) {
             return rawChunk;
         }
-        JSONObject realtime = JSONUtil.parseObj(rawChunk);
-        realtime.set("result", cn.hutool.json.JSONNull.NULL);
-        return JSONUtil.toJsonStr(realtime);
+        return JSONUtil.toJsonStr(executed.toClientSafeCopy());
     }
 }

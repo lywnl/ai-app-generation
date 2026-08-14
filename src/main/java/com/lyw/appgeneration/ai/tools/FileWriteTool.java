@@ -41,24 +41,31 @@ public class FileWriteTool extends BaseTool {
             FileToolExecutionScopeManager.FileToolScope scope =
                     scopeManager.requireCurrent(
                             appId == null ? Long.MIN_VALUE : appId, getToolName());
+            String policyRejection = scopeManager.rejectForbiddenMutation(
+                    scope, getToolName(), relativeFilePath);
+            if (policyRejection != null) {
+                return policyRejection;
+            }
             if (content == null) {
                 return result(FileToolResult.failed(
                         getToolName(), relativeFilePath, "文件内容不能为空"));
             }
-            ProjectPathResolver.ResolvedProjectPath resolved =
-                    projectPathResolver.resolveForWrite(appId, relativeFilePath);
-            Path parent = resolved.path().getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
+            try (FileToolBudgetGuard.MutationReservation reservation =
+                         scope.budgetSession().reserveMutation(content, content)) {
+                if (!reservation.accepted()) {
+                    return result(FileToolResult.resourceLimitExceeded(
+                            getToolName(), relativeFilePath));
+                }
+                String output = writeWithinReservation(
+                        scope, appId, relativeFilePath, content);
+                FileToolResult parsed = FileToolProtocolSupport.parse(
+                        output, getToolName(), relativeFilePath);
+                if (parsed.status() == FileToolResult.FileToolStatus.APPLIED
+                        && parsed.changed()) {
+                    reservation.commit();
+                }
+                return output;
             }
-            WriteResult writeResult = appFileStateManager.writeAndRecord(
-                    appId, resolved.stateKey(), content,
-                    () -> Files.isRegularFile(resolved.path())
-                            && Files.readString(resolved.path()).equals(content),
-                    () -> Files.write(resolved.path(),
-                            content.getBytes(StandardCharsets.UTF_8),
-                            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
-            return result(toProtocolResult(scope, resolved.stateKey(), writeResult));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
             return FileToolProtocolSupport.rejected(
                     getToolName(), relativeFilePath, exception);
@@ -70,6 +77,51 @@ public class FileWriteTool extends BaseTool {
             return result(FileToolResult.failed(
                     getToolName(), relativeFilePath, "文件写入失败"));
         }
+    }
+
+    private String writeWithinReservation(
+            FileToolExecutionScopeManager.FileToolScope scope,
+            Long appId, String relativeFilePath, String content)
+            throws ProjectPathResolver.UnsafeProjectPathException, IOException {
+        ProjectPathResolver.ResolvedProjectPath resolved =
+                projectPathResolver.resolveForWrite(appId, relativeFilePath);
+        Path parent = resolved.path().getParent();
+        try {
+            WriteResult writeResult = appFileStateManager.writeAndRecord(
+                    appId, resolved.stateKey(), content,
+                    () -> existingContentMatches(
+                            resolved.path(), content, scope.budgetSession()),
+                    () -> {
+                        if (parent != null) {
+                            Files.createDirectories(parent);
+                        }
+                        Files.write(resolved.path(),
+                                content.getBytes(StandardCharsets.UTF_8),
+                                StandardOpenOption.CREATE,
+                                StandardOpenOption.TRUNCATE_EXISTING);
+                    });
+            return result(toProtocolResult(scope, resolved.stateKey(), writeResult));
+        } catch (ExistingContentLimitExceededException exception) {
+            return result(FileToolResult.resourceLimitExceeded(
+                    getToolName(), relativeFilePath));
+        }
+    }
+
+    private boolean existingContentMatches(
+            Path path, String content, FileToolBudgetGuard.Session session)
+            throws IOException {
+        if (!Files.isRegularFile(path)) {
+            return false;
+        }
+        String existing = FileReadTool.readUtf8WithinBudget(
+                path, session.newSingleFileAccumulator());
+        if (existing == null) {
+            throw new ExistingContentLimitExceededException();
+        }
+        return existing.equals(content);
+    }
+
+    private static final class ExistingContentLimitExceededException extends IOException {
     }
 
     private FileToolResult toProtocolResult(

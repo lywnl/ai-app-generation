@@ -25,5 +25,11 @@ public class ToolRequestMessage extends StreamMessage {
         this.name = toolExecutionRequest.name();
         this.arguments = toolExecutionRequest.arguments();
     }
-}
 
+    public ToolRequestMessage(String id, String name, String arguments) {
+        super(StreamMessageTypeEnum.TOOL_REQUEST.getValue());
+        this.id = id;
+        this.name = name;
+        this.arguments = arguments;
+    }
+}

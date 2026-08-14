@@ -53,8 +53,9 @@ public record BuildProjectToolResult(
             boolean timedOut,
             String errorSummary) {
         BuildNextAction action = failureAction(attempt, failureKind);
-        boolean repairable = attempt == 1 && failureKind == VueBuildFailureKind.CODE;
-        boolean reflectionRequired = attempt >= 2;
+        boolean repairable = attempt < MAX_ATTEMPTS
+                && failureKind == VueBuildFailureKind.CODE;
+        boolean reflectionRequired = attempt == 2;
         boolean terminate = attempt >= MAX_ATTEMPTS;
         return completed(false, attempt, stage, failureKind, timedOut,
                 repairable, reflectionRequired, action, failureMessage(attempt, action),
@@ -66,8 +67,14 @@ public record BuildProjectToolResult(
                 "当前已有构建正在执行", false, null);
     }
 
-    public static BuildProjectToolResult rejected(String message, boolean terminate) {
-        return transientResult(BuildInvocationStatus.REJECTED, message, terminate, null);
+    public static BuildProjectToolResult mutationRequired(String message) {
+        return transientResult(
+                BuildInvocationStatus.REJECTED, message, false, BuildNextAction.REPAIR);
+    }
+
+    public static BuildProjectToolResult rejected(String message) {
+        return transientResult(
+                BuildInvocationStatus.REJECTED, message, true, BuildNextAction.STOP);
     }
 
     public static BuildProjectToolResult cancelled(
@@ -101,10 +108,10 @@ public record BuildProjectToolResult(
             BuildInvocationStatus status,
             String message,
             boolean terminate,
-            String finalResponse) {
+            BuildNextAction nextAction) {
         return new BuildProjectToolResult(PROTOCOL, status, null, null,
-                MAX_ATTEMPTS, null, null, null, false, false, null,
-                message, null, terminate, finalResponse);
+                MAX_ATTEMPTS, null, null, null, false, false, nextAction,
+                message, null, terminate, null);
     }
 
     private static BuildNextAction failureAction(
@@ -169,15 +176,17 @@ public record BuildProjectToolResult(
         }
         if (success != null || attempt != null || stage != null
                 || failureKind != null || timedOut != null || repairable
-                || reflectionRequired || nextAction != null || errorSummary != null) {
+                || reflectionRequired || errorSummary != null) {
             throw new IllegalArgumentException("未完成调用不能伪造构建结果字段");
         }
         if (status == BuildInvocationStatus.BUILD_IN_PROGRESS
-                && (terminateToolLoop || finalResponse != null)) {
+                && (nextAction != null || terminateToolLoop || finalResponse != null)) {
             throw new IllegalArgumentException("构建占用状态不能终止工具循环");
         }
         if (status == BuildInvocationStatus.REJECTED
-                && finalResponse != null) {
+                && (finalResponse != null
+                || terminateToolLoop != (nextAction == BuildNextAction.STOP)
+                || (!terminateToolLoop && nextAction != BuildNextAction.REPAIR))) {
             throw new IllegalArgumentException("拒绝结果的终止字段组合不合法");
         }
     }
@@ -204,9 +213,9 @@ public record BuildProjectToolResult(
             return;
         }
         BuildNextAction expectedAction = failureAction(attempt, failureKind);
-        boolean expectedRepairable = attempt == 1
+        boolean expectedRepairable = attempt < MAX_ATTEMPTS
                 && failureKind == VueBuildFailureKind.CODE;
-        boolean expectedReflection = attempt >= 2;
+        boolean expectedReflection = attempt == 2;
         boolean expectedTerminate = attempt == MAX_ATTEMPTS;
         if (stage == BuildStage.SUCCESS || failureKind == null || errorSummary == null
                 || repairable != expectedRepairable

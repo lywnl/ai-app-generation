@@ -15,6 +15,8 @@ import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
 import com.lyw.appgeneration.ai.parser.ToolRequestStreamParser;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+import com.lyw.appgeneration.ai.tools.ToolStreamingSpec;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
@@ -38,6 +40,8 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.File;
 import java.time.Duration;
@@ -46,7 +50,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
@@ -334,40 +340,95 @@ public class AiCodeGeneratorFacade {
         }
         VueRagContext context = retrieveVueContext(userMessage, true);
         String augmentedMessage = ragPromptAssembler.assembleVueProject(userMessage, context);
-        VueEvaluationCodeGeneratorService generatorService = aiGeneratorServiceFactory
-                .getVueEvaluationCodeGeneratorService(appId);
-        TokenStream tokenStream = generatorService.generate(appId, augmentedMessage);
+        Flux<String> stream = Flux.usingWhen(
+                Mono.fromSupplier(() -> createEvaluationScopeLease(
+                        appId, augmentedMessage)),
+                this::processEvaluationTokenStream,
+                this::cleanupEvaluationScope,
+                (lease, ignored) -> cleanupEvaluationScope(lease),
+                this::cleanupEvaluationScope);
+        return new VueProjectGeneration(context, stream);
+    }
+
+    private EvaluationScopeLease createEvaluationScopeLease(
+            long appId, String augmentedMessage) {
         FileToolExecutionScopeManager.FileToolScope scope =
                 fileToolExecutionScopeManager.evaluation(
                         appId, UUID.randomUUID().toString(), VueToolNames.EVALUATION);
-        ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
-        tokenStream.toolExecutionGuard((toolName, memoryId, action) -> {
-            ToolExecutionGuard.GuardedToolExecution execution = directGuard.execute(
-                    toolName, memoryId,
-                    () -> fileToolExecutionScopeManager.callInScope(scope, action));
-            if (!"exit".equals(toolName)) {
-                return execution;
-            }
-            return new ToolExecutionGuard.GuardedToolExecution(
-                    execution.toolResult(), evaluationExitTermination(execution.toolResult()));
-        });
-        return new VueProjectGeneration(context, processTokenStream(
-                tokenStream,
-                () -> fileToolExecutionScopeManager.revokeEvaluation(scope),
-                () -> {
-                    fileToolExecutionScopeManager.closeEvaluation(scope);
-                    if (!fileToolExecutionScopeManager.awaitEvaluationQuiescence(
-                            scope, EVALUATION_DRAIN_TIMEOUT)) {
-                        log.warn("Vue 评测工具未在撤销期限内静默,appId={},ownerToken={}",
-                                scope.appId(), scope.ownerToken());
-                    }
-                },
+        try {
+            VueEvaluationCodeGeneratorService generatorService = aiGeneratorServiceFactory
+                    .getVueEvaluationCodeGeneratorService(appId);
+            TokenStream tokenStream = generatorService.generate(appId, augmentedMessage);
+            ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
+            ToolExecutionGuard scopedGuard = (toolName, memoryId, action) -> {
+                ToolExecutionGuard.GuardedToolExecution execution = directGuard.execute(
+                        toolName, memoryId,
+                        () -> fileToolExecutionScopeManager.callInScope(
+                                scope, toolName, action));
+                if (!"exit".equals(toolName)) {
+                    return execution;
+                }
+                return new ToolExecutionGuard.GuardedToolExecution(
+                        execution.toolResult(),
+                        evaluationExitTermination(execution.toolResult()));
+            };
+            tokenStream.toolExecutionGuard(scopedGuard);
+            return new EvaluationScopeLease(
+                    scope, tokenStream, scope.budgetSession());
+        } catch (RuntimeException exception) {
+            revokeAndAwaitEvaluation(scope, EVALUATION_DRAIN_TIMEOUT);
+            throw exception;
+        }
+    }
+
+    private Flux<String> processEvaluationTokenStream(EvaluationScopeLease lease) {
+        return processTokenStream(
+                lease.tokenStream(),
+                () -> fileToolExecutionScopeManager.revokeEvaluation(lease.scope()),
+                () -> { },
                 termination -> termination.reason()
                         == ToolLoopTerminationProtocol.ControlledTerminationReason
                         .EVALUATION_COMPLETED
                         ? null
                         : new EvaluationControlledTerminationException(
-                                termination.reason())));
+                                termination.reason()));
+    }
+
+    private Mono<Void> cleanupEvaluationScope(EvaluationScopeLease lease) {
+        return Mono.fromRunnable(() -> revokeAndAwaitEvaluation(
+                        lease.scope(), EVALUATION_DRAIN_TIMEOUT))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
+    }
+
+    private void revokeAndAwaitEvaluation(
+            FileToolExecutionScopeManager.FileToolScope scope,
+            Duration cleanupBudget) {
+        long deadline = System.nanoTime() + cleanupBudget.toNanos();
+        try {
+            fileToolExecutionScopeManager.revokeEvaluation(scope);
+            long remainingNanos = Math.max(0L, deadline - System.nanoTime());
+            if (!fileToolExecutionScopeManager.awaitEvaluationQuiescence(
+                    scope, Duration.ofNanos(remainingNanos))) {
+                log.warn("Vue 评测工具未在撤销期限内静默,appId={},ownerToken={}",
+                        scope.appId(), scope.ownerToken());
+            }
+        } catch (RuntimeException exception) {
+            log.warn("Vue 评测作用域清理失败,appId={},ownerToken={}",
+                    scope.appId(), scope.ownerToken(), exception);
+        }
+    }
+
+    private record EvaluationScopeLease(
+            FileToolExecutionScopeManager.FileToolScope scope,
+            TokenStream tokenStream,
+            FileToolBudgetGuard.Session budgetSession) {
+
+        private EvaluationScopeLease {
+            Objects.requireNonNull(scope, "评测工具作用域不能为空");
+            Objects.requireNonNull(tokenStream, "评测 TokenStream 不能为空");
+            Objects.requireNonNull(budgetSession, "评测预算会话不能为空");
+        }
     }
 
     private VueProjectGeneration prepareVueGeneration(
@@ -428,11 +489,12 @@ public class AiCodeGeneratorFacade {
         FileToolExecutionScopeManager.FileToolScope scope =
                 fileToolExecutionScopeManager.online(
                         context.lease(), context.turnId(), context.appId(),
-                        VueToolNames.ONLINE);
+                        VueToolNames.ONLINE, context.budgetSession());
         ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
         tokenStream.toolExecutionGuard((toolName, memoryId, action) ->
-                fileToolExecutionScopeManager.callInScope(scope,
-                        () -> directGuard.execute(toolName, memoryId, action)));
+                directGuard.execute(toolName, memoryId,
+                        () -> fileToolExecutionScopeManager.callInScope(
+                                scope, toolName, action)));
         return Flux.create(sink -> {
             AtomicBoolean terminated = new AtomicBoolean();
             Runnable cancelModel = () -> {
@@ -447,7 +509,10 @@ public class AiCodeGeneratorFacade {
                     terminated.compareAndSet(false, true);
                 }
             });
-            Map<String, ToolRequestStreamParser> parsers = new HashMap<>();
+            Map<String, ToolRequestStreamParser> parsers =
+                    new ConcurrentHashMap<>();
+            Set<String> completedToolIds = ConcurrentHashMap.newKeySet();
+            FileToolBudgetGuard.Session budgetSession = scope.budgetSession();
             try {
                 tokenStream.onPartialResponse(partial -> context.tryRunCallback(() -> {
                             if (!sink.isCancelled()) {
@@ -461,16 +526,28 @@ public class AiCodeGeneratorFacade {
                                     }
                                     ToolRequestStreamParser parser = parsers.get(request.id());
                                     if (parser == null) {
-                                        sink.next(JSONUtil.toJsonStr(new ToolRequestMessage(request)));
+                                        sink.next(JSONUtil.toJsonStr(new ToolRequestMessage(
+                                                request.id(), request.name(), null)));
                                         parser = new ToolRequestStreamParser(request.name(), evt -> {
                                             if (sink.isCancelled()) {
                                                 return;
                                             }
                                             switch (evt.type) {
-                                                case DELTA -> sink.next(JSONUtil.toJsonStr(
-                                                        new ToolArgumentDeltaMessage(request.id(), request.name(), evt.key, evt.payload)));
-                                                case VALUE_READY -> sink.next(JSONUtil.toJsonStr(
-                                                        new ToolArgumentMessage(request.id(), request.name(), evt.key, evt.payload)));
+                                                case DELTA -> emitBudgetedArgumentDelta(
+                                                        sink, tokenStream, budgetSession,
+                                                        completedToolIds, request.id(),
+                                                        request.name(), evt.key, evt.payload);
+                                                case VALUE_READY -> {
+                                                    if (!ToolStreamingSpec.isStreaming(
+                                                            request.name(), evt.key)
+                                                            && !completedToolIds.contains(
+                                                            request.id())) {
+                                                        sink.next(JSONUtil.toJsonStr(
+                                                                new ToolArgumentMessage(
+                                                                        request.id(), request.name(),
+                                                                        evt.key, evt.payload)));
+                                                    }
+                                                }
                                                 case KEY_READY -> { }
                                             }
                                         });
@@ -487,7 +564,23 @@ public class AiCodeGeneratorFacade {
                             if (parser != null) {
                                 parser.finish();
                             }
-                            sink.next(JSONUtil.toJsonStr(new ToolExecutedMessage(execution)));
+                            ToolLoopTerminationProtocol.ToolLoopTermination parsed =
+                                    ToolLoopTerminationProtocol.parseTrusted(
+                                            execution.request().name(),
+                                            execution.result());
+                            if (parsed.reason()
+                                    == ToolLoopTerminationProtocol
+                                    .ControlledTerminationReason
+                                    .RESOURCE_LIMIT_EXCEEDED) {
+                                emitResourceLimitExecution(
+                                        sink, tokenStream, budgetSession,
+                                        completedToolIds, execution);
+                                return;
+                            }
+                            if (completedToolIds.add(execution.request().id())) {
+                                sink.next(JSONUtil.toJsonStr(
+                                        new ToolExecutedMessage(execution)));
+                            }
                         }))
                         .onControlledTermination(termination ->
                                 context.tryRunCallback(() -> {
@@ -524,6 +617,80 @@ public class AiCodeGeneratorFacade {
                 }
             }
         });
+    }
+
+    private void emitResourceLimitExecution(
+            reactor.core.publisher.FluxSink<String> sink,
+            TokenStream tokenStream,
+            FileToolBudgetGuard.Session budgetSession,
+            Set<String> completedToolIds,
+            ToolExecution execution) {
+        String toolId = execution.request().id();
+        if (completedToolIds.add(toolId)) {
+            var redactedRequest = dev.langchain4j.agent.tool.ToolExecutionRequest
+                    .builder().id(toolId).name(execution.request().name())
+                    .arguments("{}").build();
+            sink.next(JSONUtil.toJsonStr(new ToolExecutedMessage(
+                    ToolExecution.builder().request(redactedRequest)
+                            .result(execution.result()).build())));
+        }
+        if (budgetSession.claimResourceLimit()) {
+            tokenStream.requestControlledTermination(
+                    new ToolLoopTerminationProtocol.ControlledTermination(
+                            ToolLoopTerminationProtocol.ControlledTerminationReason
+                                    .RESOURCE_LIMIT_EXCEEDED,
+                            null));
+        }
+    }
+
+    private void emitBudgetedArgumentDelta(
+            reactor.core.publisher.FluxSink<String> sink,
+            TokenStream tokenStream,
+            FileToolBudgetGuard.Session budgetSession,
+            Set<String> completedToolIds,
+            String toolId, String toolName, String key, String delta) {
+        if (!ToolStreamingSpec.isStreaming(toolName, key)
+                || completedToolIds.contains(toolId)) {
+            return;
+        }
+        FileToolBudgetGuard.ArgumentDecision decision =
+                budgetSession.acceptArgumentDelta(toolId, key, delta);
+        if (!decision.acceptedPrefix().isEmpty()) {
+            sink.next(JSONUtil.toJsonStr(new ToolArgumentDeltaMessage(
+                    toolId, toolName, key, decision.acceptedPrefix())));
+        }
+        if (!decision.resourceLimitExceeded()
+                || !budgetSession.claimResourceLimit()) {
+            return;
+        }
+        String rejectedResult = resourceLimitToolResult(toolName);
+        if (completedToolIds.add(toolId)) {
+            sink.next(JSONUtil.toJsonStr(new ToolExecutedMessage(
+                    ToolExecution.builder()
+                            .request(dev.langchain4j.agent.tool.ToolExecutionRequest
+                                    .builder().id(toolId).name(toolName)
+                                    .arguments("{}").build())
+                            .result(rejectedResult).build())));
+        }
+        tokenStream.requestControlledTermination(
+                new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol.ControlledTerminationReason
+                                .RESOURCE_LIMIT_EXCEEDED,
+                        null));
+    }
+
+    private String resourceLimitToolResult(String toolName) {
+        cn.hutool.json.JSONObject json = new cn.hutool.json.JSONObject(
+                cn.hutool.json.JSONConfig.create().setIgnoreNullValue(false));
+        json.set("protocol", "file-tool/v1");
+        json.set("operation", toolName);
+        json.set("status", "REJECTED");
+        json.set("relativePath", null);
+        json.set("changed", false);
+        json.set("message", "工具内容超过本轮资源上限");
+        json.set("failureReason", "RESOURCE_LIMIT_EXCEEDED");
+        json.set("content", null);
+        return JSONUtil.toJsonStr(json);
     }
 
     private Flux<String> processTokenStream(
@@ -636,6 +803,7 @@ public class AiCodeGeneratorFacade {
         return switch (termination.reason()) {
             case BUILD_SUCCEEDED, BUILD_FAILED -> null;
             case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
+                    RESOURCE_LIMIT_EXCEEDED,
                     EVALUATION_COMPLETED -> new OnlineControlledTerminationException(
                     termination.reason());
         };

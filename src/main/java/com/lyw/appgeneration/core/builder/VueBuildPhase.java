@@ -4,6 +4,7 @@ package com.lyw.appgeneration.core.builder;
 public enum VueBuildPhase {
     GENERATING,
     REPAIRING,
+    RETRYING,
     FINAL_DIAGNOSIS,
     SUCCEEDED,
     FAILED,

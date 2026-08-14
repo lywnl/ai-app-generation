@@ -40,7 +40,8 @@ class FileToolSecurityTest {
     Path temporaryDirectory;
 
     private final AppFileStateManager fileStateManager = new AppFileStateManager();
-    private final FileToolExecutionScopeManager scopeManager = new FileToolExecutionScopeManager();
+    private final FileToolExecutionScopeManager scopeManager =
+            new FileToolExecutionScopeManager(new FileToolBudgetGuard());
     private final FileReadTool fileReadTool = new FileReadTool(scopeManager);
     private final FileModifyTool fileModifyTool = new FileModifyTool(scopeManager);
     private final FileDeleteTool fileDeleteTool = new FileDeleteTool(scopeManager);
@@ -250,8 +251,136 @@ class FileToolSecurityTest {
         assertNullContent(write);
         assertEquals(Set.of(
                         "protocol", "operation", "status", "relativePath",
-                        "changed", "message", "content"),
+                        "changed", "message", "failureReason", "content"),
                 write.keySet());
+    }
+
+    @Test
+    void resourceLimitRejectsBeforeFileSideEffectsAndReturnsStrictReason()
+            throws IOException {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(4);
+        guard.setMaxCumulativeMutationCodePoints(6);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(4);
+        guard.setMaxReadDirCodePoints(10);
+        FileToolExecutionScopeManager limitedScopes =
+                new FileToolExecutionScopeManager(guard);
+        FileWriteTool limitedWriter = new FileWriteTool(
+                new AppFileStateManager(), limitedScopes);
+        FileModifyTool limitedModifier = new FileModifyTool(limitedScopes);
+        FileReadTool limitedReader = new FileReadTool(limitedScopes);
+        FileDirReadTool limitedDirectoryReader = new FileDirReadTool(limitedScopes);
+        var limitedScope = limitedScopes.evaluation(
+                APP_ID, "limited-file-tools", ALL_TOOLS);
+
+        JSONObject write = JSONUtil.parseObj(limitedScopes.callInScope(
+                limitedScope, "writeFile",
+                () -> limitedWriter.writeFile(
+                        "never-created/too-large.txt", "A😀BCD", APP_ID)));
+        assertResourceLimit(write);
+        assertFalse(Files.exists(projectRoot().resolve("never-created")));
+
+        Path root = createProjectRoot();
+        Path existing = root.resolve("existing.txt");
+        Files.writeString(existing, "ABCD");
+        JSONObject modify = JSONUtil.parseObj(limitedScopes.callInScope(
+                limitedScope, "modifyFile",
+                () -> limitedModifier.modifyFile(
+                        "existing.txt", "A", "12345", APP_ID)));
+        assertResourceLimit(modify);
+        assertEquals("ABCD", Files.readString(existing));
+
+        Files.writeString(root.resolve("large.txt"), "A😀BCD");
+        JSONObject read = JSONUtil.parseObj(limitedScopes.callInScope(
+                limitedScope, "readFile",
+                () -> limitedReader.readFile("large.txt", APP_ID)));
+        assertResourceLimit(read);
+
+        Files.writeString(root.resolve("directory-entry-with-long-name.txt"), "x");
+        JSONObject directory = JSONUtil.parseObj(limitedScopes.callInScope(
+                limitedScope, "readDir",
+                () -> limitedDirectoryReader.readDir("", APP_ID)));
+        assertResourceLimit(directory);
+    }
+
+    @Test
+    void 目录读取必须按规范化相对路径稳定排序() throws IOException {
+        Path root = createProjectRoot();
+        Files.createDirectories(root.resolve("z-dir"));
+        Files.writeString(root.resolve("z-dir/z.txt"), "z");
+        Files.writeString(root.resolve("z-last.txt"), "z");
+        Files.createDirectories(root.resolve("a-dir"));
+        Files.writeString(root.resolve("a-dir/b.txt"), "b");
+        Files.writeString(root.resolve("a-dir/a.txt"), "a");
+        Files.writeString(root.resolve("a-first.txt"), "a");
+
+        JSONObject directory = inEvaluation(() ->
+                fileDirReadTool.readDir("", APP_ID));
+        String content = directory.getStr("content");
+
+        assertTrue(content.indexOf("a-dir") < content.indexOf("a.txt"), content);
+        assertTrue(content.indexOf("a.txt") < content.indexOf("b.txt"), content);
+        assertTrue(content.indexOf("b.txt") < content.indexOf("a-first.txt"), content);
+        assertTrue(content.indexOf("a-first.txt") < content.indexOf("z-dir"), content);
+        assertTrue(content.indexOf("z-dir") < content.indexOf("z.txt"), content);
+        assertTrue(content.indexOf("z.txt") < content.indexOf("z-last.txt"), content);
+    }
+
+    @Test
+    void 修改超大旧文件必须拒绝且保持原文件不变() throws IOException {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(4);
+        guard.setMaxCumulativeMutationCodePoints(6);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(4);
+        guard.setMaxReadDirCodePoints(10);
+        FileToolExecutionScopeManager limitedScopes =
+                new FileToolExecutionScopeManager(guard);
+        FileModifyTool limitedModifier = new FileModifyTool(limitedScopes);
+        var limitedScope = limitedScopes.evaluation(
+                APP_ID, "bounded-modify", ALL_TOOLS);
+        Path root = createProjectRoot();
+        Path target = root.resolve("large-existing.txt");
+        Files.writeString(target, "ABCDE");
+
+        JSONObject result = JSONUtil.parseObj(limitedScopes.callInScope(
+                limitedScope, "modifyFile",
+                () -> limitedModifier.modifyFile(
+                        "large-existing.txt", "A", "Z", APP_ID)));
+
+        assertResourceLimit(result);
+        assertEquals("ABCDE", Files.readString(target));
+    }
+
+    @Test
+    void 写入工具比较超大旧文件时必须有界拒绝且不改盘不记账()
+            throws IOException {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(4);
+        guard.setMaxCumulativeMutationCodePoints(6);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(4);
+        guard.setMaxReadDirCodePoints(10);
+        FileToolExecutionScopeManager limitedScopes =
+                new FileToolExecutionScopeManager(guard);
+        AppFileStateManager limitedState = new AppFileStateManager();
+        FileWriteTool limitedWriter = new FileWriteTool(
+                limitedState, limitedScopes);
+        var limitedScope = limitedScopes.evaluation(
+                APP_ID, "bounded-write-compare", ALL_TOOLS);
+        Path root = createProjectRoot();
+        Path target = root.resolve("large-existing-write.txt");
+        Files.writeString(target, "ABCDE");
+
+        JSONObject result = JSONUtil.parseObj(limitedScopes.callInScope(
+                limitedScope, "writeFile",
+                () -> limitedWriter.writeFile(
+                        "large-existing-write.txt", "ABCD", APP_ID)));
+
+        assertResourceLimit(result);
+        assertEquals("ABCDE", Files.readString(target));
+        assertEquals(0, limitedState.fileCount(APP_ID));
     }
 
     @Test
@@ -483,12 +612,12 @@ class FileToolSecurityTest {
 
         try (OnlineHarness online = onlineHarness(Set.of("writeFile", "exit"))) {
             JSONObject onlineWrite = JSONUtil.parseObj(scopeManager.callInScope(
-                    online.scope,
+                    online.scope, "writeFile",
                     () -> fileWriteTool.writeFile("online.txt", "内容", APP_ID)));
             assertTrue(onlineWrite.getStr("message").contains("buildProject"), onlineWrite.toString());
 
             JSONObject onlineExit = JSONUtil.parseObj(scopeManager.callInScope(
-                    online.scope,
+                    online.scope, "exit",
                     () -> exitTool.exit("提前退出", APP_ID)));
             assertEquals("NO_CHANGE", onlineExit.getStr("status"));
             assertTrue(onlineExit.getStr("message").contains("buildProject"), onlineExit.toString());
@@ -496,9 +625,77 @@ class FileToolSecurityTest {
     }
 
     @Test
+    void 在线成功变更必须只推进一次精确租约revision() {
+        try (OnlineHarness online = onlineHarness(Set.of("writeFile"))) {
+            JSONObject applied = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope, "writeFile",
+                    () -> fileWriteTool.writeFile(
+                            "revision.txt", "第一次", APP_ID)));
+            JSONObject noChange = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope, "writeFile",
+                    () -> fileWriteTool.writeFile(
+                            "revision.txt", "第一次", APP_ID)));
+
+            assertEquals("APPLIED", applied.getStr("status"));
+            assertEquals("NO_CHANGE", noChange.getStr("status"));
+            assertEquals(1L, online.lease.snapshot().mutationRevision());
+        }
+    }
+
+    @Test
+    void 非代码故障必须在文件副作用前拒绝mutation但保留读取权限()
+            throws IOException {
+        Path root = createProjectRoot();
+        Files.writeString(root.resolve("existing.txt"), "原内容");
+        try (OnlineHarness online = onlineHarness(Set.of(
+                "writeFile", "modifyFile", "deleteFile", "readFile"))) {
+            try (var first = online.lease.beginBuild()) {
+                online.lease.recordFailure(first, new com.lyw.appgeneration.core.builder.BuildResult(
+                        false, com.lyw.appgeneration.core.builder.BuildStage.NPM_INSTALL,
+                        1, false, false,
+                        com.lyw.appgeneration.core.builder.VueBuildFailureKind.DEPENDENCY,
+                        "依赖失败", 1L));
+            }
+
+            JSONObject write = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope, "writeFile",
+                    () -> fileWriteTool.writeFile("new.txt", "绝不能落盘", APP_ID)));
+            JSONObject modify = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope, "modifyFile",
+                    () -> fileModifyTool.modifyFile(
+                            "existing.txt", "原", "篡改", APP_ID)));
+            JSONObject delete = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope, "deleteFile",
+                    () -> fileDeleteTool.deleteFile("existing.txt", APP_ID)));
+            JSONObject read = JSONUtil.parseObj(scopeManager.callInScope(
+                    online.scope, "readFile",
+                    () -> fileReadTool.readFile("existing.txt", APP_ID)));
+
+            List<JSONObject> rejectedResults = List.of(write, modify, delete);
+            List<String> rejectedPaths = List.of(
+                    "new.txt", "existing.txt", "existing.txt");
+            for (int index = 0; index < rejectedResults.size(); index++) {
+                JSONObject rejected = rejectedResults.get(index);
+                assertEquals("REJECTED", rejected.getStr("status"));
+                assertEquals(rejectedPaths.get(index),
+                        rejected.getStr("relativePath"));
+                assertNull(rejected.getStr("failureReason"));
+                assertTrue(rejected.getStr("message").contains("依赖或基础设施"));
+            }
+            assertEquals("APPLIED", read.getStr("status"));
+            assertEquals("原内容", read.getStr("content"));
+            assertFalse(Files.exists(root.resolve("new.txt")));
+            assertEquals("原内容", Files.readString(root.resolve("existing.txt")));
+            assertEquals(0L, online.lease.snapshot().mutationRevision());
+            assertEquals(1, online.lease.snapshot().buildAttempt());
+        }
+    }
+
+    @Test
     void scopedValueDoesNotLeakIntoNewVirtualThread() throws Exception {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            String raw = scopeManager.callInScope(evaluationScope, () -> {
+            String raw = scopeManager.callInScope(
+                    evaluationScope, "writeFile", () -> {
                 try {
                     return executor.submit(() ->
                                     fileWriteTool.writeFile("leaked.txt", "绝不能落盘", APP_ID))
@@ -520,15 +717,15 @@ class FileToolSecurityTest {
         old.close();
 
         assertThrows(IllegalStateException.class, () -> scopeManager.callInScope(
-                staleScope,
+                staleScope, "writeFile",
                 () -> fileWriteTool.writeFile("stale.txt", "绝不能落盘", APP_ID)));
 
         try (OnlineHarness replacement = onlineHarness(Set.of("writeFile"))) {
             assertThrows(IllegalStateException.class, () -> scopeManager.callInScope(
-                    staleScope,
+                    staleScope, "writeFile",
                     () -> fileWriteTool.writeFile("borrowed.txt", "绝不能落盘", APP_ID)));
             JSONObject valid = JSONUtil.parseObj(scopeManager.callInScope(
-                    replacement.scope,
+                    replacement.scope, "writeFile",
                     () -> fileWriteTool.writeFile("replacement.txt", "允许落盘", APP_ID)));
             assertEquals("APPLIED", valid.getStr("status"));
         }
@@ -546,7 +743,8 @@ class FileToolSecurityTest {
         CountDownLatch release = new CountDownLatch(1);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            var blocked = executor.submit(() -> scopeManager.callInScope(scope, () -> {
+            var blocked = executor.submit(() -> scopeManager.callInScope(
+                    scope, "writeFile", () -> {
                 entered.countDown();
                 try {
                     release.await();
@@ -566,7 +764,8 @@ class FileToolSecurityTest {
 
             assertTrue(elapsedMillis < 500, "有界 drain 不能被卡死工具无限阻塞");
             assertThrows(FileToolExecutionScopeManager.ScopeViolationException.class,
-                    () -> scopeManager.callInScope(scope, () -> "迟到动作"));
+                    () -> scopeManager.callInScope(
+                            scope, "writeFile", () -> "迟到动作"));
             release.countDown();
             assertEquals("完成", blocked.get(1, TimeUnit.SECONDS));
             assertTrue(scopeManager.awaitEvaluationQuiescence(
@@ -579,10 +778,10 @@ class FileToolSecurityTest {
         FileToolExecutionScopeManager.FileToolScope readOnly =
                 scopeManager.evaluation(APP_ID, "read-only", Set.of("readFile"));
         String notAllowed = scopeManager.callInScope(
-                readOnly,
+                readOnly, "readFile",
                 () -> fileWriteTool.writeFile("denied.txt", "不能落盘", APP_ID));
         String wrongApp = scopeManager.callInScope(
-                evaluationScope,
+                evaluationScope, "writeFile",
                 () -> fileWriteTool.writeFile("wrong-app.txt", "不能落盘", APP_ID + 1));
 
         assertStatus(notAllowed, "REJECTED", false);
@@ -591,7 +790,8 @@ class FileToolSecurityTest {
     }
 
     private JSONObject inEvaluation(Supplier<String> action) {
-        return JSONUtil.parseObj(scopeManager.callInScope(evaluationScope, action));
+        return JSONUtil.parseObj(scopeManager.callInScope(
+                evaluationScope, "writeFile", action));
     }
 
     private void assertRejectedInEvaluation(Supplier<String> action) {
@@ -613,6 +813,11 @@ class FileToolSecurityTest {
         assertTrue(json.containsKey("content"), json.toString());
         assertTrue(json.isNull("content"), json.toString());
         assertNull(json.getStr("content"));
+    }
+
+    private void assertResourceLimit(JSONObject json) {
+        assertStatus(json, "REJECTED", false);
+        assertEquals("RESOURCE_LIMIT_EXCEEDED", json.getStr("failureReason"));
     }
 
     private void assertProtocolParseFailed(

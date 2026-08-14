@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -51,7 +53,8 @@ class VueTurnFinalizerTest {
         metrics = new VueBuildRepairMetricsCollector(metricsRegistry);
         lifecycleFence = new AppDataLifecycleFence();
         finalizer = new VueTurnFinalizer(
-                history, collapser, summary, preference, factory, lifecycleFence, metrics);
+                history, collapser, summary, preference, factory, lifecycleFence,
+                metrics, new FileToolBudgetGuard());
         when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
                 .thenReturn(true);
         when(collapser.collapseLastTurn(anyLong(), anyString()))
@@ -83,6 +86,57 @@ class VueTurnFinalizerTest {
                     .counter().count());
             clearInvocations(history, collapser, summary, preference, factory);
         }
+    }
+
+    @Test
+    void oversizedCanonicalTextIsReplacedBeforeMysqlAndL0() {
+        FileToolBudgetGuard guard = new FileToolBudgetGuard();
+        guard.setMaxSingleFileCodePoints(8);
+        guard.setMaxCumulativeMutationCodePoints(16);
+        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxReadFileCodePoints(8);
+        guard.setMaxReadDirCodePoints(8);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-oversized-finalizer",
+                VueBuildPhase.GENERATING, guard.newSession());
+        String oversized = "X".repeat(65);
+        VueTurnOutcome requested = outcome(
+                VueBuildPhase.GENERATING, SUCCEEDED, oversized, true);
+
+        VueTurnFinalizer.FinalizationResult result =
+                finalizer.finalizeOnce(context, requested);
+
+        assertEquals(SYSTEM_ERROR, result.outcome().outcome());
+        assertEquals(VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE,
+                result.outcome().canonicalAiText());
+        verify(history).addChatMessage(
+                APP_ID, VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE, "ai", USER_ID);
+        verify(collapser).collapseLastTurn(
+                APP_ID, VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE);
+        verify(history, never()).addChatMessage(
+                APP_ID, oversized, "ai", USER_ID);
+    }
+
+    @Test
+    void terminalReserveUsesLongestFixedTerminalMessage() {
+        List<String> expectedMessages = List.of(
+                "项目已生成并构建成功。",
+                "抱歉，系统遇到了一些问题，请您稍后重试修复",
+                "生成过程中遇到系统异常，请稍后重试。",
+                "项目尚未通过真实构建，请重新生成。",
+                "生成状态异常，系统已停止本次生成，请重新发起。",
+                "生成步骤过多，系统已停止本次生成，请稍后重试。",
+                "生成与构建超时，请稍后重试。",
+                "生成内容过大，系统已停止本次生成，请缩小需求后重试。",
+                "本次生成已取消。");
+
+        assertEquals(expectedMessages, VueTurnFinalizer.fixedTerminalMessages());
+        int longest = expectedMessages.stream()
+                .mapToInt(FileToolBudgetGuard::codePointCount)
+                .max()
+                .orElseThrow();
+        assertEquals(longest, VueTurnFinalizer.maxTerminalMessageCodePoints());
+        assertEquals(longest + 2, VueTurnFinalizer.terminalReserveCodePoints());
     }
 
     @Test

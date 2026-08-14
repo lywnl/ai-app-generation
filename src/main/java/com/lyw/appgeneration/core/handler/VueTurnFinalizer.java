@@ -2,6 +2,8 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.ai.tools.BuildProjectToolResult;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -11,7 +13,10 @@ import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.COLLAPSED;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR;
@@ -19,10 +24,43 @@ import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.
 /** 同一回合唯一允许执行稳定终态持久化与记忆副作用的组件。 */
 @Slf4j
 @Component
-public class VueTurnFinalizer {
+public class VueTurnFinalizer implements InitializingBean {
 
+    public static final String SUCCESS_MESSAGE =
+            BuildProjectToolResult.SUCCESS_RESPONSE;
+    public static final String BUILD_FAILED_MESSAGE =
+            BuildProjectToolResult.FAILURE_RESPONSE;
     public static final String SYSTEM_ERROR_MESSAGE =
             "生成过程中遇到系统异常，请稍后重试。";
+    public static final String PROTOCOL_MESSAGE =
+            "项目尚未通过真实构建，请重新生成。";
+    public static final String SCOPE_PROTOCOL_MESSAGE =
+            "生成状态异常，系统已停止本次生成，请重新发起。";
+    public static final String LOOP_LIMIT_MESSAGE =
+            "生成步骤过多，系统已停止本次生成，请稍后重试。";
+    public static final String TIMEOUT_MESSAGE =
+            "生成与构建超时，请稍后重试。";
+    public static final String RESOURCE_LIMIT_MESSAGE =
+            "生成内容过大，系统已停止本次生成，请缩小需求后重试。";
+    public static final String CANCELLED_MESSAGE = "本次生成已取消。";
+
+    private static final List<String> FIXED_TERMINAL_MESSAGES = List.of(
+            SUCCESS_MESSAGE,
+            BUILD_FAILED_MESSAGE,
+            SYSTEM_ERROR_MESSAGE,
+            PROTOCOL_MESSAGE,
+            SCOPE_PROTOCOL_MESSAGE,
+            LOOP_LIMIT_MESSAGE,
+            TIMEOUT_MESSAGE,
+            RESOURCE_LIMIT_MESSAGE,
+            CANCELLED_MESSAGE);
+    private static final int MAX_TERMINAL_MESSAGE_CODE_POINTS =
+            FIXED_TERMINAL_MESSAGES.stream()
+                    .mapToInt(FileToolBudgetGuard::codePointCount)
+                    .max()
+                    .orElseThrow();
+    private static final int TERMINAL_RESERVE_CODE_POINTS =
+            MAX_TERMINAL_MESSAGE_CODE_POINTS + 2;
 
     private final ChatHistoryService chatHistoryService;
     private final ToolMessageCollapser toolMessageCollapser;
@@ -31,6 +69,7 @@ public class VueTurnFinalizer {
     private final AiGeneratorServiceFactory serviceFactory;
     private final AppDataLifecycleFence lifecycleFence;
     private final VueBuildRepairMetricsCollector metricsCollector;
+    private final FileToolBudgetGuard fileToolBudgetGuard;
 
     public VueTurnFinalizer(ChatHistoryService chatHistoryService,
             ToolMessageCollapser toolMessageCollapser,
@@ -38,7 +77,8 @@ public class VueTurnFinalizer {
             UserMemoryService userMemoryService,
             AiGeneratorServiceFactory serviceFactory,
             AppDataLifecycleFence lifecycleFence,
-            VueBuildRepairMetricsCollector metricsCollector) {
+            VueBuildRepairMetricsCollector metricsCollector,
+            FileToolBudgetGuard fileToolBudgetGuard) {
         this.chatHistoryService = chatHistoryService;
         this.toolMessageCollapser = toolMessageCollapser;
         this.memorySummaryService = memorySummaryService;
@@ -46,6 +86,25 @@ public class VueTurnFinalizer {
         this.serviceFactory = serviceFactory;
         this.lifecycleFence = lifecycleFence;
         this.metricsCollector = metricsCollector;
+        this.fileToolBudgetGuard = fileToolBudgetGuard;
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        fileToolBudgetGuard.validateCanonicalReserve(
+                terminalReserveCodePoints());
+    }
+
+    public static List<String> fixedTerminalMessages() {
+        return FIXED_TERMINAL_MESSAGES;
+    }
+
+    public static int maxTerminalMessageCodePoints() {
+        return MAX_TERMINAL_MESSAGE_CODE_POINTS;
+    }
+
+    public static int terminalReserveCodePoints() {
+        return TERMINAL_RESERVE_CODE_POINTS;
     }
 
     public FinalizationResult finalizeOnce(
@@ -53,6 +112,7 @@ public class VueTurnFinalizer {
         if (!context.tryStartFinalization()) {
             return context.awaitFinalization();
         }
+        requestedOutcome = enforceCanonicalBudget(context, requestedOutcome);
         FinalizationResult result = persistWithinWriterPermit(context, requestedOutcome);
         metricsCollector.recordTurnOutcome(result.outcome());
         try {
@@ -63,6 +123,18 @@ public class VueTurnFinalizer {
         }
         context.completeFinalization(result);
         return result;
+    }
+
+    private VueTurnOutcome enforceCanonicalBudget(
+            VueTurnContext context, VueTurnOutcome requestedOutcome) {
+        FileToolBudgetGuard.CanonicalAccumulator check =
+                context.budgetSession().newCanonicalAccumulator();
+        if (check.append(requestedOutcome.canonicalAiText()).accepted()) {
+            return requestedOutcome;
+        }
+        return new VueTurnOutcome(
+                context.phase(), SYSTEM_ERROR, RESOURCE_LIMIT_MESSAGE,
+                false, RESOURCE_LIMIT_MESSAGE);
     }
 
     private FinalizationResult persistWithinWriterPermit(

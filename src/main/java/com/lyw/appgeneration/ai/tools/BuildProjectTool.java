@@ -10,6 +10,7 @@ import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.BuildAttemptTicket;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.BuildInProgressException;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager.BuildMutationRequiredException;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
@@ -64,11 +65,11 @@ public final class BuildProjectTool extends BaseTool {
         } catch (FileToolExecutionScopeManager.ScopeCancelledException exception) {
             return json(BuildProjectToolResult.cancelled(null, null, exception.getMessage()));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
-            return json(BuildProjectToolResult.rejected(exception.getMessage(), true));
+            return json(BuildProjectToolResult.rejected(exception.getMessage()));
         }
         if (scope.type() != FileToolExecutionScopeManager.ScopeType.ONLINE) {
             return json(BuildProjectToolResult.rejected(
-                    "PROTOCOL_ERROR: buildProject 只允许在线 Vue 作用域调用", true));
+                    "PROTOCOL_ERROR: buildProject 只允许在线 Vue 作用域调用"));
         }
         return executeBuild(scope);
     }
@@ -80,6 +81,8 @@ public final class BuildProjectTool extends BaseTool {
             ticket = lease.beginBuild();
         } catch (BuildInProgressException exception) {
             return json(BuildProjectToolResult.buildInProgress());
+        } catch (BuildMutationRequiredException exception) {
+            return json(BuildProjectToolResult.mutationRequired(exception.getMessage()));
         } catch (RuntimeException exception) {
             return json(terminalOrProtocolRejection(lease, exception));
         }
@@ -174,7 +177,7 @@ public final class BuildProjectTool extends BaseTool {
             log.error("记录构建基础设施失败时发生异常: appId={}, attempt={}",
                     scope.appId(), ticket.attempt(), recordFailure);
             return json(BuildProjectToolResult.rejected(
-                    "PROTOCOL_ERROR: 无法提交构建失败状态", true));
+                    "PROTOCOL_ERROR: 无法提交构建失败状态"));
         }
         observation.complete(failure);
         return renderCommittedResult(
@@ -183,7 +186,7 @@ public final class BuildProjectTool extends BaseTool {
 
     private String protocolErrorAfterCommit() {
         return json(BuildProjectToolResult.rejected(
-                "PROTOCOL_ERROR: 构建结果后处理失败", true));
+                "PROTOCOL_ERROR: 构建结果后处理失败"));
     }
 
     private BuildProjectToolResult terminalOrProtocolRejection(
@@ -198,7 +201,7 @@ public final class BuildProjectTool extends BaseTool {
             // 精确租约失效统一按协议拒绝，不尝试查找其他回合。
         }
         return BuildProjectToolResult.rejected(
-                "PROTOCOL_ERROR: 当前构建回合不能继续构建", true);
+                "PROTOCOL_ERROR: 当前构建回合不能继续构建");
     }
 
     private String json(BuildProjectToolResult result) {

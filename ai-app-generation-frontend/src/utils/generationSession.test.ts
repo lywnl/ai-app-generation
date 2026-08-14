@@ -69,6 +69,47 @@ afterEach(() => {
 })
 
 describe('generationSession Vue SSE 状态机', () => {
+  it('资源超限工具结果会结束卡片且只保留已广播参数', async () => {
+    const snapshot = await runSession([
+      messageEvent({
+        type: 'tool_request',
+        id: 'tool-large',
+        name: 'writeFile',
+        arguments: null,
+      }),
+      messageEvent({
+        type: 'tool_argument_delta',
+        id: 'tool-large',
+        name: 'writeFile',
+        key: 'content',
+        delta: '合法前缀',
+      }),
+      messageEvent({
+        type: 'tool_executed',
+        id: 'tool-large',
+        name: 'writeFile',
+        arguments: '{}',
+        result: JSON.stringify({
+          protocol: 'file-tool/v1',
+          operation: 'writeFile',
+          status: 'REJECTED',
+          relativePath: null,
+          changed: false,
+          message: '工具内容超过本轮资源上限',
+          failureReason: 'RESOURCE_LIMIT_EXCEEDED',
+          content: null,
+        }),
+      }),
+      outcomeEvent('SYSTEM_ERROR'),
+      event('done'),
+    ])
+
+    const tool = snapshot?.toolCalls.get('tool-large')
+    expect(tool?.status).toBe('done')
+    expect(tool?.args.content).toBe('合法前缀')
+    expect(tool?.result).toContain('RESOURCE_LIMIT_EXCEEDED')
+  })
+
   it.each([
     ['streaming', undefined, 'streaming'],
     ['done', undefined, 'unrecognized'],

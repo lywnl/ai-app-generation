@@ -148,3 +148,12 @@ management:
   endpoint:
     health:
       show-details: always
+
+ai:
+  vue:
+    tool-budget:
+      max-single-file-code-points: 128000
+      max-cumulative-mutation-code-points: 256000
+      max-canonical-ai-text-code-points: 384000
+      max-read-file-code-points: 128000
+      max-read-dir-code-points: 20000

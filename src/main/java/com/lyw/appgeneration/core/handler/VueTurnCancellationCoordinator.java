@@ -167,7 +167,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         String message = cancellation.outcomeType()
                 == VueTurnOutcome.TurnOutcomeType.TIMED_OUT
                 ? JsonMessageStreamHandler.TIMEOUT_MESSAGE
-                : "本次生成已取消。";
+                : VueTurnFinalizer.CANCELLED_MESSAGE;
         String canonical = JsonMessageStreamHandler.appendTerminalText(
                 cancellation.canonicalPrefix().get(), message);
         VueTurnFinalizer.FinalizationResult finalized =

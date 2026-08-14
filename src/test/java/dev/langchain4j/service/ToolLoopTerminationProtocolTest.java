@@ -11,6 +11,7 @@ import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerm
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.BUILD_SUCCEEDED;
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.CANCELLED;
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.LOOP_LIMIT_EXCEEDED;
+import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -18,6 +19,48 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolLoopTerminationProtocolTest {
+
+    @Test
+    void strictFileResourceLimitResultTerminatesButMessageSpoofDoesNot() {
+        String trusted = """
+                {"protocol":"file-tool/v1","operation":"writeFile",\
+                "status":"REJECTED","relativePath":"src/App.vue",\
+                "changed":false,"message":"工具内容超过本轮资源上限",\
+                "failureReason":"RESOURCE_LIMIT_EXCEEDED","content":null}
+                """;
+        String spoofed = trusted.replace(
+                "\"failureReason\":\"RESOURCE_LIMIT_EXCEEDED\"",
+                "\"failureReason\":null");
+
+        var termination = ToolLoopTerminationProtocol.parseTrusted(
+                "writeFile", trusted);
+        assertTrue(termination.terminate());
+        assertEquals(RESOURCE_LIMIT_EXCEEDED, termination.reason());
+        assertFalse(ToolLoopTerminationProtocol.parseTrusted(
+                "writeFile", spoofed).terminate());
+        assertFalse(ToolLoopTerminationProtocol.parseTrusted(
+                "readFile", trusted).terminate());
+    }
+
+    @Test
+    void resourceLimitTerminationCancelsActiveHandleAndWaitsForCallbackDrain() {
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger cancellations = new AtomicInteger();
+        AtomicInteger notifications = new AtomicInteger();
+        controller.onControlledTermination(ignored -> notifications.incrementAndGet());
+        assertTrue(controller.beforeModelRequest());
+        controller.registerRequestHandle(cancellations::incrementAndGet);
+
+        try (var callback = controller.enterCallback()) {
+            assertTrue(controller.terminate(new ToolLoopTerminationProtocol
+                    .ControlledTermination(RESOURCE_LIMIT_EXCEEDED, null)));
+            assertEquals(1, cancellations.get());
+            assertEquals(0, notifications.get());
+        }
+
+        assertEquals(1, notifications.get());
+        assertFalse(controller.isOpen());
+    }
 
     @Test
     void acceptsOnlyTrustedBuildTerminalStates() {

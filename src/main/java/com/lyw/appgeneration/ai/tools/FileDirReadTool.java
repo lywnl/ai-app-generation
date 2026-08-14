@@ -9,8 +9,6 @@ import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
-import java.util.List;
 import java.util.Set;
 
 /** 受控读取 Vue 项目目录结构。 */
@@ -36,17 +34,23 @@ public class FileDirReadTool extends BaseTool {
             @P("目录的相对路径，为空则读取整个项目结构") String relativeDirPath,
             @ToolMemoryId Long appId) {
         try {
-            scopeManager.requireCurrent(appId == null ? Long.MIN_VALUE : appId, getToolName());
+            FileToolExecutionScopeManager.FileToolScope scope =
+                    scopeManager.requireCurrent(
+                            appId == null ? Long.MIN_VALUE : appId, getToolName());
             Path path = projectPathResolver.resolveExisting(appId, relativeDirPath, true);
             if (!Files.isDirectory(path)) {
                 return result(FileToolResult.notFound(
                         getToolName(), relativeDirPath, "目录不存在或不是目录"));
             }
-            List<Path> files = projectPathResolver.collectSafeDirectoryEntries(
-                    path, appId, this::shouldIgnore);
+            String structure = formatStructure(
+                    path, appId, scope.budgetSession());
+            if (structure == null) {
+                return result(FileToolResult.resourceLimitExceeded(
+                        getToolName(), relativeDirPath));
+            }
             return result(FileToolResult.readApplied(
                     getToolName(), relativeDirPath,
-                    "目录读取成功", formatStructure(path, files)));
+                    "目录读取成功", structure));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
             return FileToolProtocolSupport.rejected(
                     getToolName(), relativeDirPath, exception);
@@ -60,15 +64,38 @@ public class FileDirReadTool extends BaseTool {
         }
     }
 
-    private String formatStructure(Path root, List<Path> files) {
+    private String formatStructure(
+            Path root, Long appId, FileToolBudgetGuard.Session session)
+            throws ProjectPathResolver.UnsafeProjectPathException {
         StringBuilder structure = new StringBuilder("项目目录结构:\n");
-        files.stream()
-                .sorted(Comparator.comparingInt((Path file) -> root.relativize(file).getNameCount())
-                        .thenComparing(Path::toString))
-                .forEach(file -> structure.append("  ".repeat(
-                                Math.max(0, root.relativize(file).getNameCount() - 1)))
-                        .append(file.getFileName()).append('\n'));
-        return structure.toString();
+        FileToolBudgetGuard.ReadAccumulator budget =
+                session.newReadDirAccumulator();
+        FileToolBudgetGuard.ReadDecision header = budget.accept(structure);
+        if (!header.accepted()) {
+            return null;
+        }
+        structure.setLength(0);
+        structure.append(header.acceptedText());
+        try {
+            projectPathResolver.forEachSafeDirectoryEntry(
+                    root, appId, this::shouldIgnore, file -> {
+                String line = "  ".repeat(
+                            Math.max(0, root.relativize(file).getNameCount() - 1))
+                        + file.getFileName() + '\n';
+                FileToolBudgetGuard.ReadDecision decision = budget.accept(line);
+                if (!decision.accepted()) {
+                    throw new ProjectPathResolver.DirectoryBudgetExceededException();
+                }
+                structure.append(decision.acceptedText());
+            });
+        } catch (ProjectPathResolver.DirectoryBudgetExceededException exception) {
+            return null;
+        }
+        FileToolBudgetGuard.ReadDecision finish = budget.finish();
+        if (!finish.accepted()) {
+            return null;
+        }
+        return structure.append(finish.acceptedText()).toString();
     }
 
     private boolean shouldIgnore(String fileName) {

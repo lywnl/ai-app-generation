@@ -9,6 +9,13 @@ import java.util.Set;
 public final class ToolLoopTerminationProtocol {
 
     private static final String TOOL_NAME = "buildProject";
+    private static final String FILE_PROTOCOL = "file-tool/v1";
+    private static final Set<String> FILE_TOOLS = Set.of(
+            "readFile", "readDir", "writeFile", "modifyFile",
+            "deleteFile", "exit");
+    private static final Set<String> FILE_RESULT_FIELDS = Set.of(
+            "protocol", "operation", "status", "relativePath", "changed",
+            "message", "failureReason", "content");
     private static final String PROTOCOL = "vue-build-tool/v1";
     private static final String SUCCESS_RESPONSE = "项目已生成并构建成功。";
     private static final String FAILURE_RESPONSE = "抱歉，系统遇到了一些问题，请您稍后重试修复";
@@ -23,12 +30,18 @@ public final class ToolLoopTerminationProtocol {
     }
 
     public static ToolLoopTermination parseTrusted(String toolName, String toolResult) {
-        if (!TOOL_NAME.equals(toolName) || toolResult == null) {
+        if (toolResult == null) {
             return notTerminated();
         }
         try {
             Object parsed = Json.fromJson(toolResult, Object.class);
+            if (parsed instanceof Map<?, ?> fields
+                    && validFileResourceLimit(toolName, fields)) {
+                return terminated(
+                        ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED, null);
+            }
             if (!(parsed instanceof Map<?, ?> fields)
+                    || !TOOL_NAME.equals(toolName)
                     || !PROTOCOL.equals(fields.get("protocol"))
                     || !Integer.valueOf(3).equals(number(fields.get("maxAttempts")))
                     || !nonBlank(fields.get("message"))) {
@@ -116,6 +129,21 @@ public final class ToolLoopTerminationProtocol {
                 && fields.get("finalResponse") == null;
     }
 
+    private static boolean validFileResourceLimit(
+            String toolName, Map<?, ?> fields) {
+        return FILE_TOOLS.contains(toolName)
+                && FILE_RESULT_FIELDS.equals(fields.keySet())
+                && FILE_PROTOCOL.equals(fields.get("protocol"))
+                && toolName.equals(fields.get("operation"))
+                && "REJECTED".equals(fields.get("status"))
+                && (fields.get("relativePath") == null
+                || fields.get("relativePath") instanceof String)
+                && Boolean.FALSE.equals(fields.get("changed"))
+                && nonBlank(fields.get("message"))
+                && "RESOURCE_LIMIT_EXCEEDED".equals(fields.get("failureReason"))
+                && fields.get("content") == null;
+    }
+
     private static Integer number(Object value) {
         if (!(value instanceof Number number)) {
             return null;
@@ -151,7 +179,8 @@ public final class ToolLoopTerminationProtocol {
         EVALUATION_COMPLETED,
         CANCELLED,
         PROTOCOL_ERROR,
-        LOOP_LIMIT_EXCEEDED
+        LOOP_LIMIT_EXCEEDED,
+        RESOURCE_LIMIT_EXCEEDED
     }
 
     public record ControlledTermination(
@@ -166,7 +195,8 @@ public final class ToolLoopTerminationProtocol {
                 case BUILD_SUCCEEDED -> SUCCESS_RESPONSE.equals(finalResponse);
                 case BUILD_FAILED -> FAILURE_RESPONSE.equals(finalResponse);
                 case EVALUATION_COMPLETED, CANCELLED, PROTOCOL_ERROR,
-                        LOOP_LIMIT_EXCEEDED -> finalResponse == null;
+                        LOOP_LIMIT_EXCEEDED, RESOURCE_LIMIT_EXCEEDED ->
+                        finalResponse == null;
             };
             if (!validFinalResponse) {
                 throw new IllegalArgumentException("受控终止原因与最终响应不匹配");

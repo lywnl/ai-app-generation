@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.ai.model.message;
 
+import com.lyw.appgeneration.ai.tools.ToolStreamMessageRedactor;
 import dev.langchain4j.service.tool.ToolExecution;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -28,5 +29,15 @@ public class ToolExecutedMessage extends StreamMessage {
         this.arguments = toolExecution.request().arguments();
         this.result = toolExecution.result();
     }
-}
 
+    public ToolExecutedMessage toClientSafeCopy() {
+        ToolExecutedMessage copy = new ToolExecutedMessage();
+        copy.setType(getType());
+        copy.id = id;
+        copy.name = name;
+        copy.arguments = ToolStreamMessageRedactor.safeArguments(name, arguments);
+        copy.result = ToolStreamMessageRedactor.safeResult(
+                name, copy.arguments, result);
+        return copy;
+    }
+}

@@ -22,6 +22,7 @@ target/
 .worktrees/
 .codex/runtime/
 .codex/sdd/
+/.codex/verification/
 
 ### NetBeans ###
 /nbproject/private/

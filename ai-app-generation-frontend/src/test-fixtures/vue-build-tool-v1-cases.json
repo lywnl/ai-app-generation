@@ -1,0 +1,313 @@
+[
+  {
+    "name": "构建成功",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "COMPLETED",
+      "success": true,
+      "attempt": 1,
+      "maxAttempts": 3,
+      "stage": "SUCCESS",
+      "failureKind": null,
+      "timedOut": false,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "STOP",
+      "message": "构建成功",
+      "errorSummary": null,
+      "terminateToolLoop": true,
+      "finalResponse": "项目已生成并构建成功。"
+    },
+    "expectedView": {
+      "invocationStatus": "COMPLETED",
+      "success": true,
+      "attempt": 1,
+      "maxAttempts": 3,
+      "stage": "SUCCESS",
+      "statusText": "第 1 次构建成功",
+      "terminateToolLoop": true
+    }
+  },
+  {
+    "name": "第1次代码失败",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 1,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "failureKind": "CODE",
+      "timedOut": false,
+      "repairable": true,
+      "reflectionRequired": false,
+      "nextAction": "REPAIR",
+      "message": "第 1 次构建失败，请进行最小代码修复",
+      "errorSummary": "TypeScript 编译失败",
+      "terminateToolLoop": false,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 1,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "statusText": "第 1 次构建失败，正在进行最小修复",
+      "errorSummary": "TypeScript 编译失败",
+      "terminateToolLoop": false
+    }
+  },
+  {
+    "name": "第1次非代码失败",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 1,
+      "maxAttempts": 3,
+      "stage": "NPM_INSTALL",
+      "failureKind": "DEPENDENCY",
+      "timedOut": false,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "RETRY_BUILD",
+      "message": "第 1 次构建失败，请直接重试构建",
+      "errorSummary": "依赖安装失败",
+      "terminateToolLoop": false,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 1,
+      "maxAttempts": 3,
+      "stage": "NPM_INSTALL",
+      "statusText": "第 1 次构建失败，正在直接重试构建",
+      "errorSummary": "依赖安装失败",
+      "terminateToolLoop": false
+    }
+  },
+  {
+    "name": "第2次代码失败",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 2,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "failureKind": "CODE",
+      "timedOut": false,
+      "repairable": true,
+      "reflectionRequired": true,
+      "nextAction": "FINAL_DIAGNOSIS",
+      "message": "第 2 次构建失败，请进行最终诊断",
+      "errorSummary": "TypeScript 编译仍失败",
+      "terminateToolLoop": false,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 2,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "statusText": "第 2 次构建失败，正在进行最终诊断",
+      "errorSummary": "TypeScript 编译仍失败",
+      "terminateToolLoop": false
+    }
+  },
+  {
+    "name": "第2次非代码失败",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 2,
+      "maxAttempts": 3,
+      "stage": "VALIDATION",
+      "failureKind": "INFRASTRUCTURE",
+      "timedOut": true,
+      "repairable": false,
+      "reflectionRequired": true,
+      "nextAction": "FINAL_DIAGNOSIS",
+      "message": "第 2 次构建失败，请进行最终诊断",
+      "errorSummary": "构建环境超时",
+      "terminateToolLoop": false,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 2,
+      "maxAttempts": 3,
+      "stage": "VALIDATION",
+      "statusText": "第 2 次构建失败，正在进行最终诊断",
+      "errorSummary": "构建环境超时",
+      "terminateToolLoop": false
+    }
+  },
+  {
+    "name": "第3次失败",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 3,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "failureKind": "CODE",
+      "timedOut": false,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "STOP",
+      "message": "第 3 次构建失败，已停止自动修复",
+      "errorSummary": "最终构建仍失败",
+      "terminateToolLoop": true,
+      "finalResponse": "抱歉，系统遇到了一些问题，请您稍后重试修复"
+    },
+    "expectedView": {
+      "invocationStatus": "COMPLETED",
+      "success": false,
+      "attempt": 3,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "statusText": "第 3 次构建失败，已停止自动修复",
+      "errorSummary": "最终构建仍失败",
+      "terminateToolLoop": true
+    }
+  },
+  {
+    "name": "构建进行中",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "BUILD_IN_PROGRESS",
+      "success": null,
+      "attempt": null,
+      "maxAttempts": 3,
+      "stage": null,
+      "failureKind": null,
+      "timedOut": null,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": null,
+      "message": "当前已有构建正在执行",
+      "errorSummary": null,
+      "terminateToolLoop": false,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "BUILD_IN_PROGRESS",
+      "maxAttempts": 3,
+      "statusText": "当前已有构建正在执行",
+      "terminateToolLoop": false
+    }
+  },
+  {
+    "name": "非终止拒绝",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "REJECTED",
+      "success": null,
+      "attempt": null,
+      "maxAttempts": 3,
+      "stage": null,
+      "failureKind": null,
+      "timedOut": null,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "REPAIR",
+      "message": "尚未检测到新的有效代码修改，请先修复构建错误后再构建",
+      "errorSummary": null,
+      "terminateToolLoop": false,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "REJECTED",
+      "maxAttempts": 3,
+      "statusText": "尚未检测到新的有效代码修改，请先修复构建错误后再构建",
+      "terminateToolLoop": false
+    }
+  },
+  {
+    "name": "终止拒绝",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "REJECTED",
+      "success": null,
+      "attempt": null,
+      "maxAttempts": 3,
+      "stage": null,
+      "failureKind": null,
+      "timedOut": null,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "STOP",
+      "message": "PROTOCOL_ERROR: 当前构建回合不能继续构建",
+      "errorSummary": null,
+      "terminateToolLoop": true,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "REJECTED",
+      "maxAttempts": 3,
+      "statusText": "PROTOCOL_ERROR: 当前构建回合不能继续构建",
+      "terminateToolLoop": true
+    }
+  },
+  {
+    "name": "预留前取消",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "CANCELLED",
+      "success": null,
+      "attempt": null,
+      "maxAttempts": 3,
+      "stage": null,
+      "failureKind": null,
+      "timedOut": null,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "STOP",
+      "message": "构建回合已取消",
+      "errorSummary": null,
+      "terminateToolLoop": true,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "CANCELLED",
+      "maxAttempts": 3,
+      "statusText": "构建回合已取消",
+      "terminateToolLoop": true
+    }
+  },
+  {
+    "name": "预留后取消",
+    "raw": {
+      "protocol": "vue-build-tool/v1",
+      "invocationStatus": "CANCELLED",
+      "success": null,
+      "attempt": 2,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "failureKind": null,
+      "timedOut": null,
+      "repairable": false,
+      "reflectionRequired": false,
+      "nextAction": "STOP",
+      "message": "构建已取消",
+      "errorSummary": null,
+      "terminateToolLoop": true,
+      "finalResponse": null
+    },
+    "expectedView": {
+      "invocationStatus": "CANCELLED",
+      "attempt": 2,
+      "maxAttempts": 3,
+      "stage": "NPM_BUILD",
+      "statusText": "构建已取消",
+      "terminateToolLoop": true
+    }
+  }
+]

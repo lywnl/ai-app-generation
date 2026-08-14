@@ -14,7 +14,7 @@ final class FileToolProtocolSupport {
 
     private static final Set<String> PROTOCOL_FIELDS = Set.of(
             "protocol", "operation", "status", "relativePath",
-            "changed", "message", "content");
+            "changed", "message", "failureReason", "content");
 
     private FileToolProtocolSupport() {
     }
@@ -28,11 +28,69 @@ final class FileToolProtocolSupport {
         json.set("relativePath", result.relativePath());
         json.set("changed", result.changed());
         json.set("message", result.message());
+        json.set("failureReason", result.failureReason());
         json.set("content", result.content());
         return JSONUtil.toJsonStr(json);
     }
 
     static FileToolResult parse(String rawResult, String operation, String relativePath) {
+        try {
+            return parseStrict(rawResult, operation, relativePath);
+        } catch (RuntimeException exception) {
+            return FileToolResult.failed(operation, relativePath, "工具结果协议解析失败");
+        }
+    }
+
+    static String clientSafeReadResult(
+            String rawResult, String operation, String relativePath) {
+        try {
+            FileToolResult result = parseStrict(rawResult, operation, relativePath);
+            if (!Set.of("readFile", "readDir").contains(operation)) {
+                throw new IllegalArgumentException("只有读取工具可以清理正文载荷");
+            }
+            JSONObject json = new JSONObject(
+                    JSONConfig.create().setIgnoreNullValue(false));
+            json.set("protocol", result.protocol());
+            json.set("operation", result.operation());
+            json.set("status", result.status().name());
+            json.set("relativePath", result.relativePath());
+            json.set("changed", result.changed());
+            json.set("message", result.message());
+            json.set("failureReason", result.failureReason());
+            json.set("content", JSONNull.NULL);
+            return JSONUtil.toJsonStr(json);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private static FileToolResult parseStrict(
+            String rawResult, String operation, String relativePath) {
+        JSONObject json = JSONUtil.parseObj(
+                rawResult, JSONConfig.create()
+                        .setCheckDuplicate(true)
+                        .setIgnoreNullValue(false));
+        validateFields(json);
+        FileToolResult result = new FileToolResult(
+                requiredString(json, "protocol"),
+                requiredString(json, "operation"),
+                FileToolResult.FileToolStatus.valueOf(
+                        requiredString(json, "status")),
+                nullableString(json, "relativePath"),
+                requiredBoolean(json, "changed"),
+                requiredString(json, "message"),
+                nullableString(json, "failureReason"),
+                nullableString(json, "content"));
+        if (!FileToolResult.PROTOCOL.equals(result.protocol())
+                || !operation.equals(result.operation())
+                || !Objects.equals(normalizePath(relativePath),
+                normalizePath(result.relativePath()))) {
+            throw new IllegalArgumentException("工具结果协议、操作名或路径不匹配");
+        }
+        return result;
+    }
+
+    static boolean isAppliedMutation(String rawResult, String operation) {
         try {
             JSONObject json = JSONUtil.parseObj(
                     rawResult, JSONConfig.create()
@@ -47,16 +105,13 @@ final class FileToolProtocolSupport {
                     nullableString(json, "relativePath"),
                     requiredBoolean(json, "changed"),
                     requiredString(json, "message"),
+                    nullableString(json, "failureReason"),
                     nullableString(json, "content"));
-            if (!FileToolResult.PROTOCOL.equals(result.protocol())
-                    || !operation.equals(result.operation())
-                    || !Objects.equals(normalizePath(relativePath),
-                    normalizePath(result.relativePath()))) {
-                throw new IllegalArgumentException("工具结果协议、操作名或路径不匹配");
-            }
-            return result;
+            return operation.equals(result.operation())
+                    && result.status() == FileToolResult.FileToolStatus.APPLIED
+                    && result.changed();
         } catch (RuntimeException exception) {
-            return FileToolResult.failed(operation, relativePath, "工具结果协议解析失败");
+            return false;
         }
     }
 

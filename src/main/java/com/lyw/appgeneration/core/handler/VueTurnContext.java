@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
@@ -39,26 +40,24 @@ public final class VueTurnContext {
     private final AtomicBoolean resourcesClosed = new AtomicBoolean();
     private final AtomicBoolean userCommitted = new AtomicBoolean();
     private final CallbackGate callbackGate = new CallbackGate();
+    private final FileToolBudgetGuard.Session budgetSession;
 
     public VueTurnContext(long appId, long userId, String turnId,
-            AppOperationLease operationLease, VueBuildLease lease) {
+            AppOperationLease operationLease, VueBuildLease lease,
+            FileToolBudgetGuard.Session budgetSession) {
         this(appId, userId, turnId, operationLease, lease, null, false,
                 operationLease.startedAtNanos(), TURN_DEADLINE,
-                System::nanoTime);
+                System::nanoTime, budgetSession);
         VueBuildSnapshot snapshot = lease.snapshot();
-        if (operationLease.appId() != appId || snapshot.appId() != appId
-                || snapshot.userId() != userId
-                || !operationLease.ownerToken().equals(turnId)
-                || !snapshot.turnId().equals(turnId)) {
-            throw new IllegalArgumentException("回合上下文身份与精确租约不匹配");
-        }
+        validateIdentity(appId, userId, turnId, operationLease, snapshot);
     }
 
     private VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
             VueBuildPhase testingPhase, boolean testingTimedOut,
             long startedAtNanos, Duration deadlineDuration,
-            LongSupplier nanoTicker) {
+            LongSupplier nanoTicker,
+            FileToolBudgetGuard.Session budgetSession) {
         if (appId <= 0 || userId <= 0) {
             throw new IllegalArgumentException("appId 和 userId 必须大于 0");
         }
@@ -80,13 +79,16 @@ public final class VueTurnContext {
         }
         this.deadlineNanos = saturatingAdd(
                 startedAtNanos, deadlineDuration.toNanos());
+        this.budgetSession = Objects.requireNonNull(
+                budgetSession, "回合体积预算会话不能为空");
     }
 
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase) {
         return new VueTurnContext(appId, userId, turnId, null, null,
                 Objects.requireNonNull(phase), false,
-                System.nanoTime(), TURN_DEADLINE, System::nanoTime);
+                System.nanoTime(), TURN_DEADLINE, System::nanoTime,
+                new FileToolBudgetGuard().newSession());
     }
 
     static VueTurnContext testing(
@@ -94,7 +96,8 @@ public final class VueTurnContext {
             VueBuildPhase phase, boolean timedOut) {
         return new VueTurnContext(appId, userId, turnId, null, null,
                 Objects.requireNonNull(phase), timedOut,
-                System.nanoTime(), TURN_DEADLINE, System::nanoTime);
+                System.nanoTime(), TURN_DEADLINE, System::nanoTime,
+                new FileToolBudgetGuard().newSession());
     }
 
     static VueTurnContext testing(
@@ -104,7 +107,28 @@ public final class VueTurnContext {
         long startedAt = ticker.getAsLong();
         return new VueTurnContext(appId, userId, turnId, null, null,
                 Objects.requireNonNull(phase), false,
-                startedAt, deadlineDuration, ticker);
+                startedAt, deadlineDuration, ticker,
+                new FileToolBudgetGuard().newSession());
+    }
+
+    static VueTurnContext testing(
+            long appId, long userId, String turnId, VueBuildPhase phase,
+            FileToolBudgetGuard.Session budgetSession) {
+        return new VueTurnContext(appId, userId, turnId, null, null,
+                Objects.requireNonNull(phase), false,
+                System.nanoTime(), TURN_DEADLINE, System::nanoTime,
+                budgetSession);
+    }
+
+    private static void validateIdentity(
+            long appId, long userId, String turnId,
+            AppOperationLease operationLease, VueBuildSnapshot snapshot) {
+        if (operationLease.appId() != appId || snapshot.appId() != appId
+                || snapshot.userId() != userId
+                || !operationLease.ownerToken().equals(turnId)
+                || !snapshot.turnId().equals(turnId)) {
+            throw new IllegalArgumentException("回合上下文身份与精确租约不匹配");
+        }
     }
 
     public long appId() {
@@ -158,6 +182,10 @@ public final class VueTurnContext {
     public boolean recordControlledTermination(ControlledTermination termination) {
         return controlledTermination.compareAndSet(
                 null, Objects.requireNonNull(termination, "受控终止不能为空"));
+    }
+
+    public FileToolBudgetGuard.Session budgetSession() {
+        return budgetSession;
     }
 
     public Optional<ControlledTermination> controlledTermination() {

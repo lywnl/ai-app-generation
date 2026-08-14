@@ -26,6 +26,7 @@ import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -134,6 +135,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private UserMemoryService userMemoryService;
+
+    @Resource
+    private FileToolBudgetGuard fileToolBudgetGuard;
 
     private Duration deleteWaitTimeout = Duration.ofSeconds(10);
 
@@ -363,7 +367,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                         operationLease, loginUser.getId(), turnId);
                 context = new VueTurnContext(
                         appId, loginUser.getId(), turnId,
-                        operationLease, vueLease);
+                        operationLease, vueLease, fileToolBudgetGuard.newSession());
                 VueTurnContext finalContext = context;
                 Flux<String> codeStream = Flux.defer(() -> finalContext
                         .tryCallCallback(() -> prepareVueTurn(

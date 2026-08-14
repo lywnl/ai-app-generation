@@ -16,7 +16,7 @@ import java.util.function.Consumer;
  * <ul>
  *   <li>{@link ArgEventType#KEY_READY}   —— 某参数 key 解析完成(可用于"已知要调用哪个字段")</li>
  *   <li>{@link ArgEventType#DELTA}       —— 标注为 streaming 的字符串 value 的增量片段(转义已还原)</li>
- *   <li>{@link ArgEventType#VALUE_READY} —— 某参数 value 完整解析完成(含完整 value 字符串,便于前端一次性拿到)</li>
+ *   <li>{@link ArgEventType#VALUE_READY} —— 非流式参数 value 完整解析完成</li>
  * </ul>
  * <p>
  * 输入保证:只投喂"某工具单次 tool_call 的 arguments 拼接片段序列",完整拼接后是一个合法 JSON 对象。
@@ -30,7 +30,7 @@ public class ToolRequestStreamParser {
     public static class ArgEvent {
         public final ArgEventType type;
         public final String key;
-        /** DELTA 时表示增量片段;VALUE_READY 时表示完整 value;KEY_READY 时为 null */
+        /** DELTA 时表示增量片段;VALUE_READY 时表示非流式完整 value;KEY_READY 时为 null */
         public final String payload;
         public ArgEvent(ArgEventType type, String key, String payload) {
             this.type = type;
@@ -47,6 +47,7 @@ public class ToolRequestStreamParser {
         EXPECT_VALUE,
         IN_STRING_VALUE,
         IN_STRING_ESCAPE,
+        IN_UNICODE_ESCAPE,
         IN_LITERAL_VALUE,
         EXPECT_COMMA_OR_END,
         DONE
@@ -62,6 +63,10 @@ public class ToolRequestStreamParser {
     private boolean currentKeyStreaming;
     /** streaming 模式下,本次 feed 内累积的待 flush 增量(减少 sink 调用次数) */
     private final StringBuilder deltaBuf = new StringBuilder();
+    private int unicodeValue;
+    private int unicodeDigits;
+    private char pendingHighSurrogate;
+    private boolean finished;
 
     public ToolRequestStreamParser(String toolName, Consumer<ArgEvent> sink) {
         this.toolName = toolName;
@@ -77,8 +82,8 @@ public class ToolRequestStreamParser {
         return out;
     }
 
-    public void feed(String chunk) {
-        if (StrUtil.isEmpty(chunk)) {
+    public synchronized void feed(String chunk) {
+        if (finished || StrUtil.isEmpty(chunk)) {
             return;
         }
         for (int i = 0; i < chunk.length(); i++) {
@@ -88,7 +93,11 @@ public class ToolRequestStreamParser {
     }
 
     /** 流结束时调用。当前仅校验状态,不做补救。 */
-    public void finish() {
+    public synchronized void finish() {
+        if (finished) {
+            return;
+        }
+        finished = true;
         flushDelta();
         // 若 AI 输出合规,应处于 DONE;否则静默结束(由调用方决定是否告警)
     }
@@ -144,16 +153,25 @@ public class ToolRequestStreamParser {
                     state = State.IN_STRING_ESCAPE;
                 } else if (c == '"') {
                     // value 结束
+                    flushPendingHighSurrogate();
                     flushDelta();
-                    String full = valueBuf.toString();
-                    sink.accept(new ArgEvent(ArgEventType.VALUE_READY, currentKey, full));
+                    if (!currentKeyStreaming) {
+                        sink.accept(new ArgEvent(
+                                ArgEventType.VALUE_READY, currentKey,
+                                valueBuf.toString()));
+                    }
                     resetAfterValue();
                 } else {
-                    valueBuf.append(c);
-                    if (currentKeyStreaming) deltaBuf.append(c);
+                    appendValue(c);
                 }
             }
             case IN_STRING_ESCAPE -> {
+                if (c == 'u') {
+                    unicodeValue = 0;
+                    unicodeDigits = 0;
+                    state = State.IN_UNICODE_ESCAPE;
+                    return;
+                }
                 char unescaped = switch (c) {
                     case '"'  -> '"';
                     case '\\' -> '\\';
@@ -163,11 +181,26 @@ public class ToolRequestStreamParser {
                     case 'n'  -> '\n';
                     case 'r'  -> '\r';
                     case 't'  -> '\t';
-                    default   -> c; // unicode escape 未实现,遇到先按字面
+                    default   -> c;
                 };
-                valueBuf.append(unescaped);
-                if (currentKeyStreaming) deltaBuf.append(unescaped);
+                appendDecoded(unescaped);
                 state = State.IN_STRING_VALUE;
+            }
+            case IN_UNICODE_ESCAPE -> {
+                int digit = Character.digit(c, 16);
+                if (digit < 0) {
+                    flushPendingHighSurrogate();
+                    appendDecoded('\uFFFD');
+                    state = State.IN_STRING_VALUE;
+                    step(c);
+                    return;
+                }
+                unicodeValue = (unicodeValue << 4) | digit;
+                unicodeDigits++;
+                if (unicodeDigits == 4) {
+                    appendDecoded((char) unicodeValue);
+                    state = State.IN_STRING_VALUE;
+                }
             }
             case IN_LITERAL_VALUE -> {
                 if (c == ',' || c == '}' || Character.isWhitespace(c)) {
@@ -193,6 +226,37 @@ public class ToolRequestStreamParser {
         if (deltaBuf.length() == 0) return;
         sink.accept(new ArgEvent(ArgEventType.DELTA, currentKey, deltaBuf.toString()));
         deltaBuf.setLength(0);
+    }
+
+    private void appendDecoded(char decoded) {
+        if (Character.isHighSurrogate(decoded)) {
+            flushPendingHighSurrogate();
+            pendingHighSurrogate = decoded;
+            return;
+        }
+        if (Character.isLowSurrogate(decoded) && pendingHighSurrogate != 0) {
+            appendValue(pendingHighSurrogate);
+            appendValue(decoded);
+            pendingHighSurrogate = 0;
+            return;
+        }
+        flushPendingHighSurrogate();
+        appendValue(Character.isLowSurrogate(decoded) ? '\uFFFD' : decoded);
+    }
+
+    private void flushPendingHighSurrogate() {
+        if (pendingHighSurrogate != 0) {
+            appendValue('\uFFFD');
+            pendingHighSurrogate = 0;
+        }
+    }
+
+    private void appendValue(char value) {
+        if (currentKeyStreaming) {
+            deltaBuf.append(value);
+        } else {
+            valueBuf.append(value);
+        }
     }
 
     private void resetAfterValue() {

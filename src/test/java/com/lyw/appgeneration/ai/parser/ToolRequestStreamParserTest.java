@@ -6,6 +6,13 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,20 +21,27 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ToolRequestStreamParserTest {
 
-    /** 整包喂入:writeFile 的 content 为 streaming 字段,应既有 DELTA 又有 VALUE_READY */
+    /** 流式代码只以增量事件对外暴露，避免解析器额外保留无界完整副本。 */
     @Test
-    void writeFile_full_json_emits_keyReady_delta_and_valueReady() {
-        List<ArgEvent> events = ToolRequestStreamParser.collect(
+    void 流式代码字段只产生增量且不累积完整值() {
+        List<ArgEvent> writeEvents = ToolRequestStreamParser.collect(
                 "writeFile",
                 "{\"relativeFilePath\":\"src/a.vue\",\"content\":\"hello\\nworld\"}");
+        List<ArgEvent> modifyEvents = ToolRequestStreamParser.collect(
+                "modifyFile",
+                "{\"relativeFilePath\":\"src/a.vue\","
+                        + "\"oldContent\":\"A\\uD83D\\uDE00B\","
+                        + "\"newContent\":\"C\\nD\"}");
 
-        // 期望:KEY relativeFilePath -> VALUE src/a.vue -> KEY content -> DELTA(hello\nworld) -> VALUE hello\nworld
-        assertEvent(events.get(0), ArgEventType.KEY_READY,   "relativeFilePath", null);
-        assertEvent(events.get(1), ArgEventType.VALUE_READY, "relativeFilePath", "src/a.vue");
-        assertEvent(events.get(2), ArgEventType.KEY_READY,   "content",          null);
-        assertEvent(events.get(3), ArgEventType.DELTA,       "content",          "hello\nworld");
-        assertEvent(events.get(4), ArgEventType.VALUE_READY, "content",          "hello\nworld");
-        assertEquals(5, events.size());
+        assertLastValueReady(writeEvents, "relativeFilePath", "src/a.vue");
+        assertDeltaContent(writeEvents, "content", "hello\nworld");
+        assertNoValueReady(writeEvents, "content");
+
+        assertLastValueReady(modifyEvents, "relativeFilePath", "src/a.vue");
+        assertDeltaContent(modifyEvents, "oldContent", "A😀B");
+        assertDeltaContent(modifyEvents, "newContent", "C\nD");
+        assertNoValueReady(modifyEvents, "oldContent");
+        assertNoValueReady(modifyEvents, "newContent");
     }
 
     /** 非 streaming 字段(readFile.relativeFilePath)不应产生 DELTA */
@@ -67,7 +81,7 @@ class ToolRequestStreamParserTest {
                 .filter(e -> e.type == ArgEventType.DELTA)
                 .map(e -> e.payload).reduce("", String::concat);
         assertEquals("line1\nline2\nline3", joinedDelta);
-        assertLastValueReady(events, "content", "line1\nline2\nline3");
+        assertNoValueReady(events, "content");
     }
 
     /** 转义字符落在 chunk 边界:反斜杠在前一片末尾,被转义字符在后一片开头 */
@@ -76,10 +90,75 @@ class ToolRequestStreamParserTest {
         List<ArgEvent> events = feedChunks("writeFile", List.of(
                 "{\"content\":\"a\\", "\"b\"}"));
         // value 应为 a"b
-        assertLastValueReady(events, "content", "a\"b");
+        assertDeltaContent(events, "content", "a\"b");
+        assertNoValueReady(events, "content");
     }
 
-    /** 多参数顺序随意,全部字符串 value 都要被正确识别 */
+    @Test
+    void unicode_escape_and_surrogate_pair_across_chunks_are_decoded() {
+        List<ArgEvent> events = feedChunks("writeFile", List.of(
+                "{\"content\":\"A\\uD83D", "\\uDE00B\"}"));
+
+        assertDeltaContent(events, "content", "A😀B");
+        assertNoValueReady(events, "content");
+    }
+
+    @Test
+    void finish_waits_for_in_progress_feed_and_emits_each_value_once() throws Exception {
+        List<ArgEvent> events = new CopyOnWriteArrayList<>();
+        CountDownLatch keyCallbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseKeyCallback = new CountDownLatch(1);
+        CountDownLatch finishTaskStarted = new CountDownLatch(1);
+        ToolRequestStreamParser parser = new ToolRequestStreamParser("writeFile", event -> {
+            events.add(event);
+            if (event.type == ArgEventType.KEY_READY && "content".equals(event.key)) {
+                keyCallbackEntered.countDown();
+                awaitLatch(releaseKeyCallback);
+            }
+        });
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> feedFuture = executor.submit(
+                    () -> parser.feed("{\"content\":\"A\\uD83D\\uDE00B\"}"));
+            assertTrue(keyCallbackEntered.await(1, TimeUnit.SECONDS));
+
+            Future<?> finishFuture = executor.submit(() -> {
+                finishTaskStarted.countDown();
+                parser.finish();
+            });
+            assertTrue(finishTaskStarted.await(1, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class,
+                    () -> finishFuture.get(100, TimeUnit.MILLISECONDS));
+
+            releaseKeyCallback.countDown();
+            feedFuture.get(1, TimeUnit.SECONDS);
+            finishFuture.get(1, TimeUnit.SECONDS);
+        }
+
+        assertEquals(0, events.stream()
+                .filter(event -> event.type == ArgEventType.VALUE_READY)
+                .count());
+        assertDeltaContent(events, "content", "A😀B");
+    }
+
+    @Test
+    void feed_after_finish_does_not_change_output() {
+        List<ArgEvent> events = new ArrayList<>();
+        ToolRequestStreamParser parser = new ToolRequestStreamParser("writeFile", events::add);
+        parser.feed("{\"content\":\"before");
+        parser.finish();
+        List<ArgEvent> snapshot = List.copyOf(events);
+
+        parser.feed(" after finish\"}");
+        parser.finish();
+
+        assertEquals(snapshot, events);
+        assertEquals(0, events.stream()
+                .filter(event -> event.type == ArgEventType.VALUE_READY)
+                .count());
+    }
+
+    /** 多参数顺序随意，路径保留完整值，代码字段只保留增量。 */
     @Test
     void multiple_fields_in_order() {
         List<ArgEvent> events = ToolRequestStreamParser.collect(
@@ -91,10 +170,12 @@ class ToolRequestStreamParserTest {
             if (e.type == ArgEventType.VALUE_READY) keyValPairs.add(e.key + "=" + e.payload);
         }
         assertEquals(List.of(
-                "relativeFilePath=x.vue",
-                "oldContent=old",
-                "newContent=new"
+                "relativeFilePath=x.vue"
         ), keyValPairs);
+        assertDeltaContent(events, "oldContent", "old");
+        assertDeltaContent(events, "newContent", "new");
+        assertNoValueReady(events, "oldContent");
+        assertNoValueReady(events, "newContent");
     }
 
     // ---------- helpers ----------
@@ -121,10 +202,36 @@ class ToolRequestStreamParserTest {
         assertEquals(expected, last.payload);
     }
 
+    private static void assertNoValueReady(List<ArgEvent> events, String key) {
+        assertTrue(events.stream().noneMatch(event ->
+                event.type == ArgEventType.VALUE_READY && key.equals(event.key)));
+    }
+
+    private static void assertDeltaContent(
+            List<ArgEvent> events, String key, String expected) {
+        String actual = events.stream()
+                .filter(event -> event.type == ArgEventType.DELTA
+                        && key.equals(event.key))
+                .map(event -> event.payload)
+                .reduce("", String::concat);
+        assertEquals(expected, actual);
+    }
+
     private static List<String> filterNonDelta(List<ArgEvent> events) {
         return events.stream()
                 .filter(e -> e.type != ArgEventType.DELTA)
                 .map(e -> e.type + "|" + e.key + "|" + e.payload)
                 .toList();
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            if (!latch.await(1, TimeUnit.SECONDS)) {
+                throw new AssertionError("等待并发测试屏障超时");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("等待并发测试屏障时被中断", exception);
+        }
     }
 }

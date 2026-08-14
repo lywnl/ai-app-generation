@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -49,6 +50,12 @@ class AiServiceStreamingResponseHandlerTest {
             "failureKind":"CODE","timedOut":false,"repairable":true,
             "reflectionRequired":false,"nextAction":"REPAIR","message":"请修复",
             "errorSummary":"安全诊断","terminateToolLoop":false,"finalResponse":null}
+            """;
+    private static final String FILE_RESOURCE_LIMIT = """
+            {"protocol":"file-tool/v1","operation":"writeFile",
+            "status":"REJECTED","relativePath":"src/App.vue","changed":false,
+            "message":"工具内容超过本轮资源上限",
+            "failureReason":"RESOURCE_LIMIT_EXCEEDED","content":null}
             """;
 
     @Test
@@ -148,6 +155,87 @@ class AiServiceStreamingResponseHandlerTest {
         assertEquals(1, terminations.get());
         ToolExecutionResultMessage skipped = (ToolExecutionResultMessage) memory.messages().get(2);
         assertTrue(skipped.text().contains("受控跳过"));
+    }
+
+    @Test
+    void resourceLimitWritesCurrentAndSkippedToolResultsOnceWithoutNextModelRequest()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        List<String> events = new ArrayList<>();
+        RecordingChatMemory memory = new RecordingChatMemory(events);
+        AtomicInteger limitedExecutorCalls = new AtomicInteger();
+        AtomicInteger skippedExecutorCalls = new AtomicInteger();
+        AtomicInteger terminationCalls = new AtomicInteger();
+        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination> termination =
+                new AtomicReference<>();
+        StreamingRequestController controller = new StreamingRequestController();
+        controller.onControlledTermination(value -> {
+            terminationCalls.incrementAndGet();
+            termination.set(value);
+        });
+        ToolExecutionGuard guard = (toolName, memoryId, action) -> {
+            String result = action.get();
+            var parsed = ToolLoopTerminationProtocol.parseTrusted(toolName, result);
+            return new ToolExecutionGuard.GuardedToolExecution(
+                    result,
+                    parsed.terminate()
+                            ? new ToolLoopTerminationProtocol.ControlledTermination(
+                            parsed.reason(), parsed.finalResponse())
+                            : null);
+        };
+        AiServiceStreamingResponseHandler handler = newHandler(
+                context,
+                Map.of(
+                        "writeFile", (request, memoryId) -> {
+                            limitedExecutorCalls.incrementAndGet();
+                            return FILE_RESOURCE_LIMIT;
+                        },
+                        "readFile", (request, memoryId) -> {
+                            skippedExecutorCalls.incrementAndGet();
+                            return "不应执行";
+                        },
+                        "deleteFile", (request, memoryId) -> {
+                            skippedExecutorCalls.incrementAndGet();
+                            return "不应执行";
+                        }),
+                memory,
+                events,
+                controller,
+                guard);
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("limited", "writeFile"),
+                tool("skipped-read", "readFile"),
+                tool("skipped-delete", "deleteFile")));
+
+        assertEquals(1, limitedExecutorCalls.get());
+        assertEquals(0, skippedExecutorCalls.get());
+        assertEquals(0, model.chatInvocations);
+        assertEquals(1, terminationCalls.get());
+        assertNotNull(termination.get());
+        assertEquals(ToolLoopTerminationProtocol.ControlledTerminationReason
+                        .RESOURCE_LIMIT_EXCEEDED,
+                termination.get().reason());
+        assertNull(termination.get().finalResponse());
+        assertEquals(List.of(
+                "memory:add-tool-result:limited",
+                "callback:on-tool-executed:writeFile",
+                "memory:add-tool-result:skipped-read",
+                "callback:on-tool-executed:readFile",
+                "memory:add-tool-result:skipped-delete",
+                "callback:on-tool-executed:deleteFile"), events);
+        assertEquals(4, memory.messages().size());
+        ToolExecutionResultMessage current =
+                (ToolExecutionResultMessage) memory.messages().get(1);
+        ToolExecutionResultMessage skippedRead =
+                (ToolExecutionResultMessage) memory.messages().get(2);
+        ToolExecutionResultMessage skippedDelete =
+                (ToolExecutionResultMessage) memory.messages().get(3);
+        assertJsonEquals(FILE_RESOURCE_LIMIT, current.text());
+        assertTrue(skippedRead.text().contains("受控跳过"));
+        assertTrue(skippedDelete.text().contains("受控跳过"));
     }
 
     @Test

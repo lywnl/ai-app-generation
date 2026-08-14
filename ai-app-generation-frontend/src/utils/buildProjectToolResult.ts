@@ -6,7 +6,7 @@ export interface BuildProjectToolView {
   stage?: string
   statusText: string
   errorSummary?: string
-  terminal: boolean
+  terminateToolLoop: boolean
 }
 
 type JsonRecord = Record<string, unknown>
@@ -112,13 +112,13 @@ function isCompletedFailure(record: JsonRecord): boolean {
   ) {
     return false
   }
-  const terminal = record.attempt === MAX_ATTEMPTS
+  const finalAttempt = record.attempt === MAX_ATTEMPTS
   return (
-    record.repairable === (record.attempt === 1 && record.failureKind === 'CODE') &&
-    record.reflectionRequired === (Number(record.attempt) >= 2) &&
+    record.repairable === (Number(record.attempt) < MAX_ATTEMPTS && record.failureKind === 'CODE') &&
+    record.reflectionRequired === (record.attempt === 2) &&
     record.nextAction === expectedFailureAction(record) &&
-    record.terminateToolLoop === terminal &&
-    (terminal ? record.finalResponse === FAILURE_RESPONSE : record.finalResponse === null)
+    record.terminateToolLoop === finalAttempt &&
+    (finalAttempt ? record.finalResponse === FAILURE_RESPONSE : record.finalResponse === null)
   )
 }
 
@@ -150,19 +150,19 @@ function parseCompleted(record: JsonRecord): BuildProjectToolView | undefined {
   ) {
     return undefined
   }
-  return {
+  const view: BuildProjectToolView = {
     invocationStatus: 'COMPLETED',
     success: record.success,
     attempt: record.attempt,
     maxAttempts: MAX_ATTEMPTS,
     stage: record.stage,
     statusText: completedStatusText(record),
-    errorSummary:
-      typeof record.errorSummary === 'string'
-        ? record.errorSummary.slice(0, MAX_ERROR_SUMMARY_LENGTH)
-        : undefined,
-    terminal: record.terminateToolLoop as boolean,
+    terminateToolLoop: record.terminateToolLoop as boolean,
   }
+  if (typeof record.errorSummary === 'string') {
+    view.errorSummary = record.errorSummary.slice(0, MAX_ERROR_SUMMARY_LENGTH)
+  }
+  return view
 }
 
 function parseCancelled(record: JsonRecord): BuildProjectToolView | undefined {
@@ -177,21 +177,23 @@ function parseCancelled(record: JsonRecord): BuildProjectToolView | undefined {
     record.nextAction !== 'STOP' ||
     record.errorSummary !== null ||
     record.terminateToolLoop !== true ||
-    record.finalResponse !== FAILURE_RESPONSE ||
+    record.finalResponse !== null ||
     (hasAttemptAndStage && !BUILD_STAGES.has(record.stage as string)) ||
     (!hasAttemptAndStage && !hasNeither)
   ) {
     return undefined
   }
-  return {
+  const view: BuildProjectToolView = {
     invocationStatus: 'CANCELLED',
-    success: undefined,
-    attempt: hasAttemptAndStage ? (record.attempt as number) : undefined,
     maxAttempts: MAX_ATTEMPTS,
-    stage: hasAttemptAndStage ? (record.stage as string) : undefined,
     statusText: record.message as string,
-    terminal: true,
+    terminateToolLoop: true,
   }
+  if (hasAttemptAndStage) {
+    view.attempt = record.attempt as number
+    view.stage = record.stage as string
+  }
+  return view
 }
 
 function parseTransient(record: JsonRecord): BuildProjectToolView | undefined {
@@ -203,28 +205,27 @@ function parseTransient(record: JsonRecord): BuildProjectToolView | undefined {
     record.timedOut !== null ||
     record.repairable !== false ||
     record.reflectionRequired !== false ||
-    record.nextAction !== null ||
     record.errorSummary !== null
   ) {
     return undefined
   }
   const status = record.invocationStatus as 'BUILD_IN_PROGRESS' | 'REJECTED'
-  if (status === 'BUILD_IN_PROGRESS' && (record.terminateToolLoop || record.finalResponse !== null)) {
-    return undefined
-  }
-  if (
-    status === 'REJECTED' &&
-    (record.terminateToolLoop !== (record.finalResponse !== null) ||
-      (record.terminateToolLoop && record.finalResponse !== FAILURE_RESPONSE))
+  if (status === 'BUILD_IN_PROGRESS') {
+    if (record.nextAction !== null || record.terminateToolLoop || record.finalResponse !== null) {
+      return undefined
+    }
+  } else if (
+    record.finalResponse !== null ||
+    record.terminateToolLoop !== (record.nextAction === 'STOP') ||
+    (!record.terminateToolLoop && record.nextAction !== 'REPAIR')
   ) {
     return undefined
   }
   return {
     invocationStatus: status,
-    success: undefined,
     maxAttempts: MAX_ATTEMPTS,
     statusText: record.message as string,
-    terminal: record.terminateToolLoop as boolean,
+    terminateToolLoop: record.terminateToolLoop as boolean,
   }
 }
 

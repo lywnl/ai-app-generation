@@ -12,7 +12,7 @@ public final class ToolStreamingSpec {
     /** key: 工具 name；value: 需要增量流式下发的参数 key 集合 */
     private static final Map<String, Set<String>> STREAMING_KEYS = Map.of(
             "writeFile", Set.of("content"),
-            "modifyFile", Set.of("newContent")
+            "modifyFile", Set.of("oldContent", "newContent")
     );
 
     private ToolStreamingSpec() {}

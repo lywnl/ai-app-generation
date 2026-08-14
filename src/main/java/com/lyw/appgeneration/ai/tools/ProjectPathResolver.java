@@ -3,16 +3,16 @@ package com.lyw.appgeneration.ai.tools;
 import com.lyw.appgeneration.constants.AppConstant;
 
 import java.io.IOException;
-import java.nio.file.FileVisitResult;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Consumer;
 
 /**
  * Vue 工程文件工具的路径边界解析器。
@@ -48,43 +48,50 @@ final class ProjectPathResolver {
         return new ResolvedProjectPath(candidate, projectRoot.relativize(candidate).toString());
     }
 
-    List<Path> collectSafeDirectoryEntries(
-            Path directory, Long appId, Predicate<String> shouldIgnore) throws UnsafeProjectPathException {
+    void forEachSafeDirectoryEntry(
+            Path directory, Long appId, Predicate<String> shouldIgnore,
+            Consumer<Path> action) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
         Path normalizedDirectory = directory.toAbsolutePath().normalize();
         Path realProjectRoot = requireExistingProjectRoot(projectRoot);
         requireRealPathWithinRoot(normalizedDirectory, realProjectRoot);
-        List<Path> entries = new ArrayList<>();
         try {
-            Files.walkFileTree(normalizedDirectory, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path current, BasicFileAttributes attributes)
-                        throws IOException {
-                    if (!current.equals(normalizedDirectory)
-                            && shouldSkipTraversalEntry(
-                                    current.getFileName().toString(), shouldIgnore)) {
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
-                    rejectSymbolicLink(current);
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
-                        throws IOException {
-                    if (shouldSkipTraversalEntry(
-                            file.getFileName().toString(), shouldIgnore)) {
-                        return FileVisitResult.CONTINUE;
-                    }
-                    rejectSymbolicLink(file);
-                    entries.add(file);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-            return List.copyOf(entries);
+            visitSorted(normalizedDirectory, normalizedDirectory,
+                    shouldIgnore, action);
+        } catch (DirectoryBudgetExceededException exception) {
+            throw exception;
         } catch (IOException exception) {
             throw unsafe("目录包含无法安全读取的符号链接或路径", exception);
         }
+    }
+
+    /** 每次只保留当前目录的直接子项，排序后深度优先遍历。 */
+    private void visitSorted(
+            Path traversalRoot, Path directory,
+            Predicate<String> shouldIgnore, Consumer<Path> action)
+            throws IOException {
+        List<Path> children = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path child : stream) {
+                String name = child.getFileName().toString();
+                if (!shouldSkipTraversalEntry(name, shouldIgnore)) {
+                    children.add(child.toAbsolutePath().normalize());
+                }
+            }
+        }
+        children.sort(Comparator.comparing(child ->
+                normalizedRelativePath(traversalRoot, child)));
+        for (Path child : children) {
+            rejectSymbolicLink(child);
+            action.accept(child);
+            if (Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
+                visitSorted(traversalRoot, child, shouldIgnore, action);
+            }
+        }
+    }
+
+    private String normalizedRelativePath(Path root, Path path) {
+        return root.relativize(path).normalize().toString().replace('\\', '/');
     }
 
     private boolean shouldSkipTraversalEntry(
@@ -234,5 +241,8 @@ final class ProjectPathResolver {
     }
 
     record ResolvedProjectPath(Path path, String stateKey) {
+    }
+
+    static final class DirectoryBudgetExceededException extends RuntimeException {
     }
 }

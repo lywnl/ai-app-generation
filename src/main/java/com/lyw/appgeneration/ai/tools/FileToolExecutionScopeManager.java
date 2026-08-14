@@ -1,9 +1,11 @@
 package com.lyw.appgeneration.ai.tools;
 
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
+import com.lyw.appgeneration.core.builder.VueBuildFailureKind;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Objects;
 import java.util.Set;
@@ -15,13 +17,33 @@ import java.util.function.Supplier;
 public final class FileToolExecutionScopeManager {
 
     private static final ScopedValue<FileToolScope> CURRENT_SCOPE = ScopedValue.newInstance();
+    private static final Set<String> MUTATION_TOOLS = Set.of(
+            "writeFile", "modifyFile", "deleteFile");
+    private static final String NON_CODE_FAILURE_MESSAGE =
+            "当前为依赖或基础设施故障，请勿修改业务文件，直接重新构建";
     private final ScopeAuthority scopeAuthority = new ScopeAuthority();
+    private final FileToolBudgetGuard budgetGuard;
+
+    @Autowired
+    public FileToolExecutionScopeManager(FileToolBudgetGuard budgetGuard) {
+        this.budgetGuard = Objects.requireNonNull(budgetGuard, "文件工具预算不能为空");
+    }
 
     public FileToolScope online(
             VueBuildLease lease,
             String ownerToken,
             long appId,
             Set<String> allowedTools) {
+        return online(lease, ownerToken, appId, allowedTools,
+                budgetGuard.newSession());
+    }
+
+    public FileToolScope online(
+            VueBuildLease lease,
+            String ownerToken,
+            long appId,
+            Set<String> allowedTools,
+            FileToolBudgetGuard.Session budgetSession) {
         Objects.requireNonNull(lease, "lease 不能为空");
         VueBuildSnapshot snapshot = lease.snapshot();
         if (snapshot.appId() != appId || !snapshot.turnId().equals(ownerToken)) {
@@ -29,7 +51,7 @@ public final class FileToolExecutionScopeManager {
         }
         return new FileToolScope(
                 ScopeType.ONLINE, appId, ownerToken, Set.copyOf(allowedTools), lease,
-                null, scopeAuthority);
+                null, budgetSession, scopeAuthority);
     }
 
     public FileToolScope evaluation(
@@ -39,24 +61,74 @@ public final class FileToolExecutionScopeManager {
         }
         return new FileToolScope(
                 ScopeType.EVALUATION, appId, requireToken(ownerToken),
-                Set.copyOf(allowedTools), null, new EvaluationGate(), scopeAuthority);
+                Set.copyOf(allowedTools), null, new EvaluationGate(),
+                budgetGuard.newSession(), scopeAuthority);
     }
 
-    public <T> T callInScope(FileToolScope scope, Supplier<T> action) {
+    public <T> T callInScope(
+            FileToolScope scope, String toolName, Supplier<T> action) {
         Objects.requireNonNull(scope, "scope 不能为空");
         Objects.requireNonNull(action, "action 不能为空");
         requireIssuedScope(scope);
+        requireToolName(scope, toolName);
         if (scope.type() == ScopeType.EVALUATION) {
             try (EvaluationTicket ignored = scope.evaluationGate().enter()) {
                 return ScopedValue.where(CURRENT_SCOPE, scope).call(action::get);
             }
         }
         try (AutoCloseable ignored = scope.lease().enterCallback()) {
-            return ScopedValue.where(CURRENT_SCOPE, scope).call(action::get);
+            T result = ScopedValue.where(CURRENT_SCOPE, scope).call(action::get);
+            recordAppliedMutation(scope, toolName, result);
+            return result;
         } catch (RuntimeException exception) {
             throw exception;
         } catch (Exception exception) {
             throw new IllegalStateException("关闭在线工具回调失败", exception);
+        }
+    }
+
+    private void requireToolName(FileToolScope scope, String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            throw new ScopeViolationException("PROTOCOL_ERROR: 工具名称不能为空");
+        }
+        if (!scope.allowedTools().contains(toolName)) {
+            throw new ScopeViolationException("PROTOCOL_ERROR: 工具不在当前作用域白名单中");
+        }
+    }
+
+    /**
+     * 在具体 mutation 工具完成身份校验后、解析路径或执行 IO 前应用故障策略。
+     *
+     * @return 非空表示本次 mutation 被策略拒绝，返回值是可直接交给模型的受信协议
+     */
+    public String rejectForbiddenMutation(
+            FileToolScope scope, String toolName, String relativePath) {
+        Objects.requireNonNull(scope, "scope 不能为空");
+        requireIssuedScope(scope);
+        requireToolName(scope, toolName);
+        if (!mutationForbidden(scope, toolName)) {
+            return null;
+        }
+        return FileToolProtocolSupport.json(FileToolResult.rejected(
+                toolName, relativePath, NON_CODE_FAILURE_MESSAGE));
+    }
+
+    private boolean mutationForbidden(FileToolScope scope, String toolName) {
+        if (scope.type() != ScopeType.ONLINE || !MUTATION_TOOLS.contains(toolName)) {
+            return false;
+        }
+        VueBuildFailureKind failureKind = scope.lease().snapshot().failureKind();
+        return failureKind == VueBuildFailureKind.DEPENDENCY
+                || failureKind == VueBuildFailureKind.INFRASTRUCTURE;
+    }
+
+    private void recordAppliedMutation(
+            FileToolScope scope, String toolName, Object rawResult) {
+        if (scope.type() == ScopeType.ONLINE
+                && MUTATION_TOOLS.contains(toolName)
+                && rawResult instanceof String result
+                && FileToolProtocolSupport.isAppliedMutation(result, toolName)) {
+            scope.lease().recordSuccessfulMutation();
         }
     }
 
@@ -153,6 +225,7 @@ public final class FileToolExecutionScopeManager {
                 Set<String> allowedTools,
                 VueBuildLease lease,
                 EvaluationGate evaluationGate,
+                FileToolBudgetGuard.Session budgetSession,
                 ScopeAuthority authority) {
 
         public FileToolScope {
@@ -161,6 +234,7 @@ public final class FileToolExecutionScopeManager {
             allowedTools = Set.copyOf(
                     Objects.requireNonNull(allowedTools, "allowedTools 不能为空"));
             Objects.requireNonNull(authority, "authority 不能为空");
+            Objects.requireNonNull(budgetSession, "文件工具预算会话不能为空");
             if (type == ScopeType.ONLINE && lease == null) {
                 throw new IllegalArgumentException("在线作用域必须绑定精确 Vue 租约");
             }
