@@ -39,7 +39,8 @@
 | 三种代码生成模式 | `HTML` 单文件 / `MULTI_FILE` 多文件 / `VUE_PROJECT` Vue 工程 |
 | AI 智能路由 | 由 Qwen-Turbo 自动判断需求适合的生成模式 |
 | RAG 检索增强 | PgVector 向量检索 + DashScope `text-embedding-v4` + `gte-rerank-v2` 二次重排 |
-| Agent 工具调用 | Vue 工程模式下 AI 自主调用 `FileWrite/Read/Modify/Delete/DirRead/Exit` 6 类工具完成多文件项目搭建 |
+| Agent 工具调用 | 工具注册层提供 5 个文件工具、`buildProject`、`exit`；在线 Vue 使用“5 个文件工具 + `buildProject`”显式白名单，离线首次生成评测使用“5 个文件工具 + `exit`” |
+| 受控 ReAct 构建修复 | Vue 生成、真实构建和最多两个失败处理阶段位于同一 SSE 回合；最多执行 3 次真实构建，任意一次成功或第三次失败后由后端强制结束 |
 | 图片采集 Agent | 首条消息自动调度 `Pexels 图片搜索` + `阿里 wan2.2 Logo 生成` + `Mermaid 流程图` + `unDraw 插画` 4 类工具，并行收集封面/Logo/插图素材 |
 | 流式 SSE | Reactor `Flux<ServerSentEvent>` + 自定义工具调用流解析器（字符级状态机） |
 | Prompt 安全护栏 | 注解 `@PromptSafetyCheck` + AOP 切面 + LangChain4j `InputGuardrail` 双重拦截 |
@@ -106,9 +107,13 @@ User Prompt
                                                         │
                                                         ▼
                           [DeepSeek 流式生成] ── SSE Flux ──► 浏览器
-                                  │
-                                  ▼
-                          [代码解析 → 文件落盘 → Vue 工程构建]
+                                  │                         ▲
+                                  ▼                         │
+                          [文件工具落盘 → buildProject] ────┤
+                                  │                         │
+                      ┌───────────┴───────────┐             │
+                      ▼                       ▼             │
+                  [构建成功]             [构建失败诊断] ────┘
                                   │
                                   ▼
                           [Selenium 截屏 → COS 上传 → 更新封面]
@@ -214,7 +219,7 @@ $env:TEN_SERCET_ID="xxx"
 $env:TEN_SECRET_KEY="xxx"
 ```
 
-> **温馨提示**：`application.yml` 中数据库密码默认为开发期占位 `lyw666`，请上线前改成自己的安全密码或迁移到环境变量。
+> **安全要求**：数据库、Redis、PgVector、COS 和模型密钥必须通过环境变量或秘密管理平台注入。不要在受版本控制的配置、README、命令历史或日志中保存秘密字面量；已暴露的凭据需要轮换，不能只修改配置文本。
 
 ### 4. 启动后端
 
@@ -436,7 +441,7 @@ ai-app-generation/
 
 **类**：`AiCodeGeneratorFacade.processTokenStream()` + `ai/tools/*`
 
-Vue 工程不能用一次性 chat 生成（结构复杂、文件多），改用 LangChain4j `TokenStream` + 工具调用：
+Vue 工程不能用一次性 chat 生成（结构复杂、文件多），改用 LangChain4j `TokenStream` + 后端受控 ReAct。模型负责生成、诊断和调用工具；构建次数、文件修改权限、循环上限、取消、超时和终态由后端状态机控制，不能依赖 Prompt 自觉退出。
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -445,11 +450,32 @@ Vue 工程不能用一次性 chat 生成（结构复杂、文件多），改用 
 | `FileModifyTool` | 局部修改（避免整文件重写） |
 | `FileDeleteTool` | 删除文件 |
 | `FileDirReadTool` | 列出工程目录 |
-| `ExitTool` | AI 主动判断完成、退出循环 |
+| `BuildProjectTool` | 在线 Vue 执行真实安装与构建，并返回 `vue-build-tool/v1` 结构化诊断 |
+| `ExitTool` | 仅用于离线首次生成评测；在线 Vue 不暴露该工具 |
+
+**工具白名单不是“所有工具都可用”**：在线 Vue 只使用 5 个文件工具和 `buildProject`；离线首次生成评测只使用 5 个文件工具和 `exit`，避免在线自动修复污染首次生成质量指标。HTML 与 `MULTI_FILE` 保持原有生成协议，不接入 Vue 构建修复状态机。
+
+**构建状态机**：
+
+| 已完成构建 | 结果 | 文件 mutation 权限 | 下一动作 |
+| :---: | :--- | :--- | :--- |
+| 第 1 次 | 成功 | 关闭 | 立即结束工具循环 |
+| 第 1 次 | `CODE` 失败 | 允许 | 进行最小代码修复后再构建 |
+| 第 1 次 | `DEPENDENCY` / `INFRASTRUCTURE` 失败 | 禁止 | 不改业务文件，直接重试构建 |
+| 第 2 次 | 成功 | 关闭 | 立即结束工具循环 |
+| 第 2 次 | 任意失败 | 仅 `CODE` 允许 | 进入最终根因诊断，再执行最后一次构建 |
+| 第 3 次 | 成功 | 关闭 | 立即结束工具循环 |
+| 第 3 次 | 任意失败 | 关闭 | 固定失败终态并强制结束，不再请求模型 |
+
+- 真实构建最多 3 次；`BUILD_IN_PROGRESS`、作用域拒绝、CODE 失败后缺少新 mutation 等未真正开始构建的调用不消耗构建次数。
+- CODE 失败后，只有新的 `file-tool/v1 APPLIED && changed=true` 才解锁下一次真实构建；重复内容、失败或取消不算修复。
+- 非代码故障时，`writeFile`、`modifyFile`、`deleteFile` 在路径解析和文件副作用前被拒绝，读取和 `buildProject` 仍可使用。
+- 第二次失败后的“最终诊断”是一个状态机阶段，不等于只允许一次模型请求或一次 `modifyFile`。
+- 单轮模型请求和工具执行分别最多 64 次；同时活跃 Vue 回合最多 64 个，第 65 个快速拒绝，防止非构建工具形成无限循环。
 
 **流式工具调用解析器**：`ai/parser/ToolRequestStreamParser.java`
 
-每个 tool call id 维护独立的字符级状态机，处理 LLM 流式吐出参数 JSON 时的字段级 delta 推送（`KEY_READY` → `DELTA` → `VALUE_READY`），让前端实时渲染"正在写入哪个文件"，体验接近 Cursor / Bolt.new。
+每个 tool call id 维护独立的字符级状态机，处理 LLM 流式吐出参数 JSON 时的字段级 delta 推送（`KEY_READY` → `DELTA` → `VALUE_READY`），让前端实时渲染“正在写入或修改哪个文件”。`writeFile.content`、`modifyFile.oldContent/newContent` 只通过受预算 DELTA 展示；完成事件不会重复携带完整代码。默认预算为：单文件 128,000 code point、单轮累计 mutation 256,000、稳定 AI 文本 384,000、单次文件读取 128,000、目录读取 20,000。超限在写盘、广播或落库前受控终止。
 
 ### 4. 图片采集 Agent
 
@@ -505,9 +531,14 @@ data:
 ```
 
 - 请求正文使用 JSON，`appId` 保持字符串，用户消息不进入 URL 和访问日志
+- 原始请求体在 Jackson 反序列化前受 **262,144 字节**硬上限保护；反序列化后的用户消息再受 **32,000 Unicode code point** 业务上限保护
 - 默认 `message` 事件用 `{"d": "片段"}` 包装；工具消息也走该正文通道
-- `turn-outcome` 是 Vue 回合的唯一业务终态，随后发送唯一 `done`
+- 命名事件只允许 `heartbeat`、`business-error`、`turn-outcome`、`done`；未知命名事件属于协议错误，不能退化为聊天正文
+- `turn-outcome` 是已提交 Vue 回合的唯一业务终态，随后发送唯一 `done`；`done` 只表示 SSE 传输正常收尾，不表示业务成功
 - `business-error` 只承载 User 提交前的安全错误，并以 `done` 结束
+- 前端只有在 `turn-outcome.outcome=SUCCEEDED` 且收到 `done` 后刷新预览；失败、取消、超时、系统错误和协议错误都保留旧预览
+- 心跳每 15 秒发送一次。Vue 回合是从操作租约领取开始计算的 1,800 秒绝对截止，不会因持续输出 token 而重置；Spring MVC 异步超时为 1,845 秒，Nginx 读写超时为 1,860 秒，给取消和终态持久化留出收尾余量
+- 生成 POST 只消费 JSON，并使用显式可信 Origin；HTTP 413、其他非 2xx 或错误的 SSE `Content-Type` 由前端转换为固定安全文案，不显示代理响应正文
 
 ### 7. 分层对话记忆（L0 / L1 / L2）
 
@@ -522,7 +553,7 @@ LayeredChatMemory.messages() 每轮拼装后送入大模型：
   │   (UserMessage, AiMessage) │   ← 跨应用，源自 app_memory
   ├─ L1 本 App 滚动摘要 ──────┤  "本应用早期对话的 5 段摘要"
   │   (UserMessage, AiMessage) │   ← 单应用，源自 app_memory_summary
-  ├─ L0 原始热窗口 ───────────┤  最近 100 条原文（user / ai / tool）
+  ├─ L0 热窗口 ───────────────┤  执行期含 user / ai / tool；Vue 终态折叠本轮工具尾部
   │   delegate.messages()      │   ← Redis，MessageWindowChatMemory
   └────────────────────────────┘
 ```
@@ -531,6 +562,10 @@ LayeredChatMemory.messages() 每轮拼装后送入大模型：
 
 - 按 `appId` 持久化到 Redis（TTL `3600s`），窗口上限 **100 条消息**，满后由 `MessageWindowChatMemory` 内置逻辑裁剪，并保证 **tool 调用 / 结果成对驱逐**（不留孤儿 tool 消息把模型搞崩）
 - 冷启动（应用重启 / 缓存过期）时，`loadChatHistoryToMemory(appId, delegate, 20)` 从 MySQL 回填最近 20 条原文重建窗口
+- 在线 Vue 的 ReAct 执行期会临时保留模型消息、工具请求和工具结果，供下一次模型调用继续诊断。唯一终态收尾器定位本轮最后一条 User，删除其后的原始 AI/tool 尾部，再追加一条 `AiMessage(canonicalAiText)`；同一个不可变 `canonicalAiText` 同时写入 MySQL `chat_history`，因此修复后的真实落盘代码和精简构建轨迹可在刷新后恢复，而错误工具尾部不会长期占据 L0
+- `canonicalAiText` 中的代码变更只接受受信 `file-tool/v1 APPLIED && changed=true` 证明已真实落盘的内容。构建错误摘要只进入当前模型工具结果和实时构建卡片；原始 npm 日志只进入专用服务端日志；`readFile/readDir` 正文只进入当前模型工具结果，前端完成事件保留安全状态元数据但固定 `content=null`
+- L0 折叠无法确认成功时，系统清除不可信的 Redis/Caffeine L0，下一轮从 MySQL 冷重建，避免残留工具消息或读取正文继续参与上下文
+- 当前首轮 RAG/图片增强后的 `UserMessage` 仍可能进入 L0，直到窗口淘汰、显式清理或 MySQL 冷重建。当前 L0 仍按 **100 条消息**而非 token 裁剪；本次 ReAct 改造没有改变这一算法
 
 **L1 · App 级滚动摘要**（`MemorySummaryService` + `app_memory_summary`，每 App 一行）
 
@@ -552,6 +587,7 @@ LayeredChatMemory.messages() 每轮拼装后送入大模型：
 - **全链路 best-effort**：L1 / L2 的提炼跑在共享后台线程池（core 5 / max 10 / queue 200，**队列满直接 `DiscardPolicy` 丢弃**），失败则 `failCount++` 且游标不前进，连续失败 ≥ 3 触发 **circuit breaker** 暂停 —— 任意一层挂掉都自动降级回纯 L0，绝不阻塞或拖慢主对话流
 - **零竞态**：异步线程只读 `chat_history`、只写各自的记忆表（L1 写 `app_memory_summary`，L2 写 `app_memory` / 游标表），不碰 delegate 与 Redis 窗口；L1 按 `appId`、L2 按 `userId` 各自 single-flight 去重
 - **摘要 ≠ 压缩**：L1 在第 4 轮（满 8 条）就可能生成，但 L0 要累计到 100 条才真正驱逐。早期摘要与原文**双重存在**是有意的安全冗余 —— 等窗口满时，L1 的价值才从"冗余"变成"唯一上下文来源"
+- **构建信息边界**：L1 只吸收仍有效的应用目标、硬约束、已否决方案和关键设计决策；L2 只提取跨应用稳定偏好。两层都排除构建错误、原始日志、读取正文和一次性修复轨迹，并且只在 MySQL/L0 稳定终态闭合后异步触发
 - **当前按消息条数（100）而非 token 裁剪**：HTML / 多文件无工具循环、每轮约 +2 条（100 条 ≈ 50 轮，偏宽松），Vue 工程含工具循环、每轮可达几十条（偏紧）。这是已知权衡，后续可演进为 token 感知或按 `CodeGenType` 分档
 
 ### 8. 数据库设计
@@ -567,7 +603,7 @@ LayeredChatMemory.messages() 每轮拼装后送入大模型：
 | `app_memory` | userId / type(USER_PREFERENCE) / name(类别) / content / appId(溯源) | `uk_userId_type_name` 偏好去重键 —— **L2 跨 App 偏好** |
 | `app_memory_extract_cursor` | appId / userId / lastExtractedId(游标) / failCount | `uk_appId` 每应用一行 —— **L2 抽取游标** |
 
-> **记忆存储分工**：L0 热窗口存于 **Redis**（`MessageWindowChatMemory`，不落 MySQL）；L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:{userId}`，TTL 1h）堵住工具循环内的高频读。
+> **记忆存储分工**：L0 窗口本身存于 **Redis**（`MessageWindowChatMemory`）；Vue 每轮原始可见 User 与折叠后的 `canonicalAiText` 同时写入 MySQL `chat_history`，作为刷新回放和 L0 冷重建的稳定来源。L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:{userId}`，TTL 1h）堵住工具循环内的高频读。
 
 **PostgreSQL 向量库** `ai_codegen_rag`：
 
@@ -607,7 +643,7 @@ server:
     context-path: /api
 
 spring:
-  mvc.async.request-timeout: 600000   # SSE 流式接口异步超时：10 分钟
+  mvc.async.request-timeout: 1845000  # SSE 运输层：30 分 45 秒
   session:
     store-type: redis
     timeout: 2592000                  # 30 天
@@ -631,13 +667,26 @@ rag:
   retrieval: { top-k: 3, min-score: 0.30 }
   rerank: { enabled: true, model-name: gte-rerank-v2, top-n: 10 }
   prompt: { max-context-chars: 4000 }
+
+ai:
+  vue:
+    tool-budget:
+      max-single-file-code-points: 128000
+      max-cumulative-mutation-code-points: 256000
+      max-canonical-ai-text-code-points: 384000
+      max-read-file-code-points: 128000
+      max-read-dir-code-points: 20000
 ```
+
+Vue 业务层使用 30 分钟绝对截止，Spring 的 30 分 45 秒用于终态收尾；生产 Nginx 对精确生成路径设置 `client_max_body_size 272k`，读写超时均为 31 分钟。三层顺序必须保持“业务 < Spring < Nginx”，不能把 Reactor 空闲超时当作绝对回合时限。
 
 ---
 
 ## 生产部署
 
 完整部署文档：[`prod/README.md`](./prod/README.md)
+
+> **当前发布边界**：Vue 受控 ReAct 构建只能用于**单实例、可信用户和可信项目源码的内测**，不能直接开放给不可信公网用户。当前构建进程仍与主后端共享权限，`AppOperationLeaseManager` 也是单 JVM 进程内租约。公开生产前必须把构建迁移到独立非 root 执行环境，并限制可写目录、CPU、内存、PID、总时限、出站网络、日志速率和磁盘；多实例部署前必须改为带 owner token、TTL、续租和 fencing token 的 Redis 分布式租约。
 
 ### 一键部署（Docker Compose）
 
@@ -688,7 +737,122 @@ curl http://localhost:9025/api/actuator/health
 - RAG 检索命中率 / 重排耗时
 - JVM / HikariCP / Redis 连接池
 
-访问：<http://localhost:3000>（默认账号 `admin / lyw666`，请上线前修改）
+访问：<http://localhost:3000>。管理员账号和密码必须通过环境变量或秘密管理平台配置，不在文档或版本库中提供默认秘密。
+
+### Vue 构建修复指标
+
+受控 ReAct 增加了低基数业务指标，标签不包含 `appId`、`userId`、`turnId`、路径、错误摘要或日志正文：
+
+| 指标 | 主要标签 | 含义 |
+| :--- | :--- | :--- |
+| `vue_build_attempts_total` | `attempt/result/stage/failure_kind` | 每次真实构建的唯一结果 |
+| `vue_build_attempt_duration_seconds` | `attempt/result/stage` | 真实构建耗时直方图 |
+| `vue_turn_outcomes_total` | `outcome/phase` | Vue 回合唯一业务终态 |
+| `vue_turn_admissions_total` | `result` | 64 个全局准入许可的领取、拒绝和释放 |
+| `vue_turn_cancellations_total` | `trigger/result` | 取消请求、完成、超时和失败 |
+| `vue_memory_l0_sync_total` | `action/result` | L0 折叠、失效和冷重建结果 |
+| `app_operations_total` | `operation/result/conflict_with` | 生成、部署、下载、删除的统一 app 租约结果 |
+| `generation_sse_protocol_results_total` | `result/error_kind` | SSE 控制协议结果 |
+| `generation_sse_publisher_terminations_total` | `result` | Reactor 发布流完成、订阅取消或发布异常 |
+
+以下查询先使用 15 分钟窗口，低流量时再用 30 分钟确认。指标名已由项目中的 `PrometheusMeterRegistry.scrape()` 自动化测试锁定；部署后仍需从真实 `/api/actuator/prometheus` 核验采集、重标记和告警链路。
+
+```promql
+# 第 1 次构建成功率
+sum(rate(vue_build_attempts_total{attempt="1",result="succeeded"}[15m]))
+/
+clamp_min(sum(rate(vue_build_attempts_total{attempt="1"}[15m])), 1e-9)
+```
+
+```promql
+# 第一次修复阶段条件成功率
+sum(rate(vue_build_attempts_total{attempt="2",result="succeeded"}[15m]))
+/
+clamp_min(sum(rate(vue_build_attempts_total{attempt="2"}[15m])), 1e-9)
+```
+
+```promql
+# 最终诊断阶段条件成功率
+sum(rate(vue_build_attempts_total{attempt="3",result="succeeded"}[15m]))
+/
+clamp_min(sum(rate(vue_build_attempts_total{attempt="3"}[15m])), 1e-9)
+```
+
+```promql
+# 第三次构建最终失败占全部初始构建的比例
+sum(rate(vue_build_attempts_total{attempt="3",result="failed"}[15m]))
+/
+clamp_min(sum(rate(vue_build_attempts_total{attempt="1"}[15m])), 1e-9)
+```
+
+```promql
+# 各 attempt 构建耗时 P95
+histogram_quantile(0.95,
+  sum by (le, attempt) (
+    rate(vue_build_attempt_duration_seconds_bucket[15m])
+  )
+)
+```
+
+```promql
+# Vue 全局准入拒绝率
+sum(rate(vue_turn_admissions_total{result="rejected"}[15m]))
+/
+clamp_min(sum(rate(vue_turn_admissions_total{result=~"acquired|rejected"}[15m])), 1e-9)
+```
+
+```promql
+# 同 app 操作拒绝率
+sum(rate(app_operations_total{result="rejected"}[15m]))
+/
+clamp_min(sum(rate(app_operations_total[15m])), 1e-9)
+```
+
+```promql
+# Vue 取消完成率
+sum(rate(vue_turn_cancellations_total{result="completed"}[30m]))
+/
+clamp_min(sum(rate(vue_turn_cancellations_total{result="requested"}[30m])), 1e-9)
+```
+
+```promql
+# L0 同步失败次数
+sum(increase(vue_memory_l0_sync_total{result="failed"}[15m]))
+```
+
+```promql
+# SSE 控制协议异常率
+sum(rate(generation_sse_protocol_results_total{result="protocol_error"}[15m]))
+/
+clamp_min(sum(rate(generation_sse_protocol_results_total[15m])), 1e-9)
+```
+
+```promql
+# 生成回合提交前系统降级率
+sum(rate(generation_sse_protocol_results_total{
+  result="business_error",error_kind="system"
+}[15m]))
+/
+clamp_min(sum(rate(generation_sse_protocol_results_total[15m])), 1e-9)
+```
+
+```promql
+# SSE 发布链错误率；不等同于 socket 写出失败率
+sum(rate(generation_sse_publisher_terminations_total{result="publisher_error"}[15m]))
+/
+clamp_min(sum(rate(generation_sse_publisher_terminations_total[15m])), 1e-9)
+```
+
+### 构建日志、灰度与回滚
+
+- 原始 npm 输出只写入 `${VUE_BUILD_LOG_DIR:-logs/vue-build}/raw-build.log`，专用 logger 设置 `additivity=false`，单文件 10MB、保留 14 天、总量 1GB；业务 SSE 和稳定记忆只使用脱敏、截断后的错误摘要
+- 任意 15 分钟出现协议错误、取消失败或 L0 失效/重建失败，立即停止扩大灰度；确认隐私泄漏、第 4 次真实构建或删除后晚写时直接回滚
+- 第 1 次构建至少 20 个样本后，最终失败比例超过 10%、SSE 发布链错误率超过 5%，或同 app 拒绝率较同流量基线上升 2 倍，停止扩大灰度
+- 构建 P95 先采集小流量 24 小时基线；超过同 attempt 基线 1.5 倍时告警，不用任意固定秒数代替容量基线
+- Nginx 499/5xx 必须按 `/api/app/chat/gen/code` 单独聚合。`publisher_error` 只表示应用发布链错误，不能冒充代理断连或真实 socket 写出失败
+- POST 请求、前置字节门禁、`vue-build-tool/v1`、`turn-outcome -> done` 和前端解析器属于同一兼容单元，必须前后端成对回滚；不能只回滚一侧
+- 回滚构建工具时必须同时移除在线 `buildProject` 白名单和强制终止协议；回滚依赖复用前先安全清理服务生成的依赖状态标记与 `node_modules`
+- 本次没有新增数据库表或字段，不需要数据库回滚脚本；但 MySQL、Redis、Caffeine 和文件系统之间没有跨资源事务，进程在删除步骤间崩溃仍需要人工检查残留
 
 ---
 
