@@ -40,7 +40,7 @@ class AiServiceStreamingResponseHandlerTest {
             {"protocol":"vue-build-tool/v1","invocationStatus":"COMPLETED",
             "success":false,"attempt":3,"maxAttempts":3,"stage":"NPM_BUILD",
             "failureKind":"CODE","timedOut":false,"repairable":false,
-            "reflectionRequired":true,"nextAction":"STOP","message":"构建失败",
+            "reflectionRequired":false,"nextAction":"STOP","message":"构建失败",
             "errorSummary":"安全诊断","terminateToolLoop":true,
             "finalResponse":"抱歉，系统遇到了一些问题，请您稍后重试修复"}
             """;

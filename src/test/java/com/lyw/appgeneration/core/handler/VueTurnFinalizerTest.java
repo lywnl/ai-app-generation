@@ -229,7 +229,7 @@ class VueTurnFinalizerTest {
     }
 
     @Test
-    void redisFailureKeepsBuildOutcomeAndClearsUnsafeL0ForColdRebuild() {
+    void redisFailureKeepsBuildOutcomeClearsUnsafeL0AndSkipsStableMemoryHooks() {
         when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(STORE_FAILED, java.util.List.of()));
         when(factory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
@@ -243,8 +243,7 @@ class VueTurnFinalizerTest {
         assertEquals(SUCCEEDED, result.outcome().outcome());
         verify(factory).invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         verify(factory, never()).invalidateVueService(APP_ID);
-        verify(summary).triggerSummarizationAsync(APP_ID);
-        verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        verifyNoInteractions(summary, preference);
     }
 
     @Test

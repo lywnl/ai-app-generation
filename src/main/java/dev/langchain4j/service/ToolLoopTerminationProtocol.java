@@ -86,7 +86,7 @@ public final class ToolLoopTerminationProtocol {
                 && FAILURE_KINDS.contains(string(fields.get("failureKind")))
                 && fields.get("timedOut") instanceof Boolean
                 && Boolean.FALSE.equals(fields.get("repairable"))
-                && Boolean.TRUE.equals(fields.get("reflectionRequired"))
+                && Boolean.FALSE.equals(fields.get("reflectionRequired"))
                 && "STOP".equals(fields.get("nextAction"))
                 && fields.get("errorSummary") instanceof String
                 && Boolean.TRUE.equals(fields.get("terminateToolLoop"))

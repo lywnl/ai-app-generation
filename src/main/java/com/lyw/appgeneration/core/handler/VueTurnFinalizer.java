@@ -224,6 +224,7 @@ public class VueTurnFinalizer implements InitializingBean {
             log.warn("Vue 回合 L0 未稳定同步,appId={},turnId={},stage={}",
                     context.appId(), context.turnId(), collapse.status());
             invalidateUnstableMemory(context);
+            return new FinalizationResult(requestedOutcome, true);
         }
         triggerStableMemoryHooks(context);
         return new FinalizationResult(requestedOutcome, true);
