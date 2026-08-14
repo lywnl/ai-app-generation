@@ -18,6 +18,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -105,19 +106,19 @@ class AiGeneratorServiceFactoryTest {
         ToolManager toolManager = mock(ToolManager.class);
         ReflectionTestUtils.setField(factory, "toolManager", toolManager);
 
-        Set<String> online = factory.onlineVueToolNames();
-        Set<String> evaluation = factory.evaluationVueToolNames();
+        List<String> online = factory.onlineVueToolNames();
+        List<String> evaluation = factory.evaluationVueToolNames();
         factory.onlineVueTools();
         factory.evaluationVueTools();
 
-        assertEquals(Set.of(
+        assertEquals(List.of(
                 "writeFile", "readFile", "modifyFile", "deleteFile", "readDir",
                 "buildProject"), online);
-        assertEquals(Set.of(
+        assertEquals(List.of(
                 "writeFile", "readFile", "modifyFile", "deleteFile", "readDir", "exit"),
                 evaluation);
-        verify(toolManager).getTools(online);
-        verify(toolManager).getTools(evaluation);
+        verify(toolManager).requireTools(online.toArray(String[]::new));
+        verify(toolManager).requireTools(evaluation.toArray(String[]::new));
     }
 
     @Test
@@ -131,7 +132,8 @@ class AiGeneratorServiceFactoryTest {
         StreamingChatModel firstModel = mock(StreamingChatModel.class);
         StreamingChatModel secondModel = mock(StreamingChatModel.class);
         doReturn(firstModel, secondModel).when(factory).evaluationStreamingChatModel();
-        when(toolManager.getTools(any())).thenReturn(new BaseTool[]{new EvaluationTools()});
+        when(toolManager.requireTools(any(String[].class)))
+                .thenReturn(new BaseTool[]{new EvaluationTools()});
         ReflectionTestUtils.setField(factory, "toolManager", toolManager);
         ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", chatHistoryService);

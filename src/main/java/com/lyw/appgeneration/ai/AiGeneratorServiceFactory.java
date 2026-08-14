@@ -27,6 +27,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -224,20 +225,20 @@ public class AiGeneratorServiceFactory {
                 "evaluationReasoningStreamingChatModelPrototype", StreamingChatModel.class);
     }
 
-    Set<String> onlineVueToolNames() {
+    List<String> onlineVueToolNames() {
         return VueToolNames.ONLINE;
     }
 
-    Set<String> evaluationVueToolNames() {
+    List<String> evaluationVueToolNames() {
         return VueToolNames.EVALUATION;
     }
 
     BaseTool[] onlineVueTools() {
-        return toolManager.getTools(VueToolNames.ONLINE);
+        return toolManager.requireTools(VueToolNames.ONLINE.toArray(String[]::new));
     }
 
     BaseTool[] evaluationVueTools() {
-        return toolManager.getTools(VueToolNames.EVALUATION);
+        return toolManager.requireTools(VueToolNames.EVALUATION.toArray(String[]::new));
     }
 
     /**

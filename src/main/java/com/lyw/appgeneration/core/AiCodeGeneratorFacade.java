@@ -354,7 +354,8 @@ public class AiCodeGeneratorFacade {
             long appId, String augmentedMessage) {
         FileToolExecutionScopeManager.FileToolScope scope =
                 fileToolExecutionScopeManager.evaluation(
-                        appId, UUID.randomUUID().toString(), VueToolNames.EVALUATION);
+                        appId, UUID.randomUUID().toString(),
+                        Set.copyOf(VueToolNames.EVALUATION));
         try {
             VueEvaluationCodeGeneratorService generatorService = aiGeneratorServiceFactory
                     .getVueEvaluationCodeGeneratorService(appId);
@@ -489,7 +490,7 @@ public class AiCodeGeneratorFacade {
         FileToolExecutionScopeManager.FileToolScope scope =
                 fileToolExecutionScopeManager.online(
                         context.lease(), context.turnId(), context.appId(),
-                        VueToolNames.ONLINE, context.budgetSession());
+                        Set.copyOf(VueToolNames.ONLINE), context.budgetSession());
         ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
         tokenStream.toolExecutionGuard((toolName, memoryId, action) ->
                 directGuard.execute(toolName, memoryId,
