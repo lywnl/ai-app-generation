@@ -281,6 +281,9 @@ class AppServiceDeletionLifecycleTest {
                      generate.enterCallback();
              AppOperationLeaseManager.CancellationRegistration cancellation =
                      generate.registerCancellation(cancellationStarted::countDown);
+             AppOperationLeaseManager.DeleteTakeoverRegistration takeover =
+                     generate.registerDeleteTakeoverParticipant(
+                             context -> context.awaitQuiescence());
              ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<Boolean> deletion = executor.submit(
                     () -> service.deleteApp(APP_ID, owner()));

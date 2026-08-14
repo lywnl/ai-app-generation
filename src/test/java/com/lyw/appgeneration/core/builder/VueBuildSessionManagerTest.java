@@ -322,7 +322,8 @@ class VueBuildSessionManagerTest {
         AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
         VueBuildSessionManager manager = new VueBuildSessionManager();
         try (var operation = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
-             var lease = manager.open(operation, 9L, "turn-1")) {
+             var lease = manager.open(operation, 9L, "turn-1");
+             var takeover = operation.registerDeleteTakeoverParticipant(context -> { })) {
             lease.registerModelCancellation(() -> {
                 throw new IllegalStateException("取消回调失败");
             });
@@ -539,6 +540,7 @@ class VueBuildSessionManagerTest {
         VueBuildSessionManager manager = new VueBuildSessionManager();
         var generate = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
         var vue = manager.open(generate, 9L, "turn-1");
+        generate.registerDeleteTakeoverParticipant(context -> { });
 
         var delete = operationManager.cancelAndAcquireDelete(
                 7L, "delete-1", Duration.ofSeconds(1));
@@ -559,6 +561,8 @@ class VueBuildSessionManagerTest {
         VueBuildSessionManager manager = new VueBuildSessionManager();
         try (var generate = operationManager.acquire(7L, AppOperationType.GENERATE, "turn-1");
              var vue = manager.open(generate, 9L, "turn-1");
+             var takeover = generate.registerDeleteTakeoverParticipant(
+                     context -> context.awaitQuiescence());
              var callback = vue.enterCallback()) {
             assertThrows(AppOperationLeaseManager.OperationQuiescenceTimeoutException.class,
                     () -> operationManager.cancelAndAcquireDelete(
