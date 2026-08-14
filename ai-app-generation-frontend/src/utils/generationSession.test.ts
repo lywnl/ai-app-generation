@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import goldenCases from '../test-fixtures/vue-build-tool-v1-cases.json'
 import {
   clearGenerationSession,
   getGenerationSessionSnapshot,
   getBuildProjectDisplayState,
+  getBuildProjectVisualState,
   shouldRefreshGenerationPreview,
   startGenerationSession,
+  subscribeGenerationSession,
+  type SessionEventType,
 } from './generationSession'
 
 const encoder = new TextEncoder()
@@ -39,6 +43,21 @@ function outcomeEvent(outcome: string, refreshPreview = false): string {
       outcome,
       message: `回合结果：${outcome}`,
       refreshPreview,
+    }),
+  )
+}
+
+function businessErrorEvent(
+  kind: 'BUSINESS' | 'SYSTEM' = 'BUSINESS',
+  message = '系统繁忙',
+): string {
+  return event(
+    'business-error',
+    JSON.stringify({
+      protocol: 'generation-error/v1',
+      kind,
+      code: kind === 'BUSINESS' ? 40000 : 50000,
+      message,
     }),
   )
 }
@@ -119,6 +138,30 @@ describe('generationSession Vue SSE 状态机', () => {
   })
 
   it.each([
+    ['流式工具', 'streaming', undefined, 'streaming'],
+    ['构建成功', 'done', { invocationStatus: 'COMPLETED', success: true }, 'success'],
+    ['构建失败', 'done', { invocationStatus: 'COMPLETED', success: false }, 'failed'],
+    ['构建取消', 'done', { invocationStatus: 'CANCELLED' }, 'cancelled'],
+    ['构建拒绝', 'done', { invocationStatus: 'REJECTED' }, 'neutral'],
+    ['已有构建', 'done', { invocationStatus: 'BUILD_IN_PROGRESS' }, 'neutral'],
+    ['结果不可识别', 'done', undefined, 'unrecognized'],
+  ] as const)('%s 使用 %s 视觉状态', (_name, status, build, expected) => {
+    expect(
+      getBuildProjectVisualState({
+        status,
+        build: build
+          ? {
+              ...build,
+              maxAttempts: 3,
+              statusText: '状态',
+              terminateToolLoop: false,
+            }
+          : undefined,
+      }),
+    ).toBe(expected)
+  })
+
+  it.each([
     ['done + succeeded', 'done', 'succeeded', true],
     ['streaming + succeeded', 'streaming', 'succeeded', false],
     ['done + failed', 'done', 'failed', false],
@@ -189,11 +232,34 @@ describe('generationSession Vue SSE 状态机', () => {
     expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
   })
 
-  it('回合创建前 business-error 后的 done 保持 system_error', async () => {
+  it.each(goldenCases)('$name 结果可被页面构建卡片消费', async ({ raw, expectedView }) => {
     const snapshot = await runSession([
-      event('business-error', JSON.stringify({ error: true, message: '系统繁忙' })),
+      messageEvent({
+        type: 'tool_executed',
+        id: `build-${raw.invocationStatus}-${String(raw.attempt)}`,
+        name: 'buildProject',
+        arguments: '{}',
+        result: JSON.stringify(raw),
+      }),
+      outcomeEvent('FAILED'),
       event('done'),
     ])
+    const tool = [...(snapshot?.toolCalls.values() ?? [])][0]
+    const expectedVisualState =
+      raw.invocationStatus === 'CANCELLED'
+        ? 'cancelled'
+        : raw.invocationStatus !== 'COMPLETED'
+          ? 'neutral'
+          : raw.success
+            ? 'success'
+            : 'failed'
+
+    expect(tool?.build).toEqual(expectedView)
+    expect(tool && getBuildProjectVisualState(tool)).toBe(expectedVisualState)
+  })
+
+  it('回合创建前 business-error 后的 done 保持 system_error', async () => {
+    const snapshot = await runSession([businessErrorEvent('BUSINESS', '系统繁忙'), event('done')])
 
     expect(snapshot).toMatchObject({
       status: 'done',
@@ -254,19 +320,32 @@ describe('generationSession Vue SSE 状态机', () => {
   })
 
   it('business-error 后再收到 outcome 标记为协议错误', async () => {
-    const snapshot = await runSession([
-      event('business-error', JSON.stringify({ error: true, message: '系统繁忙' })),
-      outcomeEvent('FAILED'),
-      event('done'),
-    ])
+    const snapshot = await runSession([businessErrorEvent(), outcomeEvent('FAILED'), event('done')])
 
     expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
   })
 
   it.each([
-    ['错误协议', { protocol: 'vue-turn/v2', outcome: 'FAILED', message: '失败', refreshPreview: false }],
-    ['成功却不刷新', { protocol: 'vue-turn/v1', outcome: 'SUCCEEDED', message: '成功', refreshPreview: false }],
-    ['失败却要求刷新', { protocol: 'vue-turn/v1', outcome: 'FAILED', message: '失败', refreshPreview: true }],
+    [
+      '错误协议',
+      { protocol: 'vue-turn/v2', outcome: 'FAILED', message: '失败', refreshPreview: false },
+    ],
+    [
+      '成功却不刷新',
+      { protocol: 'vue-turn/v1', outcome: 'SUCCEEDED', message: '成功', refreshPreview: false },
+    ],
+    [
+      '失败却要求刷新',
+      { protocol: 'vue-turn/v1', outcome: 'FAILED', message: '失败', refreshPreview: true },
+    ],
+    [
+      '非字符串 outcome',
+      { protocol: 'vue-turn/v1', outcome: 1, message: '失败', refreshPreview: false },
+    ],
+    [
+      '非字符串 message',
+      { protocol: 'vue-turn/v1', outcome: 'FAILED', message: 123, refreshPreview: false },
+    ],
   ])('%s 的 outcome 标记为协议错误', async (_name, rawOutcome) => {
     const snapshot = await runSession([
       event('turn-outcome', JSON.stringify(rawOutcome)),
@@ -286,5 +365,405 @@ describe('generationSession Vue SSE 状态机', () => {
     const snapshot = await runSession([outcomeEvent(wireOutcome), event('done')])
 
     expect(snapshot).toMatchObject({ status: 'done', outcome: expectedOutcome })
+  })
+
+  it('生成请求使用 POST JSON 且大整数 appId 全程保持字符串', async () => {
+    const appId = '9007199254740993123'
+    const userMessage = '生成内容不能进入 URL'
+    appIds.add(appId)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(streamResponse([outcomeEvent('SUCCEEDED', true), event('done')]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    startGenerationSession({
+      appId,
+      userMessage,
+      baseURL: 'http://localhost/api/',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('http://localhost/api/app/chat/gen/code')
+    expect(url).not.toContain('?')
+    expect(url).not.toContain(userMessage)
+    expect(request.method).toBe('POST')
+    expect(request.credentials).toBe('include')
+    expect(request.headers).toEqual({
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json; charset=UTF-8',
+    })
+    expect(JSON.parse(String(request.body))).toEqual({ appId, message: userMessage })
+    expect(request.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it.each([
+    [413, '请求内容过大，请缩短需求后重试。'],
+    [502, '生成服务暂时不可用，请稍后重试。'],
+  ])('HTTP %i 不读取响应正文并使用固定安全文案', async (status, safeMessage) => {
+    const appId = `http-error-${status}`
+    appIds.add(appId)
+    const response = new Response('SECRET_PROXY_BODY', {
+      status,
+      statusText: 'SECRET_PROXY_STATUS',
+      headers: { 'Content-Type': 'text/html' },
+    })
+    const getReader = vi.spyOn(response.body as ReadableStream<Uint8Array>, 'getReader')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('error')
+    })
+    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+      outcome: 'system_error',
+      errorMessage: safeMessage,
+      content: '',
+    })
+    expect(getReader).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, 'application/json', 'text/event-streaming'])(
+    'HTTP 2xx Content-Type=%s 时拒绝读取正文',
+    async (contentType) => {
+      const appId = `content-type-${String(contentType)}`
+      appIds.add(appId)
+      const headers = contentType ? { 'Content-Type': contentType } : undefined
+      const response = new Response('SECRET_NON_SSE_BODY', { status: 200, headers })
+      const getReader = vi.spyOn(response.body as ReadableStream<Uint8Array>, 'getReader')
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+      startGenerationSession({
+        appId,
+        userMessage: '生成页面',
+        baseURL: 'http://localhost/api',
+        expectVueTurnOutcome: true,
+      })
+
+      await vi.waitFor(() => {
+        expect(getGenerationSessionSnapshot(appId)?.status).toBe('error')
+      })
+      expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+        outcome: 'system_error',
+        errorMessage: '生成服务暂时不可用，请稍后重试。',
+        content: '',
+      })
+      expect(getReader).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    [
+      '未知协议',
+      { protocol: 'generation-error/v2', kind: 'BUSINESS', code: 40000, message: '失败' },
+    ],
+    ['缺少协议', { kind: 'BUSINESS', code: 40000, message: '失败' }],
+    ['未知 kind', { protocol: 'generation-error/v1', kind: 'OTHER', code: 40000, message: '失败' }],
+    ['缺少 kind', { protocol: 'generation-error/v1', code: 40000, message: '失败' }],
+    [
+      '非整数 code',
+      { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 1.5, message: '失败' },
+    ],
+    [
+      '非安全整数 code',
+      {
+        protocol: 'generation-error/v1',
+        kind: 'BUSINESS',
+        code: 9007199254740992,
+        message: '失败',
+      },
+    ],
+    ['缺少 code', { protocol: 'generation-error/v1', kind: 'BUSINESS', message: '失败' }],
+    [
+      '空 message',
+      { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 40000, message: '  ' },
+    ],
+    ['缺少 message', { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 40000 }],
+  ])('business-error %s 时进入 protocol_error', async (_name, payload) => {
+    const snapshot = await runSession([
+      event('business-error', JSON.stringify(payload)),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each(['BUSINESS', 'SYSTEM'] as const)(
+    '合法 %s business-error 只在 done 时通知一次',
+    async (kind) => {
+      const appId = `preflight-${kind}`
+      appIds.add(appId)
+      const localEvents: SessionEventType[] = []
+      const unsubscribe = subscribeGenerationSession(appId, (_snapshot, eventType) => {
+        localEvents.push(eventType)
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValue(
+            streamResponse([
+              event('heartbeat', '{"timestamp":1}'),
+              businessErrorEvent(kind, '安全前置错误'),
+              event('done'),
+            ]),
+          ),
+      )
+
+      startGenerationSession({
+        appId,
+        userMessage: '生成页面',
+        baseURL: 'http://localhost/api',
+        expectVueTurnOutcome: true,
+      })
+
+      await vi.waitFor(() => {
+        expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+      })
+      expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+        outcome: 'system_error',
+        errorMessage: '安全前置错误',
+      })
+      expect(localEvents.filter((item) => item === 'done')).toHaveLength(1)
+      expect(localEvents.filter((item) => item === 'error')).toHaveLength(0)
+      expect(localEvents).not.toContain('business-error')
+      unsubscribe()
+    },
+  )
+
+  it.each([
+    ['正文后', ['data: {"d":"正文"}\n\n', businessErrorEvent(), event('done')]],
+    [
+      '工具后',
+      [
+        messageEvent({ type: 'tool_request', id: 'tool-1', name: 'writeFile', arguments: '{}' }),
+        businessErrorEvent(),
+        event('done'),
+      ],
+    ],
+    ['重复错误', [businessErrorEvent(), businessErrorEvent(), event('done')]],
+    ['错误后正文', [businessErrorEvent(), 'data: {"d":"正文"}\n\n', event('done')]],
+    ['错误后心跳', [businessErrorEvent(), event('heartbeat', '{"timestamp":2}'), event('done')]],
+  ])('%s收到 business-error 时进入 protocol_error', async (_name, chunks) => {
+    const snapshot = await runSession(chunks)
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('business-error 后 EOF 必须覆盖为 protocol_error', async () => {
+    const snapshot = await runSession([businessErrorEvent()])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each(['error', 'build_status', 'unexpected-event'])(
+    '未知命名事件 %s 不得退化成聊天正文',
+    async (name) => {
+      const snapshot = await runSession([event(name, '{"message":"机密正文"}'), event('done')])
+
+      expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error', content: '' })
+    },
+  )
+
+  it('支持 BOM、注释、多行 data、重复 event 最后值和未知字段', async () => {
+    const snapshot = await runSession([
+      '\uFEFF: 注释\r\nunknown: ignored\r\nevent: unexpected\r\nevent: message\r\ndata: 第一行\r\ndata: 第二行\r\n\r\n',
+      outcomeEvent('SUCCEEDED', true),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({
+      content: '第一行\n第二行',
+      status: 'done',
+      outcome: 'succeeded',
+    })
+  })
+
+  it('UTF-8 多字节字符跨字节 chunk 时仍完整解码', async () => {
+    const appId = 'split-utf8'
+    appIds.add(appId)
+    const bytes = encoder.encode(
+      `data: {"d":"中文😀"}\n\n${outcomeEvent('SUCCEEDED', true)}${event('done')}`,
+    )
+    const emojiStart = bytes.findIndex((value) => value === 0xf0)
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes.slice(0, emojiStart + 2))
+          controller.enqueue(bytes.slice(emojiStart + 2))
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'TEXT/EVENT-STREAM; charset=UTF-8' } },
+    )
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+    })
+    expect(getGenerationSessionSnapshot(appId)?.content).toBe('中文😀')
+  })
+
+  it('非法 UTF-8 使用固定 protocol_error 且不产生替换字符', async () => {
+    const appId = 'invalid-utf8'
+    appIds.add(appId)
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Uint8Array.from([0x64, 0x61, 0x74, 0x61, 0x3a, 0x20, 0xc3, 0x28]))
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('error')
+    })
+    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+      outcome: 'protocol_error',
+      errorMessage: '生成流包含非法 UTF-8 数据',
+      content: '',
+    })
+    expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('\uFFFD')
+  })
+
+  it('readFile 工具卡片只保留白名单元数据并强制清除正文', async () => {
+    const secret = 'SECRET_READ_CONTENT_7fdd'
+    const unsafeResult = JSON.stringify({
+      protocol: 'file-tool/v1',
+      operation: 'readFile',
+      status: 'APPLIED',
+      relativePath: 'src/App.vue',
+      changed: false,
+      message: '文件读取成功',
+      failureReason: null,
+      content: secret,
+      extraSecret: secret,
+    })
+    const snapshot = await runSession([
+      messageEvent({
+        type: 'tool_request',
+        id: 'read-1',
+        name: 'readFile',
+        arguments: JSON.stringify({
+          relativeFilePath: 'src/App.vue',
+          content: secret,
+        }),
+      }),
+      messageEvent({
+        type: 'tool_argument_delta',
+        id: 'read-1',
+        name: 'readFile',
+        key: 'content',
+        delta: secret,
+      }),
+      messageEvent({
+        type: 'tool_executed',
+        id: 'read-1',
+        name: 'readFile',
+        arguments: JSON.stringify({ relativeFilePath: 'src/App.vue' }),
+        result: unsafeResult,
+        rawContent: secret,
+      }),
+      outcomeEvent('SUCCEEDED', true),
+      event('done'),
+    ])
+
+    const tool = snapshot?.toolCalls.get('read-1')
+    expect(JSON.parse(tool?.result ?? '{}')).toEqual({
+      protocol: 'file-tool/v1',
+      operation: 'readFile',
+      status: 'APPLIED',
+      relativePath: 'src/App.vue',
+      changed: false,
+      message: '文件读取成功',
+      failureReason: null,
+      content: null,
+    })
+    expect(JSON.stringify(tool)).not.toContain(secret)
+    expect(snapshot?.content).not.toContain(secret)
+  })
+
+  it('节流缓冲只通知一次正文变化且注销函数可重复调用', async () => {
+    const appId = 'listener-idempotent'
+    appIds.add(appId)
+    const observedContents: string[] = []
+    const listener = (snapshot: { content: string }, eventType: SessionEventType) => {
+      if (eventType === 'delta') {
+        observedContents.push(snapshot.content)
+      }
+    }
+    const unsubscribe = subscribeGenerationSession(appId, listener)
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(
+            streamResponse([
+              'data: {"d":"你"}\n\n',
+              'data: {"d":"好"}\n\n',
+              outcomeEvent('SUCCEEDED', true),
+              event('done'),
+            ]),
+          ),
+        ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'throttled',
+      throttleMs: 10_000,
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+    })
+    expect(observedContents.filter((content) => content === '你好')).toHaveLength(1)
+    const callsBeforeUnsubscribe = observedContents.length
+    unsubscribe()
+    unsubscribe()
+    startGenerationSession({
+      appId,
+      userMessage: '再次生成',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+    })
+    expect(observedContents).toHaveLength(callsBeforeUnsubscribe)
   })
 })

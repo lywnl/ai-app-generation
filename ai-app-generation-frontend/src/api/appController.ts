@@ -1,5 +1,5 @@
-// @ts-ignore
 /* eslint-disable */
+// @ts-ignore
 import request from '@/request'
 
 /** 此处后端没有提供注释 POST /app/add */
@@ -71,17 +71,17 @@ export async function updateAppByAdmin(
   })
 }
 
-/** 此处后端没有提供注释 GET /app/chat/gen/code */
+/** 此处后端没有提供注释 POST /app/chat/gen/code */
 export async function chatToGenCode(
-  // 叠加生成的Param类型 (非body参数swagger默认没有生成对象)
-  params: API.chatToGenCodeParams,
+  body: API.AppChatGenerateRequest,
   options?: { [key: string]: any }
 ) {
   return request<API.ServerSentEventString[]>('/app/chat/gen/code', {
-    method: 'GET',
-    params: {
-      ...params,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
     },
+    data: body,
     ...(options || {}),
   })
 }

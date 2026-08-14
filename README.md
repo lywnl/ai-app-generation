@@ -481,22 +481,33 @@ Vue 工程不能用一次性 chat 生成（结构复杂、文件多），改用 
 **控制器**：`AppController.chatToGenCode()` 返回 `Flux<ServerSentEvent<String>>`
 
 ```
-GET /api/app/chat/gen/code?appId=1&message=做一个待办应用
-Content-Type: text/event-stream
+POST /api/app/chat/gen/code
+Content-Type: application/json; charset=UTF-8
+Accept: text/event-stream
+
+{"appId":"1","message":"做一个待办应用"}
 
 data: {"d":"<!DOCTYPE html>"}
 data: {"d":"<html>"}
-event: tool_request
-data: {"toolName":"FileWriteTool","arguments":"..."}
-event: business-error
-data: {"error":true,"code":50000,"message":"..."}
+event: turn-outcome
+data: {"protocol":"vue-turn/v1","outcome":"SUCCEEDED","message":"项目已生成并构建成功。","refreshPreview":true}
 event: done
-data: 
+data:
 ```
 
-- 单条消息体用 `{"d": "片段"}` 包装，前端只需读 `d` 字段拼接
-- `business-error` 事件统一承载业务异常（含错误码）
-- Reactor `Flux.create` + `onErrorResume` 保证流不中断
+若 User 尚未提交就被参数、鉴权或业务门禁拒绝，则不发送正文和 `turn-outcome`，改为：
+
+```text
+event: business-error
+data: {"protocol":"generation-error/v1","kind":"BUSINESS","code":40000,"message":"..."}
+event: done
+data:
+```
+
+- 请求正文使用 JSON，`appId` 保持字符串，用户消息不进入 URL 和访问日志
+- 默认 `message` 事件用 `{"d": "片段"}` 包装；工具消息也走该正文通道
+- `turn-outcome` 是 Vue 回合的唯一业务终态，随后发送唯一 `done`
+- `business-error` 只承载 User 提交前的安全错误，并以 `done` 结束
 
 ### 7. 分层对话记忆（L0 / L1 / L2）
 
@@ -577,7 +588,7 @@ http://localhost:9025/api/doc.html
 
 | 模块 | 路径前缀 | 核心接口 |
 | :--- | :--- | :--- |
-| 应用 | `/api/app` | `POST /add` 创建 · `GET /chat/gen/code` 流式生成（SSE） · `POST /deploy` 部署 · `GET /download/{appId}` 下载 ZIP · `POST /good/list/page/vo` 精选 |
+| 应用 | `/api/app` | `POST /add` 创建 · `POST /chat/gen/code` 流式生成（SSE） · `POST /deploy` 部署 · `GET /download/{appId}` 下载 ZIP · `POST /good/list/page/vo` 精选 |
 | 用户 | `/api/user` | `POST /register` · `POST /login` · `GET /get/login` 当前用户 |
 | 对话 | `/api/chatHistory` | `POST /list/my/page` 我的对话游标分页 |
 | 静态 | `/api/static/**` | 部署产物访问 |

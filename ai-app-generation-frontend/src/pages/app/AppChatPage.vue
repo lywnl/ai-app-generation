@@ -73,10 +73,14 @@
                     :class="{
                       'is-done':
                         view.name === 'buildProject'
-                          ? view.build?.success === true
+                          ? getBuildProjectVisualState(view) === 'success'
                           : view.status === 'done',
                       'is-build-failed':
-                        view.name === 'buildProject' && view.build && view.build.success !== true,
+                        view.name === 'buildProject' &&
+                        getBuildProjectVisualState(view) === 'failed',
+                      'is-build-cancelled':
+                        view.name === 'buildProject' &&
+                        getBuildProjectVisualState(view) === 'cancelled',
                     }"
                   >
                     <div class="tool-call-header">
@@ -124,7 +128,10 @@
                           class="build-status-text"
                           :class="{
                             success: view.build.success === true,
-                            failed: view.build.success === false,
+                            failed:
+                              view.build.invocationStatus === 'COMPLETED' &&
+                              view.build.success === false,
+                            cancelled: view.build.invocationStatus === 'CANCELLED',
                           }"
                         >
                           {{ view.build.statusText }}
@@ -329,6 +336,7 @@ import {
   getGenerationSessionSnapshot,
   clearGenerationSession,
   getBuildProjectDisplayState,
+  getBuildProjectVisualState,
   shouldRefreshGenerationPreview,
 } from '@/utils/generationSession'
 
@@ -651,9 +659,6 @@ const attachSessionListener = (targetAppId: string) => {
     }
     applySessionSnapshot(snapshot)
     scrollToBottom()
-    if (eventType === 'business-error') {
-      return
-    }
     if (eventType === 'error') {
       message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))
       finalizeGeneration(snapshot)
@@ -1338,6 +1343,10 @@ onUnmounted(() => {
   border-color: var(--warning-border);
   background: var(--warning-bg);
 }
+.tool-call-card.is-build-cancelled {
+  border-color: var(--border-default);
+  background: var(--bg-soft);
+}
 .tool-call-header {
   display: flex;
   align-items: center;
@@ -1411,6 +1420,9 @@ onUnmounted(() => {
 }
 .build-status-text.failed {
   color: var(--warning);
+}
+.build-status-text.cancelled {
+  color: var(--text-secondary);
 }
 .build-stage {
   flex-shrink: 0;

@@ -1,9 +1,6 @@
-import {
-  parseBuildProjectToolResult,
-  type BuildProjectToolView,
-} from './buildProjectToolResult'
+import { parseBuildProjectToolResult, type BuildProjectToolView } from './buildProjectToolResult'
 
-export type SessionEventType = 'delta' | 'done' | 'error' | 'business-error'
+export type SessionEventType = 'delta' | 'done' | 'error'
 
 export type ToolCallStatus = 'streaming' | 'done' | 'error'
 
@@ -26,6 +23,14 @@ export interface ToolCallView {
 
 export type BuildProjectDisplayState = 'streaming' | 'parsed' | 'unrecognized'
 
+export type BuildProjectVisualState =
+  | 'streaming'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'neutral'
+  | 'unrecognized'
+
 export function getBuildProjectDisplayState(
   view: Pick<ToolCallView, 'status'> & { build?: unknown },
 ): BuildProjectDisplayState {
@@ -33,6 +38,27 @@ export function getBuildProjectDisplayState(
     return 'streaming'
   }
   return view.build ? 'parsed' : 'unrecognized'
+}
+
+export function getBuildProjectVisualState(
+  view: Pick<ToolCallView, 'status' | 'build'>,
+): BuildProjectVisualState {
+  if (view.status === 'streaming') {
+    return 'streaming'
+  }
+  if (!view.build) {
+    return 'unrecognized'
+  }
+  if (view.build.invocationStatus === 'CANCELLED') {
+    return 'cancelled'
+  }
+  if (view.build.invocationStatus !== 'COMPLETED') {
+    return 'neutral'
+  }
+  if (view.build.success === true) {
+    return 'success'
+  }
+  return view.build.success === false ? 'failed' : 'unrecognized'
 }
 
 export type GenerationStatus = 'streaming' | 'done' | 'error'
@@ -84,13 +110,26 @@ interface SessionState {
   requestId: number
   expectVueTurnOutcome: boolean
   businessErrorSeen: boolean
+  semanticEventSeen: boolean
   awaitingDone: boolean
 }
 
 type JsonRecord = Record<string, unknown>
 
 const DEFAULT_THROTTLE_MS = 100
+const SERVICE_UNAVAILABLE_MESSAGE = '生成服务暂时不可用，请稍后重试。'
+const REQUEST_TOO_LARGE_MESSAGE = '请求内容过大，请缩短需求后重试。'
 const sessions = new Map<string, SessionState>()
+
+class GenerationStreamError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: 'system_error' | 'protocol_error',
+  ) {
+    super(message)
+    this.name = 'GenerationStreamError'
+  }
+}
 
 function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
   return {
@@ -132,6 +171,7 @@ function getOrCreateSession(appId: string): SessionState {
     requestId: 0,
     expectVueTurnOutcome: false,
     businessErrorSeen: false,
+    semanticEventSeen: false,
     awaitingDone: false,
   }
   sessions.set(appId, created)
@@ -238,14 +278,7 @@ function markDone(appId: string, requestId: number): void {
     session.snapshot.outcome === 'pending' &&
     !session.businessErrorSeen
   ) {
-    finishSession(
-      appId,
-      requestId,
-      'error',
-      'error',
-      '生成协议缺少业务终态',
-      'protocol_error',
-    )
+    finishSession(appId, requestId, 'error', 'error', '生成协议缺少业务终态', 'protocol_error')
     return
   }
   session.snapshot.loading = false
@@ -260,17 +293,6 @@ function markDone(appId: string, requestId: number): void {
   }
   stopSessionStream(session)
   emit(appId, 'done', requestId)
-}
-
-function readErrorMessage(data: unknown): string {
-  if (!data || typeof data !== 'object') {
-    return '生成失败'
-  }
-  const record = data as JsonRecord
-  if (typeof record.message === 'string' && record.message.trim()) {
-    return record.message
-  }
-  return '生成失败'
 }
 
 function toStringValue(value: unknown): string | undefined {
@@ -334,9 +356,22 @@ function mergeToolArguments(view: ToolCallView, args?: JsonRecord): void {
     return
   }
   Object.entries(args).forEach(([key, value]) => {
+    if (!isVisibleToolArgument(view.name, key)) {
+      return
+    }
     const normalized = toStringValue(value)
     view.args[key] = normalized ?? value
   })
+}
+
+function isVisibleToolArgument(toolName: string, key: string): boolean {
+  if (toolName === 'readFile') {
+    return key === 'relativeFilePath'
+  }
+  if (toolName === 'readDir') {
+    return key === 'relativeDirPath'
+  }
+  return true
 }
 
 function handleToolRequest(appId: string, requestId: number, payload: JsonRecord): void {
@@ -363,7 +398,7 @@ function handleToolArgument(appId: string, requestId: number, payload: JsonRecor
   const value = toStringValue(payload.value)
   const view = ensureToolCall(session, id, name)
   view.status = 'streaming'
-  if (key && value !== undefined) {
+  if (key && value !== undefined && isVisibleToolArgument(view.name, key)) {
     view.args[key] = value
   }
   emit(appId, 'delta', requestId)
@@ -380,7 +415,7 @@ function handleToolArgumentDelta(appId: string, requestId: number, payload: Json
   const delta = toStringValue(payload.delta) || ''
   const view = ensureToolCall(session, id, name)
   view.status = 'streaming'
-  if (key) {
+  if (key && isVisibleToolArgument(view.name, key)) {
     const oldValue = typeof view.args[key] === 'string' ? (view.args[key] as string) : ''
     view.args[key] = oldValue + delta
   }
@@ -396,7 +431,7 @@ function handleToolExecuted(appId: string, requestId: number, payload: JsonRecor
   const name = toStringValue(payload.name)
   const view = ensureToolCall(session, id, name)
   mergeToolArguments(view, parseArgumentObject(payload.arguments))
-  const result = toStringValue(payload.result)
+  const result = sanitizeToolResult(view.name, toStringValue(payload.result))
   if (result !== undefined) {
     view.result = result
     if (view.name === 'buildProject') {
@@ -405,6 +440,37 @@ function handleToolExecuted(appId: string, requestId: number, payload: JsonRecor
   }
   view.status = 'done'
   emit(appId, 'delta', requestId)
+}
+
+function sanitizeToolResult(toolName: string, result: string | undefined): string | undefined {
+  if (!result || (toolName !== 'readFile' && toolName !== 'readDir')) {
+    return result
+  }
+  const parsed = tryParseJson(result)
+  if (
+    !parsed ||
+    parsed.protocol !== 'file-tool/v1' ||
+    parsed.operation !== toolName ||
+    typeof parsed.status !== 'string' ||
+    (parsed.relativePath !== null && typeof parsed.relativePath !== 'string') ||
+    parsed.changed !== false ||
+    typeof parsed.message !== 'string' ||
+    !parsed.message.trim() ||
+    (parsed.failureReason !== null && typeof parsed.failureReason !== 'string')
+  ) {
+    return undefined
+  }
+  const safe = {
+    protocol: parsed.protocol,
+    operation: parsed.operation,
+    status: parsed.status,
+    relativePath: parsed.relativePath,
+    changed: parsed.changed,
+    message: parsed.message,
+    failureReason: parsed.failureReason,
+    content: null,
+  }
+  return JSON.stringify(safe)
 }
 
 function handleTypedMessage(appId: string, requestId: number, payload: JsonRecord): void {
@@ -439,11 +505,6 @@ function handleMessageData(appId: string, requestId: number, data: string): void
     return
   }
   const outer = tryParseJson(data)
-  if (outer && outer.error === true) {
-    const errorMessage = readErrorMessage(outer)
-    handleBusinessError(appId, requestId, errorMessage)
-    return
-  }
   const wrapped = outer && typeof outer.d === 'string' ? outer.d : data
   if (!wrapped) {
     return
@@ -469,20 +530,42 @@ function markProtocolError(appId: string, requestId: number, message: string): v
   finishSession(appId, requestId, 'error', 'error', message, 'protocol_error')
 }
 
-function handleBusinessError(appId: string, requestId: number, errorMessage: string): void {
+function parseBusinessError(data: string): string | undefined {
+  const payload = tryParseJson(data)
+  if (
+    payload?.protocol !== 'generation-error/v1' ||
+    (payload.kind !== 'BUSINESS' && payload.kind !== 'SYSTEM') ||
+    !Number.isSafeInteger(payload.code) ||
+    typeof payload.message !== 'string' ||
+    !payload.message.trim()
+  ) {
+    return undefined
+  }
+  return payload.message
+}
+
+function handleBusinessError(appId: string, requestId: number, data: string): void {
   const session = getActiveSession(appId, requestId)
   if (!session || session.snapshot.status !== 'streaming') {
     return
   }
-  if (session.snapshot.outcome !== 'pending' || session.businessErrorSeen) {
-    markProtocolError(appId, requestId, '生成协议包含冲突的业务错误')
+  const errorMessage = parseBusinessError(data)
+  if (!errorMessage) {
+    markProtocolError(appId, requestId, '生成前置错误协议不合法')
+    return
+  }
+  if (
+    session.semanticEventSeen ||
+    session.snapshot.outcome !== 'pending' ||
+    session.businessErrorSeen
+  ) {
+    markProtocolError(appId, requestId, '生成协议包含冲突的前置错误')
     return
   }
   session.businessErrorSeen = true
   session.awaitingDone = true
   session.snapshot.outcome = 'system_error'
   session.snapshot.errorMessage = errorMessage
-  emit(appId, 'business-error', requestId)
 }
 
 function handleTurnOutcome(appId: string, requestId: number, data: string): void {
@@ -490,10 +573,11 @@ function handleTurnOutcome(appId: string, requestId: number, data: string): void
   if (!session || session.snapshot.status !== 'streaming') {
     return
   }
+  session.semanticEventSeen = true
   const payload = tryParseJson(data)
-  const wireOutcome = payload ? toStringValue(payload.outcome) : undefined
+  const wireOutcome = typeof payload?.outcome === 'string' ? payload.outcome : undefined
   const outcome = wireOutcome ? OUTCOME_MAP[wireOutcome] : undefined
-  const message = payload ? toStringValue(payload.message) : undefined
+  const message = typeof payload?.message === 'string' ? payload.message : undefined
   const refreshPreview = payload?.refreshPreview
   if (
     session.businessErrorSeen ||
@@ -525,11 +609,11 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
     markDone(appId, requestId)
     return
   }
-  if (eventName === 'heartbeat') {
-    return
-  }
   if (session.awaitingDone) {
     markProtocolError(appId, requestId, '生成业务终态后收到意外事件')
+    return
+  }
+  if (eventName === 'heartbeat') {
     return
   }
   if (eventName === 'turn-outcome') {
@@ -537,22 +621,20 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
     return
   }
   if (eventName === 'business-error') {
-    const payload = tryParseJson(data)
-    const errorMessage = readErrorMessage(payload)
-    handleBusinessError(appId, requestId, errorMessage)
+    handleBusinessError(appId, requestId, data)
     return
   }
-  if (eventName === 'error') {
-    const payload = tryParseJson(data)
-    const errorMessage = readErrorMessage(payload)
-    finishSession(appId, requestId, 'error', 'error', errorMessage, 'system_error')
+  if (eventName !== 'message') {
+    session.semanticEventSeen = true
+    markProtocolError(appId, requestId, '生成流包含未知命名事件')
     return
   }
+  session.semanticEventSeen = true
   handleMessageData(appId, requestId, data)
 }
 
 function consumeSseBlock(block: string, onEvent: (event: string, data: string) => void): void {
-  const text = block.trim()
+  const text = block.replace(/^\uFEFF/, '')
   if (!text) {
     return
   }
@@ -560,17 +642,21 @@ function consumeSseBlock(block: string, onEvent: (event: string, data: string) =
   let hasDataLine = false
   const dataLines: string[] = []
   text.split('\n').forEach((rawLine) => {
-    const line = rawLine.trimEnd()
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
     if (!line || line.startsWith(':')) {
       return
     }
-    if (line.startsWith('event:')) {
-      event = line.slice(6).trim() || 'message'
+    const separator = line.indexOf(':')
+    const field = separator < 0 ? line : line.slice(0, separator)
+    const rawValue = separator < 0 ? '' : line.slice(separator + 1)
+    const value = rawValue.startsWith(' ') ? rawValue.slice(1) : rawValue
+    if (field === 'event') {
+      event = value || 'message'
       return
     }
-    if (line.startsWith('data:')) {
+    if (field === 'data') {
       hasDataLine = true
-      dataLines.push(line.slice(5).trimStart())
+      dataLines.push(value)
     }
   })
   if (!hasDataLine && event === 'message') {
@@ -585,12 +671,12 @@ function consumeSseBuffer(
   flush: boolean,
 ): string {
   let working = buffer
-  let splitIndex = working.indexOf('\n\n')
-  while (splitIndex >= 0) {
-    const block = working.slice(0, splitIndex)
-    working = working.slice(splitIndex + 2)
+  let separator = /\r\n\r\n|\n\n|\r\r/.exec(working)
+  while (separator?.index !== undefined) {
+    const block = working.slice(0, separator.index)
+    working = working.slice(separator.index + separator[0].length)
     consumeSseBlock(block, onEvent)
-    splitIndex = working.indexOf('\n\n')
+    separator = /\r\n\r\n|\n\n|\r\r/.exec(working)
   }
   if (flush && working.trim()) {
     consumeSseBlock(working, onEvent)
@@ -608,12 +694,27 @@ function normalizeBaseURL(baseURL: string): string {
   return `${window.location.origin}${normalizedPath}`.replace(/\/+$/, '')
 }
 
-function buildSseUrl(baseURL: string, appId: string, userMessage: string): string {
-  const endpoint = `${normalizeBaseURL(baseURL)}/app/chat/gen/code`
-  const url = new URL(endpoint)
-  url.searchParams.set('appId', appId)
-  url.searchParams.set('message', userMessage)
-  return url.toString()
+function buildGenerationUrl(baseURL: string): string {
+  return `${normalizeBaseURL(baseURL)}/app/chat/gen/code`
+}
+
+function isEventStreamResponse(response: Response): boolean {
+  const contentType = response.headers.get('Content-Type')
+  if (!contentType) {
+    return false
+  }
+  return contentType.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream'
+}
+
+function decodeUtf8(decoder: TextDecoder, value?: Uint8Array, stream = false): string {
+  try {
+    return decoder.decode(value, { stream })
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new GenerationStreamError('生成流包含非法 UTF-8 数据', 'protocol_error')
+    }
+    throw error
+  }
 }
 
 async function startSseStream(
@@ -623,30 +724,42 @@ async function startSseStream(
   baseURL: string,
   signal: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(buildSseUrl(baseURL, appId, userMessage), {
-    method: 'GET',
+  const response = await fetch(buildGenerationUrl(baseURL), {
+    method: 'POST',
     credentials: 'include',
     headers: {
       Accept: 'text/event-stream',
+      'Content-Type': 'application/json; charset=UTF-8',
     },
+    body: JSON.stringify({ appId, message: userMessage }),
     signal,
   })
-  if (!response.ok || !response.body) {
-    throw new Error(`请求失败: ${response.status}`)
+  if (!response.ok) {
+    throw new GenerationStreamError(
+      response.status === 413 ? REQUEST_TOO_LARGE_MESSAGE : SERVICE_UNAVAILABLE_MESSAGE,
+      'system_error',
+    )
+  }
+  if (!isEventStreamResponse(response) || !response.body) {
+    throw new GenerationStreamError(SERVICE_UNAVAILABLE_MESSAGE, 'system_error')
   }
 
   const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
+  const decoder = new TextDecoder('utf-8', { fatal: true })
   let buffer = ''
   while (true) {
     const { value, done } = await reader.read()
     if (done) {
       break
     }
-    buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '')
-    buffer = consumeSseBuffer(buffer, (event, data) => handleSseEvent(appId, requestId, event, data), false)
+    buffer += decodeUtf8(decoder, value, true)
+    buffer = consumeSseBuffer(
+      buffer,
+      (event, data) => handleSseEvent(appId, requestId, event, data),
+      false,
+    )
   }
-  buffer += decoder.decode().replace(/\r/g, '')
+  buffer += decodeUtf8(decoder)
   consumeSseBuffer(buffer, (event, data) => handleSseEvent(appId, requestId, event, data), true)
 
   const session = getActiveSession(appId, requestId)
@@ -670,6 +783,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.throttleMs = throttleMs
   session.expectVueTurnOutcome = options.expectVueTurnOutcome === true
   session.businessErrorSeen = false
+  session.semanticEventSeen = false
   session.awaitingDone = false
   session.snapshot = {
     appId,
@@ -683,13 +797,18 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
 
   const controller = new AbortController()
   session.controller = controller
-  void startSseStream(appId, requestId, userMessage, baseURL, controller.signal).catch((error: unknown) => {
-    if (controller.signal.aborted) {
-      return
-    }
-    const message = error instanceof Error ? error.message : '生成失败'
-    finishSession(appId, requestId, 'error', 'error', message || '生成失败', 'system_error')
-  })
+  void startSseStream(appId, requestId, userMessage, baseURL, controller.signal).catch(
+    (error: unknown) => {
+      if (controller.signal.aborted) {
+        return
+      }
+      const streamError =
+        error instanceof GenerationStreamError
+          ? error
+          : new GenerationStreamError(SERVICE_UNAVAILABLE_MESSAGE, 'system_error')
+      finishSession(appId, requestId, 'error', 'error', streamError.message, streamError.outcome)
+    },
+  )
 }
 
 export function subscribeGenerationSession(appId: string, listener: Listener): () => void {
