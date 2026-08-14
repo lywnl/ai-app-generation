@@ -4,7 +4,10 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -18,9 +21,11 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.COLLAPSED;
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.STORE_FAILED;
@@ -347,6 +352,93 @@ class VueTurnFinalizerTest {
             assertNotNull(deletePermit);
             deletePermit.abortAndReopen();
         }
+    }
+
+    @Test
+    void persistenceRootFailureSurvivesResourceCloseErrorAndCompletesSharedResult() {
+        AssertionError persistenceFailure =
+                new AssertionError("persist-root");
+        AssertionError closeFailure =
+                new AssertionError("close-secondary");
+        when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
+                .thenThrow(persistenceFailure);
+        AppOperationLeaseManager operationManager =
+                new AppOperationLeaseManager();
+        AppOperationLeaseManager.AppOperationLease operation =
+                operationManager.acquire(
+                        APP_ID,
+                        AppOperationLeaseManager.AppOperationType.GENERATE,
+                        "turn-root-close-failure");
+        VueBuildSessionManager.VueBuildLease lease =
+                new VueBuildSessionManager().open(
+                        operation, USER_ID, "turn-root-close-failure");
+        operation.registerCancellation(() -> {
+            throw closeFailure;
+        });
+        SimpleMeterRegistry admissionRegistry = new SimpleMeterRegistry();
+        VueTurnAdmissionController admissionController =
+                new VueTurnAdmissionController(
+                        new VueBuildRepairMetricsCollector(admissionRegistry));
+        VueTurnAdmissionController.AdmissionPermit admission =
+                admissionController.tryAcquire().orElseThrow();
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, "turn-root-close-failure",
+                operation, lease, admission,
+                new FileToolBudgetGuard().newSession());
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+        context.onFinalized(ignored -> { }, observedFailure::set);
+
+        AssertionError thrown = assertThrows(
+                AssertionError.class,
+                () -> finalizer.finalizeOnce(context, outcome(
+                        VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                        "项目已生成并构建成功。", true)));
+
+        assertSame(persistenceFailure, thrown);
+        assertEquals(1, thrown.getSuppressed().length);
+        assertSame(closeFailure, thrown.getSuppressed()[0]);
+        CompletionException sharedFailure = assertThrows(
+                CompletionException.class, context::awaitFinalization);
+        assertSame(persistenceFailure, sharedFailure.getCause());
+        assertSame(persistenceFailure, observedFailure.get());
+        assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                context.turnState().stage());
+        operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-close-failure").close();
+        assertEquals(1.0, admissionRegistry
+                .get("vue_turn_admissions_total")
+                .tag("result", "released").counter().count(),
+                "关闭失败后仍必须释放准入许可");
+    }
+
+    @Test
+    void fatalObserverErrorPropagatesWithoutRewritingSharedRootFailure() {
+        AssertionError persistenceFailure =
+                new AssertionError("persist-root-before-fatal-observer");
+        OutOfMemoryError observerFailure =
+                new OutOfMemoryError("fatal-observer");
+        when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
+                .thenThrow(persistenceFailure);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-fatal-observer",
+                VueBuildPhase.SUCCEEDED);
+        context.onFinalized(ignored -> { }, ignored -> {
+            throw observerFailure;
+        });
+
+        OutOfMemoryError thrown = assertThrows(
+                OutOfMemoryError.class,
+                () -> finalizer.finalizeOnce(context, outcome(
+                        VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                        "项目已生成并构建成功。", true)));
+
+        assertSame(observerFailure, thrown);
+        CompletionException sharedFailure = assertThrows(
+                CompletionException.class, context::awaitFinalization);
+        assertSame(persistenceFailure, sharedFailure.getCause());
+        assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                context.turnState().stage());
     }
 
     private VueTurnOutcome outcome(VueBuildPhase phase,

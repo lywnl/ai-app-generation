@@ -9,6 +9,7 @@ import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.config.RagProperties;
@@ -18,6 +19,8 @@ import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -270,6 +273,7 @@ class AiCodeGeneratorFacadeTest {
         var lease = sessionManager.open(operation, 9L, "turn-online");
         VueTurnContext context = new VueTurnContext(
                 APP_ID, 9L, "turn-online", operation, lease,
+                admissionPermit(),
                 new FileToolBudgetGuard().newSession());
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
@@ -307,6 +311,7 @@ class AiCodeGeneratorFacadeTest {
         var lease = sessionManager.open(operation, 9L, "turn-resource-limit");
         VueTurnContext context = new VueTurnContext(
                 APP_ID, 9L, "turn-resource-limit", operation, lease,
+                admissionPermit(),
                 guard.newSession());
 
         List<String> output = new CopyOnWriteArrayList<>();
@@ -359,6 +364,7 @@ class AiCodeGeneratorFacadeTest {
                 operation, 9L, "turn-old-content-limit");
         VueTurnContext context = new VueTurnContext(
                 APP_ID, 9L, "turn-old-content-limit", operation, lease,
+                admissionPermit(),
                 guard.newSession());
 
         List<String> output = new CopyOnWriteArrayList<>();
@@ -399,6 +405,7 @@ class AiCodeGeneratorFacadeTest {
                 operation, 9L, "turn-executed-resource-limit");
         VueTurnContext context = new VueTurnContext(
                 APP_ID, 9L, "turn-executed-resource-limit", operation, lease,
+                admissionPermit(),
                 new FileToolBudgetGuard().newSession());
 
         List<String> output = new CopyOnWriteArrayList<>();
@@ -1313,5 +1320,11 @@ class AiCodeGeneratorFacadeTest {
 
     private RetrievedSnippet snippet(String id) {
         return RetrievedSnippet.builder().id(id).title(id).code("示例代码").score(0.9).build();
+    }
+
+    private VueTurnAdmissionController.AdmissionPermit admissionPermit() {
+        return new VueTurnAdmissionController(
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()))
+                .tryAcquire().orElseThrow();
     }
 }

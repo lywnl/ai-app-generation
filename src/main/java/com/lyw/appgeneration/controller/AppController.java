@@ -119,9 +119,9 @@ public class AppController {
             Flux<GenerationStreamEvent> business,
             AppLifecycleMetricsCollector.SseProtocolObservation observation) {
         return business.doOnNext(event -> {
-            if (event instanceof GenerationStreamEvent.VueOutcome vueEvent) {
+            if (event instanceof GenerationStreamEvent.TurnOutcome turnEvent) {
                 AppLifecycleMetricsCollector.SseProtocolResult result = switch (
-                        vueEvent.outcome().outcome()) {
+                        turnEvent.message().getOutcome()) {
                     case PROTOCOL_ERROR ->
                             AppLifecycleMetricsCollector.SseProtocolResult.PROTOCOL_ERROR;
                     case SYSTEM_ERROR ->
@@ -162,13 +162,13 @@ public class AppController {
 
     private ServerSentEvent<String> encodeBusinessEvent(
             GenerationStreamEvent event) {
-        if (event instanceof GenerationStreamEvent.VueOutcome vueEvent) {
-            var outcome = vueEvent.outcome();
+        if (event instanceof GenerationStreamEvent.TurnOutcome turnEvent) {
+            var outcome = turnEvent.message();
             Map<String, Object> data = Map.of(
                     "protocol", VUE_TURN_PROTOCOL,
-                    "outcome", outcome.outcome().name(),
-                    "message", outcome.clientMessage(),
-                    "refreshPreview", outcome.shouldRefreshPreview());
+                    "outcome", outcome.getOutcome().name(),
+                    "message", outcome.getMessage(),
+                    "refreshPreview", outcome.isShouldRefreshPreview());
             return ServerSentEvent.<String>builder()
                     .event("turn-outcome")
                     .data(JSONUtil.toJsonStr(data))

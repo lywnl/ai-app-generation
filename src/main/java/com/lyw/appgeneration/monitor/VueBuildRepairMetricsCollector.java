@@ -34,6 +34,12 @@ public final class VueBuildRepairMetricsCollector {
                 "phase", tag(outcome.phase())).increment());
     }
 
+    public void recordTurnAdmission(AdmissionResult result) {
+        Objects.requireNonNull(result, "Vue 回合准入结果不能为空");
+        safely(() -> counter("vue_turn_admissions_total",
+                "result", tag(result)).increment());
+    }
+
     public void recordCancellation(
             CancellationTrigger trigger, CancellationResult result) {
         safely(() -> counter("vue_turn_cancellations_total",
@@ -128,6 +134,10 @@ public final class VueBuildRepairMetricsCollector {
 
     public enum CancellationTrigger {
         SUBSCRIBER_CANCELLED, ABSOLUTE_DEADLINE, BUILD_TIMEOUT, DELETE_TAKEOVER
+    }
+
+    public enum AdmissionResult {
+        ACQUIRED, REJECTED, RELEASED
     }
 
     public enum CancellationResult {

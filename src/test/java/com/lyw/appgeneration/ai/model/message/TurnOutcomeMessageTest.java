@@ -3,6 +3,7 @@ package com.lyw.appgeneration.ai.model.message;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
+import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -41,5 +42,18 @@ class TurnOutcomeMessageTest {
         assertEquals("项目已生成并构建成功。", decoded.getMessage());
         assertFalse(json.contains("不应进入控制消息"),
                 "canonicalAiText 不能进入实时控制消息");
+    }
+
+    @Test
+    void generationStreamEventMustExposeOnlyClientSafeTurnOutcome()
+            throws NoSuchMethodException {
+        var nestedTypes = java.util.Arrays.stream(
+                        GenerationStreamEvent.class.getDeclaredClasses())
+                .map(Class::getSimpleName)
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertEquals(java.util.Set.of("Content", "TurnOutcome"), nestedTypes);
+        assertNotNull(GenerationStreamEvent.class.getMethod(
+                "turnOutcome", VueTurnOutcome.class));
     }
 }

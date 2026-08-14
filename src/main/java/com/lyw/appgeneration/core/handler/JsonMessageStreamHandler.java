@@ -86,14 +86,27 @@ public final class JsonMessageStreamHandler {
                     .filter(StrUtil::isNotEmpty)
                     .map(GenerationStreamEvent::content);
             AtomicBoolean deadlineReached = new AtomicBoolean();
+            AtomicBoolean deleteTakeoverReached = new AtomicBoolean();
             Mono<Long> deadline = Mono.delay(
                             context.remainingUntilDeadline(), deadlineScheduler)
                     .doOnNext(ignored -> deadlineReached.set(true));
-            Flux<GenerationStreamEvent> completed = body.takeUntilOther(deadline)
-                    .concatWith(Flux.defer(() -> deadlineReached.get()
-                            ? finalizeTimeout(context, canonical.content())
-                            : finalizeSignal(context, canonical.content(), null)));
-            return completed
+            Mono<VueTurnContext.DeleteTakeoverRequest> deleteTakeover =
+                    context.deleteTakeoverSignal()
+                            .doOnNext(ignored -> deleteTakeoverReached.set(true))
+                            .cache();
+            Flux<GenerationStreamEvent> normalFlow = body
+                    .takeUntilOther(deadline)
+                    .takeUntilOther(deleteTakeover)
+                    .concatWith(Flux.defer(() -> {
+                        if (deleteTakeoverReached.get()) {
+                            return Flux.empty();
+                        }
+                        return deadlineReached.get()
+                                ? finalizeTimeout(context, canonical.content())
+                                : finalizeSignal(
+                                        context, canonical.content(), null);
+                    }));
+            Flux<GenerationStreamEvent> guardedNormalFlow = normalFlow
                     .onErrorResume(error -> {
                         if (!context.isUserCommitted()) {
                             if (context.terminalWinner().isEmpty()) {
@@ -102,11 +115,26 @@ public final class JsonMessageStreamHandler {
                             return Flux.error(error);
                         }
                         if (context.terminalWinner().isPresent()) {
-                            return Flux.error(error);
+                            return context.terminalWinner().orElseThrow()
+                                    == VueTurnContext.TerminalTrigger.DELETE_TAKEOVER
+                                    ? Flux.empty() : Flux.error(error);
                         }
                         return finalizeSignal(
                                 context, canonical.content(), error);
-                    })
+                    });
+            Flux<GenerationStreamEvent> deleteFlow = deleteTakeover
+                    .flatMapMany(request -> cancellationCoordinator
+                            .requestDeleteTakeover(
+                                    context, request, canonical::content)
+                            .<Flux<GenerationStreamEvent>>map(finalization ->
+                                    finalization.map(result ->
+                                            (GenerationStreamEvent)
+                                                    GenerationStreamEvent.turnOutcome(
+                                                            result.outcome())).flux())
+                            .orElseGet(Flux::empty));
+            return Flux.merge(guardedNormalFlow, deleteFlow)
+                    .takeUntil(event ->
+                            event instanceof GenerationStreamEvent.TurnOutcome)
                     .doOnCancel(() -> cancellationCoordinator.requestCancellation(
                             context, canonical::content));
         });
@@ -117,7 +145,7 @@ public final class JsonMessageStreamHandler {
         return cancellationCoordinator.requestTimeout(
                         context, () -> canonicalPrefix)
                 .map(result -> result.<GenerationStreamEvent>map(finalized ->
-                        GenerationStreamEvent.vueOutcome(
+                        GenerationStreamEvent.turnOutcome(
                                 finalized.outcome())).flux())
                 .orElseGet(Flux::empty);
     }
@@ -127,13 +155,13 @@ public final class JsonMessageStreamHandler {
         VueTurnContext.TerminalTrigger trigger = error == null
                 ? VueTurnContext.TerminalTrigger.COMPLETED
                 : VueTurnContext.TerminalTrigger.FAILED;
-        if (!context.tryClaimTerminal(trigger)) {
+        if (!context.tryStartFinalization(trigger)) {
             return Flux.empty();
         }
         VueTurnOutcome requested = resolveOutcome(context, canonicalPrefix, error);
         VueTurnFinalizer.FinalizationResult result =
                 finalizer.finalizeOnce(context, requested);
-        GenerationStreamEvent event = GenerationStreamEvent.vueOutcome(
+        GenerationStreamEvent event = GenerationStreamEvent.turnOutcome(
                 result.outcome());
         return Flux.just(event);
     }

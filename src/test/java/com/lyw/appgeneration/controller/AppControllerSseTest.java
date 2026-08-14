@@ -127,7 +127,7 @@ class AppControllerSseTest {
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(
                         GenerationStreamEvent.content("正文"),
-                        GenerationStreamEvent.vueOutcome(outcome)));
+                        GenerationStreamEvent.turnOutcome(outcome)));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
                 APP_ID, "需求", request).collectList().block();
@@ -195,7 +195,7 @@ class AppControllerSseTest {
                 VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 "协议异常", false, "协议异常");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
-                .thenReturn(Flux.just(GenerationStreamEvent.vueOutcome(outcome)));
+                .thenReturn(Flux.just(GenerationStreamEvent.turnOutcome(outcome)));
 
         controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
 
@@ -211,7 +211,7 @@ class AppControllerSseTest {
                 VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                 "系统异常", false, "系统异常");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
-                .thenReturn(Flux.just(GenerationStreamEvent.vueOutcome(outcome)));
+                .thenReturn(Flux.just(GenerationStreamEvent.turnOutcome(outcome)));
 
         controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
 

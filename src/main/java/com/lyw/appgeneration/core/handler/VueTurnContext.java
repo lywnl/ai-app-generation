@@ -5,17 +5,36 @@ import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationLease;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverContext;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverRegistration;
+import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController.AdmissionPermit;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTermination;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Objects;
 import java.util.Optional;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import java.util.function.BooleanSupplier;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 /** 精确绑定一次 app 操作租约和 Vue 构建租约的在线回合上下文。 */
+@Slf4j
 public final class VueTurnContext {
 
     public static final Duration TURN_DEADLINE = Duration.ofMinutes(30);
@@ -25,6 +44,7 @@ public final class VueTurnContext {
     private final String turnId;
     private final AppOperationLease operationLease;
     private final VueBuildLease lease;
+    private final AdmissionPermit admissionPermit;
     private final VueBuildPhase testingPhase;
     private final boolean testingTimedOut;
     private final long startedAtNanos;
@@ -32,21 +52,44 @@ public final class VueTurnContext {
     private final LongSupplier nanoTicker;
     private final AtomicReference<ControlledTermination> controlledTermination =
             new AtomicReference<>();
-    private final AtomicReference<VueTurnFinalizer.FinalizationResult> finalization =
-            new AtomicReference<>();
-    private final AtomicBoolean finalizing = new AtomicBoolean();
-    private final AtomicReference<TerminalTrigger> terminalWinner =
-            new AtomicReference<>();
+    private final AtomicReference<TurnState> turnState =
+            new AtomicReference<>(TurnState.active());
+    private final CompletableFuture<VueTurnFinalizer.FinalizationResult> finalization =
+            new CompletableFuture<>();
+    private final Object finalizationObserverLock = new Object();
+    private final Map<Long, FinalizationObserver> finalizationObservers =
+            new LinkedHashMap<>();
+    private final AtomicLong nextObserverId = new AtomicLong();
+    private boolean finalizationExecutionClaimed;
     private final AtomicBoolean resourcesClosed = new AtomicBoolean();
-    private final AtomicBoolean userCommitted = new AtomicBoolean();
+    private final AtomicReference<DeleteTakeoverRegistration>
+            deleteTakeoverRegistration = new AtomicReference<>();
+    private final Sinks.One<DeleteTakeoverRequest> deleteTakeoverSignal =
+            Sinks.one();
+    private final ReentrantLock commitGate = new ReentrantLock();
+    private UserCommitState userCommitState = UserCommitState.PREPARING;
     private final CallbackGate callbackGate = new CallbackGate();
     private final FileToolBudgetGuard.Session budgetSession;
 
-    public VueTurnContext(long appId, long userId, String turnId,
+    VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
             FileToolBudgetGuard.Session budgetSession) {
-        this(appId, userId, turnId, operationLease, lease, null, false,
+        this(appId, userId, turnId, operationLease, lease, null,
+                null, false,
                 operationLease.startedAtNanos(), TURN_DEADLINE,
+                System::nanoTime, budgetSession);
+        VueBuildSnapshot snapshot = lease.snapshot();
+        validateIdentity(appId, userId, turnId, operationLease, snapshot);
+    }
+
+    public VueTurnContext(long appId, long userId, String turnId,
+            AppOperationLease operationLease, VueBuildLease lease,
+            AdmissionPermit admissionPermit,
+            FileToolBudgetGuard.Session budgetSession) {
+        this(appId, userId, turnId, operationLease, lease,
+                Objects.requireNonNull(admissionPermit,
+                        "Vue 回合准入许可不能为空"),
+                null, false, operationLease.startedAtNanos(), TURN_DEADLINE,
                 System::nanoTime, budgetSession);
         VueBuildSnapshot snapshot = lease.snapshot();
         validateIdentity(appId, userId, turnId, operationLease, snapshot);
@@ -54,6 +97,7 @@ public final class VueTurnContext {
 
     private VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
+            AdmissionPermit admissionPermit,
             VueBuildPhase testingPhase, boolean testingTimedOut,
             long startedAtNanos, Duration deadlineDuration,
             LongSupplier nanoTicker,
@@ -69,6 +113,7 @@ public final class VueTurnContext {
         }
         this.operationLease = operationLease;
         this.lease = lease;
+        this.admissionPermit = admissionPermit;
         this.testingPhase = testingPhase;
         this.testingTimedOut = testingTimedOut;
         this.startedAtNanos = startedAtNanos;
@@ -85,7 +130,7 @@ public final class VueTurnContext {
 
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase) {
-        return new VueTurnContext(appId, userId, turnId, null, null,
+        return new VueTurnContext(appId, userId, turnId, null, null, null,
                 Objects.requireNonNull(phase), false,
                 System.nanoTime(), TURN_DEADLINE, System::nanoTime,
                 new FileToolBudgetGuard().newSession());
@@ -94,7 +139,7 @@ public final class VueTurnContext {
     static VueTurnContext testing(
             long appId, long userId, String turnId,
             VueBuildPhase phase, boolean timedOut) {
-        return new VueTurnContext(appId, userId, turnId, null, null,
+        return new VueTurnContext(appId, userId, turnId, null, null, null,
                 Objects.requireNonNull(phase), timedOut,
                 System.nanoTime(), TURN_DEADLINE, System::nanoTime,
                 new FileToolBudgetGuard().newSession());
@@ -105,7 +150,7 @@ public final class VueTurnContext {
             Duration deadlineDuration, LongSupplier nanoTicker) {
         LongSupplier ticker = Objects.requireNonNull(nanoTicker);
         long startedAt = ticker.getAsLong();
-        return new VueTurnContext(appId, userId, turnId, null, null,
+        return new VueTurnContext(appId, userId, turnId, null, null, null,
                 Objects.requireNonNull(phase), false,
                 startedAt, deadlineDuration, ticker,
                 new FileToolBudgetGuard().newSession());
@@ -114,7 +159,7 @@ public final class VueTurnContext {
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase,
             FileToolBudgetGuard.Session budgetSession) {
-        return new VueTurnContext(appId, userId, turnId, null, null,
+        return new VueTurnContext(appId, userId, turnId, null, null, null,
                 Objects.requireNonNull(phase), false,
                 System.nanoTime(), TURN_DEADLINE, System::nanoTime,
                 budgetSession);
@@ -156,12 +201,97 @@ public final class VueTurnContext {
                 0L, deadlineNanos - nanoTicker.getAsLong()));
     }
 
-    public void markUserCommitted() {
-        userCommitted.set(true);
+    public UserCommitResult commitUser(BooleanSupplier persistUser) {
+        Objects.requireNonNull(persistUser, "用户消息持久化动作不能为空");
+        commitGate.lock();
+        try {
+            if (userCommitState == UserCommitState.PRE_COMMIT_TERMINATED) {
+                return UserCommitResult.TERMINATED_BEFORE_COMMIT;
+            }
+            if (userCommitState == UserCommitState.COMMITTED) {
+                throw new IllegalStateException("用户消息已经提交");
+            }
+            if (!persistUser.getAsBoolean()) {
+                return UserCommitResult.STORE_FAILED;
+            }
+            userCommitState = UserCommitState.COMMITTED;
+            return UserCommitResult.COMMITTED;
+        } finally {
+            commitGate.unlock();
+        }
+    }
+
+    /**
+     * 在预提交状态门内原子领取准备步骤的两层回调票据，随后在锁外执行动作。
+     *
+     * <p>动作结果允许为 {@code null}；未获准通过 {@link CancellationException}
+     * 单独表达，避免把“首轮无历史”误判为取消。</p>
+     */
+    public <T> T callPreparation(Supplier<T> action) {
+        Objects.requireNonNull(action, "准备动作不能为空");
+        PreparationPermit permit;
+        commitGate.lock();
+        try {
+            TurnState current = turnState.get();
+            if (current.stage() != TurnStage.ACTIVE
+                    || userCommitState != UserCommitState.PREPARING) {
+                throw new CancellationException("Vue 回合准备阶段已终止");
+            }
+            permit = tryAcquirePreparationPermit();
+        } finally {
+            commitGate.unlock();
+        }
+        if (permit == null) {
+            throw new CancellationException("Vue 回合准备阶段未取得回调票据");
+        }
+        try (permit) {
+            return action.get();
+        }
+    }
+
+    private PreparationPermit tryAcquirePreparationPermit() {
+        CallbackGate.Ticket inner = callbackGate.tryEnter();
+        if (inner == null) {
+            return null;
+        }
+        try {
+            AutoCloseable outer = lease == null ? null : lease.enterCallback();
+            return new PreparationPermit(inner, outer);
+        } catch (IllegalStateException rejected) {
+            inner.close();
+            return null;
+        }
+    }
+
+    public PreCommitTerminationDecision claimPreCommitTermination() {
+        commitGate.lock();
+        try {
+            return switch (userCommitState) {
+                case PREPARING -> {
+                    userCommitState = UserCommitState.PRE_COMMIT_TERMINATED;
+                    yield PreCommitTerminationDecision.PRE_COMMIT_WON;
+                }
+                case PRE_COMMIT_TERMINATED ->
+                        PreCommitTerminationDecision.ALREADY_TERMINATED;
+                case COMMITTED ->
+                        PreCommitTerminationDecision.POST_COMMIT_REQUIRED;
+            };
+        } finally {
+            commitGate.unlock();
+        }
+    }
+
+    public UserCommitState userCommitState() {
+        commitGate.lock();
+        try {
+            return userCommitState;
+        } finally {
+            commitGate.unlock();
+        }
     }
 
     public boolean isUserCommitted() {
-        return userCommitted.get();
+        return userCommitState() == UserCommitState.COMMITTED;
     }
 
     public VueBuildLease lease() {
@@ -192,21 +322,33 @@ public final class VueTurnContext {
         return Optional.ofNullable(controlledTermination.get());
     }
 
-    /** complete、error 与 cancel 竞争时，只允许一个分支决定规范终态。 */
-    public boolean tryClaimTerminal(TerminalTrigger trigger) {
-        return terminalWinner.compareAndSet(
-                null, Objects.requireNonNull(trigger, "终态触发原因不能为空"));
+    /** complete、error、cancel、timeout 与删除接管只允许一个分支决定规范终态。 */
+    public boolean tryStartFinalization(TerminalTrigger trigger) {
+        Objects.requireNonNull(trigger, "终态触发原因不能为空");
+        while (true) {
+            TurnState current = turnState.get();
+            if (current.stage() != TurnStage.ACTIVE) {
+                return false;
+            }
+            if (turnState.compareAndSet(current, TurnState.finalizing(trigger))) {
+                return true;
+            }
+        }
     }
 
     /**
      * 原子认领取消类终态并关闭应用外层回调门，再撤销回合内层门和生成动作。
      */
-    public boolean tryClaimTerminalAndCancel(TerminalTrigger trigger) {
+    public boolean tryStartCancellation(TerminalTrigger trigger) {
         Objects.requireNonNull(trigger, "终态触发原因不能为空");
+        if (trigger != TerminalTrigger.CANCELLED
+                && trigger != TerminalTrigger.TIMED_OUT) {
+            throw new IllegalArgumentException("只有取消或超时可以关闭回合取消门");
+        }
         boolean claimed = operationLease == null
-                ? terminalWinner.compareAndSet(null, trigger)
+                ? tryStartFinalization(trigger)
                 : operationLease.requestCancellationIf(
-                        () -> terminalWinner.compareAndSet(null, trigger));
+                        () -> tryStartFinalization(trigger));
         if (!claimed) {
             return false;
         }
@@ -217,14 +359,81 @@ public final class VueTurnContext {
         return true;
     }
 
+    /** 删除 manager 已关闭 app 外层门，此处只认领回合终态并撤销内层门。 */
+    public boolean tryStartDeleteTakeoverFinalization() {
+        if (!tryStartFinalization(TerminalTrigger.DELETE_TAKEOVER)) {
+            return false;
+        }
+        callbackGate.revoke();
+        return true;
+    }
+
+    /** 在本轮 User 已提交后，为精确生成租约绑定唯一删除接管入口。 */
+    public void registerDeleteTakeoverParticipant() {
+        if (!isUserCommitted()) {
+            throw new IllegalStateException("用户消息提交前不能注册删除接管参与者");
+        }
+        AppOperationLease currentLease = Objects.requireNonNull(
+                operationLease, "测试上下文不能注册删除接管参与者");
+        DeleteTakeoverRegistration registration = currentLease
+                .registerDeleteTakeoverParticipant(this::participateInDeleteTakeover);
+        if (!deleteTakeoverRegistration.compareAndSet(null, registration)) {
+            registration.close();
+            throw new IllegalStateException("Vue 回合已经注册删除接管参与者");
+        }
+    }
+
+    private void participateInDeleteTakeover(DeleteTakeoverContext takeoverContext)
+            throws Exception {
+        DeleteTakeoverRequest request = new DeleteTakeoverRequest(takeoverContext);
+        try (AutoCloseable ignored = onFinalized(
+                request::complete, request::fail)) {
+            if (!request.isDone()) {
+                deleteTakeoverSignal.tryEmitValue(request);
+            }
+            request.awaitCompletion();
+        }
+    }
+
+    Mono<DeleteTakeoverRequest> deleteTakeoverSignal() {
+        return deleteTakeoverSignal.asMono();
+    }
+
     public Optional<TerminalTrigger> terminalWinner() {
-        return Optional.ofNullable(terminalWinner.get());
+        TurnState current = turnState.get();
+        return current.stage() == TurnStage.ACTIVE
+                ? Optional.empty() : Optional.of(current.trigger());
+    }
+
+    public TurnState turnState() {
+        return turnState.get();
+    }
+
+    boolean tryClaimFinalizationExecution(TerminalTrigger fallbackTrigger) {
+        Objects.requireNonNull(fallbackTrigger, "兜底终态触发原因不能为空");
+        TurnState current = turnState.get();
+        if (current.stage() == TurnStage.ACTIVE
+                && !tryStartFinalization(fallbackTrigger)) {
+            current = turnState.get();
+        }
+        if (current.stage() == TurnStage.FINALIZED
+                || turnState.get().stage() == TurnStage.FINALIZED) {
+            return false;
+        }
+        synchronized (finalizationObserverLock) {
+            if (finalizationExecutionClaimed || finalization.isDone()) {
+                return false;
+            }
+            finalizationExecutionClaimed = true;
+            return true;
+        }
     }
 
     public void ensureTerminalOpen() {
-        TerminalTrigger winner = terminalWinner.get();
-        if (winner != null) {
-            throw new IllegalStateException("Vue 回合终态已由 " + winner + " 占用");
+        TurnState current = turnState.get();
+        if (current.stage() != TurnStage.ACTIVE) {
+            throw new IllegalStateException(
+                    "Vue 回合终态已由 " + current.trigger() + " 占用");
         }
     }
 
@@ -307,67 +516,299 @@ public final class VueTurnContext {
         }
     }
 
-    boolean tryStartFinalization() {
-        return finalizing.compareAndSet(false, true);
+    void completeFinalization(VueTurnFinalizer.FinalizationResult result) {
+        Objects.requireNonNull(result, "回合终态结果不能为空");
+        transitionToFinalized();
+        completeSharedFinalization(result, null);
     }
 
-    void completeFinalization(VueTurnFinalizer.FinalizationResult result) {
-        if (!finalization.compareAndSet(null, Objects.requireNonNull(result))) {
-            throw new IllegalStateException("回合终态已经完成");
+    void failFinalization(Throwable cause) {
+        Objects.requireNonNull(cause, "回合终态异常不能为空");
+        transitionToFinalized();
+        completeSharedFinalization(null, cause);
+    }
+
+    private void transitionToFinalized() {
+        while (true) {
+            TurnState current = turnState.get();
+            if (current.stage() != TurnStage.FINALIZING) {
+                throw new IllegalStateException("回合不处于可完成的收尾阶段");
+            }
+            if (turnState.compareAndSet(current, current.finalized())) {
+                return;
+            }
         }
-        synchronized (finalization) {
-            finalization.notifyAll();
+    }
+
+    private void completeSharedFinalization(
+            VueTurnFinalizer.FinalizationResult result, Throwable cause) {
+        Map<Long, FinalizationObserver> observers;
+        synchronized (finalizationObserverLock) {
+            boolean completed = cause == null
+                    ? finalization.complete(result)
+                    : finalization.completeExceptionally(cause);
+            if (!completed) {
+                throw new IllegalStateException("回合终态已经完成");
+            }
+            observers = new LinkedHashMap<>(finalizationObservers);
+            finalizationObservers.clear();
+        }
+        observers.values().forEach(observer -> observer.notify(result, cause));
+    }
+
+    AutoCloseable onFinalized(
+            Consumer<VueTurnFinalizer.FinalizationResult> success,
+            Consumer<Throwable> failure) {
+        FinalizationObserver observer = new FinalizationObserver(
+                nextObserverId.incrementAndGet(), success, failure);
+        boolean completed;
+        synchronized (finalizationObserverLock) {
+            completed = finalization.isDone();
+            if (!completed) {
+                finalizationObservers.put(observer.id(), observer);
+            }
+        }
+        if (completed) {
+            notifyCompletedObserver(observer);
+        }
+        return () -> removeObserver(observer);
+    }
+
+    private void notifyCompletedObserver(FinalizationObserver observer) {
+        try {
+            observer.notify(finalization.join(), null);
+        } catch (CompletionException exception) {
+            observer.notify(null, exception.getCause());
+        }
+    }
+
+    private void removeObserver(FinalizationObserver observer) {
+        observer.deactivate();
+        synchronized (finalizationObserverLock) {
+            finalizationObservers.remove(observer.id(), observer);
         }
     }
 
     VueTurnFinalizer.FinalizationResult awaitFinalization() {
-        boolean interrupted = false;
-        synchronized (finalization) {
-            while (finalization.get() == null) {
-                try {
-                    finalization.wait();
-                } catch (InterruptedException exception) {
-                    interrupted = true;
-                }
-            }
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
-        }
-        return finalization.get();
+        return finalization.join();
     }
 
     public void closeResources() {
         if (!resourcesClosed.compareAndSet(false, true)) {
             return;
         }
-        RuntimeException failure = null;
-        if (lease != null) {
-            try {
-                lease.close();
-            } catch (RuntimeException exception) {
-                failure = exception;
+        DeleteTakeoverRegistration takeoverRegistration =
+                deleteTakeoverRegistration.getAndSet(null);
+        closeAll(takeoverRegistration, lease, operationLease, admissionPermit);
+    }
+
+    public static void closeAll(AutoCloseable... resources) {
+        Throwable failure = null;
+        for (AutoCloseable resource : resources) {
+            if (resource == null) {
+                continue;
             }
-        }
-        if (operationLease != null) {
             try {
-                operationLease.close();
-            } catch (RuntimeException exception) {
+                resource.close();
+            } catch (Throwable exception) {
                 if (failure == null) {
                     failure = exception;
-                } else {
+                } else if (failure != exception) {
                     failure.addSuppressed(exception);
                 }
             }
         }
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
         if (failure != null) {
-            throw failure;
+            throw new IllegalStateException("关闭回合资源失败", failure);
         }
     }
 
     private static long saturatingAdd(long value, long increment) {
         return increment > 0 && value > Long.MAX_VALUE - increment
                 ? Long.MAX_VALUE : value + increment;
+    }
+
+    public enum UserCommitState {
+        PREPARING,
+        PRE_COMMIT_TERMINATED,
+        COMMITTED
+    }
+
+    public enum UserCommitResult {
+        COMMITTED,
+        TERMINATED_BEFORE_COMMIT,
+        STORE_FAILED
+    }
+
+    public enum PreCommitTerminationDecision {
+        PRE_COMMIT_WON,
+        ALREADY_TERMINATED,
+        POST_COMMIT_REQUIRED
+    }
+
+    public enum TurnStage {
+        ACTIVE,
+        FINALIZING,
+        FINALIZED
+    }
+
+    static final class DeleteTakeoverRequest {
+
+        private final DeleteTakeoverContext takeoverContext;
+        private final CompletableFuture<VueTurnFinalizer.FinalizationResult>
+                completion = new CompletableFuture<>();
+
+        private DeleteTakeoverRequest(DeleteTakeoverContext takeoverContext) {
+            this.takeoverContext = Objects.requireNonNull(
+                    takeoverContext, "删除接管上下文不能为空");
+        }
+
+        DeleteTakeoverContext takeoverContext() {
+            return takeoverContext;
+        }
+
+        boolean isDone() {
+            return completion.isDone();
+        }
+
+        void complete(VueTurnFinalizer.FinalizationResult result) {
+            completion.complete(Objects.requireNonNull(
+                    result, "删除接管终态结果不能为空"));
+        }
+
+        void fail(Throwable cause) {
+            completion.completeExceptionally(Objects.requireNonNull(
+                    cause, "删除接管终态异常不能为空"));
+        }
+
+        VueTurnFinalizer.FinalizationResult awaitCompletion()
+                throws InterruptedException, ExecutionException, TimeoutException {
+            Duration remaining = takeoverContext.remainingTime();
+            if (remaining.isZero() || remaining.isNegative()) {
+                throw new TimeoutException("删除接管等待回合终态超时");
+            }
+            return completion.get(remaining.toNanos(), TimeUnit.NANOSECONDS);
+        }
+    }
+
+    public record TurnState(TurnStage stage, TerminalTrigger trigger) {
+
+        public TurnState {
+            Objects.requireNonNull(stage, "回合阶段不能为空");
+            if ((stage == TurnStage.ACTIVE) != (trigger == null)) {
+                throw new IllegalArgumentException("活跃阶段不能携带终态触发原因");
+            }
+        }
+
+        public static TurnState active() {
+            return new TurnState(TurnStage.ACTIVE, null);
+        }
+
+        public static TurnState finalizing(TerminalTrigger trigger) {
+            return new TurnState(TurnStage.FINALIZING,
+                    Objects.requireNonNull(trigger, "终态触发原因不能为空"));
+        }
+
+        public TurnState finalized() {
+            if (stage != TurnStage.FINALIZING) {
+                throw new IllegalStateException("只有收尾中状态可以完成");
+            }
+            return new TurnState(TurnStage.FINALIZED, trigger);
+        }
+    }
+
+    private final class FinalizationObserver {
+
+        private final long id;
+        private final Consumer<VueTurnFinalizer.FinalizationResult> success;
+        private final Consumer<Throwable> failure;
+        private final AtomicBoolean active = new AtomicBoolean(true);
+
+        private FinalizationObserver(
+                long id,
+                Consumer<VueTurnFinalizer.FinalizationResult> success,
+                Consumer<Throwable> failure) {
+            this.id = id;
+            this.success = Objects.requireNonNull(success, "成功观察回调不能为空");
+            this.failure = Objects.requireNonNull(failure, "失败观察回调不能为空");
+        }
+
+        private long id() {
+            return id;
+        }
+
+        private void deactivate() {
+            active.set(false);
+        }
+
+        @SuppressWarnings("removal")
+        private void notify(
+                VueTurnFinalizer.FinalizationResult result, Throwable cause) {
+            if (!active.compareAndSet(true, false)) {
+                return;
+            }
+            try {
+                if (cause == null) {
+                    success.accept(result);
+                } else {
+                    failure.accept(cause);
+                }
+            } catch (VirtualMachineError | ThreadDeath fatal) {
+                throw fatal;
+            } catch (Throwable exception) {
+                log.warn("Vue 回合终态观察回调异常,appId={},turnId={}",
+                        appId, turnId, exception);
+            }
+        }
+    }
+
+    private static final class PreparationPermit implements AutoCloseable {
+
+        private final CallbackGate.Ticket inner;
+        private final AutoCloseable outer;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private PreparationPermit(
+                CallbackGate.Ticket inner, AutoCloseable outer) {
+            this.inner = Objects.requireNonNull(inner, "内层回调票据不能为空");
+            this.outer = outer;
+        }
+
+        @Override
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            RuntimeException failure = null;
+            if (outer != null) {
+                try {
+                    outer.close();
+                } catch (RuntimeException exception) {
+                    failure = exception;
+                } catch (Exception exception) {
+                    failure = new IllegalStateException(
+                            "关闭应用回调票据失败", exception);
+                }
+            }
+            try {
+                inner.close();
+            } catch (RuntimeException exception) {
+                if (failure == null) {
+                    failure = exception;
+                } else if (failure != exception) {
+                    failure.addSuppressed(exception);
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
     }
 
     private static final class CallbackGate {
@@ -435,6 +876,7 @@ public final class VueTurnContext {
         COMPLETED,
         FAILED,
         CANCELLED,
-        TIMED_OUT
+        TIMED_OUT,
+        DELETE_TAKEOVER
     }
 }

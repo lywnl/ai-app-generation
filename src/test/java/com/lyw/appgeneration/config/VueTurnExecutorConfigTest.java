@@ -3,10 +3,14 @@ package com.lyw.appgeneration.config;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
+import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 
+import java.time.Duration;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -31,46 +35,47 @@ class VueTurnExecutorConfigTest {
             });
             assertTrue(ran.await(1, TimeUnit.SECONDS));
             assertTrue(virtual.get());
-            assertEquals(VueTurnExecutorConfig.MAX_CONCURRENCY,
+            assertEquals(SimpleAsyncTaskExecutor.UNBOUNDED_CONCURRENCY,
                     executor.getConcurrencyLimit());
         }
     }
 
     @Test
-    void saturationAppliesBackpressureInsteadOfRejectingOrEscapingManagement()
+    void 六十五个已准入回合的清理提交不得阻塞Reactor线程()
             throws Exception {
         SimpleAsyncTaskExecutor executor = new VueTurnExecutorConfig()
                 .vueTurnCancellationExecutor();
-        CountDownLatch allRunning = new CountDownLatch(
-                VueTurnExecutorConfig.MAX_CONCURRENCY);
+        int taskCount = 65;
+        CountDownLatch allRunning = new CountDownLatch(taskCount);
         CountDownLatch release = new CountDownLatch(1);
-        try (executor; var submitter = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (int index = 0;
-                    index < VueTurnExecutorConfig.MAX_CONCURRENCY; index++) {
-                executor.execute(() -> {
-                    allRunning.countDown();
-                    try {
-                        release.await();
-                    } catch (InterruptedException exception) {
-                        Thread.currentThread().interrupt();
-                    }
-                });
-            }
-            assertTrue(allRunning.await(2, TimeUnit.SECONDS));
-
-            CountDownLatch overflowRan = new CountDownLatch(1);
-            CountDownLatch overflowSubmitting = new CountDownLatch(1);
-            Future<?> overflowSubmission = submitter.submit(() -> {
-                overflowSubmitting.countDown();
-                executor.execute(overflowRan::countDown);
-            });
-            assertTrue(overflowSubmitting.await(1, TimeUnit.SECONDS));
-            assertFalse(overflowSubmission.isDone(),
-                    "达到并发上限时应背压提交者，不能拒绝后创建脱管线程");
-
-            release.countDown();
-            overflowSubmission.get(2, TimeUnit.SECONDS);
-            assertTrue(overflowRan.await(2, TimeUnit.SECONDS));
+        Set<String> threadNames = ConcurrentHashMap.newKeySet();
+        AtomicBoolean allVirtual = new AtomicBoolean(true);
+        try (executor) {
+            StepVerifier.create(Flux.range(0, taskCount)
+                            .parallel()
+                            .runOn(Schedulers.parallel())
+                            .doOnNext(ignored -> executor.execute(() -> {
+                                Thread thread = Thread.currentThread();
+                                threadNames.add(thread.getName());
+                                allVirtual.compareAndSet(true,
+                                        thread.isVirtual());
+                                allRunning.countDown();
+                                try {
+                                    release.await();
+                                } catch (InterruptedException exception) {
+                                    Thread.currentThread().interrupt();
+                                }
+                            }))
+                            .sequential())
+                    .expectNextCount(taskCount)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(2));
+            assertTrue(allRunning.await(2, TimeUnit.SECONDS),
+                    "全部已准入回合的必要清理都必须及时启动");
+            assertTrue(allVirtual.get());
+            assertFalse(threadNames.isEmpty());
+            assertTrue(threadNames.stream()
+                    .allMatch(name -> name.startsWith("vue-turn-cancel-")));
         } finally {
             release.countDown();
         }

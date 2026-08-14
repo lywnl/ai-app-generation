@@ -11,7 +11,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -83,6 +86,8 @@ public final class AppOperationLeaseManager {
         long deadlineNanos = deadlineAfter(boundedTimeout);
         AtomicReference<OperationState> sourceReference = new AtomicReference<>();
         AtomicReference<OperationState> deleteReference = new AtomicReference<>();
+        AtomicReference<DeleteTakeoverEntry> participantReference =
+                new AtomicReference<>();
         operations.compute(appId, (ignored, active) -> {
             if (active == null) {
                 OperationState delete = new OperationState(
@@ -94,7 +99,7 @@ public final class AppOperationLeaseManager {
                 throw new ActiveAppOperationException(
                         appId, active.operationType, active.ownerToken);
             }
-            active.beginDeleteTakeover();
+            participantReference.set(active.beginDeleteTakeover());
             sourceReference.set(active);
             return active;
         });
@@ -114,6 +119,28 @@ public final class AppOperationLeaseManager {
                 completeFailedDispatchStart(source, cancellationDispatch, startFailure);
             }
             source.completeCancellationDispatchStart();
+        }
+        try {
+            runDeleteTakeoverParticipant(
+                    source, participantReference.get(), deadlineNanos);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            abortDeleteTakeover(source);
+            recordDeleteTakeoverCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationResult.FAILED);
+            throw new OperationQuiescenceTimeoutException(
+                    appId, "等待删除接管参与者时线程被中断", exception);
+        } catch (TimeoutException exception) {
+            abortDeleteTakeover(source);
+            recordDeleteTakeoverCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationResult.TIMED_OUT);
+            throw new OperationQuiescenceTimeoutException(
+                    appId, "等待删除接管参与者超时", exception);
+        } catch (ExecutionException exception) {
+            abortDeleteTakeover(source);
+            recordDeleteTakeoverCancellation(
+                    AppLifecycleMetricsCollector.OperationCancellationResult.FAILED);
+            throwUnchecked(exception.getCause());
         }
         boolean readyForReplacement;
         try {
@@ -150,6 +177,59 @@ public final class AppOperationLeaseManager {
         recordDeleteTakeoverCancellation(
                 AppLifecycleMetricsCollector.OperationCancellationResult.COMPLETED);
         return new AppOperationLease(delete);
+    }
+
+    private void runDeleteTakeoverParticipant(
+            OperationState source,
+            DeleteTakeoverEntry entry,
+            long deadlineNanos)
+            throws InterruptedException, TimeoutException, ExecutionException {
+        if (!entry.tryStart()) {
+            return;
+        }
+        DeleteTakeoverContext context = new DeleteTakeoverContext(
+                source, deadlineNanos);
+        AtomicBoolean invocationClaimed = new AtomicBoolean();
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            if (!invocationClaimed.compareAndSet(false, true)) {
+                return null;
+            }
+            boolean completed = false;
+            try {
+                entry.participant().participate(context);
+                completed = true;
+                return null;
+            } finally {
+                entry.finish(completed);
+            }
+        });
+        Thread participantThread = Thread.ofVirtual()
+                .name("app-delete-takeover-" + source.appId + "-" + entry.id())
+                .start(task);
+        long remainingNanos = OperationState.remainingNanos(deadlineNanos);
+        if (remainingNanos <= 0) {
+            task.cancel(true);
+            releaseParticipantInvocationIfNotStarted(entry, invocationClaimed);
+            throw new TimeoutException("删除接管参与者没有剩余执行时间");
+        }
+        try {
+            task.get(remainingNanos, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException | InterruptedException exception) {
+            task.cancel(true);
+            releaseParticipantInvocationIfNotStarted(entry, invocationClaimed);
+            throw exception;
+        } finally {
+            if (task.isCancelled()) {
+                participantThread.interrupt();
+            }
+        }
+    }
+
+    private void releaseParticipantInvocationIfNotStarted(
+            DeleteTakeoverEntry entry, AtomicBoolean invocationClaimed) {
+        if (invocationClaimed.compareAndSet(false, true)) {
+            entry.finish(false);
+        }
     }
 
     private void completeFailedDispatchStart(
@@ -323,6 +403,16 @@ public final class AppOperationLeaseManager {
             return state.registerCancellation(action);
         }
 
+        /** 为当前精确生成租约注册唯一的回合删除接管参与者。 */
+        public DeleteTakeoverRegistration registerDeleteTakeoverParticipant(
+                DeleteTakeoverParticipant participant) {
+            ensureActive();
+            if (state.operationType != AppOperationType.GENERATE) {
+                throw new IllegalStateException("只有生成租约可以注册删除接管参与者");
+            }
+            return state.registerDeleteTakeoverParticipant(participant);
+        }
+
         public CallbackRegistration enterCallback() {
             ensureActive();
             return state.enterCallback();
@@ -411,6 +501,57 @@ public final class AppOperationLeaseManager {
         }
     }
 
+    /** 活跃生成回合在删除替换前必须完成的接管动作。 */
+    @FunctionalInterface
+    public interface DeleteTakeoverParticipant {
+
+        void participate(DeleteTakeoverContext context) throws Exception;
+    }
+
+    /** 向接管参与者暴露同一个删除绝对截止时间和排除自身的静默等待。 */
+    public static final class DeleteTakeoverContext {
+
+        private final OperationState state;
+        private final long deadlineNanos;
+
+        private DeleteTakeoverContext(
+                OperationState state, long deadlineNanos) {
+            this.state = state;
+            this.deadlineNanos = deadlineNanos;
+        }
+
+        public boolean awaitQuiescence() throws InterruptedException {
+            return state.awaitQuiescenceAndSeal(deadlineNanos, false);
+        }
+
+        public Duration remainingTime() {
+            long remainingNanos = OperationState.remainingNanos(deadlineNanos);
+            return remainingNanos <= 0
+                    ? Duration.ZERO : Duration.ofNanos(remainingNanos);
+        }
+    }
+
+    /** 尚未开始接管时可撤销，参与者开始后关闭不会中断收尾。 */
+    public static final class DeleteTakeoverRegistration implements AutoCloseable {
+
+        private final OperationState state;
+        private final DeleteTakeoverEntry entry;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private DeleteTakeoverRegistration(
+                OperationState state, DeleteTakeoverEntry entry) {
+            this.state = state;
+            this.entry = entry;
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                state.removeDeleteTakeoverParticipant(entry);
+            }
+        }
+    }
+
     public static final class ActiveAppOperationException extends IllegalStateException {
 
         private final AppOperationType activeOperation;
@@ -445,6 +586,7 @@ public final class AppOperationLeaseManager {
                 new LinkedHashMap<>();
 
         private long nextCancellationId;
+        private long nextDeleteTakeoverParticipantId;
         private int callbackCount;
         private int cancellationDispatchCount;
         private int cancellationDispatchStartDecisionCount;
@@ -456,6 +598,8 @@ public final class AppOperationLeaseManager {
         private boolean replaced;
         private boolean cancellationRegistrationSealed;
         private boolean vueSessionClaimed;
+        private boolean deleteTakeoverParticipantRegistered;
+        private DeleteTakeoverEntry deleteTakeoverParticipant;
 
         private OperationState(
                 AppOperationLeaseManager manager,
@@ -538,6 +682,34 @@ public final class AppOperationLeaseManager {
                 }
             }
             return new CancellationRegistration(this, entry);
+        }
+
+        private synchronized DeleteTakeoverRegistration
+                registerDeleteTakeoverParticipant(
+                        DeleteTakeoverParticipant participant) {
+            Objects.requireNonNull(participant, "删除接管参与者不能为空");
+            if (ownerClosed || replaced || cancellationRequested
+                    || cancellationRegistrationSealed) {
+                throw new IllegalStateException("删除接管参与者注册边界已经关闭");
+            }
+            if (deleteTakeoverParticipantRegistered) {
+                throw new IllegalStateException("生成租约只能注册一个删除接管参与者");
+            }
+            deleteTakeoverParticipantRegistered = true;
+            DeleteTakeoverEntry entry = new DeleteTakeoverEntry(
+                    ++nextDeleteTakeoverParticipantId, participant);
+            deleteTakeoverParticipant = entry;
+            return new DeleteTakeoverRegistration(this, entry);
+        }
+
+        private synchronized void removeDeleteTakeoverParticipant(
+                DeleteTakeoverEntry entry) {
+            if (deleteTakeoverParticipant == entry
+                    && !deleteTakeover
+                    && !entry.started()) {
+                entry.cancel();
+                deleteTakeoverParticipant = null;
+            }
         }
 
         private void cancelCancellation(CancellationEntry entry) {
@@ -763,6 +935,12 @@ public final class AppOperationLeaseManager {
 
         private synchronized boolean awaitQuiescenceAndSeal(long deadlineNanos)
                 throws InterruptedException {
+            return awaitQuiescenceAndSeal(deadlineNanos, true);
+        }
+
+        private synchronized boolean awaitQuiescenceAndSeal(
+                long deadlineNanos, boolean sealRegistration)
+                throws InterruptedException {
             long remainingNanos = remainingNanos(deadlineNanos);
             while (!isQuiescent()) {
                 if (remainingNanos <= 0) {
@@ -771,7 +949,9 @@ public final class AppOperationLeaseManager {
                 TimeUnit.NANOSECONDS.timedWait(this, remainingNanos);
                 remainingNanos = remainingNanos(deadlineNanos);
             }
-            cancellationRegistrationSealed = true;
+            if (sealRegistration) {
+                cancellationRegistrationSealed = true;
+            }
             return true;
         }
 
@@ -782,12 +962,17 @@ public final class AppOperationLeaseManager {
             return deadlineNanos - System.nanoTime();
         }
 
-        private synchronized void beginDeleteTakeover() {
+        private synchronized DeleteTakeoverEntry beginDeleteTakeover() {
             if (deleteTakeover) {
                 throw new ActiveAppOperationException(appId, operationType, ownerToken);
             }
+            DeleteTakeoverEntry participant = deleteTakeoverParticipant;
+            if (participant == null || participant.cancelled()) {
+                throw new IllegalStateException("活跃生成缺少删除接管参与者");
+            }
             deleteTakeover = true;
             requestCancellation();
+            return participant;
         }
 
         private synchronized boolean abortDeleteTakeover() {
@@ -831,6 +1016,71 @@ public final class AppOperationLeaseManager {
                 notifyAll();
             }
         }
+    }
+
+    private static final class DeleteTakeoverEntry {
+
+        private final long id;
+        private final DeleteTakeoverParticipant participant;
+        private DeleteTakeoverLifecycle lifecycle = DeleteTakeoverLifecycle.READY;
+        private boolean cancelled;
+
+        private DeleteTakeoverEntry(
+                long id, DeleteTakeoverParticipant participant) {
+            this.id = id;
+            this.participant = participant;
+        }
+
+        private long id() {
+            return id;
+        }
+
+        private DeleteTakeoverParticipant participant() {
+            return participant;
+        }
+
+        private synchronized boolean tryStart() {
+            if (cancelled) {
+                throw new IllegalStateException("删除接管参与者状态不合法");
+            }
+            if (lifecycle == DeleteTakeoverLifecycle.COMPLETED) {
+                return false;
+            }
+            if (lifecycle != DeleteTakeoverLifecycle.READY) {
+                throw new IllegalStateException("删除接管参与者仍在执行");
+            }
+            lifecycle = DeleteTakeoverLifecycle.RUNNING;
+            return true;
+        }
+
+        private synchronized void cancel() {
+            if (lifecycle == DeleteTakeoverLifecycle.READY) {
+                cancelled = true;
+            }
+        }
+
+        private synchronized void finish(boolean completed) {
+            if (lifecycle != DeleteTakeoverLifecycle.RUNNING) {
+                throw new IllegalStateException("删除接管参与者完成状态不合法");
+            }
+            lifecycle = completed
+                    ? DeleteTakeoverLifecycle.COMPLETED
+                    : DeleteTakeoverLifecycle.READY;
+        }
+
+        private synchronized boolean started() {
+            return lifecycle != DeleteTakeoverLifecycle.READY;
+        }
+
+        private synchronized boolean cancelled() {
+            return cancelled;
+        }
+    }
+
+    private enum DeleteTakeoverLifecycle {
+        READY,
+        RUNNING,
+        COMPLETED
     }
 
     private static final class CancellationDispatch {

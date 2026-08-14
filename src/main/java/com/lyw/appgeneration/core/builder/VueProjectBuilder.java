@@ -91,17 +91,6 @@ public class VueProjectBuilder {
     }
 
     /**
-     * 异步构建 Vue 项目，不阻塞调用线程。
-     *
-     * @param projectPath 项目根目录路径
-     */
-    public void buildProjectAsync(String projectPath) {
-        Thread.ofVirtual()
-                .name("vue-builder-" + System.currentTimeMillis())
-                .start(() -> logAsyncResult(projectPath, buildProjectDetailed(projectPath)));
-    }
-
-    /**
      * 保留旧布尔接口，结果语义完全委托给详细构建接口。
      *
      * @param projectPath 项目根目录路径
@@ -477,15 +466,4 @@ public class VueProjectBuilder {
                 failureKind, output, durationMillis);
     }
 
-    private void logAsyncResult(String projectPath, BuildResult result) {
-        if (result.success()) {
-            log.info("Vue 项目异步构建成功: projectPath={},stage={},exitCode={},durationMs={}",
-                    projectPath, result.stage(), result.exitCode(), result.durationMillis());
-            return;
-        }
-        log.error("Vue 项目异步构建失败: projectPath={},stage={},exitCode={},timedOut={},"
-                        + "cancelled={},failureKind={},durationMs={}",
-                projectPath, result.stage(), result.exitCode(), result.timedOut(),
-                result.cancelled(), result.failureKind(), result.durationMillis());
-    }
 }

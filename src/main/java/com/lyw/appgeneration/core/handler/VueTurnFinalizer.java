@@ -109,20 +109,58 @@ public class VueTurnFinalizer implements InitializingBean {
 
     public FinalizationResult finalizeOnce(
             VueTurnContext context, VueTurnOutcome requestedOutcome) {
-        if (!context.tryStartFinalization()) {
+        VueTurnContext.TerminalTrigger fallbackTrigger =
+                requestedOutcome.outcome()
+                        == VueTurnOutcome.TurnOutcomeType.SUCCEEDED
+                        ? VueTurnContext.TerminalTrigger.COMPLETED
+                        : VueTurnContext.TerminalTrigger.FAILED;
+        if (!context.tryClaimFinalizationExecution(fallbackTrigger)) {
             return context.awaitFinalization();
         }
-        requestedOutcome = enforceCanonicalBudget(context, requestedOutcome);
-        FinalizationResult result = persistWithinWriterPermit(context, requestedOutcome);
-        metricsCollector.recordTurnOutcome(result.outcome());
+        try {
+            requestedOutcome = enforceCanonicalBudget(context, requestedOutcome);
+            FinalizationResult result = persistWithinWriterPermit(
+                    context, requestedOutcome);
+            metricsCollector.recordTurnOutcome(result.outcome());
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        } catch (RuntimeException | Error failure) {
+            closeResourcesAfterFailure(context, failure);
+            failSharedFinalization(context, failure);
+            throw failure;
+        }
+    }
+
+    private void closeResourcesAfterFailure(
+            VueTurnContext context, Throwable originalFailure) {
         try {
             context.closeResources();
-        } catch (RuntimeException exception) {
+        } catch (RuntimeException | Error closeFailure) {
+            if (closeFailure != originalFailure) {
+                originalFailure.addSuppressed(closeFailure);
+            }
             log.error("Vue 回合终态资源释放异常,appId={},turnId={}",
-                    context.appId(), context.turnId(), exception);
+                    context.appId(), context.turnId(), closeFailure);
         }
-        context.completeFinalization(result);
-        return result;
+    }
+
+    @SuppressWarnings("removal")
+    private void failSharedFinalization(
+            VueTurnContext context, Throwable originalFailure) {
+        if (context.turnState().stage()
+                != VueTurnContext.TurnStage.FINALIZING) {
+            return;
+        }
+        try {
+            context.failFinalization(originalFailure);
+        } catch (VirtualMachineError | ThreadDeath fatal) {
+            throw fatal;
+        } catch (RuntimeException | Error completionFailure) {
+            if (completionFailure != originalFailure) {
+                originalFailure.addSuppressed(completionFailure);
+            }
+        }
     }
 
     private VueTurnOutcome enforceCanonicalBudget(

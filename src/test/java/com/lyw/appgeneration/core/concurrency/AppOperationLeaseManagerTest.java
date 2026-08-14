@@ -12,6 +12,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -25,12 +26,151 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AppOperationLeaseManagerTest {
 
     @Test
+    void activeGenerateWithoutDeleteParticipantMustBlockDeleteTakeover() {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-missing");
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-missing", Duration.ofSeconds(1)));
+
+        assertTrue(failure.getMessage().contains("删除接管参与者"));
+        assertTrue(generate.isActive(), "参与者缺失时不能关闭原生成租约的取消门");
+        generate.close();
+    }
+
+    @Test
+    void deleteTakeoverMustWaitForRegisteredParticipant() throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-participant");
+        CountDownLatch participantEntered = new CountDownLatch(1);
+        CountDownLatch releaseParticipant = new CountDownLatch(1);
+        generate.registerDeleteTakeoverParticipant(context -> {
+            participantEntered.countDown();
+            assertTrue(context.remainingTime().compareTo(Duration.ZERO) > 0);
+            assertTrue(releaseParticipant.await(
+                    context.remainingTime().toNanos(), TimeUnit.NANOSECONDS));
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    executor.submit(() -> manager.cancelAndAcquireDelete(
+                            7L, "delete-participant", Duration.ofSeconds(1)));
+            assertTrue(participantEntered.await(1, TimeUnit.SECONDS));
+            assertFalse(deletion.isDone());
+
+            releaseParticipant.countDown();
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationType.DELETE, deleteLease.operationType());
+            }
+        } finally {
+            releaseParticipant.countDown();
+            generate.close();
+        }
+    }
+
+    @Test
+    void 删除已捕获参与者后关闭注册句柄不得撤销在途接管() throws Exception {
+        CountDownLatch deleteCapturedParticipant = new CountDownLatch(1);
+        CountDownLatch releaseDeleteStart = new CountDownLatch(1);
+        AtomicInteger participantInvocations = new AtomicInteger();
+        AppOperationLeaseManager manager = new AppOperationLeaseManager(
+                null, task -> {
+                    deleteCapturedParticipant.countDown();
+                    awaitUnchecked(releaseDeleteStart);
+                    Thread.startVirtualThread(task);
+                });
+        var generate = manager.acquire(
+                7L, AppOperationType.GENERATE, "turn-close-race");
+        generate.registerCancellation(() -> { });
+        var registration = generate.registerDeleteTakeoverParticipant(
+                context -> participantInvocations.incrementAndGet());
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    executor.submit(() -> manager.cancelAndAcquireDelete(
+                            7L, "delete-close-race", Duration.ofSeconds(1)));
+            assertTrue(deleteCapturedParticipant.await(1, TimeUnit.SECONDS));
+
+            registration.close();
+            releaseDeleteStart.countDown();
+
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationType.DELETE, deleteLease.operationType());
+            }
+            assertEquals(1, participantInvocations.get());
+        } finally {
+            releaseDeleteStart.countDown();
+            generate.close();
+        }
+    }
+
+    @Test
+    void deleteParticipantRegistrationMustBeUniqueAndBoundToGenerateLease() {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-unique");
+        var registration = generate.registerDeleteTakeoverParticipant(context -> { });
+
+        assertThrows(IllegalStateException.class,
+                () -> generate.registerDeleteTakeoverParticipant(context -> { }));
+        registration.close();
+        assertThrows(IllegalStateException.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-withdrawn", Duration.ofMillis(20)));
+        generate.close();
+
+        try (var deploy = manager.acquire(
+                8L, AppOperationType.DEPLOY, "deploy-no-participant")) {
+            assertThrows(IllegalStateException.class,
+                    () -> deploy.registerDeleteTakeoverParticipant(context -> { }));
+        }
+    }
+
+    @Test
+    void participantAndCancellationMustShareOneDeleteDeadline() throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-deadline");
+        CountDownLatch cancellationEntered = new CountDownLatch(1);
+        CountDownLatch releaseCancellation = new CountDownLatch(1);
+        generate.registerCancellation(() -> {
+            cancellationEntered.countDown();
+            awaitUnchecked(releaseCancellation);
+        });
+        AtomicReference<Duration> remainingAfterQuiescence = new AtomicReference<>();
+        generate.registerDeleteTakeoverParticipant(context -> {
+            assertTrue(context.awaitQuiescence());
+            remainingAfterQuiescence.set(context.remainingTime());
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    executor.submit(() -> manager.cancelAndAcquireDelete(
+                            7L, "delete-deadline", Duration.ofMillis(300)));
+            assertTrue(cancellationEntered.await(1, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class,
+                    () -> deletion.get(80, TimeUnit.MILLISECONDS));
+            releaseCancellation.countDown();
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationType.DELETE, deleteLease.operationType());
+            }
+        } finally {
+            releaseCancellation.countDown();
+            generate.close();
+        }
+        assertTrue(remainingAfterQuiescence.get().compareTo(
+                Duration.ofMillis(250)) < 0,
+                "参与者等待消耗的时间不能在后续阶段重新获得完整 deadline");
+    }
+
+    @Test
     void deleteTakeoverRecordsCompletedOnceAndInactiveDeleteRecordsNothing() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         ReflectionTestUtils.setField(manager, "appLifecycleMetricsCollector",
                 new AppLifecycleMetricsCollector(registry));
         var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generate);
 
         try (var delete = manager.cancelAndAcquireDelete(
                 7L, "delete-1", Duration.ofSeconds(1))) {
@@ -55,6 +195,7 @@ class AppOperationLeaseManagerTest {
         ReflectionTestUtils.setField(manager, "appLifecycleMetricsCollector",
                 new AppLifecycleMetricsCollector(registry));
         var generate = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generate);
         var callback = generate.enterCallback();
 
         try {
@@ -143,6 +284,7 @@ class AppOperationLeaseManagerTest {
             awaitUnchecked(resumeRegistration);
         });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<?> registration = executor.submit(
                     () -> generateLease.registerCancellation(lateCancellation::incrementAndGet));
@@ -172,6 +314,7 @@ class AppOperationLeaseManagerTest {
             awaitUnchecked(resumeRegistration);
         });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         var callback = generateLease.enterCallback();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<?> registration = executor.submit(() -> generateLease.registerCancellation(() -> {
@@ -208,6 +351,7 @@ class AppOperationLeaseManagerTest {
         CountDownLatch actionStarted = new CountDownLatch(1);
         CountDownLatch releaseAction = new CountDownLatch(1);
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(() -> {
             actionStarted.countDown();
             awaitUnchecked(releaseAction);
@@ -242,6 +386,7 @@ class AppOperationLeaseManagerTest {
         AppOperationLeaseManager manager = new AppOperationLeaseManager(
                 null, task -> { throw startFailure; });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(() -> {
             actions.incrementAndGet();
             actionStarted.countDown();
@@ -277,6 +422,7 @@ class AppOperationLeaseManagerTest {
         AppOperationLeaseManager manager = new AppOperationLeaseManager(
                 null, task -> { throw startFailure; });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(actions::incrementAndGet);
 
         AssertionError thrown = assertThrows(
@@ -297,6 +443,7 @@ class AppOperationLeaseManagerTest {
         AssertionError actionFailure = new AssertionError("动作错误");
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(() -> { throw actionFailure; });
         generateLease.registerCancellation(laterActions::incrementAndGet);
 
@@ -319,6 +466,7 @@ class AppOperationLeaseManagerTest {
         AssertionError actionFailure = new AssertionError("重复动作错误");
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(() -> { throw actionFailure; });
         generateLease.registerCancellation(() -> { throw actionFailure; });
         generateLease.registerCancellation(laterActions::incrementAndGet);
@@ -341,6 +489,7 @@ class AppOperationLeaseManagerTest {
         AppOperationLeaseManager manager = new AppOperationLeaseManager(
                 null, task -> { throw startFailure; });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(() -> { throw actionFailure; });
 
         IllegalStateException thrown = assertThrows(
@@ -359,6 +508,7 @@ class AppOperationLeaseManagerTest {
     @Test
     void failedDispatchStartDoesNotRestoreCancelledRegistration() {
         AtomicInteger actions = new AtomicInteger();
+        AtomicInteger participantInvocations = new AtomicInteger();
         AtomicInteger dispatchStarts = new AtomicInteger();
         AtomicReference<AppOperationLeaseManager.CancellationRegistration> registration =
                 new AtomicReference<>();
@@ -371,6 +521,8 @@ class AppOperationLeaseManagerTest {
             task.run();
         });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        generateLease.registerDeleteTakeoverParticipant(context ->
+                participantInvocations.incrementAndGet());
         registration.set(generateLease.registerCancellation(actions::incrementAndGet));
 
         IllegalStateException thrown = assertThrows(
@@ -384,8 +536,38 @@ class AppOperationLeaseManagerTest {
             assertEquals(AppOperationType.DELETE, deleteLease.operationType());
         }
         assertEquals(1, dispatchStarts.get());
+        assertEquals(1, participantInvocations.get(),
+                "取消分发尚未成功提交时不能提前消费删除参与者");
         generateLease.close();
         assertEquals(0, actions.get());
+        assertCanAcquireNewTurn(manager);
+    }
+
+    @Test
+    void completedParticipantMustBeReusableWhenLaterCancellationFailureIsConsumed() {
+        AtomicInteger participantInvocations = new AtomicInteger();
+        AssertionError cancellationFailure = new AssertionError("取消失败");
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-retry");
+        generateLease.registerDeleteTakeoverParticipant(context ->
+                participantInvocations.incrementAndGet());
+        generateLease.registerCancellation(() -> {
+            throw cancellationFailure;
+        });
+
+        AssertionError thrown = assertThrows(
+                AssertionError.class,
+                () -> manager.cancelAndAcquireDelete(
+                        7L, "delete-first", Duration.ofSeconds(1)));
+        assertSame(cancellationFailure, thrown);
+
+        try (var deleteLease = manager.cancelAndAcquireDelete(
+                7L, "delete-retry", Duration.ofSeconds(1))) {
+            assertEquals(AppOperationType.DELETE, deleteLease.operationType());
+        }
+        assertEquals(1, participantInvocations.get(),
+                "已经成功完成的回合收尾不能在删除重试时重复执行");
+        generateLease.close();
         assertCanAcquireNewTurn(manager);
     }
 
@@ -403,6 +585,7 @@ class AppOperationLeaseManagerTest {
             throw startFailure;
         });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(actions::incrementAndGet);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -444,6 +627,7 @@ class AppOperationLeaseManagerTest {
             throw startFailure;
         });
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         generateLease.registerCancellation(actions::incrementAndGet);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -478,6 +662,7 @@ class AppOperationLeaseManagerTest {
         AssertionError actionFailure = new AssertionError("晚注册动作失败");
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         var callback = generateLease.enterCallback();
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -513,6 +698,7 @@ class AppOperationLeaseManagerTest {
         CountDownLatch earlyActionFinished = new CountDownLatch(1);
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         var generateLease = manager.acquire(7L, AppOperationType.GENERATE, "turn-1");
+        registerNoopDeleteParticipant(generateLease);
         var callback = generateLease.enterCallback();
         generateLease.registerCancellation(() -> {
             earlyActionFinished.countDown();
@@ -549,6 +735,11 @@ class AppOperationLeaseManagerTest {
                 ExecutionException.class,
                 () -> registration.get(1, TimeUnit.SECONDS));
         assertInstanceOf(IllegalStateException.class, exception.getCause());
+    }
+
+    private void registerNoopDeleteParticipant(
+            AppOperationLeaseManager.AppOperationLease lease) {
+        lease.registerDeleteTakeoverParticipant(context -> { });
     }
 
     private void assertCanAcquireNewTurn(AppOperationLeaseManager manager) {

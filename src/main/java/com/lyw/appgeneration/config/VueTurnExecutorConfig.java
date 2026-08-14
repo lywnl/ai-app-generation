@@ -8,7 +8,6 @@ import org.springframework.core.task.SimpleAsyncTaskExecutor;
 @Configuration
 public class VueTurnExecutorConfig {
 
-    public static final int MAX_CONCURRENCY = 64;
     private static final long TERMINATION_TIMEOUT_MILLIS = 10_000L;
 
     @Bean(name = "vueTurnCancellationExecutor", destroyMethod = "close")
@@ -16,9 +15,6 @@ public class VueTurnExecutorConfig {
         SimpleAsyncTaskExecutor executor =
                 new SimpleAsyncTaskExecutor("vue-turn-cancel-");
         executor.setVirtualThreads(true);
-        executor.setConcurrencyLimit(MAX_CONCURRENCY);
-        // 达到上限时阻塞提交者，避免拒绝后转入不受 Spring 生命周期管理的线程。
-        executor.setRejectTasksWhenLimitReached(false);
         executor.setTaskTerminationTimeout(TERMINATION_TIMEOUT_MILLIS);
         return executor;
     }

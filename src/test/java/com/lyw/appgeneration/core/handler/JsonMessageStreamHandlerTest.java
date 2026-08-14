@@ -28,6 +28,10 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -37,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -91,7 +96,7 @@ class JsonMessageStreamHandlerTest {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-canonical-limit",
                 VueBuildPhase.GENERATING, guard.newSession());
-        context.markUserCommitted();
+        context.commitUser(() -> true);
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
             assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
@@ -226,7 +231,7 @@ class JsonMessageStreamHandlerTest {
     void terminalBuildTimeoutUsesTimedOutOutcomeAndFixedMessage() {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-timeout", VueBuildPhase.FAILED, true);
-        context.markUserCommitted();
+        context.commitUser(() -> true);
         context.recordControlledTermination(new ToolLoopTerminationProtocol
                 .ControlledTermination(ToolLoopTerminationProtocol
                 .ControlledTerminationReason.BUILD_FAILED,
@@ -284,7 +289,7 @@ class JsonMessageStreamHandlerTest {
                 APP_ID, USER_ID, "turn-absolute-timeout",
                 VueBuildPhase.GENERATING, Duration.ofMinutes(30),
                 () -> scheduler.now(TimeUnit.NANOSECONDS));
-        context.markUserCommitted();
+        context.commitUser(() -> true);
         VueTurnOutcome timedOut = new VueTurnOutcome(
                 VueBuildPhase.GENERATING,
                 VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
@@ -391,7 +396,7 @@ class JsonMessageStreamHandlerTest {
         VueTurnContext context = new VueTurnContext(
                 APP_ID, USER_ID, "turn-timeout-rejected-post-user",
                 operation, lease, new FileToolBudgetGuard().newSession());
-        context.markUserCommitted();
+        context.commitUser(() -> true);
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
             context.closeResources();
@@ -426,8 +431,8 @@ class JsonMessageStreamHandlerTest {
                 APP_ID, USER_ID, "turn-timeout-finalization-error",
                 VueBuildPhase.GENERATING, Duration.ofMinutes(30),
                 () -> scheduler.now(TimeUnit.NANOSECONDS));
-        context.markUserCommitted();
-        assertTrue(context.tryClaimTerminal(
+        context.commitUser(() -> true);
+        assertTrue(context.tryStartFinalization(
                 VueTurnContext.TerminalTrigger.TIMED_OUT));
         when(cancellationCoordinator.requestTimeout(eq(context), any()))
                 .thenReturn(Optional.of(Mono.error(
@@ -443,10 +448,234 @@ class JsonMessageStreamHandlerTest {
                 .verify();
     }
 
+    @Test
+    void deleteTakeoverBeforeBodyOutputCancelsOriginAndPublishesSingleOutcome()
+            throws Exception {
+        DeleteTakeoverFixture fixture = deleteTakeoverFixture("turn-delete-before");
+        AtomicBoolean originCancelled = new AtomicBoolean();
+        JsonMessageStreamHandler takeoverHandler = new JsonMessageStreamHandler(
+                toolManager, finalizer, fixture.coordinator());
+        var output = takeoverHandler.handle(
+                        Flux.<String>never()
+                                .doOnCancel(() -> originCancelled.set(true)),
+                        fixture.context())
+                .collectList().toFuture();
+
+        try (var background = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    background.submit(() -> fixture.manager().cancelAndAcquireDelete(
+                            APP_ID, "delete-before", Duration.ofSeconds(1)));
+
+            List<GenerationStreamEvent> events = output.get(1, TimeUnit.SECONDS);
+            assertEquals(1, events.size());
+            assertEquals(VueTurnOutcome.TurnOutcomeType.CANCELLED,
+                    outcomeOf(events.getFirst()).outcome());
+            assertTrue(originCancelled.get());
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
+            }
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void deleteTakeoverAfterBodyOutputPreservesBodyThenPublishesOutcome()
+            throws Exception {
+        DeleteTakeoverFixture fixture = deleteTakeoverFixture("turn-delete-after");
+        CountDownLatch bodyPublished = new CountDownLatch(1);
+        JsonMessageStreamHandler takeoverHandler = new JsonMessageStreamHandler(
+                toolManager, finalizer, fixture.coordinator());
+        var output = takeoverHandler.handle(Flux.concat(
+                        Flux.just("{\"type\":\"ai_response\",\"data\":\"正文\"}")
+                                .doOnNext(ignored -> bodyPublished.countDown()),
+                        Flux.never()), fixture.context())
+                .collectList().toFuture();
+        assertTrue(bodyPublished.await(1, TimeUnit.SECONDS));
+
+        try (var background = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    background.submit(() -> fixture.manager().cancelAndAcquireDelete(
+                            APP_ID, "delete-after", Duration.ofSeconds(1)));
+
+            List<GenerationStreamEvent> events = output.get(1, TimeUnit.SECONDS);
+            assertEquals(2, events.size());
+            assertEquals("正文", contentText(events.getFirst()));
+            assertEquals(VueTurnOutcome.TurnOutcomeType.CANCELLED,
+                    outcomeOf(events.getLast()).outcome());
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
+            }
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void 正常完成先赢时删除必须等待同一共享终态且不得重复收尾()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-complete-delete-race";
+        var operation = manager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE, turnId);
+        var lease = new VueBuildSessionManager().open(
+                operation, USER_ID, turnId);
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, turnId, operation, lease,
+                new FileToolBudgetGuard().newSession());
+        context.commitUser(() -> true);
+        context.registerDeleteTakeoverParticipant();
+        CountDownLatch finalizerEntered = new CountDownLatch(1);
+        CountDownLatch releaseFinalizer = new CountDownLatch(1);
+        AtomicInteger finalizations = new AtomicInteger();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            finalizations.incrementAndGet();
+            finalizerEntered.countDown();
+            assertTrue(releaseFinalizer.await(1, TimeUnit.SECONDS));
+            VueTurnOutcome requested = invocation.getArgument(1);
+            var result = new VueTurnFinalizer.FinalizationResult(
+                    requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+        try (var background = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, background, Duration.ofSeconds(1))) {
+            JsonMessageStreamHandler racingHandler =
+                    new JsonMessageStreamHandler(
+                            toolManager, finalizer, coordinator);
+            Future<List<GenerationStreamEvent>> output = background.submit(() ->
+                    racingHandler.handle(Flux.empty(), context)
+                            .collectList().block());
+            assertTrue(finalizerEntered.await(1, TimeUnit.SECONDS));
+            assertEquals(VueTurnContext.TerminalTrigger.COMPLETED,
+                    context.terminalWinner().orElseThrow());
+
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    background.submit(() -> manager.cancelAndAcquireDelete(
+                            APP_ID, "delete-after-complete-claim",
+                            Duration.ofSeconds(1)));
+            long deleteStartedDeadline = System.nanoTime()
+                    + TimeUnit.SECONDS.toNanos(1);
+            while (!operation.isCancellationRequested()
+                    && System.nanoTime() < deleteStartedDeadline) {
+                Thread.onSpinWait();
+            }
+            assertTrue(operation.isCancellationRequested(),
+                    "删除必须先捕获已注册参与者再释放正常收尾屏障");
+            assertFalse(deletion.isDone(),
+                    "正常收尾完成前 DELETE 不得替换生成租约");
+            releaseFinalizer.countDown();
+
+            List<GenerationStreamEvent> events =
+                    output.get(1, TimeUnit.SECONDS);
+            assertEquals(1, events.size());
+            assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                    outcomeOf(events.getFirst()).outcome());
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
+            }
+            assertEquals(1, finalizations.get());
+            verify(finalizer, times(1)).finalizeOnce(eq(context), any());
+        } finally {
+            releaseFinalizer.countDown();
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 客户端取消先赢时删除必须等待后台共享收尾且不得重复持久化()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-cancel-delete-race";
+        var operation = manager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE, turnId);
+        var lease = new VueBuildSessionManager().open(
+                operation, USER_ID, turnId);
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, turnId, operation, lease,
+                new FileToolBudgetGuard().newSession());
+        context.commitUser(() -> true);
+        context.registerDeleteTakeoverParticipant();
+        CountDownLatch finalizerEntered = new CountDownLatch(1);
+        CountDownLatch releaseFinalizer = new CountDownLatch(1);
+        AtomicInteger finalizations = new AtomicInteger();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            finalizations.incrementAndGet();
+            finalizerEntered.countDown();
+            assertTrue(releaseFinalizer.await(1, TimeUnit.SECONDS));
+            VueTurnOutcome requested = invocation.getArgument(1);
+            var result = new VueTurnFinalizer.FinalizationResult(
+                    requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+        try (var background = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, background, Duration.ofSeconds(1))) {
+            JsonMessageStreamHandler racingHandler =
+                    new JsonMessageStreamHandler(
+                            toolManager, finalizer, coordinator);
+            reactor.core.Disposable subscription = racingHandler
+                    .handle(Flux.never(), context).subscribe();
+            subscription.dispose();
+            assertTrue(finalizerEntered.await(1, TimeUnit.SECONDS));
+            assertEquals(VueTurnContext.TerminalTrigger.CANCELLED,
+                    context.terminalWinner().orElseThrow());
+
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    background.submit(() -> manager.cancelAndAcquireDelete(
+                            APP_ID, "delete-during-cancel-finalization",
+                            Duration.ofSeconds(1)));
+            assertFalse(deletion.isDone(),
+                    "取消后台收尾完成前 DELETE 不得替换生成租约");
+            releaseFinalizer.countDown();
+
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
+            }
+            assertEquals(1, finalizations.get());
+            verify(finalizer, times(1)).finalizeOnce(eq(context), any());
+        } finally {
+            releaseFinalizer.countDown();
+            context.closeResources();
+        }
+    }
+
+    private DeleteTakeoverFixture deleteTakeoverFixture(String turnId) {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var operation = manager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE, turnId);
+        var lease = new VueBuildSessionManager().open(
+                operation, USER_ID, turnId);
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, turnId, operation, lease,
+                new FileToolBudgetGuard().newSession());
+        context.commitUser(() -> true);
+        context.registerDeleteTakeoverParticipant();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            var result = new VueTurnFinalizer.FinalizationResult(requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+        VueTurnCancellationCoordinator coordinator =
+                new VueTurnCancellationCoordinator(
+                        finalizer, Runnable::run, Duration.ofSeconds(1));
+        return new DeleteTakeoverFixture(manager, context, coordinator);
+    }
+
     private VueTurnContext context(String turnId, VueBuildPhase phase) {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, turnId, phase);
-        context.markUserCommitted();
+        context.commitUser(() -> true);
         return context;
     }
 
@@ -455,6 +684,18 @@ class JsonMessageStreamHandlerTest {
     }
 
     private static VueTurnOutcome outcomeOf(GenerationStreamEvent event) {
-        return ((GenerationStreamEvent.VueOutcome) event).outcome();
+        return new VueTurnOutcome(((GenerationStreamEvent.TurnOutcome) event).message().getPhase(), ((GenerationStreamEvent.TurnOutcome) event).message().getOutcome(), ((GenerationStreamEvent.TurnOutcome) event).message().getMessage(), ((GenerationStreamEvent.TurnOutcome) event).message().isShouldRefreshPreview(), ((GenerationStreamEvent.TurnOutcome) event).message().getMessage());
+    }
+
+    private record DeleteTakeoverFixture(
+            AppOperationLeaseManager manager,
+            VueTurnContext context,
+            VueTurnCancellationCoordinator coordinator) implements AutoCloseable {
+
+        @Override
+        public void close() {
+            coordinator.close();
+            context.closeResources();
+        }
     }
 }

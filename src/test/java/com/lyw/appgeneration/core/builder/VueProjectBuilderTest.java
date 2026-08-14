@@ -19,8 +19,6 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -457,20 +455,6 @@ class VueProjectBuilderTest {
     }
 
     @Test
-    void keepsAsynchronousCompatibilityByDelegatingToDetailedBuild() throws Exception {
-        createPackageJson();
-        RecordingCommandExecutor executor = successfulExecutorCreatingDist();
-        executor.completionLatch = new CountDownLatch(2);
-        VueProjectBuilder builder = new VueProjectBuilder(executor, "npm");
-
-        builder.buildProjectAsync(tempDir.toString());
-
-        assertTrue(executor.completionLatch.await(2, TimeUnit.SECONDS));
-        awaitVueBuilderCompletion();
-        assertEquals(2, executor.invocations.size());
-    }
-
-    @Test
     void reportsNpmBuildFailureAndSkipsBuildWhenPreexistingDistCannotBeDeleted() throws IOException {
         assumeTrue(Files.getFileStore(tempDir).supportsFileAttributeView("posix"));
         createPackageJson();
@@ -531,22 +515,6 @@ class VueProjectBuilderTest {
         Files.writeString(tempDir.resolve("package.json"), trustedPackageJson());
     }
 
-    private void awaitVueBuilderCompletion() throws InterruptedException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline) {
-            boolean running = Thread.getAllStackTraces().keySet().stream()
-                    .anyMatch(thread -> thread.isAlive()
-                            && thread.getName().startsWith("vue-builder-"));
-            if (!running) {
-                return;
-            }
-            Thread.sleep(10);
-        }
-        assertFalse(Thread.getAllStackTraces().keySet().stream()
-                .anyMatch(thread -> thread.isAlive()
-                        && thread.getName().startsWith("vue-builder-")));
-    }
-
     private static String trustedPackageJson() {
         return """
                 {
@@ -577,7 +545,6 @@ class VueProjectBuilderTest {
 
         private final Queue<CommandResult> results = new ArrayDeque<>();
         private final List<CommandInvocation> invocations = new ArrayList<>();
-        private CountDownLatch completionLatch;
         private String buildConfigContents = "";
         private BuildAction successfulBuildAction = projectDirectory -> {
         };
@@ -613,9 +580,6 @@ class VueProjectBuilderTest {
             }
             if (isSuccessfulBuild(command, result)) {
                 successfulBuildAction.run(workingDirectory);
-            }
-            if (completionLatch != null) {
-                completionLatch.countDown();
             }
             return result;
         }

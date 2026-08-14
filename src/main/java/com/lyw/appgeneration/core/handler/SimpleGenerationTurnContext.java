@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationLease;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CallbackRegistration;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CancellationRegistration;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverRegistration;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -18,6 +19,7 @@ public final class SimpleGenerationTurnContext implements AutoCloseable {
     private final AppOperationLease operationLease;
     private final CallbackRegistration callbackRegistration;
     private final CancellationRegistration cancellationRegistration;
+    private final DeleteTakeoverRegistration deleteTakeoverRegistration;
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicReference<UpstreamCancellation> upstreamCancellation =
             new AtomicReference<>();
@@ -28,11 +30,23 @@ public final class SimpleGenerationTurnContext implements AutoCloseable {
         this.operationLease = Objects.requireNonNull(
                 operationLease, "普通回合操作租约不能为空");
         CallbackRegistration callback = operationLease.enterCallback();
+        CancellationRegistration cancellation = null;
         try {
-            cancellationRegistration = operationLease.registerCancellation(
+            cancellation = operationLease.registerCancellation(
                     this::cancelFromOperation);
+            deleteTakeoverRegistration = operationLease
+                    .registerDeleteTakeoverParticipant(context -> {
+                        if (!context.awaitQuiescence()) {
+                            throw new IllegalStateException(
+                                    "普通生成回合未在删除截止时间内静默");
+                        }
+                    });
+            cancellationRegistration = cancellation;
             callbackRegistration = callback;
         } catch (RuntimeException exception) {
+            if (cancellation != null) {
+                cancellation.close();
+            }
             callback.close();
             operationLease.close();
             throw exception;
@@ -86,7 +100,12 @@ public final class SimpleGenerationTurnContext implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        RuntimeException failure = closeCancellationRegistration();
+        RuntimeException failure = closeDeleteTakeoverRegistration();
+        try {
+            cancellationRegistration.close();
+        } catch (RuntimeException exception) {
+            failure = appendFailure(failure, exception);
+        }
         try {
             callbackRegistration.close();
         } catch (RuntimeException exception) {
@@ -117,9 +136,9 @@ public final class SimpleGenerationTurnContext implements AutoCloseable {
         }
     }
 
-    private RuntimeException closeCancellationRegistration() {
+    private RuntimeException closeDeleteTakeoverRegistration() {
         try {
-            cancellationRegistration.close();
+            deleteTakeoverRegistration.close();
             return null;
         } catch (RuntimeException exception) {
             return exception;

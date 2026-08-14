@@ -138,6 +138,29 @@ class VueBuildRepairMetricsCollectorTest {
         collector.recordCancellation(
                 VueBuildRepairMetricsCollector.CancellationTrigger.BUILD_TIMEOUT,
                 VueBuildRepairMetricsCollector.CancellationResult.COMPLETED);
+        collector.recordTurnAdmission(
+                VueBuildRepairMetricsCollector.AdmissionResult.RELEASED);
+    }
+
+    @Test
+    void 回合准入指标只能记录三种固定结果标签() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        VueBuildRepairMetricsCollector collector =
+                new VueBuildRepairMetricsCollector(registry);
+
+        for (VueBuildRepairMetricsCollector.AdmissionResult result
+                : VueBuildRepairMetricsCollector.AdmissionResult.values()) {
+            collector.recordTurnAdmission(result);
+        }
+
+        assertEquals(1.0, registry.get("vue_turn_admissions_total")
+                .tag("result", "acquired").counter().count());
+        assertEquals(1.0, registry.get("vue_turn_admissions_total")
+                .tag("result", "rejected").counter().count());
+        assertEquals(1.0, registry.get("vue_turn_admissions_total")
+                .tag("result", "released").counter().count());
+        assertMetricTags(registry, "vue_turn_admissions_total",
+                Set.of("result"));
     }
 
     private static boolean completeAfterStart(

@@ -19,16 +19,21 @@ import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
+import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
+import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
+import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.exception.ThrowUtils;
 import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.model.dto.app.AppAddRequest;
@@ -62,6 +67,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
 
@@ -76,6 +82,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 
 /**
  * 应用 服务层实现。
@@ -105,6 +112,15 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private VueBuildSessionManager vueBuildSessionManager;
+
+    @Resource
+    private VueTurnAdmissionController vueTurnAdmissionController;
+
+    @Resource
+    private VueTurnCancellationCoordinator vueTurnCancellationCoordinator;
+
+    @Resource
+    private VueTurnFinalizer vueTurnFinalizer;
 
     @Resource
     private ChatHistoryService chatHistoryService;
@@ -352,87 +368,206 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private Flux<GenerationStreamEvent> generateVueTurn(
             long appId, String message, User loginUser) {
         return Flux.defer(() -> {
-            String turnId = UUID.randomUUID().toString();
-            AppOperationLeaseManager.AppOperationLease operationLease =
-                    appOperationLeaseManager.acquire(
-                            appId,
-                            AppOperationLeaseManager.AppOperationType.GENERATE,
-                            turnId);
-            recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
-                    AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
-            VueBuildSessionManager.VueBuildLease vueLease = null;
-            VueTurnContext context = null;
+            VueTurnContext context;
             try {
-                vueLease = vueBuildSessionManager.open(
-                        operationLease, loginUser.getId(), turnId);
-                context = new VueTurnContext(
-                        appId, loginUser.getId(), turnId,
-                        operationLease, vueLease, fileToolBudgetGuard.newSession());
-                VueTurnContext finalContext = context;
-                Flux<String> codeStream = Flux.defer(() -> finalContext
-                        .tryCallCallback(() -> prepareVueTurn(
-                                appId, message, loginUser, finalContext))
-                        .orElseGet(() -> Flux.error(new IllegalStateException(
-                                "Vue 回合准备阶段已取消"))))
-                        .subscribeOn(Schedulers.boundedElastic());
-                MonitorContextHolder.setContext(MonitorContext.builder()
-                        .userId(loginUser.getId().toString())
-                        .appId(Long.toString(appId)).build());
-                return streamHandlerExecutor.doExecuteVue(codeStream, context)
-                        .doFinally(ignored -> MonitorContextHolder.clearContext());
+                context = openVueTurn(appId, loginUser.getId());
             } catch (RuntimeException exception) {
-                if (context != null) {
-                    context.closeResources();
-                } else {
-                    if (vueLease != null) {
-                        vueLease.close();
-                    }
-                    operationLease.close();
-                }
-                return Flux.error(exception);
+                return Flux.error(toPreflightException(exception));
             }
-        }).onErrorMap(AppOperationLeaseManager.ActiveAppOperationException.class,
-                exception -> {
-                    recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
-                            AppLifecycleMetricsCollector.OperationResult.REJECTED,
-                            exception.activeOperation());
-                    return new BusinessException(ErrorCode.OPERATION_ERROR,
-                            "应用正在执行其他操作，请稍后再生成");
-                });
+            Mono<CommittedVueTurn> prepared = Mono.fromCallable(() ->
+                            prepareVueTurn(appId, message, loginUser, context))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .onErrorResume(error -> handleVuePreparationFailure(
+                            context, error))
+                    .doOnCancel(() -> cancelVuePreparation(context));
+            Flux<GenerationStreamEvent> turnFlow = prepared
+                    .flatMapMany(this::runCommittedVueTurn);
+            return turnFlow.doOnCancel(() -> cancelVuePreparation(context));
+        });
     }
 
-    private Flux<String> prepareVueTurn(
+    private VueTurnContext openVueTurn(long appId, long userId) {
+        String turnId = UUID.randomUUID().toString();
+        VueTurnAdmissionController.AdmissionPermit admissionPermit =
+                vueTurnAdmissionController.tryAcquire().orElseThrow(() ->
+                        new BusinessException(ErrorCode.TOO_MANY_REQUEST,
+                                "当前生成任务较多，请稍后再试"));
+        AppOperationLeaseManager.AppOperationLease operationLease = null;
+        VueBuildSessionManager.VueBuildLease vueLease = null;
+        try {
+            operationLease = appOperationLeaseManager.acquire(
+                    appId, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    turnId);
+            recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
+                    AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
+            vueLease = vueBuildSessionManager.open(
+                    operationLease, userId, turnId);
+            VueTurnContext context = new VueTurnContext(
+                    appId, userId, turnId, operationLease, vueLease,
+                    admissionPermit,
+                    fileToolBudgetGuard.newSession());
+            admissionPermit = null;
+            operationLease = null;
+            vueLease = null;
+            return context;
+        } finally {
+            VueTurnContext.closeAll(
+                    vueLease, operationLease, admissionPermit);
+        }
+    }
+
+    private CommittedVueTurn prepareVueTurn(
             long appId, String message, User loginUser,
             VueTurnContext context) {
-        var lastMessage = chatHistoryService.getLastMessage(appId);
-        context.ensureTerminalOpen();
+        var lastMessage = context.callPreparation(
+                () -> chatHistoryService.getLastMessage(appId));
         boolean hasHistory = lastMessage != null;
         if (hasHistory && ChatHistoryMessageTypeEnum.USER.getValue()
                 .equals(lastMessage.getMessageType())) {
-            boolean repaired = chatHistoryService.repairOrphanUserTurn(
-                    appId, loginUser.getId(),
-                    "生成过程中遇到系统异常，请稍后重试。");
+            boolean repaired = context.callPreparation(() ->
+                    chatHistoryService.repairOrphanUserTurn(
+                            appId, loginUser.getId(),
+                            "生成过程中遇到系统异常，请稍后重试。"));
             if (!repaired) {
                 throw new BusinessException(
                         ErrorCode.OPERATION_ERROR,
                         "修复上一轮未完成对话失败");
             }
-            aiGeneratorServiceFactory.prepareVueColdRebuild(appId);
-            context.ensureTerminalOpen();
+            context.callPreparation(() -> {
+                aiGeneratorServiceFactory.prepareVueColdRebuild(appId);
+                return null;
+            });
         }
-        var generatorService = aiCodeGeneratorFacade.prepareVueGenerator(appId);
-        context.ensureTerminalOpen();
-        boolean saved = chatHistoryService.addChatMessage(
-                appId, message, ChatHistoryMessageTypeEnum.USER.getValue(),
-                loginUser.getId());
-        if (!saved) {
-            throw new BusinessException(
-                    ErrorCode.OPERATION_ERROR, "保存用户消息失败");
+        var generatorService = context.callPreparation(
+                () -> aiCodeGeneratorFacade.prepareVueGenerator(appId));
+        VueTurnContext.UserCommitResult commitResult = context.commitUser(() ->
+                chatHistoryService.addChatMessage(
+                        appId, message,
+                        ChatHistoryMessageTypeEnum.USER.getValue(),
+                        loginUser.getId()));
+        return switch (commitResult) {
+            case COMMITTED -> new CommittedVueTurn(
+                    context, generatorService, message, !hasHistory, null);
+            case TERMINATED_BEFORE_COMMIT -> throw new CancellationException(
+                    "Vue 回合在用户消息提交前终止");
+            case STORE_FAILED -> throw new IllegalStateException(
+                    "保存用户消息失败");
+        };
+    }
+
+    private Flux<GenerationStreamEvent> runCommittedVueTurn(
+            CommittedVueTurn turn) {
+        VueTurnContext context = turn.context();
+        if (turn.startupFailure() != null) {
+            return finalizeCommittedVueFailure(context, turn.startupFailure());
         }
-        context.markUserCommitted();
-        context.ensureTerminalOpen();
-        return aiCodeGeneratorFacade.generateVueProjectStream(
-                message, appId, !hasHistory, context, generatorService);
+        return Flux.defer(() -> {
+            try {
+                context.registerDeleteTakeoverParticipant();
+                Flux<String> codeStream = Flux.defer(() -> context
+                        .tryCallCallback(() ->
+                                aiCodeGeneratorFacade.generateVueProjectStream(
+                                        turn.message(), context.appId(),
+                                        turn.firstMessage(), context,
+                                        turn.generatorService()))
+                        .orElseGet(Flux::empty));
+                MonitorContextHolder.setContext(MonitorContext.builder()
+                        .userId(Long.toString(context.userId()))
+                        .appId(Long.toString(context.appId())).build());
+                return streamHandlerExecutor.doExecuteVue(codeStream, context)
+                        .doFinally(ignored -> MonitorContextHolder.clearContext());
+            } catch (RuntimeException exception) {
+                return finalizeCommittedVueFailure(context, exception);
+            }
+        });
+    }
+
+    private Mono<CommittedVueTurn> handleVuePreparationFailure(
+            VueTurnContext context, Throwable failure) {
+        return switch (context.claimPreCommitTermination()) {
+            case PRE_COMMIT_WON -> awaitPreCommitCleanup(
+                    context, toPreflightException(failure));
+            case ALREADY_TERMINATED -> awaitPreCommitCleanup(
+                    context,
+                    failure instanceof CancellationException
+                            ? failure : new CancellationException(
+                            "Vue 回合准备阶段已经终止"));
+            case POST_COMMIT_REQUIRED -> Mono.just(
+                    new CommittedVueTurn(context, null, null,
+                            false, failure));
+        };
+    }
+
+    private Mono<CommittedVueTurn> awaitPreCommitCleanup(
+            VueTurnContext context, Throwable failure) {
+        return Mono.fromCompletionStage(
+                        vueTurnCancellationCoordinator
+                                .requestPreCommitCleanup(context))
+                .then(Mono.error(failure));
+    }
+
+    private void cancelVuePreparation(VueTurnContext context) {
+        switch (context.claimPreCommitTermination()) {
+            case PRE_COMMIT_WON -> vueTurnCancellationCoordinator
+                    .requestPreCommitCleanup(context);
+            case ALREADY_TERMINATED -> {
+                // 另一个前置终止分支已经负责清理。
+            }
+            case POST_COMMIT_REQUIRED ->
+                    vueTurnCancellationCoordinator.requestCancellation(
+                            context, () -> "");
+        }
+    }
+
+    private GenerationPreflightException toPreflightException(
+            Throwable failure) {
+        if (failure instanceof GenerationPreflightException preflight) {
+            return preflight;
+        }
+        if (failure instanceof AppOperationLeaseManager
+                .ActiveAppOperationException active) {
+            recordOperation(AppOperationLeaseManager.AppOperationType.GENERATE,
+                    AppLifecycleMetricsCollector.OperationResult.REJECTED,
+                    active.activeOperation());
+            return GenerationPreflightException.business(
+                    ErrorCode.OPERATION_ERROR.getCode(),
+                    "应用正在执行其他操作，请稍后再生成", active);
+        }
+        if (failure instanceof BusinessException business) {
+            return GenerationPreflightException.business(
+                    business.getCode(), business.getMessage(), business);
+        }
+        return GenerationPreflightException.system(failure);
+    }
+
+    private Flux<GenerationStreamEvent> finalizeCommittedVueFailure(
+            VueTurnContext context, Throwable failure) {
+        if (!context.tryStartFinalization(
+                VueTurnContext.TerminalTrigger.FAILED)) {
+            return Flux.empty();
+        }
+        try {
+            VueTurnFinalizer.FinalizationResult result = vueTurnFinalizer
+                    .finalizeOnce(context, new VueTurnOutcome(
+                            context.phase(),
+                            VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                            VueTurnFinalizer.SYSTEM_ERROR_MESSAGE,
+                            false, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
+            return Flux.just(GenerationStreamEvent.turnOutcome(
+                    result.outcome()));
+        } catch (RuntimeException finalizationFailure) {
+            log.error("Vue 提交后启动失败且终态收尾异常,appId={},turnId={}",
+                    context.appId(), context.turnId(), finalizationFailure);
+            return Flux.error(finalizationFailure);
+        }
+    }
+
+    private record CommittedVueTurn(
+            VueTurnContext context,
+            AiCodeGeneratorService generatorService,
+            String message,
+            boolean firstMessage,
+            Throwable startupFailure) {
     }
 
     @Override
