@@ -350,6 +350,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     private void failCancellation(
             PendingCancellation cancellation, Throwable failure) {
         VueTurnContext context = cancellation.context();
+        recordCancellation(cancellation.metricTrigger(),
+                VueBuildRepairMetricsCollector.CancellationResult.FAILED);
         boolean finalized = context.turnState().stage()
                 == VueTurnContext.TurnStage.FINALIZED;
         boolean quiescent = finalized
@@ -379,8 +381,6 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                         ? "Vue 取消后台收尾异常,已关闭静默资源,appId={},turnId={}"
                         : "Vue 取消后台收尾异常且回调未静默,保留租约,appId={},turnId={}",
                 context.appId(), context.turnId(), failure);
-        recordCancellation(cancellation.metricTrigger(),
-                VueBuildRepairMetricsCollector.CancellationResult.FAILED);
     }
 
     private void scheduleResourceDrain(
