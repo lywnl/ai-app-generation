@@ -9,6 +9,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
@@ -91,6 +92,36 @@ class VueTurnFinalizerTest {
                     .counter().count());
             clearInvocations(history, collapser, summary, preference, factory);
         }
+    }
+
+    @Test
+    void counterIncrementFailureDoesNotChangeStableFinalization() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);
+        VueTurnFinalizer faultInjectedFinalizer = new VueTurnFinalizer(
+                history, collapser, summary, preference, factory, lifecycleFence,
+                new VueBuildRepairMetricsCollector(registry),
+                new FileToolBudgetGuard());
+        VueTurnOutcome requested = outcome(
+                VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                "项目已生成并构建成功。", true);
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-metrics-failure", VueBuildPhase.SUCCEEDED);
+
+        VueTurnFinalizer.FinalizationResult result =
+                faultInjectedFinalizer.finalizeOnce(context, requested);
+
+        assertEquals(SUCCEEDED, result.outcome().outcome());
+        assertEquals(requested.canonicalAiText(),
+                result.outcome().canonicalAiText());
+        verify(history, times(1)).addChatMessage(
+                APP_ID, requested.canonicalAiText(), "ai", USER_ID);
+        verify(collapser, times(1)).collapseLastTurn(
+                APP_ID, requested.canonicalAiText());
+        verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
+        verify(preference, times(1))
+                .triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        assertTrue(registry.failureTriggered());
     }
 
     @Test

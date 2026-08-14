@@ -8,6 +8,7 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.AppDeletionFileService;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
@@ -40,6 +41,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -209,6 +211,26 @@ class AppServiceDeletionLifecycleTest {
         assertEquals(null, fence.tryAcquireWriter(APP_ID));
         leases.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.DELETE,
                 "after-success").close();
+    }
+
+    @Test
+    void counterIncrementFailureDoesNotChangeSuccessfulDeletion() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(registry));
+
+        assertTrue(service.deleteApp(APP_ID, owner()));
+
+        verify(fileService, times(1)).delete(any());
+        verify(persistence, times(1)).deleteAppData(APP_ID);
+        verify(aiFactory, times(1)).invalidateAndClearMemory(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT);
+        verify(summaries, times(1)).invalidateCache(APP_ID);
+        verify(userMemory, times(1)).invalidateCaches(APP_ID, USER_ID);
+        leases.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.DELETE,
+                "after-metrics-failure").close();
+        assertTrue(registry.failureTriggered());
     }
 
     @Test

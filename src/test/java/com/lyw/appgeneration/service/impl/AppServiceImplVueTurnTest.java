@@ -23,6 +23,7 @@ import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.manger.ToolManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -273,6 +274,47 @@ class AppServiceImplVueTurnTest {
         order.verify(executor).doExecuteVue(any(), any());
         order.verify(facade).generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
+    }
+
+    @Test
+    void counterIncrementFailureDoesNotChangeUserCommitModelStartOrLeaseRelease() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);
+        ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(registry));
+        AtomicInteger modelStarts = new AtomicInteger();
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(true);
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenReturn(Flux.defer(() -> {
+                    modelStarts.incrementAndGet();
+                    return Flux.just("raw");
+                }));
+        when(executor.doExecuteVue(any(), any())).thenAnswer(invocation -> {
+            VueTurnContext context = invocation.getArgument(1);
+            return invocation.<Flux<String>>getArgument(0)
+                    .map(GenerationStreamEvent::content)
+                    .doFinally(ignored -> context.closeResources());
+        });
+
+        List<GenerationStreamEvent> events = service.chatToGenCode(
+                APP_ID, "需求", User.builder().id(USER_ID).build())
+                .collectList().block();
+
+        assertEquals(1, events.size());
+        assertEquals("raw", ((GenerationStreamEvent.Content)
+                events.getFirst()).text());
+        assertEquals(1, modelStarts.get());
+        verify(history, times(1)).addChatMessage(
+                APP_ID, "需求", "user", USER_ID);
+        verify(facade, times(1)).generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
+        operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-metrics-failure").close();
+        assertTrue(registry.failureTriggered());
     }
 
     @Test

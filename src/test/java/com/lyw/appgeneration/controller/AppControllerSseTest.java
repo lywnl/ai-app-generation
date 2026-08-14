@@ -9,6 +9,7 @@ import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.model.dto.app.AppChatGenerateRequest;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.model.entity.User;
@@ -81,6 +82,31 @@ class AppControllerSseTest {
                 .getStr("d"));
         assertEquals("done", events.getLast().event());
         assertEquals("", events.getLast().data());
+    }
+
+    @Test
+    void counterIncrementFailureDoesNotInterruptBodyOrDoneEvent() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);
+        ReflectionTestUtils.setField(controller, "appLifecycleMetricsCollector",
+                new AppLifecycleMetricsCollector(registry));
+        AtomicInteger subscriptions = new AtomicInteger();
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.defer(() -> {
+                    subscriptions.incrementAndGet();
+                    return Flux.just(GenerationStreamEvent.content("正文"));
+                }));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(1, subscriptions.get());
+        assertEquals(2, events.size());
+        assertEquals("正文", JSONUtil.parseObj(events.getFirst().data())
+                .getStr("d"));
+        assertEquals("done", events.getLast().event());
+        assertEquals("", events.getLast().data());
+        assertTrue(registry.failureTriggered());
     }
 
     @Test

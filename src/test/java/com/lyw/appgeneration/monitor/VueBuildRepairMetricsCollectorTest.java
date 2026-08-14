@@ -11,6 +11,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -23,6 +25,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class VueBuildRepairMetricsCollectorTest {
+
+    @ParameterizedTest
+    @EnumSource(value = ThrowingMeterRegistry.FailurePoint.class,
+            names = {"COUNTER_REGISTRATION", "COUNTER_INCREMENT"})
+    void counterFailureIsBypassedAfterObservationWins(
+            ThrowingMeterRegistry.FailurePoint failurePoint) {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(failurePoint);
+        VueBuildRepairMetricsCollector collector =
+                new VueBuildRepairMetricsCollector(registry);
+
+        assertTrue(collector.startBuildAttempt(1).complete(success()));
+        collector.recordTurnAdmission(
+                VueBuildRepairMetricsCollector.AdmissionResult.ACQUIRED);
+        assertTrue(registry.failureTriggered());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ThrowingMeterRegistry.FailurePoint.class,
+            names = {"TIMER_REGISTRATION", "TIMER_RECORD"})
+    void timerFailureIsBypassedAfterBuildResultIsCommitted(
+            ThrowingMeterRegistry.FailurePoint failurePoint) {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(failurePoint);
+        VueBuildRepairMetricsCollector collector =
+                new VueBuildRepairMetricsCollector(registry);
+
+        assertTrue(collector.startBuildAttempt(1).complete(success()));
+        assertTrue(registry.failureTriggered());
+    }
 
     @Test
     void buildAttemptOnlyCompletesOnceAndRejectsAttemptsOutsideOneToThree() {

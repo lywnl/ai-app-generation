@@ -7,6 +7,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -18,6 +20,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class AppLifecycleMetricsCollectorTest {
+
+    @ParameterizedTest
+    @EnumSource(value = ThrowingMeterRegistry.FailurePoint.class,
+            names = {"COUNTER_REGISTRATION", "COUNTER_INCREMENT"})
+    void counterFailureDoesNotChangeProtocolWinner(
+            ThrowingMeterRegistry.FailurePoint failurePoint) {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(failurePoint);
+        AppLifecycleMetricsCollector collector =
+                new AppLifecycleMetricsCollector(registry);
+
+        assertTrue(collector.startSseProtocolObservation().complete(
+                AppLifecycleMetricsCollector.SseProtocolResult.DONE,
+                AppLifecycleMetricsCollector.SseErrorKind.NONE));
+        collector.recordOperation(AppOperationType.GENERATE,
+                AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
+        assertTrue(registry.failureTriggered());
+    }
 
     @Test
     void protocolAndPublisherObservationsAreIndependentAndFirstResultWins() {

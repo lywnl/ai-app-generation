@@ -11,6 +11,7 @@ import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
@@ -139,6 +140,29 @@ class BuildProjectToolTest {
                     .tags("attempt", "1", "result", "failed",
                             "stage", "npm_build", "failure_kind", "code")
                     .counter().count());
+        }
+    }
+
+    @Test
+    void timerRecordFailureDoesNotChangeCommittedBuildResultOrAttempt() {
+        VueProjectBuilder builder = mock(VueProjectBuilder.class);
+        when(builder.buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class)))
+                .thenReturn(codeFailure());
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.TIMER_RECORD);
+        Harness harness = harness(builder, scopeManager(),
+                new VueBuildRepairMetricsCollector(registry));
+
+        try (harness) {
+            JSONObject result = invoke(harness);
+
+            assertCompletedFailure(result, 1, "REPAIR", true, false, false);
+            assertEquals("NPM_BUILD", result.getStr("stage"));
+            assertEquals("CODE", result.getStr("failureKind"));
+            assertEquals(1, harness.lease.snapshot().buildAttempt());
+            verify(builder, org.mockito.Mockito.times(1))
+                    .buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class));
+            assertTrue(registry.failureTriggered());
         }
     }
 
