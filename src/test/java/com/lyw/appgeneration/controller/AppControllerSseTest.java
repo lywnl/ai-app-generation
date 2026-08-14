@@ -7,7 +7,9 @@ import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
+import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.model.dto.app.AppChatGenerateRequest;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.service.AppService;
@@ -71,7 +73,7 @@ class AppControllerSseTest {
                 .thenReturn(business);
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                APP_ID, "需求", request).collectList().block();
+                requestBody(), request).collectList().block();
 
         assertEquals(1, subscriptions.get());
         assertEquals(2, events.size());
@@ -89,7 +91,7 @@ class AppControllerSseTest {
                         () -> cancelled.set(true)));
 
         StepVerifier.withVirtualTime(() -> controller.chatToGenCode(
-                        APP_ID, "需求", request))
+                        requestBody(), request))
                 .expectSubscription()
                 .expectNoEvent(Duration.ofSeconds(14))
                 .thenAwait(Duration.ofSeconds(1))
@@ -110,11 +112,30 @@ class AppControllerSseTest {
                 .thenReturn(content("正文"));
 
         StepVerifier.withVirtualTime(() -> controller.chatToGenCode(
-                        APP_ID, "需求", request))
+                        requestBody(), request))
                 .assertNext(event -> assertEquals("正文",
                         JSONUtil.parseObj(event.data()).getStr("d")))
                 .assertNext(event -> assertEquals("done", event.event()))
                 .verifyComplete();
+    }
+
+    @Test
+    void 下游收到done立即取消仍先记录done控制结果() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(content("正文"));
+
+        StepVerifier.create(controller.chatToGenCode(
+                        requestBody(), request).take(2))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        assertEquals(1.0, metricsRegistry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "done", "error_kind", "none")
+                .counter().count());
+        assertEquals(1.0, metricsRegistry.get(
+                        "generation_sse_publisher_terminations_total")
+                .tag("result", "subscriber_cancelled").counter().count());
     }
 
     @Test
@@ -130,7 +151,7 @@ class AppControllerSseTest {
                         GenerationStreamEvent.turnOutcome(outcome)));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                APP_ID, "需求", request).collectList().block();
+                requestBody(), request).collectList().block();
 
         assertEquals(3, events.size());
         assertEquals("正文", JSONUtil.parseObj(events.get(0).data()).getStr("d"));
@@ -150,7 +171,7 @@ class AppControllerSseTest {
                 .thenReturn(content("<html>完成</html>"));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                APP_ID, "需求", request).collectList().block();
+                requestBody(), request).collectList().block();
 
         assertEquals(2, events.size());
         assertEquals("<html>完成</html>",
@@ -166,26 +187,36 @@ class AppControllerSseTest {
                 .thenThrow(new IllegalStateException("领取租约失败"));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                APP_ID, "需求", request).collectList().block();
+                requestBody(), request).collectList().block();
 
         assertEquals(2, events.size());
         assertEquals("business-error", events.getFirst().event());
-        assertEquals("领取租约失败",
+        assertEquals("生成服务暂时不可用，请稍后重试。",
                 JSONUtil.parseObj(events.getFirst().data()).getStr("message"));
+        assertEquals("SYSTEM", JSONUtil.parseObj(
+                events.getFirst().data()).getStr("kind"));
         assertEquals("done", events.getLast().event());
+        assertEquals(1.0, metricsRegistry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "business_error",
+                        "error_kind", "system").counter().count());
     }
 
     @Test
-    void systemFailureRecordsSystemProtocolResultAndPublisherCompletionSeparately() {
+    void committedPublisherFailureIsNotRewrittenAsBusinessError() {
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.error(new IllegalStateException("系统降级")));
 
-        controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
+        StepVerifier.create(controller.chatToGenCode(requestBody(), request))
+                .expectErrorMatches(error -> error instanceof
+                        IllegalStateException
+                        && "系统降级".equals(error.getMessage()))
+                .verify();
 
-        assertEquals(1.0, metricsRegistry.get("generation_sse_protocol_results_total")
-                .tag("result", "system_error").counter().count());
+        assertTrue(metricsRegistry.find(
+                "generation_sse_protocol_results_total").meters().isEmpty());
         assertEquals(1.0, metricsRegistry.get("generation_sse_publisher_terminations_total")
-                .tag("result", "completed").counter().count());
+                .tag("result", "publisher_error").counter().count());
     }
 
     @Test
@@ -197,10 +228,11 @@ class AppControllerSseTest {
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(GenerationStreamEvent.turnOutcome(outcome)));
 
-        controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
+        controller.chatToGenCode(requestBody(), request).collectList().block();
 
         assertEquals(1.0, metricsRegistry.get("generation_sse_protocol_results_total")
-                .tag("result", "protocol_error").counter().count());
+                .tags("result", "protocol_error", "error_kind", "none")
+                .counter().count());
         assertEquals(0.0, protocolCount("done"));
     }
 
@@ -213,7 +245,7 @@ class AppControllerSseTest {
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(GenerationStreamEvent.turnOutcome(outcome)));
 
-        controller.chatToGenCode(APP_ID, "需求", request).collectList().block();
+        controller.chatToGenCode(requestBody(), request).collectList().block();
 
         assertEquals(1.0, protocolCount("system_error"));
         assertEquals(0.0, protocolCount("done"));
@@ -224,13 +256,14 @@ class AppControllerSseTest {
         var dropped = new CopyOnWriteArrayList<Throwable>();
         Hooks.onErrorDropped(dropped::add);
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
-                .thenReturn(Flux.error(new BusinessException(
-                        ErrorCode.OPERATION_ERROR, "准备阶段超时")));
+                .thenReturn(Flux.error(GenerationPreflightException.business(
+                        ErrorCode.OPERATION_ERROR.getCode(),
+                        "准备阶段超时", null)));
 
         List<ServerSentEvent<String>> events;
         try {
             events = controller.chatToGenCode(
-                    APP_ID, "需求", request).collectList().block();
+                    requestBody(), request).collectList().block();
         } finally {
             Hooks.resetOnErrorDropped();
         }
@@ -247,12 +280,29 @@ class AppControllerSseTest {
     @Test
     void parameterFailureAlsoUsesBusinessErrorProtocol() {
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                0L, "需求", request).collectList().block();
+                new AppChatGenerateRequest("0", "需求"), request)
+                .collectList().block();
 
         assertEquals(2, events.size());
         assertEquals("business-error", events.getFirst().event());
         assertEquals(ErrorCode.PARAMS_ERROR.getCode(),
                 JSONUtil.parseObj(events.getFirst().data()).getInt("code"));
+        assertEquals("done", events.getLast().event());
+        assertEquals(1.0, metricsRegistry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "business_error",
+                        "error_kind", "business").counter().count());
+    }
+
+    @Test
+    void 空请求体属于参数业务错误而非系统降级() {
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                null, request).collectList().block();
+
+        var error = JSONUtil.parseObj(events.getFirst().data());
+        assertEquals("BUSINESS", error.getStr("kind"));
+        assertEquals(ErrorCode.PARAMS_ERROR.getCode(), error.getInt("code"));
+        assertEquals("请求体不能为空", error.getStr("message"));
         assertEquals("done", events.getLast().event());
     }
 
@@ -263,7 +313,7 @@ class AppControllerSseTest {
                         ErrorCode.NO_AUTH_ERROR, "无权限访问该应用"));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                APP_ID, "需求", request).collectList().block();
+                requestBody(), request).collectList().block();
 
         var error = JSONUtil.parseObj(events.getFirst().data());
         assertEquals(ErrorCode.NO_AUTH_ERROR.getCode(), error.getInt("code"));
@@ -282,7 +332,7 @@ class AppControllerSseTest {
                 .thenReturn(business);
 
         StepVerifier.withVirtualTime(() -> controller.chatToGenCode(
-                        APP_ID, "需求", request))
+                        requestBody(), request))
                 .assertNext(event -> assertEquals("第一段",
                         JSONUtil.parseObj(event.data()).getStr("d")))
                 .thenAwait(Duration.ofSeconds(10))
@@ -309,7 +359,7 @@ class AppControllerSseTest {
                                         "\"shouldRefreshPreview\":true}")));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
-                APP_ID, "需求", request).collectList().block();
+                requestBody(), request).collectList().block();
 
         assertEquals(4, events.size());
         assertEquals("[1,2]",
@@ -327,11 +377,17 @@ class AppControllerSseTest {
         return Flux.just(GenerationStreamEvent.content(text));
     }
 
+    private AppChatGenerateRequest requestBody() {
+        return new AppChatGenerateRequest(Long.toString(APP_ID), "需求");
+    }
+
     private double protocolCount(String result) {
         return metricsRegistry.getMeters().stream()
                 .filter(meter -> meter.getId().getName()
                         .equals("generation_sse_protocol_results_total"))
                 .filter(meter -> result.equals(meter.getId().getTag("result")))
+                .filter(meter -> "none".equals(
+                        meter.getId().getTag("error_kind")))
                 .mapToDouble(meter -> meter.measure().iterator().next().getValue())
                 .sum();
     }

@@ -28,16 +28,19 @@ class AppLifecycleMetricsCollectorTest {
         var publisher = collector.startSsePublisherObservation();
 
         assertTrue(protocol.complete(
-                AppLifecycleMetricsCollector.SseProtocolResult.PROTOCOL_ERROR));
+                AppLifecycleMetricsCollector.SseProtocolResult.PROTOCOL_ERROR,
+                AppLifecycleMetricsCollector.SseErrorKind.NONE));
         assertFalse(protocol.complete(
-                AppLifecycleMetricsCollector.SseProtocolResult.DONE));
+                AppLifecycleMetricsCollector.SseProtocolResult.DONE,
+                AppLifecycleMetricsCollector.SseErrorKind.NONE));
         assertTrue(publisher.complete(
                 AppLifecycleMetricsCollector.SsePublisherResult.SUBSCRIBER_CANCELLED));
         assertFalse(publisher.complete(
                 AppLifecycleMetricsCollector.SsePublisherResult.COMPLETED));
 
         assertEquals(1.0, registry.get("generation_sse_protocol_results_total")
-                .tag("result", "protocol_error").counter().count());
+                .tags("result", "protocol_error", "error_kind", "none")
+                .counter().count());
         assertEquals(1.0, registry.get("generation_sse_publisher_terminations_total")
                 .tag("result", "subscriber_cancelled").counter().count());
     }
@@ -83,7 +86,8 @@ class AppLifecycleMetricsCollectorTest {
                 AppLifecycleMetricsCollector.OperationCancellationTrigger.DELETE_TAKEOVER,
                 AppLifecycleMetricsCollector.OperationCancellationResult.TIMED_OUT);
         collector.startSseProtocolObservation().complete(
-                AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR);
+                AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR,
+                AppLifecycleMetricsCollector.SseErrorKind.NONE);
         collector.startSsePublisherObservation().complete(
                 AppLifecycleMetricsCollector.SsePublisherResult.PUBLISHER_ERROR);
 
@@ -92,7 +96,7 @@ class AppLifecycleMetricsCollectorTest {
         assertMetricTags(registry, "app_operation_cancellations_total",
                 Set.of("trigger", "result"));
         assertMetricTags(registry, "generation_sse_protocol_results_total",
-                Set.of("result"));
+                Set.of("result", "error_kind"));
         assertMetricTags(registry, "generation_sse_publisher_terminations_total",
                 Set.of("result"));
         String scrape = registry.scrape();
@@ -111,7 +115,36 @@ class AppLifecycleMetricsCollectorTest {
         collector.recordOperation(AppOperationType.DOWNLOAD,
                 AppLifecycleMetricsCollector.OperationResult.ACQUIRED, null);
         assertTrue(collector.startSseProtocolObservation().complete(
-                AppLifecycleMetricsCollector.SseProtocolResult.DONE));
+                AppLifecycleMetricsCollector.SseProtocolResult.DONE,
+                AppLifecycleMetricsCollector.SseErrorKind.NONE));
+    }
+
+    @Test
+    void businessError必须用有限errorKind区分业务拒绝和系统降级() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AppLifecycleMetricsCollector collector =
+                new AppLifecycleMetricsCollector(registry);
+
+        assertTrue(collector.startSseProtocolObservation().complete(
+                AppLifecycleMetricsCollector.SseProtocolResult.BUSINESS_ERROR,
+                AppLifecycleMetricsCollector.SseErrorKind.BUSINESS));
+        assertTrue(collector.startSseProtocolObservation().complete(
+                AppLifecycleMetricsCollector.SseProtocolResult.BUSINESS_ERROR,
+                AppLifecycleMetricsCollector.SseErrorKind.SYSTEM));
+
+        assertEquals(1.0, registry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "business_error",
+                        "error_kind", "business").counter().count());
+        assertEquals(1.0, registry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "business_error",
+                        "error_kind", "system").counter().count());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class,
+                () -> collector.startSseProtocolObservation().complete(
+                        AppLifecycleMetricsCollector.SseProtocolResult.DONE,
+                        AppLifecycleMetricsCollector.SseErrorKind.SYSTEM));
     }
 
     private static boolean completeAfterStart(

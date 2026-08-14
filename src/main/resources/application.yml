@@ -9,7 +9,7 @@ server:
 spring:
   mvc:
     async:
-      request-timeout: 1860000  # SSE 运输层 31 分钟，略大于 Vue 业务绝对截止时间
+      request-timeout: 1845000  # SSE 运输层 30 分 45 秒，为 Vue 终态收尾保留余量
   application:
     name: ai-app-generation
   datasource:
@@ -83,6 +83,11 @@ knife4j:
   enable: true
   setting:
     language: zh_cn
+
+app:
+  cors:
+    # 空列表表示只允许同源；跨域部署必须显式列出可信 HTTPS Origin。
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:}
 
 
 # 添加 COS 对象存储配置（需要从腾讯云获取）

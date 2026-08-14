@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class Task7TimeoutConfigTest {
 
@@ -26,9 +27,17 @@ class Task7TimeoutConfigTest {
                 "proxy_send_timeout\\s+(\\d+)s");
 
         long businessMillis = VueTurnContext.TURN_DEADLINE.toMillis();
-        assertTrue(mvcMillis > businessMillis);
-        assertTrue(Duration.ofSeconds(readSeconds).toMillis() > businessMillis);
-        assertTrue(Duration.ofSeconds(sendSeconds).toMillis() > businessMillis);
+        assertEquals(1_845_000L, mvcMillis);
+        assertEquals(1_860L, readSeconds);
+        assertEquals(1_860L, sendSeconds);
+        assertTrue(businessMillis < mvcMillis);
+        assertTrue(mvcMillis < Duration.ofSeconds(readSeconds).toMillis());
+        assertTrue(mvcMillis < Duration.ofSeconds(sendSeconds).toMillis());
+        assertTrue(nginx.contains(
+                "location = /api/app/chat/gen/code"));
+        assertTrue(nginx.contains("client_max_body_size 272k"));
+        assertTrue(nginx.contains("proxy_buffering off"));
+        assertTrue(nginx.contains("proxy_cache off"));
     }
 
     private long extract(String source, String expression) {

@@ -261,13 +261,20 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             long appId, String message, User loginUser,
             CodeGenTypeEnum codeGenType) {
         return Flux.defer(() -> {
-            SimpleGenerationTurnContext context = openSimpleTurn(appId);
+            SimpleGenerationTurnContext context;
+            try {
+                context = openSimpleTurn(appId);
+            } catch (RuntimeException exception) {
+                return Flux.error(toPreflightException(exception));
+            }
+            boolean userCommitted = false;
             try {
                 AiCodeGeneratorService generatorService =
                         aiCodeGeneratorFacade.prepareSimpleGenerator(
                                 appId, codeGenType);
                 boolean firstMessage = prepareSimpleTurn(
                         appId, message, loginUser, context);
+                userCommitted = true;
                 MonitorContextHolder.setContext(MonitorContext.builder()
                         .userId(loginUser.getId().toString())
                         .appId(Long.toString(appId)).build());
@@ -283,7 +290,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                                 context, codeGenType, signal));
             } catch (RuntimeException exception) {
                 context.close();
-                return Flux.error(exception);
+                return Flux.error(userCommitted
+                        ? exception : toPreflightException(exception));
             }
         });
     }

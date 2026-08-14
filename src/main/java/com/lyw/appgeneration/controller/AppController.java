@@ -1,7 +1,6 @@
 package com.lyw.appgeneration.controller;
 
 import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.annotation.AuthCheck;
@@ -12,6 +11,7 @@ import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
+import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.exception.ThrowUtils;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.model.dto.app.*;
@@ -40,6 +40,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * 应用 控制层。
@@ -77,42 +78,68 @@ public class AppController {
         appService.downloadApp(appId, loginUser, response);
     }
 
-    @GetMapping(value = "/chat/gen/code", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
-            @RequestParam String message,
+    @PostMapping(value = "/chat/gen/code",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> chatToGenCode(
+            @RequestBody AppChatGenerateRequest requestBody,
             HttpServletRequest request) {
         return Flux.defer(() -> {
             AppLifecycleMetricsCollector.SseProtocolObservation protocolObservation =
                     appLifecycleMetricsCollector.startSseProtocolObservation();
             AppLifecycleMetricsCollector.SsePublisherObservation publisherObservation =
                     appLifecycleMetricsCollector.startSsePublisherObservation();
-            Flux<ServerSentEvent<String>> protocol = Flux.defer(() -> {
-                ThrowUtils.throwIf(appId == null || appId <= 0,
-                        ErrorCode.PARAMS_ERROR, "应用ID无效");
-                ThrowUtils.throwIf(StrUtil.isBlank(message),
-                        ErrorCode.PARAMS_ERROR, "用户消息不能为空");
+            Mono<Flux<GenerationStreamEvent>> publisher = Mono.fromCallable(() -> {
+                if (requestBody == null) {
+                    throw new BusinessException(
+                            ErrorCode.PARAMS_ERROR, "请求体不能为空");
+                }
+                long appId = requestBody.requireAppId();
+                String message = requestBody.requireMessage();
                 User loginUser = userService.getLoginUser(request);
-                Flux<GenerationStreamEvent> business = appService.chatToGenCode(
-                        appId, message, loginUser);
-                return encodeBusinessWithHeartbeat(
-                        observeVueProtocolOutcome(business, protocolObservation));
-            }).onErrorResume(error -> {
-                protocolObservation.complete(protocolResult(error));
-                return businessErrorEvent(error);
-            });
-            return protocol.concatWithValues(doneEvent())
-                    .doOnComplete(() -> protocolObservation.complete(
-                            AppLifecycleMetricsCollector.SseProtocolResult.DONE))
+                return appService.chatToGenCode(appId, message, loginUser);
+            }).onErrorMap(BusinessException.class, this::toBusinessPreflight)
+                    .onErrorMap(error -> !(error instanceof
+                                    GenerationPreflightException),
+                            GenerationPreflightException::system);
+            Flux<GenerationStreamEvent> business = publisher.flatMapMany(
+                    Function.identity());
+            Flux<ServerSentEvent<String>> protocol =
+                    encodeBusinessWithHeartbeat(observeVueProtocolOutcome(
+                            business, protocolObservation))
+                            .onErrorResume(
+                                    GenerationPreflightException.class,
+                                    error -> {
+                                        protocolObservation.complete(
+                                                AppLifecycleMetricsCollector
+                                                        .SseProtocolResult
+                                                        .BUSINESS_ERROR,
+                                                errorKind(error));
+                                        return businessErrorEvent(error);
+                                    });
+            Flux<ServerSentEvent<String>> done = Mono
+                    .fromSupplier(this::doneEvent)
+                    .doOnNext(ignored -> protocolObservation.complete(
+                            AppLifecycleMetricsCollector.SseProtocolResult.DONE,
+                            AppLifecycleMetricsCollector.SseErrorKind.NONE))
+                    .flux();
+            return protocol.concatWith(done)
                     .doFinally(signal -> publisherObservation.complete(
                             publisherResult(signal)));
         });
     }
 
-    private AppLifecycleMetricsCollector.SseProtocolResult protocolResult(
-            Throwable error) {
-        return error instanceof BusinessException
-                ? AppLifecycleMetricsCollector.SseProtocolResult.BUSINESS_ERROR
-                : AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR;
+    private AppLifecycleMetricsCollector.SseErrorKind errorKind(
+            GenerationPreflightException error) {
+        return error.kind() == GenerationPreflightException.Kind.BUSINESS
+                ? AppLifecycleMetricsCollector.SseErrorKind.BUSINESS
+                : AppLifecycleMetricsCollector.SseErrorKind.SYSTEM;
+    }
+
+    private GenerationPreflightException toBusinessPreflight(
+            BusinessException error) {
+        return GenerationPreflightException.business(
+                error.getCode(), error.getMessage(), error);
     }
 
     private Flux<GenerationStreamEvent> observeVueProtocolOutcome(
@@ -129,7 +156,8 @@ public class AppController {
                     default -> null;
                 };
                 if (result != null) {
-                    observation.complete(result);
+                    observation.complete(result,
+                            AppLifecycleMetricsCollector.SseErrorKind.NONE);
                 }
             }
         });
@@ -180,14 +208,13 @@ public class AppController {
                 .build();
     }
 
-    private Flux<ServerSentEvent<String>> businessErrorEvent(Throwable error) {
-        int code = error instanceof BusinessException businessException
-                ? businessException.getCode()
-                : ErrorCode.SYSTEM_ERROR.getCode();
+    private Flux<ServerSentEvent<String>> businessErrorEvent(
+            GenerationPreflightException error) {
         Map<String, Object> data = Map.of(
-                "error", true,
-                "code", code,
-                "message", error.getMessage() == null ? "系统错误" : error.getMessage());
+                "protocol", "generation-error/v1",
+                "kind", error.kind().name(),
+                "code", error.code(),
+                "message", error.safeMessage());
         return Flux.just(ServerSentEvent.<String>builder()
                 .event("business-error")
                 .data(JSONUtil.toJsonStr(data))

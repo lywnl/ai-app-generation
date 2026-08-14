@@ -8,6 +8,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
+import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -64,6 +65,8 @@ class AppServiceSimpleTurnLifecycleTest {
     private final ChatHistoryService history = mock(ChatHistoryService.class);
     private final MemorySummaryService summaries = mock(MemorySummaryService.class);
     private final UserMemoryService userMemory = mock(UserMemoryService.class);
+    private final StreamHandlerExecutor streamExecutor =
+            spy(new StreamHandlerExecutor());
     private AppOperationLeaseManager leases;
     private AppDataLifecycleFence fence;
     private AppServiceImpl service;
@@ -74,15 +77,18 @@ class AppServiceSimpleTurnLifecycleTest {
         leases = new AppOperationLeaseManager();
         metricsRegistry = new SimpleMeterRegistry();
         fence = new AppDataLifecycleFence();
-        StreamHandlerExecutor executor = new StreamHandlerExecutor();
-        ReflectionTestUtils.setField(executor, "memorySummaryService", summaries);
-        ReflectionTestUtils.setField(executor, "userMemoryService", userMemory);
-        ReflectionTestUtils.setField(executor, "appDataLifecycleFence", fence);
+        ReflectionTestUtils.setField(
+                streamExecutor, "memorySummaryService", summaries);
+        ReflectionTestUtils.setField(
+                streamExecutor, "userMemoryService", userMemory);
+        ReflectionTestUtils.setField(
+                streamExecutor, "appDataLifecycleFence", fence);
         service = spy(new AppServiceImpl());
         ReflectionTestUtils.setField(service, "aiCodeGeneratorFacade", facade);
         ReflectionTestUtils.setField(service, "aiGeneratorServiceFactory", aiFactory);
         ReflectionTestUtils.setField(service, "chatHistoryService", history);
-        ReflectionTestUtils.setField(service, "streamHandlerExecutor", executor);
+        ReflectionTestUtils.setField(
+                service, "streamHandlerExecutor", streamExecutor);
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", leases);
         ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
                 new AppLifecycleMetricsCollector(metricsRegistry));
@@ -114,7 +120,11 @@ class AppServiceSimpleTurnLifecycleTest {
         try (var ignored = leases.acquire(
                 APP_ID, operationType, "冲突操作")) {
             StepVerifier.create(result)
-                    .expectErrorMatches(error -> error.getMessage().equals(
+                    .expectErrorMatches(error -> error instanceof
+                            GenerationPreflightException preflight
+                            && preflight.kind()
+                            == GenerationPreflightException.Kind.BUSINESS
+                            && preflight.safeMessage().equals(
                             "应用正在执行其他操作，请稍后再生成"))
                     .verify();
         }
@@ -165,12 +175,57 @@ class AppServiceSimpleTurnLifecycleTest {
         ReflectionTestUtils.setField(service, "aiCodeGeneratorFacade", realFacade);
 
         StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
-                .expectErrorMessage("冷缓存重建失败")
+                .expectErrorMatches(error -> error instanceof
+                        GenerationPreflightException preflight
+                        && preflight.kind()
+                        == GenerationPreflightException.Kind.SYSTEM
+                        && preflight.safeMessage().equals(
+                        "生成服务暂时不可用，请稍后重试。")
+                        && "冷缓存重建失败".equals(
+                        preflight.getCause().getMessage()))
                 .verify();
 
         verify(history, never()).addChatMessage(
                 APP_ID, "需求", "user", USER_ID);
         assertLeaseReleased("准备失败后");
+    }
+
+    @Test
+    void 保存用户失败属于前置错误且不启动模型() {
+        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(false);
+
+        StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
+                .expectErrorMatches(error -> error instanceof
+                        GenerationPreflightException preflight
+                        && preflight.kind()
+                        == GenerationPreflightException.Kind.BUSINESS
+                        && preflight.safeMessage().equals(
+                        "保存用户消息失败"))
+                .verify();
+
+        verify(facade, never()).generateAndSaveCodeStream(
+                any(), any(), eq(APP_ID), anyBoolean(), any(), any());
+        assertLeaseReleased("保存用户失败后");
+    }
+
+    @Test
+    void 用户已保存后的Handler同步失败不得伪装成前置错误() {
+        org.mockito.Mockito.doThrow(
+                        new IllegalStateException("Handler初始化失败"))
+                .when(streamExecutor).doExecute(
+                        any(), eq(history), eq(APP_ID), any(),
+                        eq(CodeGenTypeEnum.HTML), any());
+
+        StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
+                .expectErrorMatches(error -> !(error instanceof
+                        GenerationPreflightException)
+                        && "Handler初始化失败".equals(error.getMessage()))
+                .verify();
+
+        verify(history).addChatMessage(
+                APP_ID, "需求", "user", USER_ID);
+        assertLeaseReleased("Handler同步失败后");
     }
 
     @Test
@@ -206,7 +261,9 @@ class AppServiceSimpleTurnLifecycleTest {
         assertLeaseReleased("正常后");
 
         StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
-                .expectErrorMessage("供应商异常")
+                .expectErrorMatches(error -> !(error instanceof
+                        GenerationPreflightException)
+                        && "供应商异常".equals(error.getMessage()))
                 .verify();
         assertLeaseReleased("异常后");
     }
@@ -278,7 +335,12 @@ class AppServiceSimpleTurnLifecycleTest {
                 fence.beginDelete(APP_ID, java.time.Duration.ZERO);
 
         StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
-                .expectErrorMessage("应用已进入删除流程，无法继续生成")
+                .expectErrorMatches(error -> error instanceof
+                        GenerationPreflightException preflight
+                        && preflight.kind()
+                        == GenerationPreflightException.Kind.BUSINESS
+                        && preflight.safeMessage().equals(
+                        "应用已进入删除流程，无法继续生成"))
                 .verify();
 
         verify(history, never()).addChatMessage(APP_ID, "需求", "user", USER_ID);

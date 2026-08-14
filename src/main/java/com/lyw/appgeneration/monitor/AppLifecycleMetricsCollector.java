@@ -45,9 +45,11 @@ public final class AppLifecycleMetricsCollector {
                 "trigger", tag(trigger), "result", tag(result)).increment());
     }
 
-    private void recordSseProtocol(SseProtocolResult result) {
+    private void recordSseProtocol(
+            SseProtocolResult result, SseErrorKind errorKind) {
         safely(() -> counter("generation_sse_protocol_results_total",
-                "result", tag(result)).increment());
+                "result", tag(result),
+                "error_kind", tag(errorKind)).increment());
     }
 
     private void recordSsePublisher(SsePublisherResult result) {
@@ -82,12 +84,19 @@ public final class AppLifecycleMetricsCollector {
             this.collector = collector;
         }
 
-        public boolean complete(SseProtocolResult result) {
+        public boolean complete(
+                SseProtocolResult result, SseErrorKind errorKind) {
             Objects.requireNonNull(result, "SSE 控制结果不能为空");
+            Objects.requireNonNull(errorKind, "SSE 前置错误类型不能为空");
+            boolean preflight = result == SseProtocolResult.BUSINESS_ERROR;
+            if (preflight == (errorKind == SseErrorKind.NONE)) {
+                throw new IllegalArgumentException(
+                        "只有 business_error 可携带业务或系统前置错误类型");
+            }
             if (!completed.compareAndSet(false, true)) {
                 return false;
             }
-            collector.recordSseProtocol(result);
+            collector.recordSseProtocol(result, errorKind);
             return true;
         }
     }
@@ -118,6 +127,10 @@ public final class AppLifecycleMetricsCollector {
 
     public enum SseProtocolResult {
         DONE, BUSINESS_ERROR, SYSTEM_ERROR, PROTOCOL_ERROR
+    }
+
+    public enum SseErrorKind {
+        BUSINESS, SYSTEM, NONE
     }
 
     public enum SsePublisherResult {
