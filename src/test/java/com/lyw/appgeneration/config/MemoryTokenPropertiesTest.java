@@ -1,0 +1,75 @@
+package com.lyw.appgeneration.config;
+
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+class MemoryTokenPropertiesTest {
+
+    @Test
+    void defaultValuesMatchApprovedTokenBudgets() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+
+        assertEquals(12_288, properties.getL0RetainedTokens());
+        assertEquals(3_072, properties.getL1MaxSummaryTokens());
+        assertEquals(1_024, properties.getL2MaxRecallTokens());
+        assertEquals(28_672, properties.getAsyncCompressionThreshold());
+        assertEquals(30_720, properties.getBlockingCompressionThreshold());
+        assertEquals(32_768, properties.getHardInputLimit());
+        assertEquals(8_192, properties.getMaxOutputTokens());
+        assertEquals(40_960, properties.getMinimumModelContextWindow());
+        assertEquals(Duration.ofSeconds(60), properties.getBlockingTimeout());
+        assertEquals(Duration.ofSeconds(30), properties.getL2Debounce());
+        assertEquals(1.15D, properties.getEstimationSafetyFactor());
+    }
+
+    @Test
+    void approvedDefaultsPassStartupValidation() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+
+        assertDoesNotThrow(properties::afterPropertiesSet);
+    }
+
+    @Test
+    void rejectsThresholdsThatAreNotStrictlyIncreasing() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setAsyncCompressionThreshold(30_720);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    void rejectsModelWindowThatCannotHoldInputAndOutputBudgets() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setMinimumModelContextWindow(40_959);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    void rejectsNonPositiveLayerBudgetsAndDurations() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setL1MaxSummaryTokens(0);
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+
+        properties = new MemoryTokenProperties();
+        properties.setBlockingTimeout(Duration.ZERO);
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+
+        properties = new MemoryTokenProperties();
+        properties.setL2Debounce(Duration.ofSeconds(-1));
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    void rejectsSafetyFactorBelowOne() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setEstimationSafetyFactor(0.99D);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+}

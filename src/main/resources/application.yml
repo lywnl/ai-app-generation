@@ -159,6 +159,19 @@ management:
       show-details: always
 
 ai:
+  memory:
+    token:
+      l0-retained-tokens: 12288
+      l1-max-summary-tokens: 3072
+      l2-max-recall-tokens: 1024
+      async-compression-threshold: 28672
+      blocking-compression-threshold: 30720
+      hard-input-limit: 32768
+      max-output-tokens: 8192
+      minimum-model-context-window: 40960
+      blocking-timeout: 60s
+      l2-debounce: 30s
+      estimation-safety-factor: 1.15
   vue:
     tool-budget:
       max-single-file-code-points: 128000
