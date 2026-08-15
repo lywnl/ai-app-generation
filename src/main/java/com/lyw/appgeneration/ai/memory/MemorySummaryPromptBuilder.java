@@ -2,6 +2,8 @@ package com.lyw.appgeneration.ai.memory;
 
 import cn.hutool.core.util.StrUtil;
 
+import java.util.Objects;
+
 /**
  * 构建 L1 滚动摘要的 prompt(5 段固定模板)。
  *
@@ -15,9 +17,6 @@ public final class MemorySummaryPromptBuilder {
 
     private MemorySummaryPromptBuilder() {
     }
-
-    /** 整段摘要 token 预算(约,对齐 RAG max-context-chars:4000)。 */
-    public static final int MAX_SUMMARY_TOKENS = 1800;
 
     private static final String TEMPLATE = """
             你是对话摘要助手。请基于【旧摘要】和【新增对话】,产出更新后的摘要。
@@ -40,7 +39,7 @@ public final class MemorySummaryPromptBuilder {
             - 构建状态只记录最终构建成功、最终构建失败或最终被取消;不要记录中间构建次数与阶段。
             - 不复制错误摘要、构建日志和逐次修复过程;它们是本轮临时诊断信息,不是稳定应用记忆。
             - 代码与实际进度以 vue_project_<appId> 当前文件为准,不要从临时工具轨迹推测代码状态。
-            - 控制在 %d token 以内;超了优先精简"当前进度速览",保住"应用目标"和"用户偏好与硬约束"。
+            - 最终摘要不得超过 %d Token;超限时优先精简"当前进度速览",保住"应用目标"和"用户偏好与硬约束"。
             - 直接输出 5 段摘要正文,不要解释、不要寒暄。
 
             【旧摘要】
@@ -57,8 +56,13 @@ public final class MemorySummaryPromptBuilder {
      * @param newMessages 本次待并入的新增对话文本
      * @return 完整 prompt
      */
-    public static String build(String oldSummary, String newMessages) {
+    public static String build(
+            String oldSummary, String newMessages, int maxSummaryTokens) {
+        Objects.requireNonNull(newMessages, "新增对话不能为空");
+        if (maxSummaryTokens <= 0) {
+            throw new IllegalArgumentException("摘要 Token 上限必须大于 0");
+        }
         String old = StrUtil.isBlank(oldSummary) ? "(无,首次生成)" : oldSummary;
-        return String.format(TEMPLATE, MAX_SUMMARY_TOKENS, old, newMessages);
+        return String.format(TEMPLATE, maxSummaryTokens, old, newMessages);
     }
 }

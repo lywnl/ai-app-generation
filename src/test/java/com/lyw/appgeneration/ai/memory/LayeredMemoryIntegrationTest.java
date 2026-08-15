@@ -5,6 +5,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.impl.MemorySummaryServiceImpl;
 import dev.langchain4j.data.message.AiMessage;
@@ -19,13 +20,15 @@ import org.mockito.MockitoAnnotations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -81,9 +84,9 @@ class LayeredMemoryIntegrationTest {
             return 1;
         });
         when(redisTemplate.opsForValue()).thenReturn(valueOps); // 缓存未命中(get→null)→回退 store(MySQL mock)
-        // 5 参生产构造器(默认阈值 8);直接 new 时 @Qualifier 被忽略,按位置绑定 mock
+        // 直接构造真实摘要服务，外部模型、数据库和 Redis 保持 mock。
         summaryService = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper, summarizationModel,
-                Executors.newSingleThreadExecutor(), redisTemplate,
+                mock(ExecutorService.class), redisTemplate,
                 new AppDataLifecycleFence());
     }
 
@@ -93,7 +96,7 @@ class LayeredMemoryIntegrationTest {
 
     @Test
     void longConversationSummarizedThenColdStartRebuildCarriesSummary() {
-        // 1. 长对话:游标之后 10 条新消息(超过默认阈值 8)
+        // 1. 长对话：游标之后有 5 个完整回合。
         List<ChatHistory> history = new ArrayList<>();
         for (int i = 1; i <= 10; i++) {
             history.add(msg(i, i % 2 == 1 ? "user" : "ai", "第" + i + "条对话"));
@@ -102,7 +105,10 @@ class LayeredMemoryIntegrationTest {
         when(summarizationModel.chat(anyString())).thenReturn(CANNED_SUMMARY);
 
         // 2. 同步提炼:断言摘要落库 + 游标推进到最后一条 id
-        summaryService.summarizeNow(APP_ID);
+        MemoryCompressionResult compression = summaryService.compressNow(
+                APP_ID, 10L, Duration.ofSeconds(60));
+        assertEquals(MemoryCompressionResult.Status.COMPRESSED,
+                compression.status());
         AppMemorySummary persisted = store.get();
         assertNotNull(persisted, "摘要应已落库");
         assertEquals(10L, persisted.getLastSummarizedId(), "游标应推进到最新消息id");
