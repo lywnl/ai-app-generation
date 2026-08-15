@@ -10,7 +10,7 @@ class SummaryCompressionPromptBuilderTest {
     @Test
     void reducerOnlyCompressesExistingSummaryToSingleThreeKLimit() {
         String prompt = SummaryCompressionPromptBuilder.build(
-                "# 应用目标与定位\n已有事实", 3_072);
+                "# 应用目标与定位\n已有事实");
 
         assertTrue(prompt.contains("只压缩现有摘要"));
         assertTrue(prompt.contains("禁止引入任何新事实"));

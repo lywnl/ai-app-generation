@@ -15,8 +15,7 @@ class MemorySummaryPromptBuilderTest {
     void buildContainsFiveSectionsAndOldSummaryAndNewMessages() {
         String prompt = MemorySummaryPromptBuilder.build(
                 "# 应用目标与定位\n旧摘要内容",
-                "用户:把按钮改成蓝色\nAI:已修改",
-                3_072);
+                "用户:把按钮改成蓝色\nAI:已修改");
         assertTrue(prompt.contains("应用目标与定位"));
         assertTrue(prompt.contains("用户偏好与硬约束"));
         assertTrue(prompt.contains("已否决的方案"));
@@ -32,7 +31,7 @@ class MemorySummaryPromptBuilderTest {
     @Test
     void buildWithBlankOldSummaryStillValid() {
         String prompt = MemorySummaryPromptBuilder.build(
-                "", "用户:做个博客", 3_072);
+                "", "用户:做个博客");
         assertTrue(prompt.contains("做个博客"));
         assertNotNull(prompt);
     }

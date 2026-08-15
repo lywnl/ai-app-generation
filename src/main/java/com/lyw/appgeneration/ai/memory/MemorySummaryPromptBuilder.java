@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import cn.hutool.core.util.StrUtil;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 
 import java.util.Objects;
 
@@ -56,13 +57,12 @@ public final class MemorySummaryPromptBuilder {
      * @param newMessages 本次待并入的新增对话文本
      * @return 完整 prompt
      */
-    public static String build(
-            String oldSummary, String newMessages, int maxSummaryTokens) {
+    public static String build(String oldSummary, String newMessages) {
         Objects.requireNonNull(newMessages, "新增对话不能为空");
-        if (maxSummaryTokens <= 0) {
-            throw new IllegalArgumentException("摘要 Token 上限必须大于 0");
-        }
         String old = StrUtil.isBlank(oldSummary) ? "(无,首次生成)" : oldSummary;
-        return String.format(TEMPLATE, maxSummaryTokens, old, newMessages);
+        return String.format(TEMPLATE,
+                MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS,
+                old,
+                newMessages);
     }
 }

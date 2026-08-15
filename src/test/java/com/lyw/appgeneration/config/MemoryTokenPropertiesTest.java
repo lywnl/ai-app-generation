@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.config;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -32,6 +33,15 @@ class MemoryTokenPropertiesTest {
         MemoryTokenProperties properties = new MemoryTokenProperties();
 
         assertDoesNotThrow(properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 3072 的 L1 摘要上限")
+    void rejectsNonCanonicalL1SummaryLimit() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setL1MaxSummaryTokens(4_096);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
 
     @Test

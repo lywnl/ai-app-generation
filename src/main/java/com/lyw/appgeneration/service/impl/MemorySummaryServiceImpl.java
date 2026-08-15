@@ -2,21 +2,14 @@ package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
-import com.lyw.appgeneration.ai.memory.ConservativeChatTokenEstimator;
-import com.lyw.appgeneration.ai.memory.MemorySummaryPromptBuilder;
-import com.lyw.appgeneration.ai.memory.SummaryCompressionPromptBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
-import com.lyw.appgeneration.model.entity.ChatHistory;
-import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
-import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.mybatisflex.core.query.QueryWrapper;
-import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -27,8 +20,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,15 +33,13 @@ import java.util.concurrent.TimeoutException;
 @Service
 public class MemorySummaryServiceImpl implements MemorySummaryService {
 
-    private static final int HISTORY_QUERY_BATCH_SIZE = 100;
     private static final String CACHE_KEY_PREFIX = "mem:summary:";
     private static final Duration CACHE_TTL = Duration.ofHours(1);
     private static final Duration RETRY_BASE_DELAY = Duration.ofSeconds(5);
     private static final Duration RETRY_MAX_DELAY = Duration.ofMinutes(5);
 
-    private final ChatHistoryService chatHistoryService;
     private final AppMemorySummaryMapper summaryMapper;
-    private final ChatModel summarizationModel;
+    private final MemorySummaryDraftEngine draftEngine;
     private final ExecutorService executor;
     private final StringRedisTemplate redisTemplate;
     private final AppDataLifecycleFence lifecycleFence;
@@ -65,60 +54,30 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
 
     @Autowired
     public MemorySummaryServiceImpl(
-            ChatHistoryService chatHistoryService,
             AppMemorySummaryMapper summaryMapper,
-            @Qualifier("openAiChatModel") ChatModel summarizationModel,
+            MemorySummaryDraftEngine draftEngine,
             @Qualifier("memorySummarizationExecutor") ExecutorService executor,
             StringRedisTemplate redisTemplate,
             AppDataLifecycleFence lifecycleFence,
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties) {
-        this(chatHistoryService, summaryMapper, summarizationModel, executor,
-                redisTemplate, lifecycleFence, tokenEstimator, properties,
-                Clock.systemUTC());
-    }
-
-    /** 保留现有集成测试和非 Spring 直接构造方式。 */
-    public MemorySummaryServiceImpl(
-            ChatHistoryService chatHistoryService,
-            AppMemorySummaryMapper summaryMapper,
-            ChatModel summarizationModel,
-            ExecutorService executor,
-            StringRedisTemplate redisTemplate,
-            AppDataLifecycleFence lifecycleFence) {
-        this(chatHistoryService, summaryMapper, summarizationModel, executor,
-                redisTemplate, lifecycleFence, legacyDefaults());
-    }
-
-    private MemorySummaryServiceImpl(
-            ChatHistoryService chatHistoryService,
-            AppMemorySummaryMapper summaryMapper,
-            ChatModel summarizationModel,
-            ExecutorService executor,
-            StringRedisTemplate redisTemplate,
-            AppDataLifecycleFence lifecycleFence,
-            LegacyDefaults defaults) {
-        this(chatHistoryService, summaryMapper, summarizationModel, executor,
-                redisTemplate, lifecycleFence, defaults.estimator(),
-                defaults.properties(), Clock.systemUTC());
+        this(summaryMapper, draftEngine, executor, redisTemplate,
+                lifecycleFence, tokenEstimator, properties, Clock.systemUTC());
     }
 
     MemorySummaryServiceImpl(
-            ChatHistoryService chatHistoryService,
             AppMemorySummaryMapper summaryMapper,
-            ChatModel summarizationModel,
+            MemorySummaryDraftEngine draftEngine,
             ExecutorService executor,
             StringRedisTemplate redisTemplate,
             AppDataLifecycleFence lifecycleFence,
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties,
             Clock clock) {
-        this.chatHistoryService = Objects.requireNonNull(
-                chatHistoryService, "对话历史服务不能为空");
         this.summaryMapper = Objects.requireNonNull(
                 summaryMapper, "摘要 Mapper 不能为空");
-        this.summarizationModel = Objects.requireNonNull(
-                summarizationModel, "摘要模型不能为空");
+        this.draftEngine = Objects.requireNonNull(
+                draftEngine, "摘要草稿引擎不能为空");
         this.executor = Objects.requireNonNull(
                 executor, "摘要执行器不能为空");
         this.redisTemplate = Objects.requireNonNull(
@@ -144,44 +103,49 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         if (inFlight.putIfAbsent(appId, flight) != null) {
             return;
         }
-        AppDataLifecycleFence.WriterPermit writerPermit =
-                lifecycleFence.tryAcquireWriter(appId);
-        if (writerPermit == null) {
-            completeFlight(appId, flight, result(
-                    MemoryCompressionResult.Status.DELETE_REJECTED,
-                    0L, 0, "应用删除流程已接管"));
-            return;
-        }
+        AppDataLifecycleFence.WriterPermit writerPermit = null;
+        MemoryCompressionResult completion = null;
+        boolean ownershipTransferred = false;
         try {
+            writerPermit = lifecycleFence.tryAcquireWriter(appId);
+            if (writerPermit == null) {
+                completion = result(
+                        MemoryCompressionResult.Status.DELETE_REJECTED,
+                        0L, 0, "应用删除流程已接管");
+                return;
+            }
+            AppDataLifecycleFence.WriterPermit taskPermit = writerPermit;
             executor.submit(() -> runBackgroundCompression(
-                    appId, summarizeThroughId, flight, writerPermit));
+                    appId, summarizeThroughId, flight, taskPermit));
+            ownershipTransferred = true;
+            writerPermit = null;
         } catch (RuntimeException exception) {
-            MemoryCompressionResult failure = result(
+            completion = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "摘要任务提交失败");
-            try (writerPermit) {
+            if (writerPermit != null) {
                 try {
-                    failure = recordFailure(
+                    completion = recordFailure(
                             appId,
                             selectCurrentSummary(appId),
                             MemoryCompressionResult.Status.MODEL_FAILED,
                             "摘要任务提交失败");
                 } catch (RuntimeException metadataException) {
-                    retryAfter.put(appId,
-                            clock.instant().plus(RETRY_BASE_DELAY));
                     log.error("记录摘要提交失败元数据异常 appId={} type={}",
                             appId,
                             metadataException.getClass().getSimpleName(),
                             metadataException);
                 }
-            } catch (RuntimeException closeException) {
-                log.error("释放摘要写许可异常 appId={} type={}", appId,
-                        closeException.getClass().getSimpleName(),
-                        closeException);
-            } finally {
-                log.warn("提交摘要任务失败 appId={} type={}",
-                        appId, exception.getClass().getSimpleName());
-                completeFlight(appId, flight, failure);
+            }
+            log.warn("启动摘要任务失败 appId={} type={}",
+                    appId, exception.getClass().getSimpleName());
+        } finally {
+            if (!ownershipTransferred) {
+                try {
+                    closeWriterPermit(appId, writerPermit);
+                } finally {
+                    finishFlight(appId, flight, completion);
+                }
             }
         }
     }
@@ -229,21 +193,31 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             return new CompressionAttempt(
                     awaitExistingFlight(existing, deadlineNanos), true);
         }
-        MemoryCompressionResult compressionResult;
-        AppDataLifecycleFence.WriterPermit writerPermit =
-                lifecycleFence.tryAcquireWriter(appId);
-        if (writerPermit == null) {
-            compressionResult = result(
-                    MemoryCompressionResult.Status.DELETE_REJECTED,
-                    0L, 0, "应用删除流程已接管");
-        } else {
-            try (writerPermit) {
-                compressionResult = compressWithinPermit(
-                        appId, summarizeThroughId, deadlineNanos);
+        MemoryCompressionResult compressionResult = null;
+        try {
+            AppDataLifecycleFence.WriterPermit writerPermit =
+                    lifecycleFence.tryAcquireWriter(appId);
+            if (writerPermit == null) {
+                compressionResult = result(
+                        MemoryCompressionResult.Status.DELETE_REJECTED,
+                        0L, 0, "应用删除流程已接管");
+            } else {
+                try (writerPermit) {
+                    compressionResult = compressWithinPermit(
+                            appId, summarizeThroughId, deadlineNanos);
+                }
             }
+            return new CompressionAttempt(compressionResult, false);
+        } catch (RuntimeException exception) {
+            log.error("同步摘要 owner 异常 appId={} type={}", appId,
+                    exception.getClass().getSimpleName(), exception);
+            compressionResult = result(
+                    MemoryCompressionResult.Status.MODEL_FAILED,
+                    0L, 0, "同步摘要任务异常");
+            return new CompressionAttempt(compressionResult, false);
+        } finally {
+            finishFlight(appId, flight, compressionResult);
         }
-        completeFlight(appId, flight, compressionResult);
-        return new CompressionAttempt(compressionResult, false);
     }
 
     private boolean canContinueAfterEarlierFlight(
@@ -270,7 +244,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             long summarizeThroughId,
             CompletableFuture<MemoryCompressionResult> flight,
             AppDataLifecycleFence.WriterPermit writerPermit) {
-        MemoryCompressionResult compressionResult;
+        MemoryCompressionResult compressionResult = null;
         try (writerPermit) {
             compressionResult = compressWithinPermit(
                     appId,
@@ -282,8 +256,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             compressionResult = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "后台摘要任务异常");
+        } finally {
+            finishFlight(appId, flight, compressionResult);
         }
-        completeFlight(appId, flight, compressionResult);
     }
 
     private MemoryCompressionResult compressWithinPermit(
@@ -291,7 +266,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         AppMemorySummary current = null;
         try {
             current = selectCurrentSummary(appId);
-            DraftResult draft = buildDraft(
+            MemorySummaryDraftEngine.DraftResult draft = draftEngine.buildDraft(
                     appId, summarizeThroughId, current, deadlineNanos);
             if (draft.failureStatus() != null) {
                 return recordFailure(appId, current,
@@ -319,172 +294,6 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         }
     }
 
-    private DraftResult buildDraft(
-            Long appId,
-            long summarizeThroughId,
-            AppMemorySummary current,
-            long deadlineNanos) {
-        long persistedCursor = currentCursor(current);
-        String oldSummary = current == null
-                ? "" : StrUtil.nullToEmpty(current.getSummary());
-        RollingSummaryAccumulator accumulator =
-                new RollingSummaryAccumulator(
-                        appId, oldSummary, persistedCursor, deadlineNanos);
-        accumulator.initialize();
-        if (accumulator.hasFailed()) {
-            return accumulator.finish();
-        }
-        long scanCursor = persistedCursor;
-        ChatHistory pendingUser = null;
-        boolean boundaryReached = false;
-        while (scanCursor < summarizeThroughId && !boundaryReached) {
-            if (isDeadlineExpired(deadlineNanos)) {
-                accumulator.fail(MemoryCompressionResult.Status.TIMED_OUT,
-                        "摘要截止时间已到");
-                break;
-            }
-            List<ChatHistory> rows = chatHistoryService
-                    .listMessagesAfterCursor(
-                            appId, scanCursor, HISTORY_QUERY_BATCH_SIZE);
-            if (rows == null) {
-                accumulator.fail(MemoryCompressionResult.Status.MODEL_FAILED,
-                        "数据库返回了空历史批次");
-                break;
-            }
-            if (rows.isEmpty()) {
-                break;
-            }
-            long previousCursor = scanCursor;
-            for (ChatHistory row : rows) {
-                long rowId = requireNextHistoryId(row, scanCursor);
-                if (rowId > summarizeThroughId) {
-                    boundaryReached = true;
-                    break;
-                }
-                scanCursor = rowId;
-                if (isUserMessage(row)) {
-                    pendingUser = row;
-                } else if (isAiMessage(row) && pendingUser != null) {
-                    accumulator.accept(new SummaryTurn(pendingUser, row));
-                    pendingUser = null;
-                    if (accumulator.hasFailed()) {
-                        break;
-                    }
-                } else {
-                    pendingUser = null;
-                }
-            }
-            if (accumulator.hasFailed() || boundaryReached
-                    || rows.size() < HISTORY_QUERY_BATCH_SIZE) {
-                break;
-            }
-            if (scanCursor <= previousCursor) {
-                accumulator.fail(MemoryCompressionResult.Status.MODEL_FAILED,
-                        "历史游标没有向前推进");
-                break;
-            }
-        }
-        return accumulator.finish();
-    }
-
-    private long requireNextHistoryId(ChatHistory history, long scanCursor) {
-        if (history == null || history.getId() == null
-                || history.getId() <= scanCursor) {
-            throw new IllegalStateException("历史消息 ID 顺序无效");
-        }
-        return history.getId();
-    }
-
-    private ModelOutput generateAndReduce(
-            Long appId,
-            String oldSummary,
-            String newMessages,
-            long deadlineNanos) {
-        String prompt = MemorySummaryPromptBuilder.build(
-                oldSummary,
-                newMessages,
-                properties.getL1MaxSummaryTokens());
-        if (!isPromptWithinInputBudget(prompt)) {
-            return ModelOutput.failure(
-                    MemoryCompressionResult.Status.MODEL_FAILED,
-                    "摘要模型输入超过硬上限");
-        }
-        ModelOutput generated = callModel(appId, prompt, deadlineNanos);
-        if (generated.failureStatus() != null) {
-            return generated;
-        }
-        return reduceToLimit(appId, generated.summary(), deadlineNanos);
-    }
-
-    private ModelOutput reduceToLimit(
-            Long appId, String sourceSummary, long deadlineNanos) {
-        String current = sourceSummary;
-        int currentTokens = tokenEstimator.estimateText(current);
-        while (currentTokens > properties.getL1MaxSummaryTokens()) {
-            if (isDeadlineExpired(deadlineNanos)) {
-                return ModelOutput.failure(
-                        MemoryCompressionResult.Status.TIMED_OUT,
-                        "摘要压缩截止时间已到");
-            }
-            String prompt = SummaryCompressionPromptBuilder.build(
-                    current, properties.getL1MaxSummaryTokens());
-            if (!isPromptWithinInputBudget(prompt)) {
-                return ModelOutput.failure(
-                        MemoryCompressionResult.Status.OUTPUT_STILL_TOO_LARGE,
-                        "现有摘要过大，无法进入 reducer");
-            }
-            ModelOutput reduced = callModel(appId, prompt, deadlineNanos);
-            if (reduced.failureStatus() != null) {
-                return reduced;
-            }
-            int reducedTokens = tokenEstimator.estimateText(reduced.summary());
-            if (reduced.summary().equals(current)
-                    || reducedTokens >= currentTokens) {
-                return ModelOutput.failure(
-                        MemoryCompressionResult.Status.OUTPUT_STILL_TOO_LARGE,
-                        "摘要 reducer 未继续收敛");
-            }
-            current = reduced.summary();
-            currentTokens = reducedTokens;
-        }
-        return ModelOutput.success(current, currentTokens);
-    }
-
-    private ModelOutput callModel(
-            Long appId, String prompt, long deadlineNanos) {
-        if (isDeadlineExpired(deadlineNanos)) {
-            return ModelOutput.failure(
-                    MemoryCompressionResult.Status.TIMED_OUT,
-                    "摘要截止时间已到");
-        }
-        String output;
-        try {
-            output = summarizationModel.chat(prompt);
-        } catch (RuntimeException exception) {
-            log.error("摘要模型调用失败 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
-            return ModelOutput.failure(
-                    MemoryCompressionResult.Status.MODEL_FAILED,
-                    "摘要模型调用失败");
-        }
-        if (isDeadlineExpired(deadlineNanos)) {
-            return ModelOutput.failure(
-                    MemoryCompressionResult.Status.TIMED_OUT,
-                    "摘要模型返回时已超时");
-        }
-        if (StrUtil.isBlank(output)) {
-            return ModelOutput.failure(
-                    MemoryCompressionResult.Status.MODEL_FAILED,
-                    "摘要模型返回空内容");
-        }
-        return ModelOutput.success(output, tokenEstimator.estimateText(output));
-    }
-
-    private boolean isPromptWithinInputBudget(String prompt) {
-        return tokenEstimator.estimateText(prompt)
-                < properties.getHardInputLimit();
-    }
-
     private AppMemorySummary selectCurrentSummary(Long appId) {
         return summaryMapper.selectOneByQuery(
                 QueryWrapper.create().eq("appId", appId));
@@ -500,7 +309,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         try {
             if (current == null) {
                 LocalDateTime now = LocalDateTime.now(clock);
-                summaryMapper.insert(AppMemorySummary.builder()
+                int affectedRows = summaryMapper.insert(
+                        AppMemorySummary.builder()
                         .appId(appId)
                         .summary("")
                         .lastSummarizedId(0L)
@@ -509,10 +319,12 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                         .createTime(now)
                         .updateTime(now)
                         .build());
+                requireExactlyOneRow(affectedRows, "新增摘要失败元数据");
             } else {
                 current.setFailCount(failCount);
                 current.setUpdateTime(LocalDateTime.now(clock));
-                summaryMapper.update(current);
+                int affectedRows = summaryMapper.update(current);
+                requireExactlyOneRow(affectedRows, "更新摘要失败元数据");
             }
         } catch (RuntimeException exception) {
             log.error("记录摘要失败元数据异常 appId={} type={}", appId,
@@ -538,12 +350,13 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             long summarizedThroughId,
             int summaryTokens) {
         if (StrUtil.isBlank(summary)
-                || summaryTokens > properties.getL1MaxSummaryTokens()) {
+                || summaryTokens > MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS) {
             throw new IllegalStateException("摘要未满足 3K 落库门禁");
         }
         LocalDateTime now = LocalDateTime.now(clock);
         if (current == null) {
-            summaryMapper.insert(AppMemorySummary.builder()
+            int affectedRows = summaryMapper.insert(
+                    AppMemorySummary.builder()
                     .appId(appId)
                     .summary(summary)
                     .lastSummarizedId(summarizedThroughId)
@@ -552,8 +365,10 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     .createTime(now)
                     .updateTime(now)
                     .build());
+            requireExactlyOneRow(affectedRows, "新增摘要");
         } else {
-            summaryMapper.update(AppMemorySummary.builder()
+            int affectedRows = summaryMapper.update(
+                    AppMemorySummary.builder()
                     .id(current.getId())
                     .appId(current.getAppId())
                     .summary(summary)
@@ -564,12 +379,44 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     .updateTime(now)
                     .isDelete(current.getIsDelete())
                     .build());
+            requireExactlyOneRow(affectedRows, "更新摘要");
         }
         writeCache(CACHE_KEY_PREFIX + appId, summary);
     }
 
+    private void requireExactlyOneRow(int affectedRows, String operation) {
+        if (affectedRows != 1) {
+            throw new IllegalStateException(
+                    operation + "影响行数必须为 1，实际为 " + affectedRows);
+        }
+    }
+
     @Override
     public String getCurrentSummary(Long appId) {
+        if (appId == null || appId <= 0L) {
+            return "";
+        }
+        AppDataLifecycleFence.WriterPermit writerPermit;
+        try {
+            writerPermit = lifecycleFence.tryAcquireWriter(appId);
+        } catch (RuntimeException exception) {
+            log.warn("获取摘要读取许可失败 appId={} type={}", appId,
+                    exception.getClass().getSimpleName());
+            return "";
+        }
+        if (writerPermit == null) {
+            return "";
+        }
+        try (writerPermit) {
+            return readCurrentSummaryWithinPermit(appId);
+        } catch (RuntimeException exception) {
+            log.warn("释放摘要读取许可失败 appId={} type={}", appId,
+                    exception.getClass().getSimpleName());
+            return "";
+        }
+    }
+
+    private String readCurrentSummaryWithinPermit(Long appId) {
         String cacheKey = CACHE_KEY_PREFIX + appId;
         try {
             String cached = redisTemplate.opsForValue().get(cacheKey);
@@ -640,12 +487,34 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         }
     }
 
-    private void completeFlight(
+    private void closeWriterPermit(
+            Long appId,
+            AppDataLifecycleFence.WriterPermit writerPermit) {
+        if (writerPermit == null) {
+            return;
+        }
+        try {
+            writerPermit.close();
+        } catch (RuntimeException exception) {
+            log.error("释放摘要写许可异常 appId={} type={}", appId,
+                    exception.getClass().getSimpleName(), exception);
+        }
+    }
+
+    private void finishFlight(
             Long appId,
             CompletableFuture<MemoryCompressionResult> flight,
             MemoryCompressionResult compressionResult) {
-        flight.complete(compressionResult);
-        inFlight.remove(appId, flight);
+        try {
+            if (compressionResult == null) {
+                flight.completeExceptionally(new IllegalStateException(
+                        "摘要 owner 未产生可用结果"));
+            } else {
+                flight.complete(compressionResult);
+            }
+        } finally {
+            inFlight.remove(appId, flight);
+        }
     }
 
     private boolean isBackgroundRetryReady(Long appId) {
@@ -690,16 +559,6 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 StrUtil.nullToEmpty(current.getSummary()));
     }
 
-    private boolean isUserMessage(ChatHistory history) {
-        return ChatHistoryMessageTypeEnum.USER.getValue()
-                .equals(history.getMessageType());
-    }
-
-    private boolean isAiMessage(ChatHistory history) {
-        return ChatHistoryMessageTypeEnum.AI.getValue()
-                .equals(history.getMessageType());
-    }
-
     private void requirePositiveId(Long id, String name) {
         if (id == null || id <= 0L) {
             throw new IllegalArgumentException(name + " 必须为正数");
@@ -713,219 +572,6 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             String detail) {
         return new MemoryCompressionResult(
                 status, summarizedThroughId, summaryTokens, detail);
-    }
-
-    private static LegacyDefaults legacyDefaults() {
-        MemoryTokenProperties properties = new MemoryTokenProperties();
-        return new LegacyDefaults(
-                new ConservativeChatTokenEstimator(properties), properties);
-    }
-
-    private final class RollingSummaryAccumulator {
-
-        private final Long appId;
-        private final long persistedCursor;
-        private final long deadlineNanos;
-        private final List<SummaryTurn> batch = new ArrayList<>();
-        private String workingSummary;
-        private int workingTokens;
-        private long summarizedThroughId;
-        private boolean changed;
-        private MemoryCompressionResult.Status failureStatus;
-        private String failureDetail = "";
-
-        private RollingSummaryAccumulator(
-                Long appId,
-                String oldSummary,
-                long persistedCursor,
-                long deadlineNanos) {
-            this.appId = appId;
-            this.workingSummary = oldSummary;
-            this.persistedCursor = persistedCursor;
-            this.summarizedThroughId = persistedCursor;
-            this.deadlineNanos = deadlineNanos;
-        }
-
-        private void initialize() {
-            workingTokens = tokenEstimator.estimateText(workingSummary);
-            if (workingTokens <= properties.getL1MaxSummaryTokens()) {
-                return;
-            }
-            ModelOutput reduced = reduceToLimit(
-                    appId, workingSummary, deadlineNanos);
-            applyModelOutput(reduced);
-            if (!hasFailed()) {
-                changed = true;
-            }
-        }
-
-        private void accept(SummaryTurn turn) {
-            if (hasFailed()) {
-                return;
-            }
-            String candidateMessages = renderBatch(turn);
-            String prompt = MemorySummaryPromptBuilder.build(
-                    workingSummary,
-                    candidateMessages,
-                    properties.getL1MaxSummaryTokens());
-            if (isPromptWithinInputBudget(prompt)) {
-                batch.add(turn);
-                return;
-            }
-            if (batch.isEmpty()) {
-                fail(MemoryCompressionResult.Status.MODEL_FAILED,
-                        "单个完整回合超过摘要输入预算");
-                return;
-            }
-            flush();
-            if (hasFailed()) {
-                return;
-            }
-            String singleTurnPrompt = MemorySummaryPromptBuilder.build(
-                    workingSummary,
-                    turn.render(),
-                    properties.getL1MaxSummaryTokens());
-            if (!isPromptWithinInputBudget(singleTurnPrompt)) {
-                fail(MemoryCompressionResult.Status.MODEL_FAILED,
-                        "单个完整回合超过摘要输入预算");
-                return;
-            }
-            batch.add(turn);
-        }
-
-        private DraftResult finish() {
-            if (!hasFailed()) {
-                flush();
-            }
-            if (hasFailed()) {
-                return DraftResult.failure(
-                        persistedCursor,
-                        tokenEstimator.estimateText(workingSummary),
-                        failureStatus,
-                        failureDetail);
-            }
-            return DraftResult.success(
-                    workingSummary,
-                    summarizedThroughId,
-                    workingTokens,
-                    changed);
-        }
-
-        private void flush() {
-            if (batch.isEmpty() || hasFailed()) {
-                return;
-            }
-            ModelOutput output = generateAndReduce(
-                    appId,
-                    workingSummary,
-                    renderBatch(null),
-                    deadlineNanos);
-            applyModelOutput(output);
-            if (hasFailed()) {
-                return;
-            }
-            summarizedThroughId = batch.getLast().completedThroughId();
-            changed = true;
-            batch.clear();
-        }
-
-        private void applyModelOutput(ModelOutput output) {
-            if (output.failureStatus() != null) {
-                fail(output.failureStatus(), output.detail());
-                return;
-            }
-            workingSummary = output.summary();
-            workingTokens = output.tokens();
-        }
-
-        private String renderBatch(SummaryTurn additionalTurn) {
-            StringBuilder rendered = new StringBuilder();
-            for (SummaryTurn turn : batch) {
-                rendered.append(turn.render());
-            }
-            if (additionalTurn != null) {
-                rendered.append(additionalTurn.render());
-            }
-            return rendered.toString();
-        }
-
-        private boolean hasFailed() {
-            return failureStatus != null;
-        }
-
-        private void fail(
-                MemoryCompressionResult.Status status, String detail) {
-            failureStatus = status;
-            failureDetail = detail;
-        }
-    }
-
-    private record SummaryTurn(
-            long turnId,
-            long completedThroughId,
-            String userText,
-            String aiText) {
-
-        private SummaryTurn(ChatHistory user, ChatHistory ai) {
-            this(user.getId(), ai.getId(),
-                    StrUtil.nullToEmpty(user.getMessage()),
-                    StrUtil.nullToEmpty(ai.getMessage()));
-            if (turnId <= 0L || completedThroughId <= turnId) {
-                throw new IllegalArgumentException("完整回合 ID 边界无效");
-            }
-        }
-
-        private String render() {
-            return "用户:\n" + userText + "\nAI:\n" + aiText + "\n";
-        }
-    }
-
-    private record DraftResult(
-            String summary,
-            long summarizedThroughId,
-            int summaryTokens,
-            boolean changed,
-            MemoryCompressionResult.Status failureStatus,
-            String detail) {
-
-        private static DraftResult success(
-                String summary,
-                long summarizedThroughId,
-                int summaryTokens,
-                boolean changed) {
-            return new DraftResult(summary, summarizedThroughId,
-                    summaryTokens, changed, null, "");
-        }
-
-        private static DraftResult failure(
-                long persistedCursor,
-                int existingSummaryTokens,
-                MemoryCompressionResult.Status status,
-                String detail) {
-            return new DraftResult("", persistedCursor,
-                    existingSummaryTokens, false, status, detail);
-        }
-    }
-
-    private record ModelOutput(
-            String summary,
-            int tokens,
-            MemoryCompressionResult.Status failureStatus,
-            String detail) {
-
-        private static ModelOutput success(String summary, int tokens) {
-            return new ModelOutput(summary, tokens, null, "");
-        }
-
-        private static ModelOutput failure(
-                MemoryCompressionResult.Status status, String detail) {
-            return new ModelOutput("", 0, status, detail);
-        }
-    }
-
-    private record LegacyDefaults(
-            ChatTokenEstimator estimator,
-            MemoryTokenProperties properties) {
     }
 
     private record CompressionAttempt(

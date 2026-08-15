@@ -1,5 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
+import com.lyw.appgeneration.config.MemoryTokenProperties;
+
 import java.util.Objects;
 
 /** 构建只针对现有 L1 摘要的二次压缩提示词。 */
@@ -19,11 +21,10 @@ public final class SummaryCompressionPromptBuilder {
     private SummaryCompressionPromptBuilder() {
     }
 
-    public static String build(String summary, int maxSummaryTokens) {
+    public static String build(String summary) {
         Objects.requireNonNull(summary, "待压缩摘要不能为空");
-        if (maxSummaryTokens <= 0) {
-            throw new IllegalArgumentException("摘要 Token 上限必须大于 0");
-        }
-        return String.format(TEMPLATE, maxSummaryTokens, summary);
+        return String.format(TEMPLATE,
+                MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS,
+                summary);
     }
 }

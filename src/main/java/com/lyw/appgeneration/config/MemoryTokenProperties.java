@@ -13,8 +13,10 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "ai.memory.token")
 public class MemoryTokenProperties implements InitializingBean {
 
+    public static final int L1_MAX_SUMMARY_TOKENS = 3_072;
+
     private int l0RetainedTokens = 12_288;
-    private int l1MaxSummaryTokens = 3_072;
+    private int l1MaxSummaryTokens = L1_MAX_SUMMARY_TOKENS;
     private int l2MaxRecallTokens = 1_024;
     private int asyncCompressionThreshold = 28_672;
     private int blockingCompressionThreshold = 30_720;
@@ -28,7 +30,10 @@ public class MemoryTokenProperties implements InitializingBean {
     @Override
     public void afterPropertiesSet() {
         requirePositive(l0RetainedTokens, "L0 保留预算");
-        requirePositive(l1MaxSummaryTokens, "L1 摘要预算");
+        if (l1MaxSummaryTokens != L1_MAX_SUMMARY_TOKENS) {
+            throw new IllegalStateException(
+                    "L1 摘要预算必须严格等于 3072 Token");
+        }
         requirePositive(l2MaxRecallTokens, "L2 召回预算");
         requirePositive(asyncCompressionThreshold, "异步压缩阈值");
         requirePositive(blockingCompressionThreshold, "同步压缩阈值");

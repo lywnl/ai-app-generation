@@ -1,18 +1,21 @@
 package com.lyw.appgeneration.ai.memory;
 
-import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.UserMemoryService;
+import com.lyw.appgeneration.service.impl.MemorySummaryDraftEngine;
 import com.lyw.appgeneration.service.impl.MemorySummaryServiceImpl;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -68,6 +71,7 @@ class LayeredMemoryIntegrationTest {
     UserMemoryService userMemoryService; // L1 集成测试不验 L2,未表态(recallByApp→null)→L2 层跳过
 
     private MemorySummaryServiceImpl summaryService;
+    private ExecutorService modelExecutor;
     /** 内存 store 模拟 app_memory_summary 单行持久化。 */
     private final AtomicReference<AppMemorySummary> store = new AtomicReference<>();
 
@@ -84,10 +88,31 @@ class LayeredMemoryIntegrationTest {
             return 1;
         });
         when(redisTemplate.opsForValue()).thenReturn(valueOps); // 缓存未命中(get→null)→回退 store(MySQL mock)
+        modelExecutor = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor();
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        ChatTokenEstimator tokenEstimator =
+                new ConservativeChatTokenEstimator(properties);
+        MemorySummaryDraftEngine draftEngine = new MemorySummaryDraftEngine(
+                chatHistoryService,
+                summarizationModel,
+                modelExecutor,
+                tokenEstimator,
+                properties);
         // 直接构造真实摘要服务，外部模型、数据库和 Redis 保持 mock。
-        summaryService = new MemorySummaryServiceImpl(chatHistoryService, summaryMapper, summarizationModel,
-                mock(ExecutorService.class), redisTemplate,
-                new AppDataLifecycleFence());
+        summaryService = new MemorySummaryServiceImpl(
+                summaryMapper,
+                draftEngine,
+                mock(ExecutorService.class),
+                redisTemplate,
+                new AppDataLifecycleFence(),
+                tokenEstimator,
+                properties);
+    }
+
+    @AfterEach
+    void tearDown() {
+        modelExecutor.shutdownNow();
     }
 
     private ChatHistory msg(long id, String type, String text) {
