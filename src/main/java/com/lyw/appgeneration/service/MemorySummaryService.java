@@ -40,5 +40,12 @@ public interface MemorySummaryService {
      */
     String getCurrentSummary(Long appId);
 
+    /**
+     * 读取 L1 已确认覆盖到的 chat_history.id；尚无摘要时返回 0。
+     *
+     * <p>该游标决定冷启动与 L0 裁剪边界，读取失败必须向调用方传播。</p>
+     */
+    long lastSummarizedId(Long appId);
+
     MemoryCacheInvalidationResult invalidateCache(Long appId);
 }

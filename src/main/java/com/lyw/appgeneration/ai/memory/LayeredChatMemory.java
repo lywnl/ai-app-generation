@@ -40,6 +40,11 @@ public class LayeredChatMemory implements ChatMemory {
         return delegate.id();
     }
 
+    /** 为职责更窄的分层记忆子类提供稳定的 L0 扩展点。 */
+    protected final ChatMemory delegateMemory() {
+        return delegate;
+    }
+
     @Override
     public void add(ChatMessage message) {
         delegate.add(message);

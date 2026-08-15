@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.MockMakers.INLINE;
@@ -660,6 +661,44 @@ class MemorySummaryServiceImplTest {
                         .summary("# 应用目标\n降级读取").build());
 
         assertEquals("# 应用目标\n降级读取", service.getCurrentSummary(1L));
+    }
+
+    @Test
+    void lastSummarizedIdReadsPersistedCursorWithoutUsingSummaryCache() {
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(
+                currentSummary(42L, "旧摘要", 800, 0));
+
+        long cursor = service.lastSummarizedId(1L);
+
+        assertEquals(42L, cursor);
+        verifyNoInteractions(valueOps);
+    }
+
+    @Test
+    void lastSummarizedIdFailsClosedWhenDeletionHasTombstonedApp() {
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(1L, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.commitTombstone();
+
+        assertThrows(IllegalStateException.class,
+                () -> service.lastSummarizedId(1L));
+        verifyNoInteractions(summaryMapper, valueOps);
+    }
+
+    @Test
+    void lastSummarizedIdDatabaseFailureIsPropagatedWithCursorContext() {
+        IllegalStateException databaseFailure =
+                new IllegalStateException("database down");
+        when(summaryMapper.selectOneByQuery(any()))
+                .thenThrow(databaseFailure);
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> service.lastSummarizedId(1L));
+
+        assertTrue(thrown.getMessage().contains("摘要游标"));
+        assertSame(databaseFailure, thrown.getCause());
     }
 
     @Test

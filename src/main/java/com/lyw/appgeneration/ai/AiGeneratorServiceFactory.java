@@ -4,7 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.lyw.appgeneration.ai.guardrail.PromptSafetyInputGuardrail;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
-import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
+import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.ai.tools.*;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
@@ -142,7 +142,8 @@ public class AiGeneratorServiceFactory {
      * 创建新的 AI 服务实例
      */
     private AiCodeGeneratorService createAiCodeGeneratorService(long appId, CodeGenTypeEnum codeGenType) {
-        LayeredChatMemory chatMemory = createOnlineChatMemory(appId, codeGenType);
+        CompressionAwareChatMemory chatMemory = createOnlineChatMemory(
+                appId, codeGenType);
         // 根据代码生成类型选择不同的模型配置
         return switch (codeGenType) {
             // Vue 项目生成使用推理模型
@@ -178,7 +179,7 @@ public class AiGeneratorServiceFactory {
     }
 
     /** 按固定装饰顺序创建在线 L0/L1/L2 记忆，并从 MySQL 重建完整回合。 */
-    LayeredChatMemory createOnlineChatMemory(
+    CompressionAwareChatMemory createOnlineChatMemory(
             long appId, CodeGenTypeEnum codeGenType) {
         // MessageWindow 只保留 Redis store 和工具对一致性，不再按消息条数淘汰。
         MessageWindowChatMemory delegate = MessageWindowChatMemory
@@ -190,9 +191,21 @@ public class AiGeneratorServiceFactory {
         TokenAwareChatMemory tokenAwareMemory =
                 new TokenAwareChatMemory(delegate);
         // 冷启动按完整回合回填到 30K；L1/L2 由最外层装饰器注入。
+        long lastSummarizedId;
+        try {
+            lastSummarizedId = memorySummaryService.lastSummarizedId(appId);
+        } catch (RuntimeException exception) {
+            recordVueColdRebuild(
+                    VueBuildRepairMetricsCollector.MemoryResult.FAILED,
+                    codeGenType);
+            throw new IllegalStateException(
+                    "读取 L1 摘要游标失败，无法重建 L0，appId=" + appId,
+                    exception);
+        }
         ChatHistoryService.HistoryLoadResult historyLoad =
                 chatHistoryService.loadRecentCompleteTurnsToMemory(
                         appId,
+                        lastSummarizedId,
                         tokenAwareMemory,
                         memoryTokenProperties.getBlockingCompressionThreshold(),
                         chatTokenEstimator);
@@ -205,7 +218,7 @@ public class AiGeneratorServiceFactory {
                 == ChatHistoryService.HistoryLoadStatus.EMPTY
                 ? VueBuildRepairMetricsCollector.MemoryResult.EMPTY
                 : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
-        return new LayeredChatMemory(
+        return new CompressionAwareChatMemory(
                 tokenAwareMemory, memorySummaryService, userMemoryService);
     }
 

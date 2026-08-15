@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.ai.memory;
 
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
@@ -11,10 +10,10 @@ import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * 为 L0 的读取、追加和已完成前缀替换提供同一把锁。
+ * 为 L0 的读取、追加和已完成前缀删除提供同一把锁。
  *
  * <p>该装饰器不会在 {@link #messages()} 时自动裁剪。只有 L1 摘要成功落库后，
- * 协调器才调用 {@link #replaceCompletedPrefix(List)}，保证先摘要、后裁剪。</p>
+ * 协调器才调用 {@link #removeCompletedPrefixIfMatches(List)}，保证先摘要、后裁剪。</p>
  */
 public class TokenAwareChatMemory implements ChatMemory {
 
@@ -62,33 +61,54 @@ public class TokenAwareChatMemory implements ChatMemory {
     }
 
     /**
-     * 用新的稳定完整回合替换旧前缀，同时保留系统前缀和当前未完成回合。
+     * 仅当任务启动时确认的旧完整前缀仍原样存在时删除它。
+     *
+     * <p>删除在追加消息共用的锁内完成，晚于快照追加的完整回合、工具消息和
+     * 当前未完成回合都不会被旧快照覆盖。</p>
+     *
+     * @return 前缀匹配并完成删除时返回 {@code true}
      */
-    public void replaceCompletedPrefix(
-            List<ChatMessage> retainedCompletedMessages) {
-        List<ChatMessage> retained = List.copyOf(Objects.requireNonNull(
-                retainedCompletedMessages, "保留消息不能为空"));
+    public boolean removeCompletedPrefixIfMatches(
+            List<ChatMessage> expectedPrefix) {
+        List<ChatMessage> expected = List.copyOf(Objects.requireNonNull(
+                expectedPrefix, "待删除前缀不能为空"));
+        if (expected.isEmpty()) {
+            return true;
+        }
+        if (!isCompleteTurnSequence(expected)) {
+            return false;
+        }
         memoryLock.lock();
         try {
             List<ChatMessage> current = List.copyOf(delegate.messages());
             int firstUser = firstUserIndex(current);
-            if (firstUser < 0) {
-                return;
+            int expectedEnd = firstUser + expected.size();
+            if (firstUser < 0 || expectedEnd > current.size()
+                    || !current.subList(firstUser, expectedEnd)
+                    .equals(expected)) {
+                return false;
             }
-            int unfinishedTail = unfinishedTailStart(current);
             List<ChatMessage> replacement = new ArrayList<>(
-                    firstUser + retained.size()
-                            + Math.max(0, current.size() - unfinishedTail));
+                    current.size() - expected.size());
             replacement.addAll(current.subList(0, firstUser));
-            replacement.addAll(retained);
-            if (unfinishedTail < current.size()) {
-                replacement.addAll(current.subList(
-                        unfinishedTail, current.size()));
-            }
+            replacement.addAll(current.subList(expectedEnd, current.size()));
             delegate.clear();
             delegate.add(replacement);
+            return true;
         } finally {
             memoryLock.unlock();
+        }
+    }
+
+    private boolean isCompleteTurnSequence(List<ChatMessage> messages) {
+        try {
+            ConversationTurnSnapshotParser.Snapshot snapshot =
+                    new ConversationTurnSnapshotParser().parse(messages);
+            return snapshot.leadingMessages().isEmpty()
+                    && snapshot.unfinishedTail().isEmpty()
+                    && !snapshot.completedTurns().isEmpty();
+        } catch (IllegalArgumentException exception) {
+            return false;
         }
     }
 
@@ -101,27 +121,4 @@ public class TokenAwareChatMemory implements ChatMemory {
         return -1;
     }
 
-    private int unfinishedTailStart(List<ChatMessage> messages) {
-        int lastUser = -1;
-        for (int index = messages.size() - 1; index >= 0; index--) {
-            if (messages.get(index) instanceof UserMessage) {
-                lastUser = index;
-                break;
-            }
-        }
-        if (lastUser < 0 || hasTerminalAi(messages, lastUser)) {
-            return messages.size();
-        }
-        return lastUser;
-    }
-
-    private boolean hasTerminalAi(
-            List<ChatMessage> messages, int lastUser) {
-        if (lastUser + 1 >= messages.size()) {
-            return false;
-        }
-        ChatMessage last = messages.getLast();
-        return last instanceof AiMessage aiMessage
-                && !aiMessage.hasToolExecutionRequests();
-    }
 }

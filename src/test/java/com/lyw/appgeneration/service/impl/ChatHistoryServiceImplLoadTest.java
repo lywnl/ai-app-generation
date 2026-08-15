@@ -100,6 +100,50 @@ class ChatHistoryServiceImplLoadTest {
     }
 
     @Test
+    void coldLoadOnlyRestoresCompleteTurnsAfterL1Cursor() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(List.of(
+                message(6L, "新回复", "ai"),
+                message(5L, "新问题", "user"),
+                message(4L, "中回复", "ai"),
+                message(3L, "中问题", "user")))
+                .when(service).list(any(QueryWrapper.class));
+        var memory = MessageWindowChatMemory.withMaxMessages(
+                Integer.MAX_VALUE);
+
+        var result = service.loadRecentCompleteTurnsToMemory(
+                7L, 2L, memory, 30_720, fixedTurnEstimator(100));
+
+        assertEquals(HistoryLoadStatus.LOADED, result.status());
+        assertEquals(List.of("中问题", "中回复", "新问题", "新回复"),
+                messageTexts(memory.messages()));
+    }
+
+    @Test
+    void listsNewestStableTurnBoundariesInChronologicalOrder() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(List.of(
+                message(7L, "当前孤立问题", "user"),
+                message(6L, "新回复", "ai"),
+                message(5L, "新问题", "user"),
+                message(4L, "中回复", "ai"),
+                message(3L, "中问题", "user"),
+                message(2L, "旧回复", "ai"),
+                message(1L, "旧问题", "user")))
+                .when(service).list(any(QueryWrapper.class));
+
+        var boundaries = service.listRecentCompleteTurnBoundaries(7L, 2);
+
+        assertEquals(2, boundaries.size());
+        assertEquals(3L, boundaries.getFirst().turnId());
+        assertEquals(4L, boundaries.getFirst().completedThroughId());
+        assertEquals("中问题", boundaries.getFirst().userText());
+        assertEquals("中回复", boundaries.getFirst().aiText());
+        assertEquals(5L, boundaries.getLast().turnId());
+        assertEquals(6L, boundaries.getLast().completedThroughId());
+    }
+
+    @Test
     void ignoresUnclosedAndNonAdjacentRowsWhenLoadingAllHistory() {
         ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
         doReturn(List.of(

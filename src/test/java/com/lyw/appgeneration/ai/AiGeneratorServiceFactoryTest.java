@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.ai.tools.BaseTool;
@@ -170,29 +171,36 @@ class AiGeneratorServiceFactoryTest {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
         RedisChatMemoryStore redisStore = statefulRedisStore();
         ChatHistoryService history = mock(ChatHistoryService.class);
+        MemorySummaryService summary = mock(MemorySummaryService.class);
         ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
         MemoryTokenProperties properties = new MemoryTokenProperties();
         ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "chatTokenEstimator", estimator);
         ReflectionTestUtils.setField(factory, "memoryTokenProperties", properties);
-        ReflectionTestUtils.setField(factory, "memorySummaryService",
-                mock(MemorySummaryService.class));
+        ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
         ReflectionTestUtils.setField(factory, "userMemoryService",
                 mock(UserMemoryService.class));
         when(history.loadRecentCompleteTurnsToMemory(
                 any(), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.empty());
+        when(history.loadRecentCompleteTurnsToMemory(
+                any(), any(Long.class), any(), any(Integer.class), any()))
+                .thenReturn(ChatHistoryService.HistoryLoadResult.empty());
+        when(summary.lastSummarizedId(7L)).thenReturn(4L);
 
         LayeredChatMemory layered = factory.createOnlineChatMemory(
                 7L, CodeGenTypeEnum.HTML);
 
         ArgumentCaptor<ChatMemory> memoryCaptor =
                 ArgumentCaptor.forClass(ChatMemory.class);
+        verify(summary).lastSummarizedId(7L);
         verify(history).loadRecentCompleteTurnsToMemory(
-                eq(7L), memoryCaptor.capture(), eq(30_720), same(estimator));
+                eq(7L), eq(4L), memoryCaptor.capture(), eq(30_720),
+                same(estimator));
         ChatMemory l0 = memoryCaptor.getValue();
         assertInstanceOf(TokenAwareChatMemory.class, l0);
+        assertInstanceOf(CompressionAwareChatMemory.class, layered);
         assertEquals(7L, layered.id());
         for (int turn = 0; turn < 60; turn++) {
             layered.add(UserMessage.from("问题-" + turn));
@@ -208,17 +216,20 @@ class AiGeneratorServiceFactoryTest {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
         RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
         ChatHistoryService history = mock(ChatHistoryService.class);
+        MemorySummaryService summary = mock(MemorySummaryService.class);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
                 new VueBuildRepairMetricsCollector(registry));
         ReflectionTestUtils.setField(factory, "chatTokenEstimator",
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
+        when(summary.lastSummarizedId(7L)).thenReturn(0L);
         when(history.loadRecentCompleteTurnsToMemory(
-                any(), any(), any(Integer.class), any()))
+                any(), any(Long.class), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
 
         assertThrows(IllegalStateException.class, () -> factory
@@ -227,8 +238,37 @@ class AiGeneratorServiceFactoryTest {
                 .getAiCodeGeneratorService(7L, CodeGenTypeEnum.VUE_PROJECT));
 
         verify(history, times(2)).loadRecentCompleteTurnsToMemory(
-                any(), any(), any(Integer.class), any());
+                any(), any(Long.class), any(), any(Integer.class), any());
         assertEquals(2.0, registry.get("vue_memory_l0_sync_total")
+                .tags("action", "rebuild", "result", "failed")
+                .counter().count());
+    }
+
+    @Test
+    void cursorReadFailureClosesColdRebuildWithoutLoadingHistory() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        MemorySummaryService summary = mock(MemorySummaryService.class);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore",
+                mock(RedisChatMemoryStore.class));
+        ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
+        ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
+                new VueBuildRepairMetricsCollector(registry));
+        ReflectionTestUtils.setField(factory, "chatTokenEstimator",
+                mock(ChatTokenEstimator.class));
+        ReflectionTestUtils.setField(factory, "memoryTokenProperties",
+                new MemoryTokenProperties());
+        when(summary.lastSummarizedId(7L))
+                .thenThrow(new IllegalStateException("cursor read failed"));
+
+        assertThrows(IllegalStateException.class, () ->
+                factory.createOnlineChatMemory(7L,
+                        CodeGenTypeEnum.VUE_PROJECT));
+
+        verifyNoInteractions(history);
+        assertEquals(1.0, registry.get("vue_memory_l0_sync_total")
                 .tags("action", "rebuild", "result", "failed")
                 .counter().count());
     }
@@ -239,18 +279,21 @@ class AiGeneratorServiceFactoryTest {
             CodeGenTypeEnum codeGenType) {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
         ChatHistoryService history = mock(ChatHistoryService.class);
+        MemorySummaryService summary = mock(MemorySummaryService.class);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ReflectionTestUtils.setField(factory, "redisChatMemoryStore",
                 mock(RedisChatMemoryStore.class));
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
                 new VueBuildRepairMetricsCollector(registry));
         ReflectionTestUtils.setField(factory, "chatTokenEstimator",
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
+        when(summary.lastSummarizedId(7L)).thenReturn(0L);
         when(history.loadRecentCompleteTurnsToMemory(
-                any(), any(), any(Integer.class), any()))
+                any(), any(Long.class), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
 
         assertThrows(IllegalStateException.class, () -> factory

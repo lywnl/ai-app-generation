@@ -12,6 +12,7 @@ import dev.langchain4j.memory.ChatMemory;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 对话历史 服务层。
@@ -76,11 +77,43 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      * @param estimator 统一 Token 估算器
      * @return 加载状态和实际回填的消息条数
      */
-    HistoryLoadResult loadRecentCompleteTurnsToMemory(
+    default HistoryLoadResult loadRecentCompleteTurnsToMemory(
             Long appId,
             ChatMemory chatMemory,
             int blockingCompressionThreshold,
+            ChatTokenEstimator estimator) {
+        return loadRecentCompleteTurnsToMemory(appId, 0L, chatMemory,
+                blockingCompressionThreshold, estimator);
+    }
+
+    /**
+     * 只回填 L1 摘要游标之后的稳定完整回合。
+     */
+    HistoryLoadResult loadRecentCompleteTurnsToMemory(
+            Long appId,
+            long afterCursorId,
+            ChatMemory chatMemory,
+            int blockingCompressionThreshold,
             ChatTokenEstimator estimator);
+
+    /** 查询最近稳定完整回合边界，结果按时间正序返回。 */
+    List<StableTurnBoundary> listRecentCompleteTurnBoundaries(
+            Long appId, int maxTurns);
+
+    record StableTurnBoundary(
+            long turnId,
+            long completedThroughId,
+            String userText,
+            String aiText) {
+
+        public StableTurnBoundary {
+            if (turnId <= 0L || completedThroughId <= turnId) {
+                throw new IllegalArgumentException("稳定回合 ID 边界无效");
+            }
+            userText = Objects.requireNonNull(userText, "用户文本不能为空");
+            aiText = Objects.requireNonNull(aiText, "AI 文本不能为空");
+        }
+    }
 
     enum HistoryLoadStatus {
         LOADED,

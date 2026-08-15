@@ -460,6 +460,25 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         return summary;
     }
 
+    @Override
+    public long lastSummarizedId(Long appId) {
+        requirePositiveId(appId, "应用 ID");
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                lifecycleFence.tryAcquireWriter(appId);
+        if (writerPermit == null) {
+            throw new IllegalStateException("应用删除流程已接管，无法读取摘要游标");
+        }
+        try (writerPermit) {
+            try {
+                return currentCursor(selectCurrentSummary(appId));
+            } catch (RuntimeException exception) {
+                throw new IllegalStateException(
+                        "读取 L1 摘要游标失败，appId=" + appId,
+                        exception);
+            }
+        }
+    }
+
     private void writeCache(String cacheKey, String summary) {
         try {
             redisTemplate.opsForValue().set(cacheKey, summary, CACHE_TTL);

@@ -212,16 +212,31 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             ChatMemory chatMemory,
             int blockingCompressionThreshold,
             ChatTokenEstimator estimator) {
+        return loadRecentCompleteTurnsToMemory(appId, 0L, chatMemory,
+                blockingCompressionThreshold, estimator);
+    }
+
+    @Override
+    public HistoryLoadResult loadRecentCompleteTurnsToMemory(
+            Long appId,
+            long afterCursorId,
+            ChatMemory chatMemory,
+            int blockingCompressionThreshold,
+            ChatTokenEstimator estimator) {
         ThrowUtils.throwIf(appId == null || appId <= 0,
                 ErrorCode.PARAMS_ERROR, "应用ID不能为空");
         Objects.requireNonNull(chatMemory, "L0 ChatMemory 不能为空");
         Objects.requireNonNull(estimator, "Token 估算器不能为空");
+        if (afterCursorId < 0L) {
+            throw new IllegalArgumentException("L1 摘要游标不能为负数");
+        }
         if (blockingCompressionThreshold <= 0) {
             throw new IllegalArgumentException("阻塞压缩阈值必须大于 0");
         }
         try {
             CompleteTurnLoad load = readRecentCompleteTurns(
-                    appId, blockingCompressionThreshold, estimator);
+                    appId, afterCursorId,
+                    blockingCompressionThreshold, estimator);
             int loadedMessages = replaceColdMemory(chatMemory, load.turns());
             if (loadedMessages == 0) {
                 return HistoryLoadResult.empty();
@@ -237,6 +252,7 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
 
     private CompleteTurnLoad readRecentCompleteTurns(
             Long appId,
+            long afterCursorId,
             int tokenThreshold,
             ChatTokenEstimator estimator) {
         List<ConversationTurn> newestFirst = new ArrayList<>();
@@ -244,7 +260,8 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
         Long beforeId = null;
         long totalTokens = 0L;
         while (totalTokens < tokenThreshold) {
-            List<ChatHistory> batch = listRecentHistoryBatch(appId, beforeId);
+            List<ChatHistory> batch = listRecentHistoryBatch(
+                    appId, afterCursorId, beforeId);
             if (batch == null) {
                 throw new IllegalStateException("数据库返回了 null 历史批次");
             }
@@ -280,8 +297,10 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     private List<ChatHistory> listRecentHistoryBatch(
-            Long appId, Long beforeId) {
-        QueryWrapper query = QueryWrapper.create().eq("appId", appId);
+            Long appId, long afterCursorId, Long beforeId) {
+        QueryWrapper query = QueryWrapper.create()
+                .eq("appId", appId)
+                .gt("id", afterCursorId);
         if (beforeId != null) {
             query.lt("id", beforeId);
         }
@@ -336,6 +355,62 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     private boolean isAiMessage(ChatHistory history) {
         return history != null && ChatHistoryMessageTypeEnum.AI.getValue()
                 .equals(history.getMessageType());
+    }
+
+    @Override
+    public List<StableTurnBoundary> listRecentCompleteTurnBoundaries(
+            Long appId, int maxTurns) {
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用ID不能为空");
+        if (maxTurns <= 0) {
+            throw new IllegalArgumentException("稳定回合数量必须大于 0");
+        }
+        List<StableTurnBoundary> newestFirst = new ArrayList<>(maxTurns);
+        ChatHistory pendingAi = null;
+        Long beforeId = null;
+        while (newestFirst.size() < maxTurns) {
+            List<ChatHistory> batch = listRecentHistoryBatch(
+                    appId, 0L, beforeId);
+            if (batch == null) {
+                throw new IllegalStateException("数据库返回了 null 历史批次");
+            }
+            if (batch.isEmpty()) {
+                break;
+            }
+            long oldestId = requireDescendingBatchCursor(batch, beforeId);
+            for (ChatHistory history : batch) {
+                if (isAiMessage(history)) {
+                    pendingAi = history;
+                } else if (isUserMessage(history) && pendingAi != null) {
+                    newestFirst.add(toStableTurnBoundary(
+                            history, pendingAi));
+                    pendingAi = null;
+                    if (newestFirst.size() >= maxTurns) {
+                        break;
+                    }
+                } else {
+                    pendingAi = null;
+                }
+            }
+            if (newestFirst.size() >= maxTurns
+                    || batch.size() < COMPLETE_TURN_LOAD_BATCH_SIZE) {
+                break;
+            }
+            beforeId = oldestId;
+        }
+        Collections.reverse(newestFirst);
+        return List.copyOf(newestFirst);
+    }
+
+    private StableTurnBoundary toStableTurnBoundary(
+            ChatHistory user, ChatHistory ai) {
+        if (user.getId() == null || ai.getId() == null) {
+            throw new IllegalStateException("稳定回合 ID 不能为空");
+        }
+        return new StableTurnBoundary(
+                user.getId(), ai.getId(),
+                Objects.toString(user.getMessage(), ""),
+                Objects.toString(ai.getMessage(), ""));
     }
 
     private record CompleteTurnLoad(
