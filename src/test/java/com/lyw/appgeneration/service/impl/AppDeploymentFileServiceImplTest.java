@@ -7,6 +7,12 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,6 +45,95 @@ class AppDeploymentFileServiceImplTest {
                 target.resolve("index.html"), StandardCharsets.UTF_8));
         assertEquals("new-js", Files.readString(
                 target.resolve("assets/app.js"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void createsMissingTargetParentForFirstDeployment() throws Exception {
+        Path source = temporaryDirectory.resolve("source");
+        Path deployRoot = temporaryDirectory.resolve("deploy-root");
+        Path target = deployRoot.resolve("deploy-key");
+        Files.createDirectories(source);
+        Files.writeString(
+                source.resolve("index.html"), "content", StandardCharsets.UTF_8);
+
+        service.copyDirectory(source, target);
+
+        assertEquals("content", Files.readString(
+                target.resolve("index.html"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void rejectsSymbolicLinkTargetParentWithoutWritingOutside() throws Exception {
+        Path source = temporaryDirectory.resolve("source");
+        Path outsideTarget = temporaryDirectory.resolve("outside-target");
+        Path deployRootLink = temporaryDirectory.resolve("deploy-root");
+        Path target = deployRootLink.resolve("deploy-key");
+        Files.createDirectories(source);
+        Files.createDirectories(outsideTarget);
+        Files.writeString(
+                source.resolve("index.html"), "content", StandardCharsets.UTF_8);
+        Files.createSymbolicLink(deployRootLink, outsideTarget);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> service.copyDirectory(source, target));
+
+        assertEquals("部署目录拷贝失败", exception.getMessage());
+        assertFalse(Files.exists(outsideTarget.resolve("deploy-key")));
+    }
+
+    @Test
+    void rejectsRegularFileTargetParent() throws Exception {
+        Path source = temporaryDirectory.resolve("source");
+        Path deployRootFile = temporaryDirectory.resolve("deploy-root");
+        Path target = deployRootFile.resolve("deploy-key");
+        Files.createDirectories(source);
+        Files.writeString(deployRootFile, "not-a-directory", StandardCharsets.UTF_8);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> service.copyDirectory(source, target));
+
+        assertEquals("部署目录拷贝失败", exception.getMessage());
+    }
+
+    @Test
+    void supportsConcurrentFirstDeploymentsToMissingTargetParent() throws Exception {
+        int deploymentCount = 4;
+        Path deployRoot = temporaryDirectory.resolve("deploy-root");
+        CountDownLatch ready = new CountDownLatch(deploymentCount);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(deploymentCount);
+        List<Future<?>> deployments = new ArrayList<>();
+        try {
+            for (int index = 0; index < deploymentCount; index++) {
+                Path source = temporaryDirectory.resolve("source-" + index);
+                Path target = deployRoot.resolve("deploy-key-" + index);
+                Files.createDirectories(source);
+                Files.writeString(
+                        source.resolve("index.html"), "content-" + index,
+                        StandardCharsets.UTF_8);
+                deployments.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    service.copyDirectory(source, target);
+                    return null;
+                }));
+            }
+            ready.await();
+            start.countDown();
+            for (Future<?> deployment : deployments) {
+                deployment.get();
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        for (int index = 0; index < deploymentCount; index++) {
+            assertEquals("content-" + index, Files.readString(
+                    deployRoot.resolve("deploy-key-" + index).resolve("index.html"),
+                    StandardCharsets.UTF_8));
+        }
     }
 
     @Test

@@ -4,10 +4,26 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 class WebScreenshotUtilsPathResolveTest {
+
+    private static final String MAC_OS_GOOGLE_CHROME_PATH =
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+    @Test
+    void defaultCandidates_shouldIncludeMacOsGoogleChrome() throws Exception {
+        Field candidatesField = WebScreenshotUtils.class.getDeclaredField(
+                "CHROME_BINARY_CANDIDATES");
+        candidatesField.setAccessible(true);
+        String[] candidates = (String[]) candidatesField.get(null);
+
+        Assertions.assertTrue(
+                Arrays.asList(candidates).contains(MAC_OS_GOOGLE_CHROME_PATH));
+    }
 
     @Test
     void resolveExecutablePath_shouldReturnExplicitPathWhenExists() throws IOException {

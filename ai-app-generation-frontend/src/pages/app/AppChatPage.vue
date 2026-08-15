@@ -1073,7 +1073,7 @@ onUnmounted(() => {
   flex: 0.9;
   padding: 16px;
   overflow-y: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 .message-item {

@@ -197,6 +197,18 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- 本地数据库连接不得继承 macOS 系统代理，避免 PG JDBC 误走 SOCKS。 -->
+                    <jvmArguments>
+                        -Djava.net.useSystemProxies=false
+                        -Dhttp.proxyHost=
+                        -Dhttp.proxyPort=
+                        -Dhttps.proxyHost=
+                        -Dhttps.proxyPort=
+                        -DsocksProxyHost=
+                        -DsocksProxyPort=
+                    </jvmArguments>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

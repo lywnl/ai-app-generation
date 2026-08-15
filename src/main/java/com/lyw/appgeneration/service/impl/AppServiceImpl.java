@@ -638,8 +638,17 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 ErrorCode.OPERATION_ERROR, "更新部署失败");
         String formatUrl = String.format(
                 "%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
-        generateAppScreenshotAsync(app.getId(), formatUrl);
+        tryGenerateAppScreenshot(app.getId(), formatUrl);
         return formatUrl;
+    }
+
+    private void tryGenerateAppScreenshot(Long appId, String appUrl) {
+        try {
+            generateAppScreenshotAsync(appId, appUrl);
+        } catch (RuntimeException exception) {
+            log.warn("应用部署成功，但封面截图生成失败，保留部署结果: appId={}, appUrl={}",
+                    appId, appUrl, exception);
+        }
     }
 
     private Path buildVueDeployment(

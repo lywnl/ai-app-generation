@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
@@ -73,6 +74,7 @@ public class AppDeploymentFileServiceImpl implements AppDeploymentFileService {
         Path target = normalizeLeaf(deployDirectory, "部署目录");
         rejectSymbolicLink(source);
         requireDirectory(source);
+        ensureTargetParentDirectory(target);
         rejectSymbolicLink(target);
         if (Files.notExists(target, LinkOption.NOFOLLOW_LINKS)) {
             Files.createDirectory(target);
@@ -92,6 +94,20 @@ public class AppDeploymentFileServiceImpl implements AppDeploymentFileService {
             handlesOpenedHook.run();
             copyEntries(sourceRoot, targetRoot, entries);
         }
+    }
+
+    private void ensureTargetParentDirectory(Path target) throws IOException {
+        Path targetParent = target.getParent();
+        rejectSymbolicLink(targetParent);
+        if (Files.notExists(targetParent, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(targetParent);
+            } catch (FileAlreadyExistsException ignored) {
+                // 允许不同应用首次并发部署时，由另一个线程先创建部署根目录。
+            }
+        }
+        rejectSymbolicLink(targetParent);
+        requireDirectory(targetParent);
     }
 
     private List<EntrySnapshot> prepareDirectorySkeleton(

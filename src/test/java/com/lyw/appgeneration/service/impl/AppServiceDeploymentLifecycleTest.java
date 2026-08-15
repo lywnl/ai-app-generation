@@ -24,13 +24,13 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -244,6 +244,28 @@ class AppServiceDeploymentLifecycleTest {
         leaseManager.acquire(
                 APP_ID, AppOperationLeaseManager.AppOperationType.DEPLOY,
                 "after-success").close();
+    }
+
+    @Test
+    void screenshotFailureDoesNotTurnSuccessfulDeploymentIntoFailure() {
+        doReturn(vueApp(USER_ID)).when(service).getById(APP_ID);
+        when(builder.buildProjectDetailed(eq(sourceDirectory), any()))
+                .thenReturn(new BuildResult(
+                        true, BuildStage.SUCCESS, 0, false, "ok", 10L));
+        when(screenshotService.generateAndUploadScreenshot(anyString()))
+                .thenThrow(new BusinessException(
+                        com.lyw.appgeneration.exception.ErrorCode.SYSTEM_ERROR,
+                        "初始化 Chrome 浏览器失败"));
+
+        String url = service.deployApp(APP_ID, loginUser());
+
+        assertEquals("http://lllyw.cn/" + DEPLOY_KEY + "/", url);
+        verify(deploymentFileService).copyDirectory(
+                sourceDirectory.resolve("dist"), deployDirectory);
+        verify(screenshotService).generateAndUploadScreenshot(url);
+        leaseManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.DEPLOY,
+                "after-screenshot-failure").close();
     }
 
     @Test

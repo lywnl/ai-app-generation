@@ -116,7 +116,7 @@ rag:
   hybrid:
     enabled: false
   # 模板库根目录(文件系统路径,非 classpath)
-  templates-dir: D:/ai-app-generation/embed_text
+  templates-dir: ${RAG_TEMPLATES_DIR:embed_text}
   ingest:
     enabled: false            # 只在策展变化时手动改 true 跑一次
   pgvector:
