@@ -1,5 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
+import dev.langchain4j.service.ModelRequestGate;
+
 import java.util.Objects;
 
 /**
@@ -16,8 +18,10 @@ import java.util.Objects;
  * 实际模型请求与任务 6 的完成事件仍必须再次通过同一个真实回调门。</p>
  */
 @FunctionalInterface
-public interface ContextContinuationGate {
+public interface ContextContinuationGate
+        extends ModelRequestGate.ContinuationGate {
 
+    @Override
     boolean tryRun(Runnable action);
 
     static ContextContinuationGate alwaysOpen() {

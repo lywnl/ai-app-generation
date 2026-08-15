@@ -3,6 +3,7 @@ package dev.langchain4j.service;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.guardrail.ChatExecutor;
 import dev.langchain4j.internal.Json;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
@@ -21,7 +22,9 @@ import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -57,6 +60,268 @@ class AiServiceStreamingResponseHandlerTest {
             "message":"工具内容超过本轮资源上限",
             "failureReason":"RESOURCE_LIMIT_EXCEEDED","content":null}
             """;
+
+    @Test
+    void 工具续调用必须等待门禁完成且等待期间释放当前模型回调票据() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        CompletableFuture<ModelRequestGate.Decision> preparation =
+                new CompletableFuture<>();
+        AtomicReference<ModelRequestGate.Request> gateRequest =
+                new AtomicReference<>();
+        ModelRequestGate gate = request -> {
+            gateRequest.set(request);
+            return preparation;
+        };
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, gate, action -> {
+                    action.run();
+                    return true;
+                }, error -> fail("不应触发错误回调", error));
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("large-tool", "writeFile")));
+
+        assertEquals(0, model.chatInvocations,
+                "工具结果加入后必须先等待统一门禁");
+        assertTrue(controller.awaitQuiescence(
+                        java.time.Duration.ofMillis(100)),
+                "prepare 返回后必须立即释放当前 SDK callback 票据");
+        assertSame(memory, gateRequest.get().latestMemory().get());
+
+        List<ChatMessage> compressedMessages = List.of(
+                UserMessage.from("压缩后的工具上下文"));
+        preparation.complete(new ModelRequestGate.Decision(
+                ModelRequestGate.Status.ALLOWED,
+                compressedMessages,
+                12_000,
+                ""));
+
+        assertEquals(1, model.chatInvocations);
+        assertEquals(compressedMessages, model.lastChatRequest.messages());
+    }
+
+    @Test
+    void 已完成门禁结果也必须先释放旧模型回调票据再续调() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        AtomicBoolean oldCallbackReleased = new AtomicBoolean();
+        ModelRequestGate gate = request -> CompletableFuture.completedFuture(
+                allowed(request.latestMemory().get().messages()));
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, gate, action -> {
+                    oldCallbackReleased.set(controller.awaitQuiescence(
+                            java.time.Duration.ZERO));
+                    action.run();
+                    return true;
+                }, error -> fail("不应触发错误回调", error));
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("completed-gate-tool", "writeFile")));
+
+        assertTrue(oldCallbackReleased.get(),
+                "即使 prepare 返回已完成 Future，也必须先退出旧 SDK callback");
+        assertEquals(1, model.chatInvocations);
+    }
+
+    @Test
+    void 完成回调调度被拒绝时不得续调且失败只收口一次() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        AtomicInteger continuationCalls = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        AtomicBoolean errorAfterCallbackReleased = new AtomicBoolean();
+        ModelRequestGate gate = new ModelRequestGate() {
+            @Override
+            public java.util.concurrent.CompletionStage<Decision> prepare(
+                    Request request) {
+                return CompletableFuture.completedFuture(
+                        allowed(request.latestMemory().get().messages()));
+            }
+
+            @Override
+            public java.util.concurrent.CompletionStage<DispatchStatus> onPrepared(
+                    java.util.concurrent.CompletionStage<Decision> preparation,
+                    java.util.function.BiConsumer<Decision, Throwable> completion) {
+                return CompletableFuture.completedFuture(
+                        DispatchStatus.REJECTED);
+            }
+        };
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, gate, action -> {
+                    continuationCalls.incrementAndGet();
+                    action.run();
+                    return true;
+                }, error -> {
+                    errors.incrementAndGet();
+                    errorAfterCallbackReleased.set(controller.awaitQuiescence(
+                            java.time.Duration.ZERO));
+                });
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("rejected-dispatch-tool", "writeFile")));
+
+        assertEquals(0, continuationCalls.get());
+        assertEquals(0, model.chatInvocations);
+        assertEquals(1, errors.get());
+        assertTrue(errorAfterCallbackReleased.get(),
+                "调度拒绝只能在旧 SDK callback 票据释放后收口失败");
+    }
+
+    @Test
+    void 门禁同步提交失败只在旧模型回调票据释放后派发() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        AtomicInteger errors = new AtomicInteger();
+        AtomicBoolean errorAfterCallbackReleased = new AtomicBoolean();
+        ModelRequestGate gate = request -> {
+            throw new IllegalStateException("门禁提交失败");
+        };
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, gate, action -> {
+                    fail("门禁提交失败后不得执行续调用");
+                    return false;
+                }, error -> {
+                    errors.incrementAndGet();
+                    errorAfterCallbackReleased.set(controller.awaitQuiescence(
+                            java.time.Duration.ZERO));
+                });
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("failed-prepare-tool", "writeFile")));
+
+        assertEquals(1, errors.get());
+        assertTrue(errorAfterCallbackReleased.get(),
+                "同步提交失败也必须先认领终态并释放旧 SDK callback 票据");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(
+            value = ModelRequestGate.Status.class,
+            names = {"COMPRESSION_FAILED", "HARD_LIMIT_REJECTED"})
+    void 工具续调用门禁失败不得再次调用模型并返回安全错误(
+            ModelRequestGate.Status status) {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        ModelRequestGate gate = request -> CompletableFuture.completedFuture(
+                new ModelRequestGate.Decision(
+                        status, request.latestMemory().get().messages(),
+                        32_768, "上下文门禁安全提示"));
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context,
+                MessageWindowChatMemory.withMaxMessages(100),
+                controller,
+                gate,
+                action -> {
+                    action.run();
+                    return true;
+                },
+                error::set);
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("rejected-tool", "writeFile")));
+
+        assertEquals(0, model.chatInvocations);
+        assertEquals("上下文门禁安全提示", error.get().getMessage());
+    }
+
+    @Test
+    void 取消期间完成的晚到门禁结果不得启动新模型请求() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        CompletableFuture<ModelRequestGate.Decision> preparation =
+                new CompletableFuture<>();
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, request -> preparation,
+                action -> {
+                    action.run();
+                    return true;
+                }, error -> fail("取消后不应报告普通错误", error));
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("cancelled-tool", "writeFile")));
+        controller.cancel();
+        preparation.complete(allowed(memory.messages()));
+
+        assertEquals(0, model.chatInvocations);
+    }
+
+    @Test
+    void 门禁结果不是永久授权回合关门后不得启动新模型请求() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        CompletableFuture<ModelRequestGate.Decision> preparation =
+                new CompletableFuture<>();
+        AtomicBoolean continuationOpen = new AtomicBoolean(true);
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, request -> preparation,
+                action -> {
+                    if (!continuationOpen.get()) {
+                        return false;
+                    }
+                    action.run();
+                    return true;
+                }, error -> fail("关门后不应报告普通错误", error));
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("closed-turn-tool", "writeFile")));
+        continuationOpen.set(false);
+        preparation.complete(allowed(memory.messages()));
+
+        assertEquals(0, model.chatInvocations);
+    }
+
+    @Test
+    void 旧请求代次的晚到门禁结果不得重复启动模型() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        CompletableFuture<ModelRequestGate.Decision> preparation =
+                new CompletableFuture<>();
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context, memory, controller, request -> preparation,
+                action -> {
+                    action.run();
+                    return true;
+                }, error -> fail("旧代次不应报告普通错误", error));
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("stale-generation-tool", "writeFile")));
+        assertTrue(controller.beforeModelRequest(1L));
+        preparation.complete(allowed(memory.messages()));
+
+        assertEquals(0, model.chatInvocations);
+    }
 
     @Test
     void shouldSkipInvalidToolAndContinueWithValidTool() throws Exception {
@@ -773,6 +1038,45 @@ class AiServiceStreamingResponseHandlerTest {
                 throwable -> fail("Should not raise onError"), memory,
                 new TokenUsage(), List.of(), toolExecutors, null, "method-1",
                 controller, guard);
+    }
+
+    private static AiServiceStreamingResponseHandler gatedHandler(
+            AiServiceContext context,
+            ChatMemory memory,
+            StreamingRequestController controller,
+            ModelRequestGate gate,
+            ModelRequestGate.ContinuationGate continuationGate,
+            java.util.function.Consumer<Throwable> errorHandler) {
+        return new AiServiceStreamingResponseHandler(
+                new NoopChatExecutor(), context, "mem-1",
+                partial -> { },
+                (index, request) -> { },
+                (index, request) -> { },
+                execution -> { },
+                response -> { },
+                errorHandler,
+                memory,
+                new TokenUsage(),
+                List.<ToolSpecification>of(),
+                Map.<String, ToolExecutor>of(
+                        "writeFile", (request, memoryId) ->
+                        "大工具结果".repeat(10_000)),
+                null,
+                "method-1",
+                controller,
+                ToolExecutionGuard.direct(),
+                controller.latestModelRequestGeneration(),
+                gate,
+                continuationGate);
+    }
+
+    private static ModelRequestGate.Decision allowed(
+            List<ChatMessage> messages) {
+        return new ModelRequestGate.Decision(
+                ModelRequestGate.Status.ALLOWED,
+                messages,
+                12_000,
+                "");
     }
 
     private static ChatResponse responseWithTools(ToolExecutionRequest... requests) {

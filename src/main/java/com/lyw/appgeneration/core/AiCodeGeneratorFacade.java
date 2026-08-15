@@ -32,6 +32,7 @@ import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -86,6 +87,9 @@ public class AiCodeGeneratorFacade {
 
     @Resource
     private FileToolExecutionScopeManager fileToolExecutionScopeManager;
+
+    @Resource
+    private ModelRequestGate modelRequestGate;
 
     /**
      * 生成并保存代码
@@ -205,6 +209,7 @@ public class AiCodeGeneratorFacade {
         }
         TokenStream tokenStream = createSimpleCodeStream(
                 userMessage, codeGenTypeEnum, isFirstMessage, generatorService);
+        tokenStream.modelRequestGate(modelRequestGate, context);
         Flux<String> source = processSimpleTokenStream(tokenStream, context);
         return progressCodeStream(source, codeGenTypeEnum, appId, context);
     }
@@ -321,6 +326,7 @@ public class AiCodeGeneratorFacade {
         }
         TokenStream tokenStream = generatorService.generateVueProjectCodeStream(
                 appId, generationRequest);
+        tokenStream.modelRequestGate(modelRequestGate, turnContext);
         return processOnlineTokenStream(tokenStream, turnContext);
     }
 

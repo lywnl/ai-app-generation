@@ -14,9 +14,12 @@ import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.service.tool.ToolExecutor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -26,6 +29,9 @@ import static dev.langchain4j.internal.ValidationUtils.ensureNotNull;
 
 @Internal
 public class AiServiceTokenStream implements TokenStream {
+
+    private static final Logger LOG =
+            LoggerFactory.getLogger(AiServiceTokenStream.class);
 
     private final List<ChatMessage> messages;
     private final List<ToolSpecification> toolSpecifications;
@@ -46,6 +52,8 @@ public class AiServiceTokenStream implements TokenStream {
     private final StreamingRequestController requestController =
             new StreamingRequestController();
     private ToolExecutionGuard toolExecutionGuard = ToolExecutionGuard.direct();
+    private ModelRequestGate modelRequestGate;
+    private ModelRequestGate.ContinuationGate continuationGate;
 
     private int onPartialResponseInvoked;
     private int onCompleteResponseInvoked;
@@ -138,6 +146,16 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream modelRequestGate(
+            ModelRequestGate gate,
+            ModelRequestGate.ContinuationGate continuationGate) {
+        this.modelRequestGate = ensureNotNull(gate, "modelRequestGate");
+        this.continuationGate = ensureNotNull(
+                continuationGate, "continuationGate");
+        return this;
+    }
+
+    @Override
     public TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         requestController.onControlledTermination(handler);
@@ -154,9 +172,131 @@ public class AiServiceTokenStream implements TokenStream {
     @Override
     public void start() {
         validateConfiguration();
+        if (!requestController.isOpen()) {
+            return;
+        }
+
+        ChatMemory temporaryMemory = initTemporaryMemory(context, messages);
+        if (modelRequestGate == null) {
+            startInitialModelRequest(messages, temporaryMemory, false);
+            return;
+        }
+        prepareInitialModelRequest(temporaryMemory);
+    }
+
+    private void prepareInitialModelRequest(ChatMemory temporaryMemory) {
+        CompletionStage<ModelRequestGate.Decision> preparation;
+        try {
+            preparation = modelRequestGate.prepare(new ModelRequestGate.Request(
+                    memoryId,
+                    () -> activeMemory(temporaryMemory),
+                    toolSpecifications,
+                    continuationGate));
+        } catch (RuntimeException exception) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁准备失败", exception));
+            return;
+        }
+        if (preparation == null) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁未返回准备结果"));
+            return;
+        }
+        observeInitialPreparation(preparation, temporaryMemory);
+    }
+
+    private void observeInitialPreparation(
+            CompletionStage<ModelRequestGate.Decision> preparation,
+            ChatMemory temporaryMemory) {
+        CompletionStage<ModelRequestGate.DispatchStatus> dispatch;
+        try {
+            dispatch = modelRequestGate.onPrepared(
+                    preparation,
+                    (decision, failure) -> finishInitialPreparation(
+                            decision, failure, temporaryMemory));
+        } catch (RuntimeException exception) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁完成回调注册失败", exception));
+            return;
+        }
+        if (dispatch == null) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁未返回完成回调调度结果"));
+            return;
+        }
+        dispatch.whenComplete(this::finishInitialDispatch);
+    }
+
+    private void finishInitialDispatch(
+            ModelRequestGate.DispatchStatus status,
+            Throwable failure) {
+        if (failure != null) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁完成回调执行失败", failure));
+            return;
+        }
+        if (status != ModelRequestGate.DispatchStatus.DISPATCHED) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁完成回调调度失败"));
+        }
+    }
+
+    private void finishInitialPreparation(
+            ModelRequestGate.Decision decision,
+            Throwable failure,
+            ChatMemory temporaryMemory) {
+        if (failure != null) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁执行失败", failure));
+            return;
+        }
+        if (decision == null) {
+            deliverGateFailure(new IllegalStateException(
+                    "模型请求门禁返回空决策"));
+            return;
+        }
+        switch (decision.status()) {
+            case ALLOWED -> startAllowedInitialRequest(
+                    decision.messages(), temporaryMemory);
+            case CANCELLED -> requestController.cancel();
+            case COMPRESSION_FAILED, HARD_LIMIT_REJECTED ->
+                    deliverGateFailure(new IllegalStateException(
+                            decision.safeMessage()));
+        }
+    }
+
+    private void startAllowedInitialRequest(
+            List<ChatMessage> preparedMessages,
+            ChatMemory temporaryMemory) {
+        boolean accepted;
+        try {
+            accepted = continuationGate.tryRun(() -> {
+                try (var callback = requestController.enterCallback()) {
+                    if (callback != null) {
+                        startInitialModelRequest(
+                                preparedMessages, temporaryMemory, true);
+                    }
+                }
+            });
+        } catch (RuntimeException exception) {
+            deliverGateFailure(exception);
+            return;
+        }
+        if (!accepted) {
+            requestController.cancel();
+        }
+    }
+
+    private void startInitialModelRequest(
+            List<ChatMessage> requestMessages,
+            ChatMemory temporaryMemory,
+            boolean verifyGeneration) {
+        if (!requestController.isOpen()) {
+            return;
+        }
 
         ChatRequest chatRequest = ChatRequest.builder()
-                .messages(messages)
+                .messages(requestMessages)
                 .toolSpecifications(toolSpecifications)
                 .build();
 
@@ -165,10 +305,10 @@ public class AiServiceTokenStream implements TokenStream {
                 .chatRequest(chatRequest)
                 .build();
 
-        if (!requestController.isOpen()) {
-            return;
-        }
-        if (!requestController.beforeModelRequest()) {
+        boolean requestAccepted = verifyGeneration
+                ? requestController.beforeModelRequest(0L)
+                : requestController.beforeModelRequest();
+        if (!requestAccepted) {
             requestController.dispatchClaimedTermination();
             return;
         }
@@ -183,7 +323,7 @@ public class AiServiceTokenStream implements TokenStream {
                 toolExecutionHandler,
                 completeResponseHandler,
                 errorHandler,
-                initTemporaryMemory(context, messages),
+                temporaryMemory,
                 new TokenUsage(),
                 toolSpecifications,
                 toolExecutors,
@@ -191,7 +331,9 @@ public class AiServiceTokenStream implements TokenStream {
                 methodKey,
                 requestController,
                 toolExecutionGuard,
-                requestGeneration);
+                requestGeneration,
+                modelRequestGate,
+                continuationGate);
 
         if (contentsHandler != null && retrievedContents != null
                 && !requestController.runIfOpen(
@@ -204,6 +346,28 @@ public class AiServiceTokenStream implements TokenStream {
                     () -> context.streamingChatModel.chat(chatRequest, handler));
         } catch (RuntimeException exception) {
             handler.onError(exception);
+        }
+    }
+
+    private ChatMemory activeMemory(ChatMemory temporaryMemory) {
+        return context.hasChatMemory()
+                ? context.chatMemoryService.getOrCreateChatMemory(memoryId)
+                : temporaryMemory;
+    }
+
+    private void deliverGateFailure(Throwable failure) {
+        if (!requestController.completeNormally()) {
+            return;
+        }
+        if (errorHandler == null) {
+            LOG.warn("Ignored error", failure);
+            return;
+        }
+        try {
+            errorHandler.accept(failure);
+        } catch (RuntimeException handlerError) {
+            LOG.error("While handling the following error...", failure);
+            LOG.error("...the following error happened", handlerError);
         }
     }
 

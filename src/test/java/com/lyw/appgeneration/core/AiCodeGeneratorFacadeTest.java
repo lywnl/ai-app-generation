@@ -21,6 +21,7 @@ import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -90,6 +91,9 @@ class AiCodeGeneratorFacadeTest {
     @Mock
     private TokenStream tokenStream;
 
+    @Mock
+    private ModelRequestGate modelRequestGate;
+
     private RagProperties properties;
     private AiCodeGeneratorFacade facade;
     private FileToolExecutionScopeManager scopeManager;
@@ -117,6 +121,54 @@ class AiCodeGeneratorFacadeTest {
         ReflectionTestUtils.setField(facade, "ragPromptAssembler", promptAssembler);
         ReflectionTestUtils.setField(facade, "ragProperties", properties);
         ReflectionTestUtils.setField(facade, "fileToolExecutionScopeManager", scopeManager);
+        ReflectionTestUtils.setField(facade, "modelRequestGate", modelRequestGate);
+    }
+
+    @Test
+    void 普通在线生成安装统一门禁和真实回合原子门() {
+        when(retrievalService.retrieve(
+                RAW_QUERY, CodeGenTypeEnum.HTML)).thenReturn(List.of());
+        when(promptAssembler.assemble(RAW_QUERY, List.of()))
+                .thenReturn(RAW_QUERY);
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
+                .thenReturn(tokenStream);
+        var operation = new AppOperationLeaseManager().acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "普通门禁安装");
+        SimpleGenerationTurnContext context =
+                new SimpleGenerationTurnContext(operation);
+
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false,
+                context, generatorService);
+
+        verify(tokenStream).modelRequestGate(modelRequestGate, context);
+        context.close();
+    }
+
+    @Test
+    void Vue在线生成安装统一门禁和真实回合原子门() {
+        properties.setEnabled(false);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(tokenStream);
+        AppOperationLeaseManager operationManager =
+                new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-gate-install");
+        var lease = sessionManager.open(
+                operation, 9L, "turn-gate-install");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, 9L, "turn-gate-install", operation, lease,
+                admissionPermit(),
+                new FileToolBudgetGuard().newSession());
+
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, false, context, generatorService);
+
+        verify(tokenStream).modelRequestGate(modelRequestGate, context);
+        context.closeResources();
     }
 
     @Test
@@ -318,6 +370,7 @@ class AiCodeGeneratorFacadeTest {
                 stream.observedScopeType);
         assertEquals("turn-online", stream.observedScope.ownerToken());
         assertTrue(context.controlledTermination().isEmpty());
+        assertEquals(1, stream.gateInstallations.get());
         context.closeResources();
     }
 
@@ -600,6 +653,8 @@ class AiCodeGeneratorFacadeTest {
                 evaluationStream::executeCapturedScopeAgain,
                 "AI 流完成后被捕获的 scope 也必须失效");
         assertEquals(0, evaluationStream.staleActions.get());
+        assertEquals(0, evaluationStream.gateInstallations.get(),
+                "离线 Vue 评测不得安装在线上下文门禁");
     }
 
     @Test
@@ -1294,6 +1349,7 @@ class AiCodeGeneratorFacadeTest {
         private final AtomicInteger cancellations = new AtomicInteger();
         private final AtomicInteger rejectionsObservedDuringCancel = new AtomicInteger();
         private final AtomicInteger staleActions = new AtomicInteger();
+        private final AtomicInteger gateInstallations = new AtomicInteger();
         private ToolExecutionGuard guard;
         private Consumer<dev.langchain4j.model.chat.response.ChatResponse> completeHandler;
         private Consumer<Throwable> errorHandler;
@@ -1323,6 +1379,14 @@ class AiCodeGeneratorFacadeTest {
         @Override
         public TokenStream toolExecutionGuard(ToolExecutionGuard guard) {
             this.guard = guard;
+            return this;
+        }
+
+        @Override
+        public TokenStream modelRequestGate(
+                ModelRequestGate gate,
+                ModelRequestGate.ContinuationGate continuationGate) {
+            gateInstallations.incrementAndGet();
             return this;
         }
 

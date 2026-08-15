@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
@@ -36,7 +37,7 @@ import reactor.core.publisher.Sinks;
 
 /** 精确绑定一次 app 操作租约和 Vue 构建租约的在线回合上下文。 */
 @Slf4j
-public final class VueTurnContext {
+public final class VueTurnContext implements ContextContinuationGate {
 
     public static final Duration TURN_DEADLINE = Duration.ofMinutes(30);
 
@@ -460,6 +461,11 @@ public final class VueTurnContext {
             action.run();
             return Boolean.TRUE;
         }).isPresent();
+    }
+
+    @Override
+    public boolean tryRun(Runnable action) {
+        return tryRunCallback(action);
     }
 
     /** 在回调双门内执行准备或模型动作；关门后拒绝迟到动作。 */

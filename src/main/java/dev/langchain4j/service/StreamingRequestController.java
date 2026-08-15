@@ -33,17 +33,31 @@ public final class StreamingRequestController {
     private boolean terminationDelivered;
 
     public boolean beforeModelRequest() {
-        return beforeOperation(true);
+        return beforeOperation(true, null);
+    }
+
+    /** 仅允许当前 generation 的完成回调推进下一次模型请求。 */
+    public boolean beforeModelRequest(long expectedCurrentGeneration) {
+        if (expectedCurrentGeneration < 0L) {
+            throw new IllegalArgumentException("期望的模型请求代次不能为负数");
+        }
+        return beforeOperation(true, expectedCurrentGeneration);
     }
 
     public boolean beforeToolExecution() {
-        return beforeOperation(false);
+        return beforeOperation(false, null);
     }
 
-    private boolean beforeOperation(boolean modelRequest) {
+    private boolean beforeOperation(
+            boolean modelRequest, Long expectedCurrentGeneration) {
         ControlledTermination limit = null;
         synchronized (this) {
             if (state != State.ACTIVE) {
+                return false;
+            }
+            if (modelRequest && expectedCurrentGeneration != null
+                    && latestModelRequestGeneration
+                    != expectedCurrentGeneration) {
                 return false;
             }
             int count = modelRequest ? modelRequestCount : toolExecutionCount;

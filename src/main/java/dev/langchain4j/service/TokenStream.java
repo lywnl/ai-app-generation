@@ -25,6 +25,13 @@ public interface TokenStream {
         return this;
     }
 
+    /** 为在线模型请求安装统一异步门禁和本轮真实原子回调门。 */
+    default TokenStream modelRequestGate(
+            ModelRequestGate gate,
+            ModelRequestGate.ContinuationGate continuationGate) {
+        return this;
+    }
+
     default TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         return this;

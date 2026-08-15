@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
@@ -23,13 +24,29 @@ import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 class VueTurnContextTest {
+
+    @Test
+    void Vue回合直接实现统一上下文继续门() {
+        VueTurnContext context = context("turn-context-gate");
+        ContextContinuationGate gate = assertInstanceOf(
+                ContextContinuationGate.class, context);
+        AtomicBoolean invoked = new AtomicBoolean();
+
+        assertTrue(gate.tryRun(() -> invoked.set(true)));
+        context.revokeCallbacks();
+
+        assertTrue(invoked.get());
+        assertFalse(gate.tryRun(() -> fail("关门后不得执行晚到动作")));
+    }
 
     @Test
     void 生产构造器必须显式接收不可伪造的准入许可() {
