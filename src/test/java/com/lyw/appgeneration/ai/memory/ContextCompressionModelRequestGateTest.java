@@ -2,9 +2,15 @@ package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
+import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import dev.langchain4j.data.message.ChatMessage;
@@ -28,9 +34,13 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.V;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.util.List;
@@ -354,6 +364,103 @@ class ContextCompressionModelRequestGateTest {
         assertTrue(decision.messages().isEmpty());
         assertFalse(decision.safeMessage().isBlank());
         verify(coordinator, never()).admit(any(), any(), any(), any());
+    }
+
+    @Test
+    void 真实30K压缩进度贯通普通回合且不串入Vue回合()
+            throws Exception {
+        try (RealGateFixture fixture = new RealGateFixture(19_000, 12_000);
+             SimpleGenerationTurnContext turnContext =
+                     fixture.openTurn("real-simple-progress-30k")) {
+            VueTurnContext isolatedVue = openIndependentVueTurn(
+                    "isolated-vue-progress");
+            CompletableFuture<GenerationStreamEvent> vueBusinessResult =
+                    new CompletableFuture<>();
+            AtomicInteger vueSubscriptions = new AtomicInteger();
+            CompletableFuture<List<GenerationStreamEvent>> vueEvents =
+                    isolatedVue.mergeProgress(Flux.defer(() -> {
+                                vueSubscriptions.incrementAndGet();
+                                return Mono.fromFuture(vueBusinessResult).flux();
+                            }))
+                            .collectList()
+                            .toFuture();
+            AtomicInteger businessSubscriptions = new AtomicInteger();
+            try {
+                StepVerifier.create(turnContext.mergeProgress(realGateBusiness(
+                                fixture, turnContext, "普通正文",
+                                businessSubscriptions)))
+                        .expectNext(GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.started()))
+                        .then(() -> releaseStartedCompression(fixture))
+                        .expectNext(GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.completed()))
+                        .expectNext(GenerationStreamEvent.content("普通正文"))
+                        .verifyComplete();
+
+                assertEquals(1, businessSubscriptions.get());
+                assertFalse(vueEvents.isDone(),
+                        "普通回合完成不得关闭或写入 Vue 私有通道");
+                vueBusinessResult.complete(
+                        GenerationStreamEvent.content("Vue占位正文"));
+                assertEquals(List.of(
+                                GenerationStreamEvent.content("Vue占位正文")),
+                        vueEvents.get(2, TimeUnit.SECONDS));
+                assertEquals(1, vueSubscriptions.get());
+            } finally {
+                vueBusinessResult.complete(
+                        GenerationStreamEvent.content("Vue占位正文"));
+                isolatedVue.closeResources();
+            }
+        }
+    }
+
+    @Test
+    void 真实30K压缩进度贯通Vue回合且不串入普通回合()
+            throws Exception {
+        try (RealGateFixture fixture = new RealGateFixture(19_000, 12_000);
+             SimpleGenerationTurnContext isolatedSimple =
+                     openIndependentSimpleTurn("isolated-simple-progress")) {
+            VueTurnContext turnContext = fixture.openVueTurn(
+                    "real-vue-progress-30k");
+            CompletableFuture<GenerationStreamEvent> simpleBusinessResult =
+                    new CompletableFuture<>();
+            AtomicInteger simpleSubscriptions = new AtomicInteger();
+            CompletableFuture<List<GenerationStreamEvent>> simpleEvents =
+                            isolatedSimple.mergeProgress(Flux.defer(() -> {
+                                simpleSubscriptions.incrementAndGet();
+                                return Mono.fromFuture(simpleBusinessResult)
+                                        .flux();
+                            }))
+                            .collectList()
+                            .toFuture();
+            AtomicInteger businessSubscriptions = new AtomicInteger();
+            try {
+                StepVerifier.create(turnContext.mergeProgress(realGateBusiness(
+                                fixture, turnContext, "Vue正文",
+                                businessSubscriptions)))
+                        .expectNext(GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.started()))
+                        .then(() -> releaseStartedCompression(fixture))
+                        .expectNext(GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.completed()))
+                        .expectNext(GenerationStreamEvent.content("Vue正文"))
+                        .verifyComplete();
+
+                assertEquals(1, businessSubscriptions.get());
+                assertFalse(simpleEvents.isDone(),
+                        "Vue 回合完成不得关闭或写入普通回合私有通道");
+                simpleBusinessResult.complete(
+                        GenerationStreamEvent.content("普通占位正文"));
+                assertEquals(List.of(
+                                GenerationStreamEvent.content("普通占位正文")),
+                        simpleEvents.get(2, TimeUnit.SECONDS));
+                assertEquals(1, simpleSubscriptions.get());
+            } finally {
+                simpleBusinessResult.complete(
+                        GenerationStreamEvent.content("普通占位正文"));
+                turnContext.closeResources();
+            }
+        }
     }
 
     @Test
@@ -703,6 +810,11 @@ class ContextCompressionModelRequestGateTest {
             return new SimpleGenerationTurnContext(operation);
         }
 
+        private VueTurnContext openVueTurn(String ownerToken) {
+            return ContextCompressionModelRequestGateTest.openVueTurn(
+                    operationManager, ownerToken);
+        }
+
         private boolean awaitCompressionStarted()
                 throws InterruptedException {
             return compressionStarted.await(2, TimeUnit.SECONDS);
@@ -782,6 +894,76 @@ class ContextCompressionModelRequestGateTest {
             action.run();
             return true;
         });
+    }
+
+    private Flux<GenerationStreamEvent> realGateBusiness(
+            RealGateFixture fixture,
+            ContextContinuationGate continuationGate,
+            String content,
+            AtomicInteger subscriptions) {
+        return Flux.defer(() -> {
+            subscriptions.incrementAndGet();
+            return Mono.fromCompletionStage(fixture.gate().prepare(
+                            request(fixture.memory(), continuationGate)))
+                    .doOnNext(decision -> assertEquals(
+                            ModelRequestGate.Status.ALLOWED,
+                            decision.status()))
+                    .thenReturn((GenerationStreamEvent)
+                            GenerationStreamEvent.content(content))
+                    .flux();
+        });
+    }
+
+    private void releaseStartedCompression(RealGateFixture fixture) {
+        try {
+            assertTrue(fixture.awaitCompressionStarted(),
+                    "30K 请求必须进入真实阻塞压缩");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("等待真实阻塞压缩被中断", exception);
+        }
+        fixture.releaseCompression();
+    }
+
+    private SimpleGenerationTurnContext openIndependentSimpleTurn(
+            String ownerToken) {
+        var operation = new AppOperationLeaseManager().acquire(
+                7L,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                ownerToken);
+        return new SimpleGenerationTurnContext(operation);
+    }
+
+    private VueTurnContext openIndependentVueTurn(String ownerToken) {
+        return openVueTurn(new AppOperationLeaseManager(), ownerToken);
+    }
+
+    private static VueTurnContext openVueTurn(
+            AppOperationLeaseManager operationManager,
+            String ownerToken) {
+        var admission = new VueTurnAdmissionController(
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()))
+                .tryAcquire()
+                .orElseThrow();
+        AppOperationLeaseManager.AppOperationLease operation = null;
+        VueBuildSessionManager.VueBuildLease vueLease = null;
+        try {
+            operation = operationManager.acquire(
+                    7L,
+                    AppOperationLeaseManager.AppOperationType.GENERATE,
+                    ownerToken);
+            vueLease = new VueBuildSessionManager().open(
+                    operation, 9L, ownerToken);
+            VueTurnContext context = new VueTurnContext(
+                    7L, 9L, ownerToken, operation, vueLease, admission,
+                    new FileToolBudgetGuard().newSession());
+            admission = null;
+            operation = null;
+            vueLease = null;
+            return context;
+        } finally {
+            VueTurnContext.closeAll(vueLease, operation, admission);
+        }
     }
 
     private ModelRequestGate.Request request(

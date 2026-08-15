@@ -115,6 +115,7 @@ interface SessionState {
   businessErrorSeen: boolean
   semanticEventSeen: boolean
   awaitingDone: boolean
+  doneSeen: boolean
 }
 
 type JsonRecord = Record<string, unknown>
@@ -177,6 +178,7 @@ function getOrCreateSession(appId: string): SessionState {
     businessErrorSeen: false,
     semanticEventSeen: false,
     awaitingDone: false,
+    doneSeen: false,
   }
   sessions.set(appId, created)
   return created
@@ -643,8 +645,12 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
   if (!session || session.snapshot.status !== 'streaming') {
     return
   }
+  if (session.doneSeen) {
+    markProtocolError(appId, requestId, '生成结束事件后收到意外事件')
+    return
+  }
   if (eventName === 'done') {
-    markDone(appId, requestId)
+    session.doneSeen = true
     return
   }
   if (session.awaitingDone) {
@@ -806,7 +812,11 @@ async function startSseStream(
 
   const session = getActiveSession(appId, requestId)
   if (session && session.snapshot.status === 'streaming') {
-    markProtocolError(appId, requestId, '生成流意外结束')
+    if (session.doneSeen) {
+      markDone(appId, requestId)
+    } else {
+      markProtocolError(appId, requestId, '生成流意外结束')
+    }
   }
 }
 
@@ -827,6 +837,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.businessErrorSeen = false
   session.semanticEventSeen = false
   session.awaitingDone = false
+  session.doneSeen = false
   session.snapshot = {
     appId,
     content: '',

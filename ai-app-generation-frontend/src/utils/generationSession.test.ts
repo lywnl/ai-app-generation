@@ -442,6 +442,109 @@ describe('generationSession Vue SSE 状态机', () => {
     expect(snapshot?.toolCalls.has('tool-after-outcome')).toBe(false)
   })
 
+  it('同一缓冲中 done 后的压缩事件必须覆盖同步清理竞态并标记协议错误', async () => {
+    const appId = 'event-after-done-with-sync-clear'
+    appIds.add(appId)
+    let lastObserved:
+      | {
+          eventType: SessionEventType
+          status: string
+          outcome: string
+        }
+      | undefined
+    let doneEvents = 0
+    subscribeGenerationSession(appId, (snapshot, eventType) => {
+      lastObserved = {
+        eventType,
+        status: snapshot.status,
+        outcome: snapshot.outcome,
+      }
+      if (eventType === 'done') {
+        doneEvents += 1
+        clearGenerationSession(appId)
+      }
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          streamResponse([
+            outcomeEvent('SUCCEEDED', true) + event('done') + contextCompressionEvent('STARTED'),
+          ]),
+        ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(lastObserved?.eventType).toBe('error')
+    })
+    expect(lastObserved).toEqual({
+      eventType: 'error',
+      status: 'error',
+      outcome: 'protocol_error',
+    })
+    expect(doneEvents).toBe(0)
+  })
+
+  it('同一缓冲中的重复 done 必须标记协议错误', async () => {
+    const snapshot = await runSession([
+      outcomeEvent('SUCCEEDED', true) + event('done') + event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('合法唯一 done 仅在 EOF 确认后发布一次', async () => {
+    const appId = 'single-done-after-eof'
+    appIds.add(appId)
+    const doneSnapshots: Array<{ status: string; outcome: string }> = []
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    subscribeGenerationSession(appId, (snapshot, eventType) => {
+      if (eventType === 'done') {
+        doneSnapshots.push({ status: snapshot.status, outcome: snapshot.outcome })
+      }
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller
+              controller.enqueue(encoder.encode(outcomeEvent('SUCCEEDED', true) + event('done')))
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+      ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.outcome).toBe('succeeded'))
+    expect(getGenerationSessionSnapshot(appId)?.status).toBe('streaming')
+    expect(doneSnapshots).toEqual([])
+
+    streamController?.close()
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(doneSnapshots).toEqual([{ status: 'done', outcome: 'succeeded' }])
+  })
+
   it('business-error 后再收到 outcome 标记为协议错误', async () => {
     const snapshot = await runSession([businessErrorEvent(), outcomeEvent('FAILED'), event('done')])
 
