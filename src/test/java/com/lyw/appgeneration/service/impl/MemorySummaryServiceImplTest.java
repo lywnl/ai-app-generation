@@ -798,6 +798,7 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
+    @DisplayName("提交失败元数据查询再次异常时后台至少退避五秒")
     void rejectedSubmissionCleansFlightEvenWhenFailureMetadataLookupFails() {
         ExecutorService executor = mock(ExecutorService.class);
         when(executor.submit(any(Runnable.class)))
@@ -808,14 +809,39 @@ class MemorySummaryServiceImplTest {
 
         assertDoesNotThrow(() ->
                 background.triggerSummarizationAsync(1L, 2L));
+        background.triggerSummarizationAsync(1L, 2L);
+
+        verify(executor).submit(any(Runnable.class));
 
         AppDataLifecycleFence.DeletePermit deletion =
                 lifecycleFence.beginDelete(1L, Duration.ZERO);
         assertNotNull(deletion);
         deletion.abortAndReopen();
-        clock.advance(Duration.ofSeconds(6));
+        clock.advance(Duration.ofSeconds(5));
         background.triggerSummarizationAsync(1L, 2L);
         verify(executor, times(2)).submit(any(Runnable.class));
+    }
+
+    @Test
+    @DisplayName("后台兜底退避期间同步压缩仍可立即执行")
+    void synchronousCompressionBypassesBackgroundFallbackBackoff() {
+        ExecutorService executor = mock(ExecutorService.class);
+        when(executor.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"));
+        when(summaryMapper.selectOneByQuery(any()))
+                .thenThrow(new IllegalStateException("database down"))
+                .thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of());
+        MemorySummaryServiceImpl background = newService(executor);
+        background.triggerSummarizationAsync(1L, 2L);
+
+        MemoryCompressionResult result = background.compressNow(
+                1L, 2L, Duration.ofSeconds(1));
+
+        assertEquals(MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
+                result.status());
+        verify(summaryMapper, times(2)).selectOneByQuery(any());
     }
 
     @Test
@@ -1092,8 +1118,96 @@ class MemorySummaryServiceImplTest {
                 failing.triggerSummarizationAsync(1L, 2L));
         failing.triggerSummarizationAsync(1L, 2L);
 
+        verify(failingFence).tryAcquireWriter(1L);
+        verify(backgroundExecutor, never()).submit(any(Runnable.class));
+
+        clock.advance(Duration.ofSeconds(5));
+        failing.triggerSummarizationAsync(1L, 2L);
+
         verify(failingFence, times(2)).tryAcquireWriter(1L);
         verify(backgroundExecutor).submit(any(Runnable.class));
+    }
+
+    @Test
+    @DisplayName("后台 owner 关闭写许可异常后至少退避五秒")
+    void backgroundOwnerCloseFailureBacksOffThenRetriesAfterDelay() {
+        AppDataLifecycleFence failingFence = mock(
+                AppDataLifecycleFence.class,
+                withSettings().mockMaker(INLINE));
+        AppDataLifecycleFence.WriterPermit failingPermit = mock(
+                AppDataLifecycleFence.WriterPermit.class);
+        AppDataLifecycleFence.WriterPermit recoveredPermit = mock(
+                AppDataLifecycleFence.WriterPermit.class);
+        when(failingFence.tryAcquireWriter(1L))
+                .thenReturn(failingPermit, recoveredPermit);
+        doThrow(new IllegalStateException("close down"))
+                .when(failingPermit).close();
+        ExecutorService backgroundExecutor = mock(ExecutorService.class);
+        when(backgroundExecutor.submit(any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<Runnable>getArgument(0).run();
+                    return mock(Future.class);
+                });
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of());
+        MemorySummaryServiceImpl failing = newService(
+                backgroundExecutor, modelExecutor, failingFence);
+
+        failing.triggerSummarizationAsync(1L, 2L);
+        failing.triggerSummarizationAsync(1L, 2L);
+
+        verify(backgroundExecutor).submit(any(Runnable.class));
+        verify(failingFence).tryAcquireWriter(1L);
+
+        clock.advance(Duration.ofSeconds(5));
+        failing.triggerSummarizationAsync(1L, 2L);
+
+        verify(backgroundExecutor, times(2)).submit(any(Runnable.class));
+        verify(failingFence, times(2)).tryAcquireWriter(1L);
+    }
+
+    @Test
+    @DisplayName("兜底退避不得缩短已有指数退避")
+    void fallbackRetryDelayDoesNotShortenExistingExponentialBackoff() {
+        AppDataLifecycleFence failingFence = mock(
+                AppDataLifecycleFence.class,
+                withSettings().mockMaker(INLINE));
+        AppDataLifecycleFence.WriterPermit failingPermit = mock(
+                AppDataLifecycleFence.WriterPermit.class);
+        AppDataLifecycleFence.WriterPermit recoveredPermit = mock(
+                AppDataLifecycleFence.WriterPermit.class);
+        when(failingFence.tryAcquireWriter(1L))
+                .thenReturn(failingPermit, recoveredPermit);
+        doThrow(new IllegalStateException("close down"))
+                .when(failingPermit).close();
+        ExecutorService backgroundExecutor = mock(ExecutorService.class);
+        when(backgroundExecutor.submit(any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<Runnable>getArgument(0).run();
+                    return mock(Future.class);
+                });
+        AppMemorySummary current = currentSummary(0L, "旧摘要", 100, 2);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "问题"),
+                        message(2L, "ai", "回复")));
+        when(summarizationModel.chat(anyString()))
+                .thenThrow(new IllegalStateException("model down"));
+        MemorySummaryServiceImpl failing = newService(
+                backgroundExecutor, modelExecutor, failingFence);
+
+        failing.triggerSummarizationAsync(1L, 2L);
+        clock.advance(Duration.ofSeconds(5));
+        failing.triggerSummarizationAsync(1L, 2L);
+
+        verify(backgroundExecutor).submit(any(Runnable.class));
+
+        clock.advance(Duration.ofSeconds(15));
+        failing.triggerSummarizationAsync(1L, 2L);
+
+        verify(backgroundExecutor, times(2)).submit(any(Runnable.class));
     }
 
     private MemorySummaryServiceImpl newService(ExecutorService executor) {

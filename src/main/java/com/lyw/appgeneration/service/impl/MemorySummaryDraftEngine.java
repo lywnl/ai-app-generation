@@ -25,6 +25,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 
 /** 生成 L1 摘要草稿，负责分页、完整回合、动态分批和 reducer 收敛。 */
 @Slf4j
@@ -38,6 +39,7 @@ public class MemorySummaryDraftEngine {
     private final ExecutorService modelExecutor;
     private final ChatTokenEstimator tokenEstimator;
     private final MemoryTokenProperties properties;
+    private final LongSupplier nanoTime;
 
     public MemorySummaryDraftEngine(
             ChatHistoryService chatHistoryService,
@@ -45,6 +47,17 @@ public class MemorySummaryDraftEngine {
             @Qualifier("memorySummaryModelExecutor") ExecutorService modelExecutor,
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties) {
+        this(chatHistoryService, summarizationModel, modelExecutor,
+                tokenEstimator, properties, System::nanoTime);
+    }
+
+    MemorySummaryDraftEngine(
+            ChatHistoryService chatHistoryService,
+            ChatModel summarizationModel,
+            ExecutorService modelExecutor,
+            ChatTokenEstimator tokenEstimator,
+            MemoryTokenProperties properties,
+            LongSupplier nanoTime) {
         this.chatHistoryService = Objects.requireNonNull(
                 chatHistoryService, "对话历史服务不能为空");
         this.summarizationModel = Objects.requireNonNull(
@@ -55,6 +68,8 @@ public class MemorySummaryDraftEngine {
                 tokenEstimator, "Token 估算器不能为空");
         this.properties = Objects.requireNonNull(
                 properties, "Token 配置不能为空");
+        this.nanoTime = Objects.requireNonNull(
+                nanoTime, "单调时钟不能为空");
     }
 
     DraftResult buildDraft(
@@ -226,7 +241,7 @@ public class MemorySummaryDraftEngine {
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     "提交摘要模型任务失败");
         }
-        long remainingNanos = deadlineNanos - System.nanoTime();
+        long remainingNanos = deadlineNanos - nanoTime.getAsLong();
         if (remainingNanos <= 0L) {
             modelCall.cancel(true);
             return ModelOutput.failure(
@@ -236,6 +251,11 @@ public class MemorySummaryDraftEngine {
         try {
             String output = modelCall.get(
                     remainingNanos, TimeUnit.NANOSECONDS);
+            if (isDeadlineExpired(deadlineNanos)) {
+                return ModelOutput.failure(
+                        MemoryCompressionResult.Status.TIMED_OUT,
+                        "摘要模型返回时截止时间已到");
+            }
             if (StrUtil.isBlank(output)) {
                 return ModelOutput.failure(
                         MemoryCompressionResult.Status.MODEL_FAILED,
@@ -275,7 +295,7 @@ public class MemorySummaryDraftEngine {
     }
 
     private boolean isDeadlineExpired(long deadlineNanos) {
-        return System.nanoTime() >= deadlineNanos;
+        return nanoTime.getAsLong() >= deadlineNanos;
     }
 
     private long currentCursor(AppMemorySummary current) {
@@ -300,6 +320,7 @@ public class MemorySummaryDraftEngine {
         private final long deadlineNanos;
         private final List<SummaryTurn> batch = new ArrayList<>();
         private String workingSummary;
+        private int persistedSummaryTokens;
         private int workingTokens;
         private long summarizedThroughId;
         private boolean changed;
@@ -319,7 +340,9 @@ public class MemorySummaryDraftEngine {
         }
 
         private void initialize() {
-            workingTokens = tokenEstimator.estimateText(workingSummary);
+            persistedSummaryTokens = tokenEstimator.estimateText(
+                    workingSummary);
+            workingTokens = persistedSummaryTokens;
             if (workingTokens
                     <= MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS) {
                 return;
@@ -369,9 +392,16 @@ public class MemorySummaryDraftEngine {
             if (hasFailed()) {
                 return DraftResult.failure(
                         persistedCursor,
-                        tokenEstimator.estimateText(workingSummary),
+                        persistedSummaryTokens,
                         failureStatus,
                         failureDetail);
+            }
+            if (isDeadlineExpired(deadlineNanos)) {
+                return DraftResult.failure(
+                        persistedCursor,
+                        persistedSummaryTokens,
+                        MemoryCompressionResult.Status.TIMED_OUT,
+                        "摘要草稿完成时截止时间已到");
             }
             return DraftResult.success(
                     workingSummary,

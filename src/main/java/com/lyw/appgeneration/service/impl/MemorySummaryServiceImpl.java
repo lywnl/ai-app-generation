@@ -137,6 +137,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                             metadataException);
                 }
             }
+            ensureFallbackRetryDelay(appId);
             log.warn("启动摘要任务失败 appId={} type={}",
                     appId, exception.getClass().getSimpleName());
         } finally {
@@ -253,6 +254,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         } catch (RuntimeException exception) {
             log.error("后台摘要任务异常 appId={} type={}", appId,
                     exception.getClass().getSimpleName(), exception);
+            ensureFallbackRetryDelay(appId);
             compressionResult = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "后台摘要任务异常");
@@ -334,6 +336,23 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 clock.instant().plus(retryDelay(failCount)));
         return result(status, currentCursor(current),
                 currentSummaryTokens(current), detail);
+    }
+
+    private void ensureFallbackRetryDelay(Long appId) {
+        try {
+            Instant fallbackRetryTime = clock.instant()
+                    .plus(RETRY_BASE_DELAY);
+            retryAfter.merge(
+                    appId,
+                    fallbackRetryTime,
+                    (existingRetryTime, candidateRetryTime) ->
+                            existingRetryTime.isAfter(candidateRetryTime)
+                                    ? existingRetryTime
+                                    : candidateRetryTime);
+        } catch (RuntimeException exception) {
+            log.error("设置摘要兜底退避异常 appId={} type={}", appId,
+                    exception.getClass().getSimpleName(), exception);
+        }
     }
 
     private Duration retryDelay(int failCount) {
