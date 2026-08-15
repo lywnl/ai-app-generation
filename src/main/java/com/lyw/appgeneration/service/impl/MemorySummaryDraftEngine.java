@@ -12,6 +12,7 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -41,6 +42,7 @@ public class MemorySummaryDraftEngine {
     private final MemoryTokenProperties properties;
     private final LongSupplier nanoTime;
 
+    @Autowired
     public MemorySummaryDraftEngine(
             ChatHistoryService chatHistoryService,
             @Qualifier("openAiChatModel") ChatModel summarizationModel,
