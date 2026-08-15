@@ -85,6 +85,10 @@ knife4j:
     language: zh_cn
 
 app:
+  code:
+    deploy:
+      # 完整部署访问基地址必须由运行环境显式提供，不允许跨环境静默回退。
+      base-url: ${APP_CODE_DEPLOY_BASE_URL}
   cors:
     # 空列表表示只允许同源；跨域部署必须显式列出可信 HTTPS Origin。
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:}

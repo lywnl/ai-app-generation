@@ -22,13 +22,4 @@ public interface AppConstant {
      */
     String CODE_DEPLOY_ROOT_DIR = System.getProperty("user.dir") + "/tmp/code_deploy";
 
-    /**
-     * 应用部署域名
-     */
-    String CODE_DEPLOY_HOST = System.getProperty(
-            "app.code.deploy.host",
-            System.getenv().getOrDefault("APP_CODE_DEPLOY_HOST", "http://lllyw.cn")
-    );
-
 }
-

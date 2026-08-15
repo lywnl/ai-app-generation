@@ -50,6 +50,7 @@ import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.AppDeploymentFileService;
+import com.lyw.appgeneration.service.AppDeployUrlBuilder;
 import com.lyw.appgeneration.service.AppDeletionFileService;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
@@ -138,6 +139,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private AppDeploymentFileService appDeploymentFileService;
 
     @Resource
+    private AppDeployUrlBuilder appDeployUrlBuilder;
+
+    @Resource
     private AppDeletionFileService appDeletionFileService;
 
     @Resource
@@ -173,6 +177,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         AppVO appVO = new AppVO();
         BeanUtil.copyProperties(app, appVO);
+        appVO.setDeployUrl(appDeployUrlBuilder.buildUrl(app.getDeployKey()));
         // 关联查询用户信息
         Long userId = app.getUserId();
         if (userId != null) {
@@ -636,8 +641,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         boolean updated = updateById(updateApp);
         ThrowUtils.throwIf(!updated,
                 ErrorCode.OPERATION_ERROR, "更新部署失败");
-        String formatUrl = String.format(
-                "%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        String formatUrl = appDeployUrlBuilder.buildUrl(deployKey);
         tryGenerateAppScreenshot(app.getId(), formatUrl);
         return formatUrl;
     }

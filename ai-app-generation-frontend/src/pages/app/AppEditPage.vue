@@ -105,7 +105,7 @@
             {{ appInfo?.deployedTime ? formatTime(appInfo.deployedTime) : '未部署' }}
           </a-descriptions-item>
           <a-descriptions-item label="访问链接">
-            <a-button v-if="appInfo?.deployKey" type="link" @click="openPreview" size="small">
+            <a-button v-if="appInfo?.deployUrl" type="link" @click="openPreview" size="small">
               查看预览
             </a-button>
             <span v-else>未部署</span>
@@ -125,7 +125,6 @@ import { getAppVoById, updateApp, updateAppByAdmin } from '@/api/appController'
 import { formatCodeGenType } from '@/utils/codeGenTypes'
 import { formatTime } from '@/utils/time'
 import UserInfo from '@/components/UserInfo.vue'
-import { getStaticPreviewUrl } from '@/config/env'
 import type { FormInstance } from 'ant-design-vue'
 
 const route = useRoute()
@@ -262,9 +261,8 @@ const goToChat = () => {
 
 // 打开预览
 const openPreview = () => {
-  if (appInfo.value?.codeGenType && appInfo.value?.id) {
-    const url = getStaticPreviewUrl(appInfo.value.codeGenType, String(appInfo.value.id))
-    window.open(url, '_blank')
+  if (appInfo.value?.deployUrl) {
+    window.open(appInfo.value.deployUrl, '_blank')
   }
 }
 

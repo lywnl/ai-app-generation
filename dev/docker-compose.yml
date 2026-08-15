@@ -9,6 +9,7 @@ services:
       - "127.0.0.1:80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../tmp/code_deploy:/opt/code_deploy:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

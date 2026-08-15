@@ -1,6 +1,5 @@
 param(
     [string]$ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path,
-    [string]$DeployDomain = "http://43.138.69.10:100",
     [string]$ApiBaseUrl = "/api"
 )
 
@@ -20,7 +19,6 @@ New-Item -ItemType Directory -Force -Path $artifactsFrontendDir, $artifactsBacke
 
 Write-Host "[1/5] Build frontend for production..."
 Push-Location $frontendDir
-$env:VITE_DEPLOY_DOMAIN = $DeployDomain
 $env:VITE_API_BASE_URL = $ApiBaseUrl
 npm run build
 Pop-Location

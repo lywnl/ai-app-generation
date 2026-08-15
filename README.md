@@ -217,7 +217,16 @@ $env:PEXELS_API_KEY="xxx"
 $env:COS_HOST="https://xxx.cos.ap-beijing.myqcloud.com"
 $env:TEN_SERCET_ID="xxx"
 $env:TEN_SECRET_KEY="xxx"
+$env:APP_CODE_DEPLOY_BASE_URL="http://localhost"
 ```
+
+Linux / macOS 当前终端可执行：
+
+```bash
+export APP_CODE_DEPLOY_BASE_URL="http://localhost"
+```
+
+`APP_CODE_DEPLOY_BASE_URL` 是必填项，表示部署产物经 Nginx 暴露后的源站地址，只能包含协议、主机和可选端口，不能包含业务路径。本地 Nginx 固定使用 80 端口，因此不得追加其他端口。
 
 > **安全要求**：数据库、Redis、PgVector、COS 和模型密钥必须通过环境变量或秘密管理平台注入。不要在受版本控制的配置、README、命令历史或日志中保存秘密字面量；已暴露的凭据需要轮换，不能只修改配置文本。
 
@@ -709,7 +718,7 @@ docker compose --env-file .env up -d
 
 | 服务 | 容器端口 | 主机端口（默认） | 用途 |
 | :--- | :--- | :--- | :--- |
-| Nginx | 100 | `${NGINX_HOST_PORT}` 100 | 业务总入口（前端 + 部署产物） |
+| Nginx | 80 | 80 | 业务总入口（前端 + 部署产物） |
 | Backend | 9025 | `${BACKEND_HOST_PORT}` 9025 | Spring Boot API |
 | MySQL | 3306 | - | 业务数据 |
 | Redis | 6379 | - | Session / 缓存 |

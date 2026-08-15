@@ -31,6 +31,14 @@ cd /opt/ai-app-generation/prod
 cp .env.example .env
 ```
 
+编辑 `.env`，必须显式填写部署产物的外部访问基地址，例如：
+
+```env
+APP_CODE_DEPLOY_BASE_URL=http://your-domain.example
+```
+
+该值只能包含协议、主机和可选端口，不能包含业务路径；部署访问路径由后端统一追加。
+
 默认账号密码（已预置）：
 
 - MySQL：`admin / lyw666`（root 密码 `lyw666`）
@@ -91,7 +99,7 @@ docker compose --env-file .env -f docker-compose.yml logs -f backend
 
 访问：
 
-- 业务入口：`http://43.138.69.10:100`
+- 业务入口：`http://服务器地址`
 - 后端健康：`http://43.138.69.10:9025/api/actuator/health`
 - Prometheus：`http://43.138.69.10:9090`
 - Grafana：`http://43.138.69.10:3000`

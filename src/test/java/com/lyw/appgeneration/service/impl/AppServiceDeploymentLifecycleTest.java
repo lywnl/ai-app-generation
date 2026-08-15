@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.config.AppCodeDeployProperties;
 import com.lyw.appgeneration.core.builder.BuildExecutionContext;
 import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
@@ -12,6 +13,7 @@ import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.service.AppDeploymentFileService;
+import com.lyw.appgeneration.service.AppDeployUrlBuilder;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.ScreenshotService;
@@ -62,6 +64,7 @@ class AppServiceDeploymentLifecycleTest {
             mock(AppDeploymentFileService.class);
     private final ScreenshotService screenshotService = mock(ScreenshotService.class);
     private final ChatHistoryService chatHistoryService = mock(ChatHistoryService.class);
+    private final AppDeployUrlBuilder deployUrlBuilder = deployUrlBuilder();
     private final AiGeneratorServiceFactory aiFactory =
             mock(AiGeneratorServiceFactory.class);
     private AppOperationLeaseManager leaseManager;
@@ -94,8 +97,17 @@ class AppServiceDeploymentLifecycleTest {
                 service, "appDeploymentFileService", deploymentFileService);
         ReflectionTestUtils.setField(service, "screenshotService", screenshotService);
         ReflectionTestUtils.setField(service, "chatHistoryService", chatHistoryService);
+        ReflectionTestUtils.setField(
+                service, "appDeployUrlBuilder", deployUrlBuilder);
         ReflectionTestUtils.setField(service, "aiGeneratorServiceFactory", aiFactory);
         doReturn(true).when(service).updateById(any(App.class));
+    }
+
+    private static AppDeployUrlBuilder deployUrlBuilder() {
+        AppCodeDeployProperties properties = new AppCodeDeployProperties();
+        properties.setBaseUrl("http://deploy.example");
+        properties.afterPropertiesSet();
+        return new AppDeployUrlBuilder(properties);
     }
 
     @Test
@@ -220,7 +232,7 @@ class AppServiceDeploymentLifecycleTest {
 
         String url = service.deployApp(APP_ID, loginUser());
 
-        assertEquals("http://lllyw.cn/" + DEPLOY_KEY + "/", url);
+        assertEquals("http://deploy.example/" + DEPLOY_KEY + "/", url);
         ArgumentCaptor<BuildExecutionContext> contextCaptor =
                 ArgumentCaptor.forClass(BuildExecutionContext.class);
         verify(builder).buildProjectDetailed(
@@ -259,7 +271,7 @@ class AppServiceDeploymentLifecycleTest {
 
         String url = service.deployApp(APP_ID, loginUser());
 
-        assertEquals("http://lllyw.cn/" + DEPLOY_KEY + "/", url);
+        assertEquals("http://deploy.example/" + DEPLOY_KEY + "/", url);
         verify(deploymentFileService).copyDirectory(
                 sourceDirectory.resolve("dist"), deployDirectory);
         verify(screenshotService).generateAndUploadScreenshot(url);

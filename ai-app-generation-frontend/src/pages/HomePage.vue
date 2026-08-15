@@ -4,7 +4,6 @@ import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser'
 import { addApp, listMyAppVoByPage, listGoodAppVoByPage } from '@/api/appController'
-import { getDeployUrl } from '@/config/env'
 import AppCard from '@/components/AppCard.vue'
 import { normalizePageTotal } from '@/utils/pageTotal'
 
@@ -124,9 +123,8 @@ const viewChat = (appId: string | number | undefined) => {
 
 // 查看作品
 const viewWork = (app: API.AppVO) => {
-  if (app.deployKey) {
-    const url = getDeployUrl(app.deployKey)
-    window.open(url, '_blank')
+  if (app.deployUrl) {
+    window.open(app.deployUrl, '_blank')
   }
 }
 
