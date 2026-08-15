@@ -190,6 +190,18 @@ public class AppController {
 
     private ServerSentEvent<String> encodeBusinessEvent(
             GenerationStreamEvent event) {
+        if (event instanceof GenerationStreamEvent.ContextCompression
+                compressionEvent) {
+            var compression = compressionEvent.message();
+            Map<String, Object> data = Map.of(
+                    "protocol", compression.protocol(),
+                    "phase", compression.phase().name(),
+                    "message", compression.message());
+            return ServerSentEvent.<String>builder()
+                    .event("context-compression")
+                    .data(JSONUtil.toJsonStr(data))
+                    .build();
+        }
         if (event instanceof GenerationStreamEvent.TurnOutcome turnEvent) {
             var outcome = turnEvent.message();
             Map<String, Object> data = Map.of(

@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.config.MemoryTokenProperties;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
@@ -41,11 +42,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,6 +58,126 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ContextCompressionModelRequestGateTest {
+
+    @Test
+    void 阻塞压缩只通过真实回合门发布固定开始和完成进度()
+            throws Exception {
+        ContextCompressionCoordinator coordinator =
+                mock(ContextCompressionCoordinator.class);
+        CompressionAwareChatMemory memory = compressionMemory("阻塞压缩");
+        RecordingProgressGate continuation = new RecordingProgressGate();
+        when(coordinator.admit(eq(memory), eq(List.of()), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<ContextAdmissionResult> listener =
+                            invocation.getArgument(2);
+                    ContextContinuationGate actualGate =
+                            invocation.getArgument(3);
+                    assertSame(continuation, actualGate);
+                    assertTrue(actualGate.tryRun(() -> listener.accept(result(
+                            ContextCompressionMode.BLOCKING_STARTED,
+                            ContextAdmissionResult.FailureReason.NONE,
+                            31_000, 31_000))));
+                    return result(ContextCompressionMode.BLOCKING_COMPLETED,
+                            ContextAdmissionResult.FailureReason.NONE,
+                            31_000, 12_000);
+                });
+
+        try (ExecutorService executor =
+                     Executors.newVirtualThreadPerTaskExecutor()) {
+            ContextCompressionModelRequestGate gate =
+                    new ContextCompressionModelRequestGate(
+                            coordinator, executor);
+
+            ModelRequestGate.Decision decision = gate.prepare(
+                            request(memory, continuation))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
+            assertEquals(List.of(
+                            ContextCompressionMessage.Phase.STARTED,
+                            ContextCompressionMessage.Phase.COMPLETED),
+                    continuation.phases());
+            assertEquals(2, continuation.attempts(),
+                    "COMPLETED 必须重新取得同一个真实回合门");
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ContextCompressionMode.class,
+            names = {"ASYNC_SCHEDULED", "BLOCKING_FAILED",
+                    "HARD_LIMIT_REJECTED"})
+    void 异步压缩和失败结果不得发布控制事件(
+            ContextCompressionMode mode) throws Exception {
+        ContextCompressionCoordinator coordinator =
+                mock(ContextCompressionCoordinator.class);
+        CompressionAwareChatMemory memory = compressionMemory("非展示结果");
+        RecordingProgressGate continuation = new RecordingProgressGate();
+        ContextAdmissionResult.FailureReason reason = switch (mode) {
+            case ASYNC_SCHEDULED ->
+                    ContextAdmissionResult.FailureReason.NONE;
+            case BLOCKING_FAILED ->
+                    ContextAdmissionResult.FailureReason.MODEL_FAILED;
+            case HARD_LIMIT_REJECTED ->
+                    ContextAdmissionResult.FailureReason.STILL_OVER_HARD_LIMIT;
+            default -> throw new IllegalArgumentException("未覆盖模式");
+        };
+        when(coordinator.admit(eq(memory), eq(List.of()), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<ContextAdmissionResult> listener =
+                            invocation.getArgument(2);
+                    listener.accept(result(mode, reason, 31_000, 31_000));
+                    return result(mode, reason, 31_000, 31_000);
+                });
+
+        try (ExecutorService executor =
+                     Executors.newVirtualThreadPerTaskExecutor()) {
+            ContextCompressionModelRequestGate gate =
+                    new ContextCompressionModelRequestGate(
+                            coordinator, executor);
+
+            gate.prepare(request(memory, continuation))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertTrue(continuation.phases().isEmpty());
+        }
+    }
+
+    @Test
+    void 回合终态先关门时静默丢弃迟到完成进度() throws Exception {
+        ContextCompressionCoordinator coordinator =
+                mock(ContextCompressionCoordinator.class);
+        CompressionAwareChatMemory memory = compressionMemory("终态竞争");
+        RecordingProgressGate continuation = new RecordingProgressGate();
+        when(coordinator.admit(eq(memory), eq(List.of()), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<ContextAdmissionResult> listener =
+                            invocation.getArgument(2);
+                    ContextContinuationGate actualGate =
+                            invocation.getArgument(3);
+                    assertTrue(actualGate.tryRun(() -> listener.accept(result(
+                            ContextCompressionMode.BLOCKING_STARTED,
+                            ContextAdmissionResult.FailureReason.NONE,
+                            31_000, 31_000))));
+                    continuation.close();
+                    return result(ContextCompressionMode.BLOCKING_COMPLETED,
+                            ContextAdmissionResult.FailureReason.NONE,
+                            31_000, 12_000);
+                });
+
+        try (ExecutorService executor =
+                     Executors.newVirtualThreadPerTaskExecutor()) {
+            ContextCompressionModelRequestGate gate =
+                    new ContextCompressionModelRequestGate(
+                            coordinator, executor);
+
+            gate.prepare(request(memory, continuation))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertEquals(List.of(ContextCompressionMessage.Phase.STARTED),
+                    continuation.phases());
+            assertEquals(2, continuation.attempts());
+        }
+    }
 
     @ParameterizedTest
     @EnumSource(value = ContextCompressionMode.class,
@@ -655,11 +778,17 @@ class ContextCompressionModelRequestGateTest {
     }
 
     private ModelRequestGate.Request request(ChatMemory memory) {
+        return request(memory, action -> {
+            action.run();
+            return true;
+        });
+    }
+
+    private ModelRequestGate.Request request(
+            ChatMemory memory,
+            ModelRequestGate.ContinuationGate continuationGate) {
         return new ModelRequestGate.Request(
-                7L, () -> memory, List.of(), action -> {
-                    action.run();
-                    return true;
-                });
+                7L, () -> memory, List.of(), continuationGate);
     }
 
     private ContextAdmissionResult result(
@@ -694,5 +823,42 @@ class ContextCompressionModelRequestGateTest {
                 userMemoryService);
         memory.add(UserMessage.from(message));
         return memory;
+    }
+
+    private static final class RecordingProgressGate
+            implements ContextContinuationGate {
+
+        private final List<ContextCompressionMessage.Phase> phases =
+                new CopyOnWriteArrayList<>();
+        private final AtomicInteger attempts = new AtomicInteger();
+        private volatile boolean open = true;
+
+        @Override
+        public boolean tryRun(Runnable action) {
+            attempts.incrementAndGet();
+            if (!open) {
+                return false;
+            }
+            action.run();
+            return true;
+        }
+
+        @Override
+        public void publishContextCompression(
+                ContextCompressionMessage message) {
+            phases.add(message.phase());
+        }
+
+        private List<ContextCompressionMessage.Phase> phases() {
+            return List.copyOf(phases);
+        }
+
+        private int attempts() {
+            return attempts.get();
+        }
+
+        private void close() {
+            open = false;
+        }
     }
 }

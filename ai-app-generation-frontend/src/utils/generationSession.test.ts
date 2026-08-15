@@ -62,6 +62,17 @@ function businessErrorEvent(
   )
 }
 
+function contextCompressionEvent(phase: 'STARTED' | 'COMPLETED'): string {
+  return event(
+    'context-compression',
+    JSON.stringify({
+      protocol: 'context-compression/v1',
+      phase,
+      message: phase === 'STARTED' ? '正在压缩上下文，请稍候…' : '上下文压缩完成，继续生成…',
+    }),
+  )
+}
+
 async function runSession(chunks: string[], expectVueTurnOutcome = true) {
   const appId = `app-${appIds.size + 1}`
   appIds.add(appId)
@@ -88,6 +99,117 @@ afterEach(() => {
 })
 
 describe('generationSession Vue SSE 状态机', () => {
+  it('压缩开始和完成只切换状态且不污染正文或监听事件类型', async () => {
+    const appId = 'context-compression-state'
+    appIds.add(appId)
+    const observed: Array<{
+      contextCompression: string | undefined
+      content: string
+      eventType: SessionEventType
+    }> = []
+    const unsubscribe = subscribeGenerationSession(appId, (snapshot, eventType) => {
+      observed.push({
+        contextCompression: snapshot.contextCompression,
+        content: snapshot.content,
+        eventType,
+      })
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          streamResponse([
+            contextCompressionEvent('STARTED'),
+            contextCompressionEvent('COMPLETED'),
+            'data: {"d":"正文"}\n\n',
+            outcomeEvent('SUCCEEDED', true),
+            event('done'),
+          ]),
+        ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+    })
+    expect(observed).toContainEqual({
+      contextCompression: 'compressing',
+      content: '',
+      eventType: 'delta',
+    })
+    expect(observed.some((item) => item.contextCompression === 'idle')).toBe(true)
+    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+      contextCompression: 'idle',
+      content: '正文',
+      outcome: 'succeeded',
+    })
+    expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('压缩上下文')
+    expect(observed.every((item) => ['delta', 'done', 'error'].includes(item.eventType))).toBe(true)
+    unsubscribe()
+  })
+
+  it.each([
+    [
+      '未知 protocol',
+      {
+        protocol: 'context-compression/v2',
+        phase: 'STARTED',
+        message: '正在压缩上下文，请稍候…',
+      },
+    ],
+    [
+      '未知 phase',
+      {
+        protocol: 'context-compression/v1',
+        phase: 'FAILED',
+        message: '压缩失败',
+      },
+    ],
+    [
+      '非固定安全文案',
+      {
+        protocol: 'context-compression/v1',
+        phase: 'STARTED',
+        message: '内部异常详情',
+      },
+    ],
+  ])('压缩控制帧%s时进入 protocol_error', async (_name, payload) => {
+    const snapshot = await runSession([
+      event('context-compression', JSON.stringify(payload)),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({
+      status: 'error',
+      outcome: 'protocol_error',
+      content: '',
+    })
+  })
+
+  it('没有 STARTED 的 COMPLETED 进入 protocol_error', async () => {
+    const snapshot = await runSession([contextCompressionEvent('COMPLETED'), event('done')])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('重复 STARTED 进入 protocol_error', async () => {
+    const snapshot = await runSession([
+      contextCompressionEvent('STARTED'),
+      contextCompressionEvent('STARTED'),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
   it('资源超限工具结果会结束卡片且只保留已广播参数', async () => {
     const snapshot = await runSession([
       messageEvent({
@@ -307,6 +429,7 @@ describe('generationSession Vue SSE 状态机', () => {
       }),
     ],
     ['错误事件', event('error', JSON.stringify({ message: '迟到错误' }))],
+    ['压缩事件', contextCompressionEvent('STARTED')],
   ])('turn-outcome 后收到%s标记为协议错误', async (_name, unexpectedEvent) => {
     const snapshot = await runSession([
       outcomeEvent('SUCCEEDED', true),

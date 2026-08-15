@@ -63,6 +63,8 @@ export function getBuildProjectVisualState(
 
 export type GenerationStatus = 'streaming' | 'done' | 'error'
 
+export type ContextCompressionState = 'idle' | 'compressing'
+
 export type GenerationOutcome =
   | 'pending'
   | 'succeeded'
@@ -78,6 +80,7 @@ export interface GenerationSessionSnapshot {
   loading: boolean
   status: GenerationStatus
   outcome: GenerationOutcome
+  contextCompression: ContextCompressionState
   errorMessage?: string
   toolCalls: Map<string, ToolCallView>
 }
@@ -138,6 +141,7 @@ function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
     loading: false,
     status: 'done',
     outcome: 'pending',
+    contextCompression: 'idle',
     toolCalls: new Map(),
   }
 }
@@ -261,6 +265,7 @@ function finishSession(
   flushBuffer(appId, requestId)
   session.snapshot.loading = false
   session.snapshot.status = nextStatus
+  session.snapshot.contextCompression = 'idle'
   session.snapshot.errorMessage = errorMessage
   session.snapshot.outcome = outcome
   stopSessionStream(session)
@@ -282,6 +287,7 @@ function markDone(appId: string, requestId: number): void {
     return
   }
   session.snapshot.loading = false
+  session.snapshot.contextCompression = 'idle'
   if (session.snapshot.status === 'streaming') {
     session.snapshot.status = 'done'
     if (!session.expectVueTurnOutcome && session.snapshot.outcome === 'pending') {
@@ -530,6 +536,38 @@ function markProtocolError(appId: string, requestId: number, message: string): v
   finishSession(appId, requestId, 'error', 'error', message, 'protocol_error')
 }
 
+const CONTEXT_COMPRESSION_MESSAGES = {
+  STARTED: '正在压缩上下文，请稍候…',
+  COMPLETED: '上下文压缩完成，继续生成…',
+} as const
+
+function handleContextCompression(appId: string, requestId: number, data: string): void {
+  const session = getActiveSession(appId, requestId)
+  if (!session || session.snapshot.status !== 'streaming') {
+    return
+  }
+  session.semanticEventSeen = true
+  const payload = tryParseJson(data)
+  const phase = payload?.phase
+  const validPhase = phase === 'STARTED' || phase === 'COMPLETED'
+  const expectedMessage = validPhase ? CONTEXT_COMPRESSION_MESSAGES[phase] : undefined
+  const validTransition =
+    phase === 'STARTED'
+      ? session.snapshot.contextCompression === 'idle'
+      : phase === 'COMPLETED' && session.snapshot.contextCompression === 'compressing'
+  if (
+    payload?.protocol !== 'context-compression/v1' ||
+    !validPhase ||
+    payload.message !== expectedMessage ||
+    !validTransition
+  ) {
+    markProtocolError(appId, requestId, '上下文压缩协议不合法')
+    return
+  }
+  session.snapshot.contextCompression = phase === 'STARTED' ? 'compressing' : 'idle'
+  emit(appId, 'delta', requestId)
+}
+
 function parseBusinessError(data: string): string | undefined {
   const payload = tryParseJson(data)
   if (
@@ -614,6 +652,10 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
     return
   }
   if (eventName === 'heartbeat') {
+    return
+  }
+  if (eventName === 'context-compression') {
+    handleContextCompression(appId, requestId, data)
     return
   }
   if (eventName === 'turn-outcome') {
@@ -791,6 +833,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
     loading: true,
     status: 'streaming',
     outcome: 'pending',
+    contextCompression: 'idle',
     toolCalls: new Map(),
   }
   emit(appId, 'delta', requestId)

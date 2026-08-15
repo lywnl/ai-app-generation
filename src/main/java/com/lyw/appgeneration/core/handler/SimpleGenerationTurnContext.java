@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationLease;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CallbackRegistration;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CancellationRegistration;
@@ -12,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 /** 持有一次 HTML 或多文件生成所需的精确租约与取消边界。 */
@@ -28,6 +30,8 @@ public final class SimpleGenerationTurnContext
     private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CallbackGate callbackGate = new CallbackGate();
+    private final TurnProgressChannel progressChannel =
+            new TurnProgressChannel();
 
     public SimpleGenerationTurnContext(AppOperationLease operationLease) {
         this.operationLease = Objects.requireNonNull(
@@ -86,6 +90,17 @@ public final class SimpleGenerationTurnContext
         }
     }
 
+    @Override
+    public void publishContextCompression(
+            ContextCompressionMessage message) {
+        progressChannel.publish(message);
+    }
+
+    public Flux<GenerationStreamEvent> mergeProgress(
+            Flux<GenerationStreamEvent> business) {
+        return progressChannel.mergeWith(business);
+    }
+
     /** DELETE 触发时完成该信号，使外层 Reactor 回合可靠进入终态清理。 */
     public Mono<Void> cancellationSignal() {
         return cancellationSignal.asMono();
@@ -126,6 +141,7 @@ public final class SimpleGenerationTurnContext
             return;
         }
         callbackGate.revoke();
+        progressChannel.close();
         RuntimeException failure = closeDeleteTakeoverRegistration();
         try {
             cancellationRegistration.close();
@@ -149,6 +165,7 @@ public final class SimpleGenerationTurnContext
 
     private void cancelFromOperation() {
         callbackGate.revoke();
+        progressChannel.close();
         cancelled.set(true);
         synchronized (cancelled) {
             cancelled.notifyAll();

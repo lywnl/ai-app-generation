@@ -1,8 +1,11 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -12,10 +15,41 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 class SimpleGenerationTurnContextTest {
+
+    @Test
+    void 同一应用上一轮迟到进度不得串入下一轮() {
+        AppOperationLeaseManager leases = new AppOperationLeaseManager();
+        SimpleGenerationTurnContext previous = new SimpleGenerationTurnContext(
+                leases.acquire(7L,
+                        AppOperationLeaseManager.AppOperationType.GENERATE,
+                        "上一轮"));
+        previous.close();
+        SimpleGenerationTurnContext current = new SimpleGenerationTurnContext(
+                leases.acquire(7L,
+                        AppOperationLeaseManager.AppOperationType.GENERATE,
+                        "当前轮"));
+
+        previous.publishContextCompression(ContextCompressionMessage.started());
+        Flux<GenerationStreamEvent> business = Flux.defer(() -> {
+            current.publishContextCompression(
+                    ContextCompressionMessage.started());
+            return Flux.just(GenerationStreamEvent.content("正文"));
+        });
+
+        StepVerifier.create(current.mergeProgress(business))
+                .assertNext(event -> assertEquals(
+                        ContextCompressionMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.ContextCompression) event)
+                                .message().phase()))
+                .expectNext(GenerationStreamEvent.content("正文"))
+                .verifyComplete();
+        current.close();
+    }
 
     @Test
     void 普通回合暴露与Vue等价的原子继续门() throws Exception {

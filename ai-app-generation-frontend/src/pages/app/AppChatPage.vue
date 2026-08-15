@@ -158,9 +158,17 @@
                     </template>
                   </div>
                 </div>
-                <div v-if="message.loading" class="loading-indicator">
+                <div
+                  v-if="message.loading"
+                  class="loading-indicator"
+                  role="status"
+                  aria-live="polite"
+                >
                   <a-spin size="small" />
-                  <span>AI 正在思考...</span>
+                  <span v-if="message.contextCompression === 'compressing'">
+                    正在压缩上下文，请稍候…
+                  </span>
+                  <span v-else>AI 正在思考...</span>
                 </div>
               </div>
             </div>
@@ -281,9 +289,10 @@
             </div>
             <p>网站文件生成完成后将在这里展示</p>
           </div>
-          <div v-else-if="isGenerating" class="preview-loading">
+          <div v-else-if="isGenerating" class="preview-loading" role="status" aria-live="polite">
             <a-spin size="large" />
-            <p>正在生成网站...</p>
+            <p v-if="contextCompression === 'compressing'">正在压缩上下文，请稍候…</p>
+            <p v-else>正在生成网站...</p>
           </div>
           <iframe
             v-else
@@ -331,6 +340,7 @@ import {
   type ToolCallView,
   type GenerationSessionSnapshot,
   type GenerationOutcome,
+  type ContextCompressionState,
   startGenerationSession,
   subscribeGenerationSession,
   getGenerationSessionSnapshot,
@@ -400,6 +410,7 @@ interface Message {
   type: 'user' | 'ai'
   content: string
   loading?: boolean
+  contextCompression?: ContextCompressionState
   createTime?: string
   /** tool call id → 当前调用参数视图;保持插入顺序用 Map */
   toolCalls?: Map<string, ToolCallView>
@@ -412,6 +423,7 @@ const messagesContainer = ref<HTMLElement>()
 const activeSessionAppId = ref<string | null>(null)
 const sessionMessageIndex = ref<number | null>(null)
 const detachSession = ref<null | (() => void)>(null)
+const contextCompression = ref<ContextCompressionState>('idle')
 
 // 外层消息容器智能吸底状态:用户上滑取消吸底,滑回接近底部(距底 ≤ 32px)恢复吸底。
 // 阈值 32 不是宽容,是流式场景下 scrollHeight 持续增长的兜底 —— 1px 在抖动中不可达。
@@ -580,6 +592,7 @@ const fetchAppInfo = async () => {
 }
 
 const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
+  contextCompression.value = snapshot.contextCompression
   const idx = sessionMessageIndex.value
   if (idx === null || !messages.value[idx]) {
     return
@@ -587,8 +600,8 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   const aiMessage = messages.value[idx]
   aiMessage.content = snapshot.content
   aiMessage.toolCalls = new Map(snapshot.toolCalls)
-  const hasAnyOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
-  aiMessage.loading = !hasAnyOutput && snapshot.loading
+  aiMessage.contextCompression = snapshot.contextCompression
+  aiMessage.loading = snapshot.loading
   isGenerating.value = snapshot.status === 'streaming'
 }
 

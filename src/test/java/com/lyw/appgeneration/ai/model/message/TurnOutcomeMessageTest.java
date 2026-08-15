@@ -45,15 +45,37 @@ class TurnOutcomeMessageTest {
     }
 
     @Test
-    void generationStreamEventMustExposeOnlyClientSafeTurnOutcome()
+    void generationStreamEventMustExposeOnlyClientSafeControlEvents()
             throws NoSuchMethodException {
         var nestedTypes = java.util.Arrays.stream(
                         GenerationStreamEvent.class.getDeclaredClasses())
                 .map(Class::getSimpleName)
                 .collect(java.util.stream.Collectors.toSet());
 
-        assertEquals(java.util.Set.of("Content", "TurnOutcome"), nestedTypes);
+        assertEquals(java.util.Set.of(
+                "Content", "TurnOutcome", "ContextCompression"), nestedTypes);
         assertNotNull(GenerationStreamEvent.class.getMethod(
                 "turnOutcome", VueTurnOutcome.class));
+        assertNotNull(GenerationStreamEvent.class.getMethod(
+                "contextCompression", ContextCompressionMessage.class));
+    }
+
+    @Test
+    void contextCompressionMessageMustRejectUntrustedContractFields() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ContextCompressionMessage(
+                        "context-compression/v2",
+                        ContextCompressionMessage.Phase.STARTED,
+                        "正在压缩上下文，请稍候…"));
+        assertThrows(NullPointerException.class,
+                () -> new ContextCompressionMessage(
+                        ContextCompressionMessage.PROTOCOL,
+                        null,
+                        "正在压缩上下文，请稍候…"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ContextCompressionMessage(
+                        ContextCompressionMessage.PROTOCOL,
+                        ContextCompressionMessage.Phase.STARTED,
+                        "内部异常详情"));
     }
 }

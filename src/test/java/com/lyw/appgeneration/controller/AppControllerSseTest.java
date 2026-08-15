@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.controller;
 
 import cn.hutool.json.JSONUtil;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
@@ -189,6 +190,60 @@ class AppControllerSseTest {
         assertTrue(data.getBool("refreshPreview"));
         assertFalse(data.containsKey("type"));
         assertEquals("done", events.get(2).event());
+    }
+
+    @Test
+    void contextCompressionUsesTrustedContractBeforeBodyAndKeepsOneDone() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(
+                        GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.started()),
+                        GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.completed()),
+                        GenerationStreamEvent.content("正文")));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(4, events.size());
+        assertCompressionEvent(events.get(0), "STARTED",
+                "正在压缩上下文，请稍候…");
+        assertCompressionEvent(events.get(1), "COMPLETED",
+                "上下文压缩完成，继续生成…");
+        assertEquals("正文",
+                JSONUtil.parseObj(events.get(2).data()).getStr("d"));
+        assertEquals(1, events.stream()
+                .filter(event -> "done".equals(event.event())).count());
+        assertEquals("done", events.getLast().event());
+    }
+
+    @Test
+    void contextCompressionDoesNotBecomeVueOutcomeOrChangeTerminalOrder() {
+        VueTurnOutcome outcome = new VueTurnOutcome(
+                VueBuildPhase.SUCCEEDED,
+                VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
+                "正文", true, "项目已生成并构建成功。");
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(
+                        GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.started()),
+                        GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.completed()),
+                        GenerationStreamEvent.turnOutcome(outcome)));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(List.of(
+                        "context-compression",
+                        "context-compression",
+                        "turn-outcome",
+                        "done"),
+                events.stream().map(ServerSentEvent::event).toList());
+        assertEquals(1, events.stream()
+                .filter(event -> "turn-outcome".equals(event.event())).count());
+        assertEquals(1, events.stream()
+                .filter(event -> "done".equals(event.event())).count());
     }
 
     @Test
@@ -401,6 +456,16 @@ class AppControllerSseTest {
 
     private Flux<GenerationStreamEvent> content(String text) {
         return Flux.just(GenerationStreamEvent.content(text));
+    }
+
+    private void assertCompressionEvent(
+            ServerSentEvent<String> event, String phase, String message) {
+        assertEquals("context-compression", event.event());
+        var data = JSONUtil.parseObj(event.data());
+        assertEquals("context-compression/v1", data.getStr("protocol"));
+        assertEquals(phase, data.getStr("phase"));
+        assertEquals(message, data.getStr("message"));
+        assertEquals(3, data.size(), "控制帧只能暴露受信协议字段");
     }
 
     private AppChatGenerateRequest requestBody() {

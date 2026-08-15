@@ -1,12 +1,15 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -33,6 +36,46 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class VueTurnContextTest {
+
+    @Test
+    void Vue回合私有进度通道隔离同应用迟到事件() {
+        VueTurnContext previous = context("previous-progress");
+        VueTurnContext current = context("current-progress");
+        previous.closeResources();
+
+        previous.publishContextCompression(ContextCompressionMessage.started());
+        Flux<GenerationStreamEvent> business = Flux.defer(() -> {
+            current.publishContextCompression(
+                    ContextCompressionMessage.started());
+            return Flux.just(GenerationStreamEvent.content("正文"));
+        });
+
+        StepVerifier.create(current.mergeProgress(business))
+                .assertNext(event -> assertEquals(
+                        ContextCompressionMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.ContextCompression) event)
+                                .message().phase()))
+                .expectNext(GenerationStreamEvent.content("正文"))
+                .verifyComplete();
+        current.closeResources();
+    }
+
+    @Test
+    void Vue唯一终态先获胜时静默丢弃迟到完成进度() {
+        VueTurnContext context = context("terminal-before-progress");
+        Flux<GenerationStreamEvent> business = Flux.defer(() -> {
+            assertTrue(context.tryStartFinalization(
+                    VueTurnContext.TerminalTrigger.COMPLETED));
+            context.tryRun(() -> context.publishContextCompression(
+                    ContextCompressionMessage.completed()));
+            return Flux.just(GenerationStreamEvent.content("终态正文"));
+        });
+
+        StepVerifier.create(context.mergeProgress(business))
+                .expectNext(GenerationStreamEvent.content("终态正文"))
+                .verifyComplete();
+        context.closeResources();
+    }
 
     @Test
     void Vue回合直接实现统一上下文继续门() {

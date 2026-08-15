@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.ai.memory;
 
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import dev.langchain4j.service.ModelRequestGate;
 
 import java.util.Objects;
@@ -23,6 +24,21 @@ public interface ContextContinuationGate
 
     @Override
     boolean tryRun(Runnable action);
+
+    /** 非应用回合调用方保持无操作，真实回合上下文覆盖此提交点。 */
+    default void publishContextCompression(
+            ContextCompressionMessage message) {
+        Objects.requireNonNull(message, "上下文压缩进度不能为空");
+    }
+
+    static ContextContinuationGate from(
+            ModelRequestGate.ContinuationGate continuationGate) {
+        Objects.requireNonNull(continuationGate, "回合原子提交门不能为空");
+        if (continuationGate instanceof ContextContinuationGate contextGate) {
+            return contextGate;
+        }
+        return continuationGate::tryRun;
+    }
 
     static ContextContinuationGate alwaysOpen() {
         return action -> {

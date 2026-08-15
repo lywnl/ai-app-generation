@@ -2,11 +2,13 @@ package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
+import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.model.entity.App;
@@ -35,6 +37,7 @@ import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -53,6 +56,41 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AppServiceSimpleTurnLifecycleTest {
+
+    @Test
+    void 普通服务真实回合在模型正文前合并压缩进度且只订阅业务一次() {
+        AtomicInteger businessSubscriptions = new AtomicInteger();
+        when(facade.generateAndSaveCodeStream(
+                any(), any(), eq(APP_ID), anyBoolean(), any(), any()))
+                .thenAnswer(invocation -> {
+                    SimpleGenerationTurnContext context =
+                            invocation.getArgument(4);
+                    return Flux.defer(() -> {
+                        businessSubscriptions.incrementAndGet();
+                        assertTrue(context.tryRun(() ->
+                                context.publishContextCompression(
+                                        ContextCompressionMessage.started())));
+                        assertTrue(context.tryRun(() ->
+                                context.publishContextCompression(
+                                        ContextCompressionMessage.completed())));
+                        return Flux.just("回答");
+                    });
+                });
+
+        StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
+                .assertNext(event -> assertEquals(
+                        ContextCompressionMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.ContextCompression) event)
+                                .message().phase()))
+                .assertNext(event -> assertEquals(
+                        ContextCompressionMessage.Phase.COMPLETED,
+                        ((GenerationStreamEvent.ContextCompression) event)
+                                .message().phase()))
+                .expectNext(GenerationStreamEvent.content("回答"))
+                .verifyComplete();
+
+        assertEquals(1, businessSubscriptions.get());
+    }
 
     private static final long APP_ID = 7L;
     private static final long USER_ID = 9L;

@@ -287,10 +287,11 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                         aiCodeGeneratorFacade.generateAndSaveCodeStream(
                                 message, codeGenType, appId,
                                 firstMessage, context, generatorService));
-                return streamHandlerExecutor.doExecute(
-                                codeStream, chatHistoryService, appId,
+                Flux<GenerationStreamEvent> business = streamHandlerExecutor
+                        .doExecute(codeStream, chatHistoryService, appId,
                                 loginUser, codeGenType, context)
-                        .takeUntilOther(context.cancellationSignal())
+                        .takeUntilOther(context.cancellationSignal());
+                return context.mergeProgress(business)
                         .doFinally(signal -> finishSimpleTurn(
                                 context, codeGenType, signal));
             } catch (RuntimeException exception) {
@@ -487,7 +488,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 MonitorContextHolder.setContext(MonitorContext.builder()
                         .userId(Long.toString(context.userId()))
                         .appId(Long.toString(context.appId())).build());
-                return streamHandlerExecutor.doExecuteVue(codeStream, context)
+                Flux<GenerationStreamEvent> business = streamHandlerExecutor
+                        .doExecuteVue(codeStream, context);
+                return context.mergeProgress(business)
                         .doFinally(ignored -> MonitorContextHolder.clearContext());
             } catch (RuntimeException exception) {
                 return finalizeCommittedVueFailure(context, exception);

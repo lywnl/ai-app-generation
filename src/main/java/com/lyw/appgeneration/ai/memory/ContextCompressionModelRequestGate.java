@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.ai.memory;
 
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.service.ModelRequestGate;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -93,17 +94,41 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
         if (!(activeMemory instanceof CompressionAwareChatMemory memory)) {
             return compressionFailure();
         }
+        ContextContinuationGate continuationGate =
+                ContextContinuationGate.from(request.continuationGate());
         ContextAdmissionResult admission = coordinator.admit(
                 memory,
                 request.toolSpecifications(),
-                ignored -> { },
-                request.continuationGate()::tryRun);
+                transition -> publishStarted(
+                        continuationGate, transition),
+                continuationGate);
+        publishCompleted(continuationGate, admission);
         List<dev.langchain4j.data.message.ChatMessage> latestMessages =
                 Objects.requireNonNull(
                         request.latestMemory().get(),
                         "协调后的活动 ChatMemory 不能为空")
                         .messages();
         return map(admission, latestMessages);
+    }
+
+    private void publishStarted(
+            ContextContinuationGate continuationGate,
+            ContextAdmissionResult transition) {
+        if (transition.mode() == ContextCompressionMode.BLOCKING_STARTED) {
+            continuationGate.publishContextCompression(
+                    ContextCompressionMessage.started());
+        }
+    }
+
+    private void publishCompleted(
+            ContextContinuationGate continuationGate,
+            ContextAdmissionResult admission) {
+        if (admission.mode() != ContextCompressionMode.BLOCKING_COMPLETED) {
+            return;
+        }
+        continuationGate.tryRun(() ->
+                continuationGate.publishContextCompression(
+                        ContextCompressionMessage.completed()));
     }
 
     private Decision map(

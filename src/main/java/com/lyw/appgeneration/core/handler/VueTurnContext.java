@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
@@ -32,6 +33,7 @@ import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.function.BooleanSupplier;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
@@ -71,6 +73,8 @@ public final class VueTurnContext implements ContextContinuationGate {
     private final ReentrantLock commitGate = new ReentrantLock();
     private UserCommitState userCommitState = UserCommitState.PREPARING;
     private final CallbackGate callbackGate = new CallbackGate();
+    private final TurnProgressChannel progressChannel =
+            new TurnProgressChannel();
     private final FileToolBudgetGuard.Session budgetSession;
 
     VueTurnContext(long appId, long userId, String turnId,
@@ -332,6 +336,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             if (current.stage() != TurnStage.ACTIVE) {
                 return false;
             }
+            progressChannel.close();
             if (turnState.compareAndSet(current, TurnState.finalizing(trigger))) {
                 return true;
             }
@@ -468,6 +473,17 @@ public final class VueTurnContext implements ContextContinuationGate {
         return tryRunCallback(action);
     }
 
+    @Override
+    public void publishContextCompression(
+            ContextCompressionMessage message) {
+        progressChannel.publish(message);
+    }
+
+    public Flux<GenerationStreamEvent> mergeProgress(
+            Flux<GenerationStreamEvent> business) {
+        return progressChannel.mergeWith(business);
+    }
+
     /** 在回调双门内执行准备或模型动作；关门后拒绝迟到动作。 */
     public <T> Optional<T> tryCallCallback(Supplier<T> action) {
         Objects.requireNonNull(action, "回调不能为空");
@@ -505,6 +521,7 @@ public final class VueTurnContext implements ContextContinuationGate {
     /** 先关闭内层回调门，再触发 Vue/app 租约取消及模型、构建取消动作。 */
     public void cancelGeneration() {
         callbackGate.revoke();
+        progressChannel.close();
         if (lease != null) {
             lease.cancel();
         }
@@ -512,6 +529,7 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     public void revokeCallbacks() {
         callbackGate.revoke();
+        progressChannel.close();
     }
 
     /** 依次等待回合内层与 app/Vue 外层回调静默，共享同一超时预算。 */
@@ -617,6 +635,7 @@ public final class VueTurnContext implements ContextContinuationGate {
         if (!resourcesClosed.compareAndSet(false, true)) {
             return;
         }
+        progressChannel.close();
         DeleteTakeoverRegistration takeoverRegistration =
                 deleteTakeoverRegistration.getAndSet(null);
         closeAll(takeoverRegistration, lease, operationLease, admissionPermit);

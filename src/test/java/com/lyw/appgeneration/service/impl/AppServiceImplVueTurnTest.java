@@ -4,6 +4,7 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
@@ -71,6 +72,50 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 
 class AppServiceImplVueTurnTest {
+
+    @Test
+    void Vue服务真实回合在模型正文前合并压缩进度且只订阅业务一次() {
+        AtomicInteger businessSubscriptions = new AtomicInteger();
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(true);
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenAnswer(invocation -> {
+                    VueTurnContext context = invocation.getArgument(3);
+                    return Flux.defer(() -> {
+                        businessSubscriptions.incrementAndGet();
+                        assertTrue(context.tryRun(() ->
+                                context.publishContextCompression(
+                                        ContextCompressionMessage.started())));
+                        assertTrue(context.tryRun(() ->
+                                context.publishContextCompression(
+                                        ContextCompressionMessage.completed())));
+                        return Flux.just("正文");
+                    });
+                });
+        when(executor.doExecuteVue(any(), any())).thenAnswer(invocation -> {
+            VueTurnContext context = invocation.getArgument(1);
+            return invocation.<Flux<String>>getArgument(0)
+                    .map(GenerationStreamEvent::content)
+                    .doFinally(ignored -> context.closeResources());
+        });
+
+        StepVerifier.create(service.chatToGenCode(
+                        APP_ID, "需求", User.builder().id(USER_ID).build()))
+                .assertNext(event -> assertEquals(
+                        ContextCompressionMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.ContextCompression) event)
+                                .message().phase()))
+                .assertNext(event -> assertEquals(
+                        ContextCompressionMessage.Phase.COMPLETED,
+                        ((GenerationStreamEvent.ContextCompression) event)
+                                .message().phase()))
+                .expectNext(GenerationStreamEvent.content("正文"))
+                .verifyComplete();
+
+        assertEquals(1, businessSubscriptions.get());
+    }
 
     private static final long APP_ID = 7L;
     private static final long USER_ID = 9L;
