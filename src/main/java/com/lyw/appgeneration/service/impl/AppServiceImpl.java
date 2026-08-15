@@ -521,9 +521,14 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             case ALREADY_TERMINATED -> {
                 // 另一个前置终止分支已经负责清理。
             }
-            case POST_COMMIT_REQUIRED ->
+            case POST_COMMIT_REQUIRED -> {
+                // SSE 心跳扇出在终态下发后会取消内部订阅，此时回合已经有
+                // 终态赢家，不能再把协议内部取消误判为浏览器断连。
+                if (context.terminalWinner().isEmpty()) {
                     vueTurnCancellationCoordinator.requestCancellation(
                             context, () -> "");
+                }
+            }
         }
     }
 

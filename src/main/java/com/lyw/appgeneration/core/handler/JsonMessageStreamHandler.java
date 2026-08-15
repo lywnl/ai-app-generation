@@ -80,6 +80,7 @@ public final class JsonMessageStreamHandler {
                     context.budgetSession().newCanonicalAccumulator(
                             TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
+            AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
                                     chunk, canonical, seenToolIds, context))
@@ -135,8 +136,15 @@ public final class JsonMessageStreamHandler {
             return Flux.merge(guardedNormalFlow, deleteFlow)
                     .takeUntil(event ->
                             event instanceof GenerationStreamEvent.TurnOutcome)
-                    .doOnCancel(() -> cancellationCoordinator.requestCancellation(
-                            context, canonical::content));
+                    .doOnNext(event -> terminalDelivered.compareAndSet(
+                            false,
+                            event instanceof GenerationStreamEvent.TurnOutcome))
+                    .doOnCancel(() -> {
+                        if (!terminalDelivered.get()) {
+                            cancellationCoordinator.requestCancellation(
+                                    context, canonical::content);
+                        }
+                    });
         });
     }
 

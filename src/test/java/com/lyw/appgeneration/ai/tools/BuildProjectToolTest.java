@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONNull;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.core.builder.BuildErrorSanitizer;
 import com.lyw.appgeneration.core.builder.BuildExecutionContext;
@@ -91,7 +92,7 @@ class BuildProjectToolTest {
 
             JSONObject terminalRetry = invoke(harness);
             assertEquals("REJECTED", terminalRetry.getStr("invocationStatus"));
-            assertNull(terminalRetry.get("attempt"));
+            assertJsonNull(terminalRetry, "attempt");
             verify(builder, org.mockito.Mockito.times(3))
                     .buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class));
         }
@@ -109,13 +110,13 @@ class BuildProjectToolTest {
             JSONObject rejected = invoke(harness);
 
             assertEquals("REJECTED", rejected.getStr("invocationStatus"));
-            assertNull(rejected.get("success"));
-            assertNull(rejected.get("attempt"));
+            assertJsonNull(rejected, "success");
+            assertJsonNull(rejected, "attempt");
             assertEquals("REPAIR", rejected.getStr("nextAction"));
             assertFalse(rejected.getBool("repairable"));
             assertFalse(rejected.getBool("reflectionRequired"));
             assertFalse(rejected.getBool("terminateToolLoop"));
-            assertNull(rejected.get("finalResponse"));
+            assertJsonNull(rejected, "finalResponse");
             assertEquals(1, harness.lease.snapshot().buildAttempt());
             verify(builder, org.mockito.Mockito.times(1))
                     .buildProjectDetailed(any(Path.class), any(BuildExecutionContext.class));
@@ -200,6 +201,17 @@ class BuildProjectToolTest {
     }
 
     @Test
+    void successfulProtocolKeepsNullableFieldsForStrictFrontendParsing() {
+        JSONObject json = JSONUtil.parseObj(BuildProjectProtocolSupport.json(
+                BuildProjectToolResult.completedSuccess(1)));
+
+        assertTrue(json.containsKey("failureKind"));
+        assertEquals(JSONNull.NULL, json.get("failureKind"));
+        assertTrue(json.containsKey("errorSummary"));
+        assertEquals(JSONNull.NULL, json.get("errorSummary"));
+    }
+
+    @Test
     void concurrentInvocationDoesNotConsumeSecondAttempt() throws Exception {
         VueProjectBuilder builder = mock(VueProjectBuilder.class);
         CountDownLatch entered = new CountDownLatch(1);
@@ -220,8 +232,8 @@ class BuildProjectToolTest {
             JSONObject first = firstFuture.get(2, TimeUnit.SECONDS);
 
             assertEquals("BUILD_IN_PROGRESS", concurrent.getStr("invocationStatus"));
-            assertNull(concurrent.get("attempt"));
-            assertNull(concurrent.get("stage"));
+            assertJsonNull(concurrent, "attempt");
+            assertJsonNull(concurrent, "stage");
             assertFalse(concurrent.getBool("terminateToolLoop"));
             assertEquals(1, first.getInt("attempt"));
             assertEquals(1, harness.lease.snapshot().buildAttempt());
@@ -259,10 +271,10 @@ class BuildProjectToolTest {
             JSONObject json = JSONUtil.parseObj(raw);
 
             assertEquals("CANCELLED", json.getStr("invocationStatus"));
-            assertNull(json.get("attempt"));
-            assertNull(json.get("stage"));
+            assertJsonNull(json, "attempt");
+            assertJsonNull(json, "stage");
             assertTrue(json.getBool("terminateToolLoop"));
-            assertNull(json.get("finalResponse"));
+            assertJsonNull(json, "finalResponse");
             verify(builder, never()).buildProjectDetailed(any(), any());
         }
     }
@@ -284,7 +296,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("NPM_BUILD", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
-            assertNull(json.get("finalResponse"));
+            assertJsonNull(json, "finalResponse");
         }
     }
 
@@ -305,7 +317,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("NPM_BUILD", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
-            assertNull(json.get("finalResponse"));
+            assertJsonNull(json, "finalResponse");
         }
     }
 
@@ -325,7 +337,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("SUCCESS", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
-            assertNull(json.get("finalResponse"));
+            assertJsonNull(json, "finalResponse");
         }
     }
 
@@ -408,7 +420,7 @@ class BuildProjectToolTest {
             assertEquals("REJECTED", json.getStr("invocationStatus"));
             assertTrue(json.getBool("terminateToolLoop"));
             assertTrue(json.getStr("message").contains("PROTOCOL_ERROR"));
-            assertNull(json.get("finalResponse"));
+            assertJsonNull(json, "finalResponse");
             assertEquals(VueBuildPhase.REPAIRING, harness.lease.snapshot().phase());
             assertEquals(VueBuildFailureKind.CODE, harness.lease.snapshot().failureKind());
             assertEquals(1, harness.lease.snapshot().buildAttempt());
@@ -447,7 +459,7 @@ class BuildProjectToolTest {
             assertEquals(1, json.getInt("attempt"));
             assertEquals("VALIDATION", json.getStr("stage"));
             assertTrue(json.getBool("terminateToolLoop"));
-            assertNull(json.get("finalResponse"));
+            assertJsonNull(json, "finalResponse");
         }
     }
 
@@ -508,12 +520,17 @@ class BuildProjectToolTest {
 
     private void assertProtocolRejection(JSONObject json) {
         assertEquals("REJECTED", json.getStr("invocationStatus"));
-        assertNull(json.get("attempt"));
-        assertNull(json.get("stage"));
-        assertNull(json.get("success"));
+        assertJsonNull(json, "attempt");
+        assertJsonNull(json, "stage");
+        assertJsonNull(json, "success");
         assertTrue(json.getBool("terminateToolLoop"));
         assertTrue(json.getStr("message").contains("PROTOCOL_ERROR"));
-        assertNull(json.get("finalResponse"));
+        assertJsonNull(json, "finalResponse");
+    }
+
+    private void assertJsonNull(JSONObject json, String key) {
+        assertTrue(json.containsKey(key), key + " 字段必须存在");
+        assertEquals(JSONNull.NULL, json.get(key), key + " 必须为 JSON null");
     }
 
     private Harness harness(VueProjectBuilder builder) {

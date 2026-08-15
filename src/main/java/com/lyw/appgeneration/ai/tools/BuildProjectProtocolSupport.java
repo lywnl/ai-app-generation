@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONConfig;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.builder.VueBuildFailureKind;
@@ -12,7 +13,8 @@ final class BuildProjectProtocolSupport {
     }
 
     static String json(BuildProjectToolResult result) {
-        JSONObject json = new JSONObject();
+        JSONObject json = new JSONObject(
+                JSONConfig.create().setIgnoreNullValue(false));
         json.set("protocol", result.protocol());
         json.set("invocationStatus", enumName(result.invocationStatus()));
         json.set("success", result.success());

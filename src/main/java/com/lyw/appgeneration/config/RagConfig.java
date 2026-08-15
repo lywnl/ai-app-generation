@@ -47,11 +47,14 @@ public class RagConfig {
 
     /**
      * 按代码生成类型隔离的向量存储 Map(一种类型一张表,比 metadata filter 更快)
-     * 即使 RAG 被关闭也要构建,避免启动期报依赖缺失;真正是否检索由 RagRetrievalService 判定
+     * RAG 关闭时返回空 Map，保留依赖契约但不建立 PGVector 连接。
      */
     @Bean
     public Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> embeddingStoreByType() {
         Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> map = new EnumMap<>(CodeGenTypeEnum.class);
+        if (!props.isEnabled()) {
+            return map;
+        }
         RagConstants.TYPE_TO_TABLE.forEach((type, table) -> {
             try {
                 map.put(type, buildStore(table));

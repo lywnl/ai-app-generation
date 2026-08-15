@@ -277,6 +277,47 @@ class AppServiceImplVueTurnTest {
     }
 
     @Test
+    void 成功终态后的协议内部取消不得重新请求用户取消() {
+        AtomicReference<VueTurnContext> capturedContext = new AtomicReference<>();
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(true);
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenReturn(Flux.just("raw"));
+        when(executor.doExecuteVue(any(), any())).thenAnswer(invocation -> {
+            VueTurnContext context = invocation.getArgument(1);
+            capturedContext.set(context);
+            VueTurnOutcome outcome = new VueTurnOutcome(
+                    com.lyw.appgeneration.core.builder.VueBuildPhase.SUCCEEDED,
+                    VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
+                    "项目已生成并构建成功。", true,
+                    "项目已生成并构建成功。");
+            return Flux.defer(() -> {
+                assertTrue(context.tryStartFinalization(
+                        VueTurnContext.TerminalTrigger.COMPLETED));
+                context.closeResources();
+                return Flux.just(GenerationStreamEvent.turnOutcome(outcome));
+            });
+        });
+
+        List<GenerationStreamEvent> events = service.chatToGenCode(
+                        APP_ID, "需求", User.builder().id(USER_ID).build())
+                .take(1)
+                .collectList()
+                .block();
+
+        assertEquals(1, events.size());
+        assertEquals(VueTurnContext.TerminalTrigger.COMPLETED,
+                capturedContext.get().terminalWinner().orElseThrow());
+        verify(cancellationCoordinator, never()).requestCancellation(
+                eq(capturedContext.get()), any());
+        operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-success-terminal").close();
+    }
+
+    @Test
     void counterIncrementFailureDoesNotChangeUserCommitModelStartOrLeaseRelease() {
         ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
                 ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);

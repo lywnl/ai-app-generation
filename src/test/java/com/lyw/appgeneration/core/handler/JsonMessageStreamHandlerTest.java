@@ -5,6 +5,8 @@ import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
+import com.lyw.appgeneration.core.builder.BuildResult;
+import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
@@ -18,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import reactor.test.scheduler.VirtualTimeScheduler;
@@ -25,6 +28,7 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +87,69 @@ class JsonMessageStreamHandlerTest {
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 outcome.outcome());
         assertFalse(outcome.shouldRefreshPreview());
+    }
+
+    @Test
+    void successfulOutcomeThroughSseFanOutDoesNotDropLeaseErrors() {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-success-sse-fan-out";
+        var operation = manager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE, turnId);
+        var lease = new VueBuildSessionManager().open(operation, USER_ID, turnId);
+        try (var ticket = lease.beginBuild()) {
+            lease.recordSuccess(ticket,
+                    new BuildResult(true, BuildStage.SUCCESS, 0,
+                            false, "ok", 1L));
+        }
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, turnId, operation, lease,
+                new FileToolBudgetGuard().newSession());
+        context.commitUser(() -> true);
+        context.recordControlledTermination(new ToolLoopTerminationProtocol
+                .ControlledTermination(ToolLoopTerminationProtocol
+                .ControlledTerminationReason.BUILD_SUCCEEDED,
+                JsonMessageStreamHandler.SUCCESS_MESSAGE));
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            var result = new VueTurnFinalizer.FinalizationResult(requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+        List<Throwable> dropped = new CopyOnWriteArrayList<>();
+
+        Hooks.onErrorDropped(dropped::add);
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, Runnable::run, Duration.ofSeconds(1))) {
+            JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
+                    toolManager, finalizer, coordinator);
+            Flux<GenerationStreamEvent> sseFanOut = realHandler
+                    .handle(Flux.empty(), context)
+                    .publish(shared -> {
+                        Flux<GenerationStreamEvent> body = shared;
+                        Flux<GenerationStreamEvent> heartbeat = shared
+                                .map(ignored -> 0L)
+                                .onErrorComplete()
+                                .startWith(0L)
+                                .switchMap(ignored -> Mono.delay(Duration.ofHours(1))
+                                        .<GenerationStreamEvent>map(tick -> GenerationStreamEvent
+                                                .content("heartbeat")))
+                                .takeUntilOther(shared.ignoreElements()
+                                        .onErrorComplete());
+                        return Flux.merge(body, heartbeat);
+                    });
+
+            List<GenerationStreamEvent> events = sseFanOut.collectList().block();
+
+            assertEquals(1, events.size());
+            assertEquals(VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
+                    outcomeOf(events.getFirst()).outcome());
+            assertTrue(dropped.isEmpty(),
+                    "SSE 多订阅收尾不得取消已释放租约或丢弃异常");
+        } finally {
+            Hooks.resetOnErrorDropped();
+            context.closeResources();
+        }
     }
 
     @Test

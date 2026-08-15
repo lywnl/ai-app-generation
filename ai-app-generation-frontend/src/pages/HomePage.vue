@@ -6,6 +6,7 @@ import { useLoginUserStore } from '@/stores/loginUser'
 import { addApp, listMyAppVoByPage, listGoodAppVoByPage } from '@/api/appController'
 import { getDeployUrl } from '@/config/env'
 import AppCard from '@/components/AppCard.vue'
+import { normalizePageTotal } from '@/utils/pageTotal'
 
 const router = useRouter()
 const loginUserStore = useLoginUserStore()
@@ -88,7 +89,7 @@ const loadMyApps = async () => {
 
     if (res.data.code === 0 && res.data.data) {
       myApps.value = res.data.data.records || []
-      myAppsPage.total = res.data.data.totalRow || 0
+      myAppsPage.total = normalizePageTotal(res.data.data.totalRow)
     }
   } catch (error) {
     console.error('加载我的应用失败：', error)
@@ -107,7 +108,7 @@ const loadFeaturedApps = async () => {
 
     if (res.data.code === 0 && res.data.data) {
       featuredApps.value = res.data.data.records || []
-      featuredAppsPage.total = res.data.data.totalRow || 0
+      featuredAppsPage.total = normalizePageTotal(res.data.data.totalRow)
     }
   } catch (error) {
     console.error('加载精选应用失败：', error)
