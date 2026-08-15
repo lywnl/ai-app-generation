@@ -110,6 +110,17 @@ class AiCodeGeneratorFacadeTest {
                         .getReturnType());
     }
 
+    @Test
+    void 在线生成不得公开无真实回合上下文的四参数入口() {
+        assertThrows(NoSuchMethodException.class,
+                () -> AiCodeGeneratorFacade.class.getMethod(
+                        "generateAndSaveCodeStream",
+                        String.class,
+                        CodeGenTypeEnum.class,
+                        long.class,
+                        boolean.class));
+    }
+
     @BeforeEach
     void setUp() {
         properties = new RagProperties();
@@ -172,23 +183,26 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void hybridFirstVueRetrievesRawQueryThenEnhancesGenerationRequest() {
+    void hybridFirstVueEnhancesGenerationRequestAndRetrievesRawQuery() {
         stubVueGenerator();
         properties.getHybrid().setEnabled(true);
         VueRagContext context = context("vue-skeleton");
+        VueTurnContext turnContext = newVueTurnContext("hybrid-first");
         when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
         when(promptAssembler.assembleVueProject(ENHANCED_QUERY, context)).thenReturn(AUGMENTED_QUERY);
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         InOrder order = inOrder(retrievalService, imageCollectionService, promptAssembler, generatorService);
-        order.verify(retrievalService).retrieveVueProject(RAW_QUERY);
         order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(retrievalService).retrieveVueProject(RAW_QUERY);
         order.verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, context);
         order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
         verify(retrievalService, never()).retrieve(any(), any());
         verify(promptAssembler, never()).assemble(any(), anyList());
+        turnContext.closeResources();
     }
 
     @Test
@@ -196,37 +210,43 @@ class AiCodeGeneratorFacadeTest {
         stubVueGenerator();
         properties.getHybrid().setEnabled(true);
         VueRagContext context = context("vue-skeleton");
+        VueTurnContext turnContext = newVueTurnContext("hybrid-non-first");
         when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
         when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("专用拼装");
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, false, turnContext, generatorService);
 
         verify(retrievalService).retrieveVueProject(RAW_QUERY);
         verify(imageCollectionService, never()).enhancePrompt(any());
         verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
         verify(generatorService).generateVueProjectCodeStream(APP_ID, "专用拼装");
+        turnContext.closeResources();
     }
 
     @Test
-    void disabledHybridUsesNewDenseOnlyWithRawQueryThenEnhancesGenerationRequest() {
+    void disabledHybridEnhancesGenerationRequestAndUsesRawQueryDenseOnly() {
         stubVueGenerator();
         properties.setEnabled(true);
         properties.getHybrid().setEnabled(false);
         VueRagContext context = context("dense-skeleton");
+        VueTurnContext turnContext = newVueTurnContext("dense-only");
         when(retrievalService.retrieveVueProjectDenseOnly(RAW_QUERY)).thenReturn(context);
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
         when(promptAssembler.assembleVueProject(ENHANCED_QUERY, context)).thenReturn(AUGMENTED_QUERY);
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         InOrder order = inOrder(retrievalService, imageCollectionService, promptAssembler, generatorService);
-        order.verify(retrievalService).retrieveVueProjectDenseOnly(RAW_QUERY);
         order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(retrievalService).retrieveVueProjectDenseOnly(RAW_QUERY);
         order.verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, context);
         order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
         verify(retrievalService, never()).retrieve(any(), any());
         verify(retrievalService, never()).retrieveVueProject(any());
         verify(promptAssembler, never()).assemble(any(), anyList());
+        turnContext.closeResources();
     }
 
     @Test
@@ -234,31 +254,36 @@ class AiCodeGeneratorFacadeTest {
         stubVueGenerator();
         properties.setEnabled(false);
         properties.getHybrid().setEnabled(true);
+        VueTurnContext turnContext = newVueTurnContext("rag-disabled");
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         verifyNoInteractions(retrievalService, promptAssembler);
         verify(imageCollectionService).enhancePrompt(RAW_QUERY);
         verify(generatorService).generateVueProjectCodeStream(APP_ID, ENHANCED_QUERY);
+        turnContext.closeResources();
     }
 
     @Test
     void hybridRetrievalFailureStillEnhancesAndGeneratesWithEmptyContext() {
         stubVueGenerator();
         properties.getHybrid().setEnabled(true);
+        VueTurnContext turnContext = newVueTurnContext("rag-failure");
         when(retrievalService.retrieveVueProject(RAW_QUERY))
                 .thenThrow(new IllegalStateException("检索依赖失败"));
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
         when(promptAssembler.assembleVueProject(ENHANCED_QUERY, VueRagContext.unavailable()))
                 .thenReturn("无 RAG 拼装");
 
-        assertDoesNotThrow(() -> facade.generateAndSaveCodeStream(
-                RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true));
+        assertDoesNotThrow(() -> facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, true, turnContext, generatorService));
 
         verify(imageCollectionService).enhancePrompt(RAW_QUERY);
         verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, VueRagContext.unavailable());
         verify(generatorService).generateVueProjectCodeStream(APP_ID, "无 RAG 拼装");
+        turnContext.closeResources();
     }
 
     @Test
@@ -266,14 +291,17 @@ class AiCodeGeneratorFacadeTest {
         stubVueGenerator();
         properties.getHybrid().setEnabled(true);
         VueRagContext context = context("vue-skeleton");
+        VueTurnContext turnContext = newVueTurnContext("image-fallback");
         when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(RAW_QUERY);
         when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("原消息拼装");
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, true);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
         verify(generatorService).generateVueProjectCodeStream(APP_ID, "原消息拼装");
+        turnContext.closeResources();
     }
 
     @ParameterizedTest
@@ -284,16 +312,19 @@ class AiCodeGeneratorFacadeTest {
             ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
         OnlineControlledTokenStream stream = new OnlineControlledTokenStream(reason);
         stubOnlineControlledGenerator(stream);
+        VueTurnContext context = newVueTurnContext(
+                "controlled-failure-" + reason);
 
         RuntimeException error = assertThrows(RuntimeException.class, () ->
-                facade.generateAndSaveCodeStream(
-                        RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false)
+                facade.generateVueProjectStream(
+                        RAW_QUERY, APP_ID, false, context, generatorService)
                         .then().block());
 
         assertTrue(error instanceof AiCodeGeneratorFacade
                 .OnlineControlledTerminationException);
         assertEquals(reason, ((AiCodeGeneratorFacade.OnlineControlledTerminationException)
                 error).reason());
+        context.closeResources();
     }
 
     @ParameterizedTest
@@ -303,10 +334,13 @@ class AiCodeGeneratorFacadeTest {
             ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
         OnlineControlledTokenStream stream = new OnlineControlledTokenStream(reason);
         stubOnlineControlledGenerator(stream);
+        VueTurnContext context = newVueTurnContext(
+                "controlled-success-" + reason);
 
-        assertDoesNotThrow(() -> facade.generateAndSaveCodeStream(
-                RAW_QUERY, CodeGenTypeEnum.VUE_PROJECT, APP_ID, false)
+        assertDoesNotThrow(() -> facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, false, context, generatorService)
                 .then().block());
+        context.closeResources();
     }
 
     @Test
@@ -510,15 +544,17 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void htmlKeepsLegacyOrderWithoutImageEnhancement() {
-        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.HTML))
-                .thenReturn(generatorService);
         List<RetrievedSnippet> snippets = List.of(snippet("html"));
+        SimpleGenerationTurnContext context =
+                newSimpleTurnContext("html-legacy-order");
         when(retrievalService.retrieve(RAW_QUERY, CodeGenTypeEnum.HTML)).thenReturn(snippets);
         when(promptAssembler.assemble(RAW_QUERY, snippets)).thenReturn("HTML 拼装");
         when(generatorService.generateHtmlCodeStream("HTML 拼装"))
                 .thenReturn(tokenStream);
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, true);
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, true,
+                context, generatorService);
 
         InOrder order = inOrder(retrievalService, promptAssembler, generatorService);
         order.verify(retrievalService).retrieve(RAW_QUERY, CodeGenTypeEnum.HTML);
@@ -526,13 +562,14 @@ class AiCodeGeneratorFacadeTest {
         order.verify(generatorService).generateHtmlCodeStream("HTML 拼装");
         verify(imageCollectionService, never()).enhancePrompt(any());
         verify(retrievalService, never()).retrieveVueProject(any());
+        context.close();
     }
 
     @Test
     void multiFileKeepsImageThenLegacyRetrievalOrder() {
-        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.MULTI_FILE))
-                .thenReturn(generatorService);
         List<RetrievedSnippet> snippets = List.of(snippet("multi"));
+        SimpleGenerationTurnContext context =
+                newSimpleTurnContext("multi-legacy-order");
         when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
         when(retrievalService.retrieve(ENHANCED_QUERY, CodeGenTypeEnum.MULTI_FILE))
                 .thenReturn(snippets);
@@ -540,7 +577,9 @@ class AiCodeGeneratorFacadeTest {
         when(generatorService.generateMultiFileCodeStream("多文件拼装"))
                 .thenReturn(tokenStream);
 
-        facade.generateAndSaveCodeStream(RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, true);
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, true,
+                context, generatorService);
 
         InOrder order = inOrder(imageCollectionService, retrievalService, promptAssembler, generatorService);
         order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
@@ -548,6 +587,7 @@ class AiCodeGeneratorFacadeTest {
         order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
         order.verify(generatorService).generateMultiFileCodeStream("多文件拼装");
         verify(retrievalService, never()).retrieveVueProject(any());
+        context.close();
     }
 
     @Test
@@ -833,9 +873,28 @@ class AiCodeGeneratorFacadeTest {
         return new VueRagContext(skeleton, List.of(), "catalog-v7", false);
     }
 
+    private SimpleGenerationTurnContext newSimpleTurnContext(String ownerToken) {
+        var operation = new AppOperationLeaseManager().acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                ownerToken);
+        return new SimpleGenerationTurnContext(operation);
+    }
+
+    private VueTurnContext newVueTurnContext(String turnId) {
+        AppOperationLeaseManager operationManager =
+                new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = sessionManager.open(operation, 9L, turnId);
+        return new VueTurnContext(
+                APP_ID, 9L, turnId, operation, lease,
+                admissionPermit(),
+                new FileToolBudgetGuard().newSession());
+    }
+
     private void stubVueGenerator() {
-        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
-                .thenReturn(generatorService);
         when(generatorService.generateVueProjectCodeStream(eq(APP_ID), any()))
                 .thenReturn(tokenStream);
     }
@@ -855,8 +914,6 @@ class AiCodeGeneratorFacadeTest {
 
     private void stubOnlineControlledGenerator(OnlineControlledTokenStream stream) {
         properties.setEnabled(false);
-        when(serviceFactory.getAiCodeGeneratorService(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
-                .thenReturn(generatorService);
         when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
                 .thenReturn(stream);
     }

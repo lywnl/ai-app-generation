@@ -6,6 +6,7 @@ import dev.langchain4j.memory.ChatMemory;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -18,18 +19,15 @@ public interface ModelRequestGate {
 
     /**
      * 在门禁实现拥有的受控执行上下文中派发准备结果。
-     * 默认实现保留第三方门禁的兼容语义；在线门禁应覆盖此方法，避免已完成 Future
-     * 把续调用内联回模型 SDK 回调线程。
+     * 默认实现失败关闭，避免已完成 Future 把续调用内联回模型 SDK 回调线程。
+     * 在线门禁必须覆盖此方法，并把完成回调提交到自身受管执行器。
      */
     default CompletionStage<DispatchStatus> onPrepared(
             CompletionStage<Decision> preparation,
             BiConsumer<Decision, Throwable> completion) {
         Objects.requireNonNull(preparation, "门禁准备结果不能为空");
         Objects.requireNonNull(completion, "门禁完成回调不能为空");
-        return preparation.handle((decision, failure) -> {
-            completion.accept(decision, failure);
-            return DispatchStatus.DISPATCHED;
-        });
+        return CompletableFuture.completedFuture(DispatchStatus.REJECTED);
     }
 
     @FunctionalInterface

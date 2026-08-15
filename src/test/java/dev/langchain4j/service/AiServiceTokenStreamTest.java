@@ -21,7 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 class AiServiceTokenStreamTest {
 
     @Test
-    void 首次请求必须使用门禁完成后的活动记忆而不是构造时旧快照() {
+    void 首次请求必须使用门禁完成后的活动记忆而不是构造时旧快照()
+            throws Exception {
         MutableChatMemory memory = new MutableChatMemory(7L);
         memory.add(UserMessage.from("旧上下文".repeat(10_000)));
         memory.add(AiMessage.from("旧回复"));
@@ -45,7 +46,7 @@ class AiServiceTokenStreamTest {
                 UserMessage.from("压缩摘要"),
                 AiMessage.from("已读取摘要"),
                 UserMessage.from("本轮问题"));
-        ModelRequestGate gate = request -> {
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(request -> {
             assertEquals(7L, request.memoryId());
             assertSame(memory, request.latestMemory().get());
             memory.replaceWith(compressedMessages);
@@ -55,24 +56,27 @@ class AiServiceTokenStreamTest {
                             request.latestMemory().get().messages(),
                             12_000,
                             ""));
-        };
-        TokenStream stream = service.chat(7L, "本轮问题");
+        })) {
+            TokenStream stream = service.chat(7L, "本轮问题");
 
-        stream.modelRequestGate(gate, action -> {
-                    action.run();
-                    return true;
-                })
-                .onPartialResponse(ignored -> { })
-                .ignoreErrors()
-                .start();
+            stream.modelRequestGate(gate, action -> {
+                        action.run();
+                        return true;
+                    })
+                    .onPartialResponse(ignored -> { })
+                    .ignoreErrors()
+                    .start();
+            gate.awaitIdle();
 
-        assertEquals(1, modelCalls.get());
-        assertEquals(compressedMessages,
-                capturedRequest.get().messages());
+            assertEquals(1, modelCalls.get());
+            assertEquals(compressedMessages,
+                    capturedRequest.get().messages());
+        }
     }
 
     @Test
-    void 首次请求等待门禁期间取消后晚到结果不得启动模型() {
+    void 首次请求等待门禁期间取消后晚到结果不得启动模型()
+            throws Exception {
         MutableChatMemory memory = new MutableChatMemory(7L);
         memory.add(UserMessage.from("旧上下文"));
         AtomicInteger modelCalls = new AtomicInteger();
@@ -91,25 +95,29 @@ class AiServiceTokenStreamTest {
                 .build();
         CompletableFuture<ModelRequestGate.Decision> preparation =
                 new CompletableFuture<>();
-        TokenStream stream = service.chat(7L, "本轮问题");
-        stream.modelRequestGate(
-                        request -> preparation,
-                        action -> {
-                            action.run();
-                            return true;
-                        })
-                .onPartialResponse(ignored -> { })
-                .ignoreErrors()
-                .start();
+        try (ManagedModelRequestGate gate =
+                     new ManagedModelRequestGate(request -> preparation)) {
+            TokenStream stream = service.chat(7L, "本轮问题");
+            stream.modelRequestGate(
+                            gate,
+                            action -> {
+                                action.run();
+                                return true;
+                            })
+                    .onPartialResponse(ignored -> { })
+                    .ignoreErrors()
+                    .start();
 
-        stream.cancel();
-        preparation.complete(new ModelRequestGate.Decision(
-                ModelRequestGate.Status.ALLOWED,
-                memory.messages(),
-                10,
-                ""));
+            stream.cancel();
+            preparation.complete(new ModelRequestGate.Decision(
+                    ModelRequestGate.Status.ALLOWED,
+                    memory.messages(),
+                    10,
+                    ""));
+            gate.awaitIdle();
 
-        assertEquals(0, modelCalls.get());
+            assertEquals(0, modelCalls.get());
+        }
     }
 
     @Test

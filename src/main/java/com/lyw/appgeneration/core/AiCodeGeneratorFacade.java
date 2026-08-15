@@ -121,56 +121,6 @@ public class AiCodeGeneratorFacade {
         };
     }
 
-    /**
-     * 统一入口：根据类型生成并保存代码（流式）
-     *
-     * @param userMessage     用户提示词
-     * @param codeGenTypeEnum 生成类型
-     * @param appId           应用 ID
-     * @param isFirstMessage  是否首次对话；仅首次时触发图片收集增强
-     */
-    public Flux<String> generateAndSaveCodeStream(String userMessage, CodeGenTypeEnum codeGenTypeEnum, long appId, boolean isFirstMessage) {
-        if (codeGenTypeEnum == null) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "生成类型为空");
-        }
-        // 根据ID 获取AI代码生成服务
-        AiCodeGeneratorService aiCodeGeneratorService = aiGeneratorServiceFactory.getAiCodeGeneratorService(appId, codeGenTypeEnum);
-        return switch (codeGenTypeEnum) {
-            case HTML -> {
-                String augmentedMessage = ragAugment(userMessage, CodeGenTypeEnum.HTML);
-                Flux<String> codeStream = processSimpleTokenStream(
-                        aiCodeGeneratorService.generateHtmlCodeStream(
-                                augmentedMessage), null);
-                yield progressCodeStream(codeStream, CodeGenTypeEnum.HTML, appId);
-            }
-            case MULTI_FILE -> {
-                String enhancedPrompt = isFirstMessage ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
-                String augmentedMessage = ragAugment(enhancedPrompt, CodeGenTypeEnum.MULTI_FILE);
-                Flux<String> codeStream = processSimpleTokenStream(
-                        aiCodeGeneratorService.generateMultiFileCodeStream(
-                                augmentedMessage), null);
-                yield progressCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
-            }
-            case VUE_PROJECT -> {
-                if (!ragProperties.isEnabled()) {
-                    String generationRequest = isFirstMessage
-                            ? imageCollectionService.enhancePrompt(userMessage)
-                            : userMessage;
-                    TokenStream tokenStream = aiCodeGeneratorService.generateVueProjectCodeStream(
-                            appId, generationRequest);
-                    yield processTokenStream(tokenStream);
-                }
-                yield prepareVueGeneration(
-                        userMessage, appId, isFirstMessage, aiCodeGeneratorService,
-                        ragProperties.getHybrid().isEnabled()).stream();
-            }
-            default -> {
-                String errorMsg = "不支持的生成类型: " + codeGenTypeEnum.getValue();
-                throw new BusinessException(ErrorCode.SYSTEM_ERROR, errorMsg);
-            }
-        };
-    }
-
     /** 普通在线回合专用入口，文件写入受精确租约和删除栅栏共同保护。 */
     public Flux<String> generateAndSaveCodeStream(
             String userMessage, CodeGenTypeEnum codeGenTypeEnum, long appId,
@@ -438,21 +388,6 @@ public class AiCodeGeneratorFacade {
         }
     }
 
-    private VueProjectGeneration prepareVueGeneration(
-            String userMessage,
-            long appId,
-            boolean isFirstMessage,
-            AiCodeGeneratorService generatorService,
-            boolean hybridEnabled) {
-        VueRagContext context = retrieveVueContext(userMessage, hybridEnabled);
-        String generationRequest = isFirstMessage
-                ? imageCollectionService.enhancePrompt(userMessage)
-                : userMessage;
-        String augmentedMessage = ragPromptAssembler.assembleVueProject(generationRequest, context);
-        TokenStream tokenStream = generatorService.generateVueProjectCodeStream(appId, augmentedMessage);
-        return new VueProjectGeneration(context, processTokenStream(tokenStream));
-    }
-
     /**
      * RAG 增强:召回相关模板片段并前置到用户消息
      * 失败自动降级为返回原 userMessage(由 RagRetrievalService 保证,不抛异常)
@@ -486,11 +421,6 @@ public class AiCodeGeneratorFacade {
      * @param tokenStream TokenStream 对象
      * @return Flux<String> 流式响应
      */
-    private Flux<String> processTokenStream(TokenStream tokenStream) {
-        return processTokenStream(tokenStream, () -> { }, () -> { },
-                this::onlineControlledTerminationError);
-    }
-
     private Flux<String> processOnlineTokenStream(
             TokenStream tokenStream, VueTurnContext context) {
         FileToolExecutionScopeManager.FileToolScope scope =

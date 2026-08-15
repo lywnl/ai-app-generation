@@ -4,10 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
-import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
+import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
+import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
+import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
 import com.lyw.appgeneration.service.rag.RagRerankService;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
@@ -33,6 +39,8 @@ import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import dev.langchain4j.service.TokenStream;
+import dev.langchain4j.service.ModelRequestGate;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -228,31 +236,48 @@ class VueKnowledgeIngestorTest {
             RagRetrievalService retrievalService,
             RagProperties properties) {
         properties.getHybrid().setEnabled(false);
-        AiGeneratorServiceFactory factory = mock(AiGeneratorServiceFactory.class);
         AiCodeGeneratorService generator = mock(AiCodeGeneratorService.class);
         ImageCollectionService imageService = mock(ImageCollectionService.class);
-        when(factory.getAiCodeGeneratorService(9L, CodeGenTypeEnum.VUE_PROJECT))
-                .thenReturn(generator);
         when(imageService.enhancePrompt("Vue3 基础工程 登录表单"))
                 .thenReturn("Vue3 基础工程 登录表单\n图片增强信息");
         when(generator.generateVueProjectCodeStream(
                 org.mockito.ArgumentMatchers.eq(9L), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(mock(TokenStream.class));
         AiCodeGeneratorFacade facade = new AiCodeGeneratorFacade();
-        ReflectionTestUtils.setField(facade, "aiGeneratorServiceFactory", factory);
         ReflectionTestUtils.setField(facade, "imageCollectionService", imageService);
         ReflectionTestUtils.setField(facade, "ragRetrievalService", retrievalService);
         ReflectionTestUtils.setField(facade, "ragPromptAssembler",
                 new RagPromptAssembler(properties, mock(VueRagMetricsCollector.class)));
         ReflectionTestUtils.setField(facade, "ragProperties", properties);
+        FileToolBudgetGuard budgetGuard = new FileToolBudgetGuard();
+        ReflectionTestUtils.setField(facade, "fileToolExecutionScopeManager",
+                new FileToolExecutionScopeManager(budgetGuard));
+        ReflectionTestUtils.setField(facade, "modelRequestGate",
+                mock(ModelRequestGate.class));
+        AppOperationLeaseManager operationManager =
+                new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(
+                9L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "disabled-hybrid-real-turn");
+        var lease = sessionManager.open(
+                operation, 11L, "disabled-hybrid-real-turn");
+        var permit = new VueTurnAdmissionController(
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()))
+                .tryAcquire().orElseThrow();
+        VueTurnContext turnContext = new VueTurnContext(
+                9L, 11L, "disabled-hybrid-real-turn", operation, lease,
+                permit, budgetGuard.newSession());
 
-        facade.generateAndSaveCodeStream(
-                "Vue3 基础工程 登录表单", CodeGenTypeEnum.VUE_PROJECT, 9L, true);
+        facade.generateVueProjectStream(
+                "Vue3 基础工程 登录表单", 9L, true,
+                turnContext, generator);
 
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(generator).generateVueProjectCodeStream(
                 org.mockito.ArgumentMatchers.eq(9L), promptCaptor.capture());
         verify(imageService).enhancePrompt("Vue3 基础工程 登录表单");
+        turnContext.closeResources();
         return promptCaptor.getValue();
     }
 

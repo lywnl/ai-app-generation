@@ -62,7 +62,8 @@ class AiServiceStreamingResponseHandlerTest {
             """;
 
     @Test
-    void 工具续调用必须等待门禁完成且等待期间释放当前模型回调票据() {
+    void 工具续调用必须等待门禁完成且等待期间释放当前模型回调票据()
+            throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -73,40 +74,43 @@ class AiServiceStreamingResponseHandlerTest {
                 new CompletableFuture<>();
         AtomicReference<ModelRequestGate.Request> gateRequest =
                 new AtomicReference<>();
-        ModelRequestGate gate = request -> {
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(request -> {
             gateRequest.set(request);
             return preparation;
-        };
-        AiServiceStreamingResponseHandler handler = gatedHandler(
-                context, memory, controller, gate, action -> {
-                    action.run();
-                    return true;
-                }, error -> fail("不应触发错误回调", error));
+        })) {
+            AiServiceStreamingResponseHandler handler = gatedHandler(
+                    context, memory, controller, gate, action -> {
+                        action.run();
+                        return true;
+                    }, error -> fail("不应触发错误回调", error));
 
-        handler.onCompleteResponse(responseWithTools(
-                tool("large-tool", "writeFile")));
+            handler.onCompleteResponse(responseWithTools(
+                    tool("large-tool", "writeFile")));
 
-        assertEquals(0, model.chatInvocations,
-                "工具结果加入后必须先等待统一门禁");
-        assertTrue(controller.awaitQuiescence(
-                        java.time.Duration.ofMillis(100)),
-                "prepare 返回后必须立即释放当前 SDK callback 票据");
-        assertSame(memory, gateRequest.get().latestMemory().get());
+            assertEquals(0, model.chatInvocations,
+                    "工具结果加入后必须先等待统一门禁");
+            assertTrue(controller.awaitQuiescence(
+                            java.time.Duration.ofMillis(100)),
+                    "prepare 返回后必须立即释放当前 SDK callback 票据");
+            assertSame(memory, gateRequest.get().latestMemory().get());
 
-        List<ChatMessage> compressedMessages = List.of(
-                UserMessage.from("压缩后的工具上下文"));
-        preparation.complete(new ModelRequestGate.Decision(
-                ModelRequestGate.Status.ALLOWED,
-                compressedMessages,
-                12_000,
-                ""));
+            List<ChatMessage> compressedMessages = List.of(
+                    UserMessage.from("压缩后的工具上下文"));
+            preparation.complete(new ModelRequestGate.Decision(
+                    ModelRequestGate.Status.ALLOWED,
+                    compressedMessages,
+                    12_000,
+                    ""));
+            gate.awaitIdle();
 
-        assertEquals(1, model.chatInvocations);
-        assertEquals(compressedMessages, model.lastChatRequest.messages());
+            assertEquals(1, model.chatInvocations);
+            assertEquals(compressedMessages, model.lastChatRequest.messages());
+        }
     }
 
     @Test
-    void 已完成门禁结果也必须先释放旧模型回调票据再续调() {
+    void 已完成门禁结果也必须先释放旧模型回调票据再续调()
+            throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -114,22 +118,25 @@ class AiServiceStreamingResponseHandlerTest {
         StreamingRequestController controller = new StreamingRequestController();
         assertTrue(controller.beforeModelRequest());
         AtomicBoolean oldCallbackReleased = new AtomicBoolean();
-        ModelRequestGate gate = request -> CompletableFuture.completedFuture(
-                allowed(request.latestMemory().get().messages()));
-        AiServiceStreamingResponseHandler handler = gatedHandler(
-                context, memory, controller, gate, action -> {
-                    oldCallbackReleased.set(controller.awaitQuiescence(
-                            java.time.Duration.ZERO));
-                    action.run();
-                    return true;
-                }, error -> fail("不应触发错误回调", error));
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
+                request -> CompletableFuture.completedFuture(
+                        allowed(request.latestMemory().get().messages())))) {
+            AiServiceStreamingResponseHandler handler = gatedHandler(
+                    context, memory, controller, gate, action -> {
+                        oldCallbackReleased.set(controller.awaitQuiescence(
+                                java.time.Duration.ZERO));
+                        action.run();
+                        return true;
+                    }, error -> fail("不应触发错误回调", error));
 
-        handler.onCompleteResponse(responseWithTools(
-                tool("completed-gate-tool", "writeFile")));
+            handler.onCompleteResponse(responseWithTools(
+                    tool("completed-gate-tool", "writeFile")));
+            gate.awaitIdle();
 
-        assertTrue(oldCallbackReleased.get(),
-                "即使 prepare 返回已完成 Future，也必须先退出旧 SDK callback");
-        assertEquals(1, model.chatInvocations);
+            assertTrue(oldCallbackReleased.get(),
+                    "即使 prepare 返回已完成 Future，也必须先退出旧 SDK callback");
+            assertEquals(1, model.chatInvocations);
+        }
     }
 
     @Test
@@ -215,37 +222,43 @@ class AiServiceStreamingResponseHandlerTest {
             value = ModelRequestGate.Status.class,
             names = {"COMPRESSION_FAILED", "HARD_LIMIT_REJECTED"})
     void 工具续调用门禁失败不得再次调用模型并返回安全错误(
-            ModelRequestGate.Status status) {
+            ModelRequestGate.Status status) throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
         StreamingRequestController controller = new StreamingRequestController();
         assertTrue(controller.beforeModelRequest());
         AtomicReference<Throwable> error = new AtomicReference<>();
-        ModelRequestGate gate = request -> CompletableFuture.completedFuture(
-                new ModelRequestGate.Decision(
-                        status, request.latestMemory().get().messages(),
-                        32_768, "上下文门禁安全提示"));
-        AiServiceStreamingResponseHandler handler = gatedHandler(
-                context,
-                MessageWindowChatMemory.withMaxMessages(100),
-                controller,
-                gate,
-                action -> {
-                    action.run();
-                    return true;
-                },
-                error::set);
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
+                request -> CompletableFuture.completedFuture(
+                        new ModelRequestGate.Decision(
+                                status,
+                                request.latestMemory().get().messages(),
+                                32_768,
+                                "上下文门禁安全提示")))) {
+            AiServiceStreamingResponseHandler handler = gatedHandler(
+                    context,
+                    MessageWindowChatMemory.withMaxMessages(100),
+                    controller,
+                    gate,
+                    action -> {
+                        action.run();
+                        return true;
+                    },
+                    error::set);
 
-        handler.onCompleteResponse(responseWithTools(
-                tool("rejected-tool", "writeFile")));
+            handler.onCompleteResponse(responseWithTools(
+                    tool("rejected-tool", "writeFile")));
+            gate.awaitIdle();
 
-        assertEquals(0, model.chatInvocations);
-        assertEquals("上下文门禁安全提示", error.get().getMessage());
+            assertEquals(0, model.chatInvocations);
+            assertEquals("上下文门禁安全提示", error.get().getMessage());
+        }
     }
 
     @Test
-    void 取消期间完成的晚到门禁结果不得启动新模型请求() {
+    void 取消期间完成的晚到门禁结果不得启动新模型请求()
+            throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -254,23 +267,28 @@ class AiServiceStreamingResponseHandlerTest {
         assertTrue(controller.beforeModelRequest());
         CompletableFuture<ModelRequestGate.Decision> preparation =
                 new CompletableFuture<>();
-        AiServiceStreamingResponseHandler handler = gatedHandler(
-                context, memory, controller, request -> preparation,
-                action -> {
-                    action.run();
-                    return true;
-                }, error -> fail("取消后不应报告普通错误", error));
+        try (ManagedModelRequestGate gate =
+                     new ManagedModelRequestGate(request -> preparation)) {
+            AiServiceStreamingResponseHandler handler = gatedHandler(
+                    context, memory, controller, gate,
+                    action -> {
+                        action.run();
+                        return true;
+                    }, error -> fail("取消后不应报告普通错误", error));
 
-        handler.onCompleteResponse(responseWithTools(
-                tool("cancelled-tool", "writeFile")));
-        controller.cancel();
-        preparation.complete(allowed(memory.messages()));
+            handler.onCompleteResponse(responseWithTools(
+                    tool("cancelled-tool", "writeFile")));
+            controller.cancel();
+            preparation.complete(allowed(memory.messages()));
+            gate.awaitIdle();
 
-        assertEquals(0, model.chatInvocations);
+            assertEquals(0, model.chatInvocations);
+        }
     }
 
     @Test
-    void 门禁结果不是永久授权回合关门后不得启动新模型请求() {
+    void 门禁结果不是永久授权回合关门后不得启动新模型请求()
+            throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -280,26 +298,31 @@ class AiServiceStreamingResponseHandlerTest {
         CompletableFuture<ModelRequestGate.Decision> preparation =
                 new CompletableFuture<>();
         AtomicBoolean continuationOpen = new AtomicBoolean(true);
-        AiServiceStreamingResponseHandler handler = gatedHandler(
-                context, memory, controller, request -> preparation,
-                action -> {
-                    if (!continuationOpen.get()) {
-                        return false;
-                    }
-                    action.run();
-                    return true;
-                }, error -> fail("关门后不应报告普通错误", error));
+        try (ManagedModelRequestGate gate =
+                     new ManagedModelRequestGate(request -> preparation)) {
+            AiServiceStreamingResponseHandler handler = gatedHandler(
+                    context, memory, controller, gate,
+                    action -> {
+                        if (!continuationOpen.get()) {
+                            return false;
+                        }
+                        action.run();
+                        return true;
+                    }, error -> fail("关门后不应报告普通错误", error));
 
-        handler.onCompleteResponse(responseWithTools(
-                tool("closed-turn-tool", "writeFile")));
-        continuationOpen.set(false);
-        preparation.complete(allowed(memory.messages()));
+            handler.onCompleteResponse(responseWithTools(
+                    tool("closed-turn-tool", "writeFile")));
+            continuationOpen.set(false);
+            preparation.complete(allowed(memory.messages()));
+            gate.awaitIdle();
 
-        assertEquals(0, model.chatInvocations);
+            assertEquals(0, model.chatInvocations);
+        }
     }
 
     @Test
-    void 旧请求代次的晚到门禁结果不得重复启动模型() {
+    void 旧请求代次的晚到门禁结果不得重复启动模型()
+            throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -308,19 +331,23 @@ class AiServiceStreamingResponseHandlerTest {
         assertTrue(controller.beforeModelRequest());
         CompletableFuture<ModelRequestGate.Decision> preparation =
                 new CompletableFuture<>();
-        AiServiceStreamingResponseHandler handler = gatedHandler(
-                context, memory, controller, request -> preparation,
-                action -> {
-                    action.run();
-                    return true;
-                }, error -> fail("旧代次不应报告普通错误", error));
+        try (ManagedModelRequestGate gate =
+                     new ManagedModelRequestGate(request -> preparation)) {
+            AiServiceStreamingResponseHandler handler = gatedHandler(
+                    context, memory, controller, gate,
+                    action -> {
+                        action.run();
+                        return true;
+                    }, error -> fail("旧代次不应报告普通错误", error));
 
-        handler.onCompleteResponse(responseWithTools(
-                tool("stale-generation-tool", "writeFile")));
-        assertTrue(controller.beforeModelRequest(1L));
-        preparation.complete(allowed(memory.messages()));
+            handler.onCompleteResponse(responseWithTools(
+                    tool("stale-generation-tool", "writeFile")));
+            assertTrue(controller.beforeModelRequest(1L));
+            preparation.complete(allowed(memory.messages()));
+            gate.awaitIdle();
 
-        assertEquals(0, model.chatInvocations);
+            assertEquals(0, model.chatInvocations);
+        }
     }
 
     @Test
