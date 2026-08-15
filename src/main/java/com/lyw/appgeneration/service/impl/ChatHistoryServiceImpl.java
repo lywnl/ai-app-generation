@@ -2,6 +2,8 @@ package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
+import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.ConversationTurn;
 import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -17,6 +19,7 @@ import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import jakarta.annotation.Resource;
@@ -25,7 +28,10 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 对话历史 服务层实现。
@@ -35,6 +41,8 @@ import java.util.List;
 @Slf4j
 @Service
 public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatHistory>  implements ChatHistoryService {
+
+    private static final int COMPLETE_TURN_LOAD_BATCH_SIZE = 100;
 
     @Resource
     @Lazy
@@ -196,6 +204,146 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             return HistoryLoadResult.failed();
         }
 
+    }
+
+    @Override
+    public HistoryLoadResult loadRecentCompleteTurnsToMemory(
+            Long appId,
+            ChatMemory chatMemory,
+            int blockingCompressionThreshold,
+            ChatTokenEstimator estimator) {
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用ID不能为空");
+        Objects.requireNonNull(chatMemory, "L0 ChatMemory 不能为空");
+        Objects.requireNonNull(estimator, "Token 估算器不能为空");
+        if (blockingCompressionThreshold <= 0) {
+            throw new IllegalArgumentException("阻塞压缩阈值必须大于 0");
+        }
+        try {
+            CompleteTurnLoad load = readRecentCompleteTurns(
+                    appId, blockingCompressionThreshold, estimator);
+            int loadedMessages = replaceColdMemory(chatMemory, load.turns());
+            if (loadedMessages == 0) {
+                return HistoryLoadResult.empty();
+            }
+            log.info("按完整回合加载 {} 条消息到 L0，应用ID：{}，估算Token：{}",
+                    loadedMessages, appId, load.tokens());
+            return HistoryLoadResult.loaded(loadedMessages);
+        } catch (Exception exception) {
+            log.error("按完整回合加载对话历史失败，应用ID：{}", appId, exception);
+            return HistoryLoadResult.failed();
+        }
+    }
+
+    private CompleteTurnLoad readRecentCompleteTurns(
+            Long appId,
+            int tokenThreshold,
+            ChatTokenEstimator estimator) {
+        List<ConversationTurn> newestFirst = new ArrayList<>();
+        ChatHistory pendingAi = null;
+        Long beforeId = null;
+        long totalTokens = 0L;
+        while (totalTokens < tokenThreshold) {
+            List<ChatHistory> batch = listRecentHistoryBatch(appId, beforeId);
+            if (batch == null) {
+                throw new IllegalStateException("数据库返回了 null 历史批次");
+            }
+            if (batch.isEmpty()) {
+                break;
+            }
+            long oldestId = requireDescendingBatchCursor(batch, beforeId);
+            for (ChatHistory history : batch) {
+                if (isAiMessage(history)) {
+                    pendingAi = history;
+                } else if (isUserMessage(history) && pendingAi != null) {
+                    ConversationTurn turn = toConversationTurn(
+                            history, pendingAi, estimator);
+                    newestFirst.add(turn);
+                    totalTokens = Math.min(Integer.MAX_VALUE,
+                            totalTokens + turn.tokens());
+                    pendingAi = null;
+                    if (totalTokens >= tokenThreshold) {
+                        break;
+                    }
+                } else {
+                    pendingAi = null;
+                }
+            }
+            if (totalTokens >= tokenThreshold
+                    || batch.size() < COMPLETE_TURN_LOAD_BATCH_SIZE) {
+                break;
+            }
+            beforeId = oldestId;
+        }
+        Collections.reverse(newestFirst);
+        return new CompleteTurnLoad(newestFirst, (int) totalTokens);
+    }
+
+    private List<ChatHistory> listRecentHistoryBatch(
+            Long appId, Long beforeId) {
+        QueryWrapper query = QueryWrapper.create().eq("appId", appId);
+        if (beforeId != null) {
+            query.lt("id", beforeId);
+        }
+        return this.list(query.orderBy("id", false)
+                .limit(COMPLETE_TURN_LOAD_BATCH_SIZE));
+    }
+
+    private long requireDescendingBatchCursor(
+            List<ChatHistory> batch, Long beforeId) {
+        Long oldestId = batch.getLast().getId();
+        if (oldestId == null || oldestId <= 0L
+                || (beforeId != null && oldestId >= beforeId)) {
+            throw new IllegalStateException("历史批次游标无效");
+        }
+        return oldestId;
+    }
+
+    private ConversationTurn toConversationTurn(
+            ChatHistory user,
+            ChatHistory ai,
+            ChatTokenEstimator estimator) {
+        if (user.getId() == null || ai.getId() == null
+                || user.getId() >= ai.getId()) {
+            throw new IllegalStateException("完整回合 ID 顺序无效");
+        }
+        List<ChatMessage> messages = List.of(
+                UserMessage.from(user.getMessage()),
+                AiMessage.from(ai.getMessage()));
+        int tokens = estimator.estimateMessages(messages);
+        if (tokens <= 0) {
+            throw new IllegalStateException("完整回合 Token 估算无效");
+        }
+        return new ConversationTurn(
+                user.getId(), ai.getId(), messages, tokens);
+    }
+
+    private int replaceColdMemory(
+            ChatMemory chatMemory, List<ConversationTurn> turns) {
+        List<ChatMessage> messages = turns.stream()
+                .flatMap(turn -> turn.messages().stream())
+                .toList();
+        chatMemory.clear();
+        chatMemory.add(messages);
+        return messages.size();
+    }
+
+    private boolean isUserMessage(ChatHistory history) {
+        return history != null && ChatHistoryMessageTypeEnum.USER.getValue()
+                .equals(history.getMessageType());
+    }
+
+    private boolean isAiMessage(ChatHistory history) {
+        return history != null && ChatHistoryMessageTypeEnum.AI.getValue()
+                .equals(history.getMessageType());
+    }
+
+    private record CompleteTurnLoad(
+            List<ConversationTurn> turns, int tokens) {
+
+        private CompleteTurnLoad {
+            turns = List.copyOf(turns);
+        }
     }
 
     @Override

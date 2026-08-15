@@ -1,7 +1,11 @@
 package com.lyw.appgeneration.ai;
 
 import com.github.benmanes.caffeine.cache.Cache;
+import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
+import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.ai.tools.BaseTool;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -11,20 +15,30 @@ import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doReturn;
@@ -152,6 +166,44 @@ class AiGeneratorServiceFactoryTest {
     }
 
     @Test
+    void onlineMemoryUsesTokenAwareUnlimitedWindowAndTokenColdLoad() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        RedisChatMemoryStore redisStore = statefulRedisStore();
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "chatHistoryService", history);
+        ReflectionTestUtils.setField(factory, "chatTokenEstimator", estimator);
+        ReflectionTestUtils.setField(factory, "memoryTokenProperties", properties);
+        ReflectionTestUtils.setField(factory, "memorySummaryService",
+                mock(MemorySummaryService.class));
+        ReflectionTestUtils.setField(factory, "userMemoryService",
+                mock(UserMemoryService.class));
+        when(history.loadRecentCompleteTurnsToMemory(
+                any(), any(), any(Integer.class), any()))
+                .thenReturn(ChatHistoryService.HistoryLoadResult.empty());
+
+        LayeredChatMemory layered = factory.createOnlineChatMemory(
+                7L, CodeGenTypeEnum.HTML);
+
+        ArgumentCaptor<ChatMemory> memoryCaptor =
+                ArgumentCaptor.forClass(ChatMemory.class);
+        verify(history).loadRecentCompleteTurnsToMemory(
+                eq(7L), memoryCaptor.capture(), eq(30_720), same(estimator));
+        ChatMemory l0 = memoryCaptor.getValue();
+        assertInstanceOf(TokenAwareChatMemory.class, l0);
+        assertEquals(7L, layered.id());
+        for (int turn = 0; turn < 60; turn++) {
+            layered.add(UserMessage.from("问题-" + turn));
+            layered.add(AiMessage.from("回复-" + turn));
+        }
+        assertEquals(120, l0.messages().size());
+        verify(history, never()).loadChatHistoryToMemory(
+                any(), any(), any(Integer.class));
+    }
+
+    @Test
     void failedColdHistoryLoadDoesNotReturnOrCacheVueService() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
         RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
@@ -161,7 +213,12 @@ class AiGeneratorServiceFactoryTest {
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
                 new VueBuildRepairMetricsCollector(registry));
-        when(history.loadChatHistoryToMemory(any(), any(), any(Integer.class)))
+        ReflectionTestUtils.setField(factory, "chatTokenEstimator",
+                mock(ChatTokenEstimator.class));
+        ReflectionTestUtils.setField(factory, "memoryTokenProperties",
+                new MemoryTokenProperties());
+        when(history.loadRecentCompleteTurnsToMemory(
+                any(), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
 
         assertThrows(IllegalStateException.class, () -> factory
@@ -169,7 +226,8 @@ class AiGeneratorServiceFactoryTest {
         assertThrows(IllegalStateException.class, () -> factory
                 .getAiCodeGeneratorService(7L, CodeGenTypeEnum.VUE_PROJECT));
 
-        verify(history, times(2)).loadChatHistoryToMemory(any(), any(), any(Integer.class));
+        verify(history, times(2)).loadRecentCompleteTurnsToMemory(
+                any(), any(), any(Integer.class), any());
         assertEquals(2.0, registry.get("vue_memory_l0_sync_total")
                 .tags("action", "rebuild", "result", "failed")
                 .counter().count());
@@ -187,13 +245,32 @@ class AiGeneratorServiceFactoryTest {
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
                 new VueBuildRepairMetricsCollector(registry));
-        when(history.loadChatHistoryToMemory(any(), any(), any(Integer.class)))
+        ReflectionTestUtils.setField(factory, "chatTokenEstimator",
+                mock(ChatTokenEstimator.class));
+        ReflectionTestUtils.setField(factory, "memoryTokenProperties",
+                new MemoryTokenProperties());
+        when(history.loadRecentCompleteTurnsToMemory(
+                any(), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
 
         assertThrows(IllegalStateException.class, () -> factory
                 .getAiCodeGeneratorService(7L, codeGenType));
 
         assertEquals(null, registry.find("vue_memory_l0_sync_total").counter());
+    }
+
+    private RedisChatMemoryStore statefulRedisStore() {
+        RedisChatMemoryStore store = mock(RedisChatMemoryStore.class);
+        AtomicReference<List<ChatMessage>> messages =
+                new AtomicReference<>(List.of());
+        when(store.getMessages(any())).thenAnswer(invocation ->
+                messages.get());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            List<ChatMessage> updated = invocation.getArgument(1);
+            messages.set(List.copyOf(updated));
+            return null;
+        }).when(store).updateMessages(any(), anyList());
+        return store;
     }
 
     private static final class EvaluationTools extends BaseTool {

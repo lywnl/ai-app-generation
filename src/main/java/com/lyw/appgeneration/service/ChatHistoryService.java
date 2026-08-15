@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service;
 
+import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.model.dto.app.ChatHistoryQueryRequest;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
@@ -62,6 +63,24 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      */
     HistoryLoadResult loadChatHistoryToMemory(
             Long appId, ChatMemory chatMemory, int maxCount);
+
+    /**
+     * 按完整 User/AI 回合从新到旧回填 L0，累计达到阻塞压缩阈值后停止。
+     *
+     * <p>查询和回合识别全部成功后才替换 ChatMemory，避免数据库分批读取失败时
+     * 先清空现有 L0。若全部完整历史不足阈值，则完整回填。</p>
+     *
+     * @param appId 应用 ID
+     * @param chatMemory 待重建的 L0
+     * @param blockingCompressionThreshold 阻塞压缩阈值
+     * @param estimator 统一 Token 估算器
+     * @return 加载状态和实际回填的消息条数
+     */
+    HistoryLoadResult loadRecentCompleteTurnsToMemory(
+            Long appId,
+            ChatMemory chatMemory,
+            int blockingCompressionThreshold,
+            ChatTokenEstimator estimator);
 
     enum HistoryLoadStatus {
         LOADED,

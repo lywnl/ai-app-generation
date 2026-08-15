@@ -3,8 +3,11 @@ package com.lyw.appgeneration.ai;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.lyw.appgeneration.ai.guardrail.PromptSafetyInputGuardrail;
+import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
+import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.ai.tools.*;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.manger.ToolManager;
@@ -53,6 +56,12 @@ public class AiGeneratorServiceFactory {
 
     @Resource
     private UserMemoryService userMemoryService;
+
+    @Resource
+    private ChatTokenEstimator chatTokenEstimator;
+
+    @Resource
+    private MemoryTokenProperties memoryTokenProperties;
 
     @Resource
     private ToolManager toolManager;
@@ -133,27 +142,7 @@ public class AiGeneratorServiceFactory {
      * 创建新的 AI 服务实例
      */
     private AiCodeGeneratorService createAiCodeGeneratorService(long appId, CodeGenTypeEnum codeGenType) {
-        // L0 热窗口:委托给 MessageWindowChatMemory(Redis 持久化 + 窗口裁剪 + tool 对成对驱逐由其内置负责)
-        MessageWindowChatMemory delegate = MessageWindowChatMemory
-                .builder()
-                .id(appId)
-                .chatMemoryStore(redisChatMemoryStore)
-                .maxMessages(100)
-                .build();
-        // 冷启动重建:回填最近原文到 delegate(L1 摘要由 LayeredChatMemory.messages() 在拼装时注入)
-        ChatHistoryService.HistoryLoadResult historyLoad =
-                chatHistoryService.loadChatHistoryToMemory(appId, delegate, 20);
-        if (historyLoad.status() == ChatHistoryService.HistoryLoadStatus.FAILED) {
-            recordVueColdRebuild(
-                    VueBuildRepairMetricsCollector.MemoryResult.FAILED, codeGenType);
-            throw new IllegalStateException("从 MySQL 重建对话历史失败,appId=" + appId);
-        }
-        recordVueColdRebuild(historyLoad.status()
-                == ChatHistoryService.HistoryLoadStatus.EMPTY
-                ? VueBuildRepairMetricsCollector.MemoryResult.EMPTY
-                : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
-        // 分层装饰器:messages() 返回前前置 L2 用户偏好 + L1 摘要;add/clear/id 全部委托 delegate
-        LayeredChatMemory chatMemory = new LayeredChatMemory(delegate, memorySummaryService, userMemoryService);
+        LayeredChatMemory chatMemory = createOnlineChatMemory(appId, codeGenType);
         // 根据代码生成类型选择不同的模型配置
         return switch (codeGenType) {
             // Vue 项目生成使用推理模型
@@ -186,6 +175,38 @@ public class AiGeneratorServiceFactory {
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR,
                     "不支持的代码生成类型: " + codeGenType.getValue());
         };
+    }
+
+    /** 按固定装饰顺序创建在线 L0/L1/L2 记忆，并从 MySQL 重建完整回合。 */
+    LayeredChatMemory createOnlineChatMemory(
+            long appId, CodeGenTypeEnum codeGenType) {
+        // MessageWindow 只保留 Redis store 和工具对一致性，不再按消息条数淘汰。
+        MessageWindowChatMemory delegate = MessageWindowChatMemory
+                .builder()
+                .id(appId)
+                .chatMemoryStore(redisChatMemoryStore)
+                .maxMessages(Integer.MAX_VALUE)
+                .build();
+        TokenAwareChatMemory tokenAwareMemory =
+                new TokenAwareChatMemory(delegate);
+        // 冷启动按完整回合回填到 30K；L1/L2 由最外层装饰器注入。
+        ChatHistoryService.HistoryLoadResult historyLoad =
+                chatHistoryService.loadRecentCompleteTurnsToMemory(
+                        appId,
+                        tokenAwareMemory,
+                        memoryTokenProperties.getBlockingCompressionThreshold(),
+                        chatTokenEstimator);
+        if (historyLoad.status() == ChatHistoryService.HistoryLoadStatus.FAILED) {
+            recordVueColdRebuild(
+                    VueBuildRepairMetricsCollector.MemoryResult.FAILED, codeGenType);
+            throw new IllegalStateException("从 MySQL 重建对话历史失败,appId=" + appId);
+        }
+        recordVueColdRebuild(historyLoad.status()
+                == ChatHistoryService.HistoryLoadStatus.EMPTY
+                ? VueBuildRepairMetricsCollector.MemoryResult.EMPTY
+                : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
+        return new LayeredChatMemory(
+                tokenAwareMemory, memorySummaryService, userMemoryService);
     }
 
     private void recordVueColdRebuild(
