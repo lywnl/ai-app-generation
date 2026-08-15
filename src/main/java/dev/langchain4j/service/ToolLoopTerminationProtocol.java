@@ -122,7 +122,7 @@ public final class ToolLoopTerminationProtocol {
                 && fields.get("timedOut") == null
                 && Boolean.FALSE.equals(fields.get("repairable"))
                 && Boolean.FALSE.equals(fields.get("reflectionRequired"))
-                && fields.get("nextAction") == null
+                && "STOP".equals(fields.get("nextAction"))
                 && fields.get("errorSummary") == null
                 && Boolean.TRUE.equals(fields.get("terminateToolLoop"))
                 && string(fields.get("message")).startsWith("PROTOCOL_ERROR")

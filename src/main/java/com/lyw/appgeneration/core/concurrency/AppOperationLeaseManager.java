@@ -57,6 +57,13 @@ public final class AppOperationLeaseManager {
         GENERATE, DEPLOY, DOWNLOAD, DELETE
     }
 
+    /** 条件取消在精确租约边界上的原子判定结果。 */
+    public enum CancellationClaimResult {
+        CLAIMED,
+        NOT_CLAIMED,
+        LEASE_INACTIVE
+    }
+
     @FunctionalInterface
     interface CancellationDispatchStarter {
         void start(Runnable task);
@@ -430,12 +437,29 @@ public final class AppOperationLeaseManager {
          * 认领失败时不改变租约；认领成功后，晚到回调不可能再取得票据。
          */
         public boolean requestCancellationIf(BooleanSupplier claimAction) {
-            ensureActiveOrCancellationRequested();
-            boolean changed = state.requestCancellationIf(claimAction);
-            if (changed) {
+            CancellationClaimResult result = requestCancellationDecisionIf(
+                    claimAction);
+            if (result == CancellationClaimResult.LEASE_INACTIVE) {
+                throw new IllegalStateException("应用操作租约已经失效");
+            }
+            return result == CancellationClaimResult.CLAIMED;
+        }
+
+        /**
+         * 原子区分终态未认领与租约已经失效，取消动作异常仍原样传播。
+         */
+        public CancellationClaimResult requestCancellationDecisionIf(
+                BooleanSupplier claimAction) {
+            Objects.requireNonNull(claimAction, "终态认领动作不能为空");
+            if (closed.get()) {
+                return CancellationClaimResult.LEASE_INACTIVE;
+            }
+            CancellationClaimResult result =
+                    state.requestCancellationDecisionIf(claimAction);
+            if (result == CancellationClaimResult.CLAIMED) {
                 state.fireCancellationActions();
             }
-            return changed;
+            return result;
         }
 
         public boolean awaitQuiescence(Duration timeout) throws InterruptedException {
@@ -736,18 +760,19 @@ public final class AppOperationLeaseManager {
             return true;
         }
 
-        private synchronized boolean requestCancellationIf(
+        private synchronized CancellationClaimResult
+                requestCancellationDecisionIf(
                 BooleanSupplier claimAction) {
             Objects.requireNonNull(claimAction, "终态认领动作不能为空");
             if (ownerClosed || replaced) {
-                throw new IllegalStateException("应用操作租约已经失效");
+                return CancellationClaimResult.LEASE_INACTIVE;
             }
             if (cancellationRequested || !claimAction.getAsBoolean()) {
-                return false;
+                return CancellationClaimResult.NOT_CLAIMED;
             }
             cancellationRequested = true;
             notifyAll();
-            return true;
+            return CancellationClaimResult.CLAIMED;
         }
 
         private void fireCancellationActions() {

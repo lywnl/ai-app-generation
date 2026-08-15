@@ -297,6 +297,99 @@ class VueTurnContextTest {
     }
 
     @Test
+    void 晚到取消遇到已经认领并释放的终态必须幂等返回false() {
+        VueTurnContext context = realContext("turn-late-cancellation");
+        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
+                context.commitUser(() -> true));
+        assertTrue(context.tryStartFinalization(
+                VueTurnContext.TerminalTrigger.COMPLETED));
+        context.closeResources();
+
+        assertFalse(context.tryStartCancellation(
+                VueTurnContext.TerminalTrigger.CANCELLED));
+    }
+
+    @Test
+    void 活跃回合租约异常失效时取消必须继续暴露生命周期错误() {
+        VueTurnContext context = realContext("turn-active-lease-lost");
+        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
+                context.commitUser(() -> true));
+        context.closeResources();
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> context.tryStartCancellation(
+                        VueTurnContext.TerminalTrigger.CANCELLED));
+
+        assertEquals("应用操作租约已经失效", thrown.getMessage());
+        assertEquals(VueTurnContext.TurnStage.ACTIVE,
+                context.turnState().stage());
+    }
+
+    @Test
+    void 取消动作异常不能被误判为晚到取消() {
+        String turnId = "turn-cancellation-action-failed";
+        var operation = new com.lyw.appgeneration.core.concurrency
+                .AppOperationLeaseManager().acquire(
+                7L,
+                com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager
+                        .AppOperationType.GENERATE,
+                turnId);
+        var vueLease = new com.lyw.appgeneration.core.builder
+                .VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, vueLease,
+                new FileToolBudgetGuard().newSession());
+        IllegalStateException cancellationFailure =
+                new IllegalStateException("取消动作失败");
+        operation.registerCancellation(() -> {
+            throw cancellationFailure;
+        });
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> context.tryStartCancellation(
+                        VueTurnContext.TerminalTrigger.CANCELLED));
+
+        assertSame(cancellationFailure, thrown);
+        context.closeResources();
+    }
+
+    @Test
+    void 取消动作抛出租约失效异常时也不能被误判为晚到取消() {
+        String turnId = "turn-inactive-lease-action-failed";
+        var manager = new com.lyw.appgeneration.core.concurrency
+                .AppOperationLeaseManager();
+        var operation = manager.acquire(
+                7L,
+                com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager
+                        .AppOperationType.GENERATE,
+                turnId);
+        var vueLease = new com.lyw.appgeneration.core.builder
+                .VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, vueLease,
+                new FileToolBudgetGuard().newSession());
+        var staleOperation = manager.acquire(
+                8L,
+                com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager
+                        .AppOperationType.GENERATE,
+                "stale-operation");
+        staleOperation.close();
+        operation.registerCancellation(staleOperation::requestCancellation);
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> context.tryStartCancellation(
+                        VueTurnContext.TerminalTrigger.CANCELLED));
+
+        assertEquals("应用操作租约已经失效", thrown.getMessage());
+        assertEquals(VueTurnContext.TurnStage.FINALIZING,
+                context.turnState().stage());
+        context.closeResources();
+    }
+
+    @Test
     void 共享收尾异常必须唤醒观察者且已注销观察者不得回调() {
         VueTurnContext context = context("turn-finalization-failed");
         assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
@@ -448,6 +541,20 @@ class VueTurnContextTest {
         return VueTurnContext.testing(
                 7L, 9L, turnId,
                 com.lyw.appgeneration.core.builder.VueBuildPhase.GENERATING);
+    }
+
+    private VueTurnContext realContext(String turnId) {
+        var operation = new com.lyw.appgeneration.core.concurrency
+                .AppOperationLeaseManager().acquire(
+                7L,
+                com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager
+                        .AppOperationType.GENERATE,
+                turnId);
+        var vueLease = new com.lyw.appgeneration.core.builder
+                .VueBuildSessionManager().open(operation, 9L, turnId);
+        return new VueTurnContext(
+                7L, 9L, turnId, operation, vueLease,
+                new FileToolBudgetGuard().newSession());
     }
 
     private void await(CountDownLatch latch) {

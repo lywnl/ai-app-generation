@@ -50,6 +50,31 @@ class VueRetrievalResourceProviderTest {
     }
 
     @Test
+    void Rag总开关关闭时不得加载模板或记录目录错误() {
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                VueRetrievalResourceProvider.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            RagProperties properties = new RagProperties();
+            properties.setEnabled(false);
+            properties.setTemplatesDir("\0");
+
+            VueRetrievalResourceProvider provider =
+                    new VueRetrievalResourceProvider(
+                            properties, new ObjectMapper());
+
+            assertTrue(provider.current().isEmpty());
+            assertTrue(appender.list.isEmpty(),
+                    "RAG 关闭后不应再尝试解析 Vue 模板目录");
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
     void keepsCatalogAvailableWhenBm25InitializationFails(@TempDir Path tempDir) throws IOException {
         Path vueRoot = tempDir.resolve("vue-project");
         TemplateTestData.write(

@@ -16,6 +16,7 @@ import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import dev.langchain4j.service.ToolLoopTerminationProtocol;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -384,6 +385,22 @@ class BuildProjectToolTest {
         assertEquals("第 1 次构建失败（阶段：NPM_BUILD），正在进行最小修复", markdown);
         assertFalse(markdown.contains("绝密原始诊断"));
         assertFalse(markdown.contains("/private/project"));
+    }
+
+    @Test
+    void 生产协议的终止拒绝必须让ReAct循环立即退出() {
+        String raw = BuildProjectProtocolSupport.json(
+                BuildProjectToolResult.rejected(
+                        "PROTOCOL_ERROR: 当前构建回合不能继续构建"));
+
+        var termination = ToolLoopTerminationProtocol.parseTrusted(
+                "buildProject", raw);
+
+        assertTrue(termination.terminate());
+        assertEquals(
+                ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR,
+                termination.reason());
+        assertNull(termination.finalResponse());
     }
 
     @Test

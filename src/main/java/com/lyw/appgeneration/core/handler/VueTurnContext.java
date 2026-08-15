@@ -5,6 +5,7 @@ import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationLease;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CancellationClaimResult;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverContext;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverRegistration;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController.AdmissionPermit;
@@ -345,10 +346,23 @@ public final class VueTurnContext {
                 && trigger != TerminalTrigger.TIMED_OUT) {
             throw new IllegalArgumentException("只有取消或超时可以关闭回合取消门");
         }
-        boolean claimed = operationLease == null
-                ? tryStartFinalization(trigger)
-                : operationLease.requestCancellationIf(
+        if (operationLease == null) {
+            return completeCancellationClaim(tryStartFinalization(trigger));
+        }
+        CancellationClaimResult result = operationLease
+                .requestCancellationDecisionIf(
                         () -> tryStartFinalization(trigger));
+        if (result == CancellationClaimResult.LEASE_INACTIVE) {
+            if (turnState.get().stage() != TurnStage.ACTIVE) {
+                return false;
+            }
+            throw new IllegalStateException("应用操作租约已经失效");
+        }
+        return completeCancellationClaim(
+                result == CancellationClaimResult.CLAIMED);
+    }
+
+    private boolean completeCancellationClaim(boolean claimed) {
         if (!claimed) {
             return false;
         }
@@ -693,7 +707,18 @@ public final class VueTurnContext {
             if (remaining.isZero() || remaining.isNegative()) {
                 throw new TimeoutException("删除接管等待回合终态超时");
             }
-            return completion.get(remaining.toNanos(), TimeUnit.NANOSECONDS);
+            try {
+                return completion.get(
+                        remaining.toNanos(), TimeUnit.NANOSECONDS);
+            } catch (ExecutionException exception) {
+                if (exception.getCause() instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                if (exception.getCause() instanceof Error error) {
+                    throw error;
+                }
+                throw exception;
+            }
         }
     }
 

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.RejectedExecutionException;
@@ -34,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -92,6 +94,49 @@ class VueTurnCancellationCoordinatorTest {
                 "subscriber_cancelled", "completed"));
         manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "turn-next").close();
+    }
+
+    @Test
+    void 取消动作失败后已认领终态必须失败收尾并释放静默租约()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-cancellation-action-failure";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(
+                operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        IllegalStateException cancellationFailure =
+                new IllegalStateException("模型取消失败");
+        context.registerModelCancellation(() -> {
+            throw cancellationFailure;
+        });
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+
+        try (AutoCloseable observer = context.onFinalized(
+                ignored -> { }, observedFailure::set);
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), Runnable::run,
+                     Duration.ofMillis(20))) {
+            IllegalStateException thrown = assertThrows(
+                    IllegalStateException.class,
+                    () -> coordinator.requestCancellation(
+                            context, () -> "部分内容"));
+
+            assertSame(cancellationFailure, thrown);
+            assertSame(cancellationFailure, observedFailure.get());
+            assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                    context.turnState().stage());
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "turn-after-cancellation-failure").close();
+        } finally {
+            context.closeResources();
+        }
     }
 
     @Test
@@ -331,6 +376,257 @@ class VueTurnCancellationCoordinatorTest {
         verify(finalizer).finalizeOnce(eq(context), any());
         manager.acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-safe-fallback").close();
+    }
+
+    @Test
+    void 执行器拒绝时非阻塞线程不得同步执行取消持久化() throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-rejected-non-blocking";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        RejectedExecutionException rejection =
+                new RejectedExecutionException("initial schedule rejected");
+        LinkedBlockingQueue<Runnable> recoveryTasks =
+                new LinkedBlockingQueue<>();
+        AtomicInteger submissions = new AtomicInteger();
+        java.util.concurrent.Executor recoveringExecutor = task -> {
+            if (submissions.incrementAndGet() == 1) {
+                throw rejection;
+            }
+            recoveryTasks.add(task);
+        };
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        reactor.core.scheduler.Scheduler scheduler =
+                reactor.core.scheduler.Schedulers.newParallel(
+                        "test-cancel-rejected", 1);
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+        AtomicBoolean triggerWasNonBlocking = new AtomicBoolean();
+        CountDownLatch requestReturned = new CountDownLatch(1);
+
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, recoveringExecutor, Duration.ofMillis(20))) {
+            scheduler.schedule(() -> {
+                triggerWasNonBlocking.set(
+                        reactor.core.scheduler.Schedulers
+                                .isInNonBlockingThread());
+                try {
+                    coordinator.requestCancellation(context, () -> "部分");
+                } catch (Throwable failure) {
+                    observedFailure.set(failure);
+                } finally {
+                    requestReturned.countDown();
+                }
+            });
+
+            assertTrue(requestReturned.await(1, TimeUnit.SECONDS));
+            assertTrue(triggerWasNonBlocking.get());
+            assertSame(rejection, observedFailure.get());
+            verify(finalizer, org.mockito.Mockito.never())
+                    .finalizeOnce(any(), any());
+            assertEquals(1, coordinator.pendingCount());
+
+            Runnable drainTask = recoveryTasks.poll(1, TimeUnit.SECONDS);
+            assertNotNull(drainTask);
+            Thread drainThread = Thread.ofVirtual()
+                    .name("test-cancel-rejected-drain")
+                    .start(drainTask);
+            drainThread.join(Duration.ofSeconds(1));
+
+            assertFalse(drainThread.isAlive());
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-rejected-non-blocking").close();
+        } finally {
+            scheduler.dispose();
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 非阻塞线程连续遭遇执行器拒绝时仍须释放静默资源()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-rejected-non-blocking-twice";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        AtomicInteger submissions = new AtomicInteger();
+        java.util.concurrent.Executor rejecting = task -> {
+            submissions.incrementAndGet();
+            throw new RejectedExecutionException("executor closed");
+        };
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        reactor.core.scheduler.Scheduler scheduler =
+                reactor.core.scheduler.Schedulers.newParallel(
+                        "test-cancel-double-rejection", 1);
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+        CountDownLatch requestReturned = new CountDownLatch(1);
+
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, rejecting, Duration.ofMillis(20))) {
+            scheduler.schedule(() -> {
+                try {
+                    coordinator.requestCancellation(context, () -> "部分");
+                } catch (Throwable failure) {
+                    observedFailure.set(failure);
+                } finally {
+                    requestReturned.countDown();
+                }
+            });
+
+            assertTrue(requestReturned.await(1, TimeUnit.SECONDS));
+            assertTrue(observedFailure.get()
+                    instanceof RejectedExecutionException);
+            assertEquals(2, submissions.get());
+            assertEquals(0, coordinator.pendingCount());
+            assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                    context.turnState().stage());
+            verify(finalizer, org.mockito.Mockito.never())
+                    .finalizeOnce(any(), any());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-double-rejection").close();
+        } finally {
+            scheduler.dispose();
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 取消执行器出现非标准运行时异常时必须失败终态并释放静默资源()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-executor-runtime-failure";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        IllegalStateException schedulingFailure =
+                new IllegalStateException("任务装饰器异常");
+        java.util.concurrent.Executor failing = task -> {
+            throw schedulingFailure;
+        };
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+
+        try (AutoCloseable observer = context.onFinalized(
+                ignored -> { }, observedFailure::set);
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), failing,
+                     Duration.ofMillis(20))) {
+            IllegalStateException thrown = assertThrows(
+                    IllegalStateException.class,
+                    () -> coordinator.requestCancellation(
+                            context, () -> "部分"));
+
+            assertSame(schedulingFailure, thrown);
+            assertSame(schedulingFailure, observedFailure.get());
+            assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                    context.turnState().stage());
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-runtime-scheduling-failure").close();
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 同步兜底收尾失败时必须失败共享终态并释放静默租约()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-quiet-fallback-failure";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        IllegalStateException prefixFailure =
+                new IllegalStateException("同步正文读取失败");
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+        java.util.concurrent.Executor rejecting = task -> {
+            throw new RejectedExecutionException("executor closed");
+        };
+
+        try (AutoCloseable observer = context.onFinalized(
+                ignored -> { }, observedFailure::set);
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), rejecting,
+                     Duration.ofMillis(20))) {
+            IllegalStateException thrown = assertThrows(
+                    IllegalStateException.class,
+                    () -> coordinator.requestCancellation(context, () -> {
+                        throw prefixFailure;
+                    }));
+
+            assertSame(prefixFailure, thrown);
+            assertSame(prefixFailure, observedFailure.get());
+            assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                    context.turnState().stage());
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-quiet-fallback-failure").close();
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 同步兜底收尾出现Error时也必须失败共享终态并释放静默租约()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-quiet-fallback-error";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        AssertionError prefixFailure = new AssertionError("同步正文严重错误");
+        AtomicReference<Throwable> observedFailure = new AtomicReference<>();
+        java.util.concurrent.Executor rejecting = task -> {
+            throw new RejectedExecutionException("executor closed");
+        };
+
+        try (AutoCloseable observer = context.onFinalized(
+                ignored -> { }, observedFailure::set);
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), rejecting,
+                     Duration.ofMillis(20))) {
+            AssertionError thrown = assertThrows(
+                    AssertionError.class,
+                    () -> coordinator.requestCancellation(context, () -> {
+                        throw prefixFailure;
+                    }));
+
+            assertSame(prefixFailure, thrown);
+            assertSame(prefixFailure, observedFailure.get());
+            assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                    context.turnState().stage());
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-quiet-fallback-error").close();
+        } finally {
+            context.closeResources();
+        }
     }
 
     @Test
@@ -719,6 +1015,137 @@ class VueTurnCancellationCoordinatorTest {
     }
 
     @Test
+    void 预提交取消动作失败后必须排空并释放静默租约() throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-pre-commit-cancellation-failure";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        IllegalStateException cancellationFailure =
+                new IllegalStateException("预提交模型取消失败");
+        context.registerModelCancellation(() -> {
+            throw cancellationFailure;
+        });
+        assertEquals(VueTurnContext.PreCommitTerminationDecision.PRE_COMMIT_WON,
+                context.claimPreCommitTermination());
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), executor,
+                     Duration.ofMillis(20))) {
+            CompletionStage<Void> cleanup =
+                    coordinator.requestPreCommitCleanup(context);
+
+            CompletionException thrown = assertThrows(
+                    CompletionException.class,
+                    () -> cleanup.toCompletableFuture().join());
+            assertSame(cancellationFailure, thrown.getCause());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (coordinator.pendingCount() != 0
+                    && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-pre-commit-cancellation-failure").close();
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 预提交取消动作出现Error后也必须排空并释放静默租约()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-pre-commit-cancellation-error";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        AssertionError cancellationFailure =
+                new AssertionError("预提交模型取消严重错误");
+        context.registerModelCancellation(() -> {
+            throw cancellationFailure;
+        });
+        assertEquals(VueTurnContext.PreCommitTerminationDecision.PRE_COMMIT_WON,
+                context.claimPreCommitTermination());
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), executor,
+                     Duration.ofMillis(20))) {
+            CompletionStage<Void> cleanup =
+                    coordinator.requestPreCommitCleanup(context);
+
+            CompletionException thrown = assertThrows(
+                    CompletionException.class,
+                    () -> cleanup.toCompletableFuture().join());
+            assertSame(cancellationFailure, thrown.getCause());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (coordinator.pendingCount() != 0
+                    && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-pre-commit-cancellation-error").close();
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 预提交取消动作抛出拒绝异常时不得误判为后台执行器拒绝()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-pre-commit-cancellation-rejected";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        RejectedExecutionException cancellationFailure =
+                new RejectedExecutionException("模型取消句柄拒绝执行");
+        context.registerModelCancellation(() -> {
+            throw cancellationFailure;
+        });
+        assertEquals(VueTurnContext.PreCommitTerminationDecision.PRE_COMMIT_WON,
+                context.claimPreCommitTermination());
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), executor,
+                     Duration.ofMillis(20))) {
+            CompletionStage<Void> cleanup =
+                    coordinator.requestPreCommitCleanup(context);
+
+            CompletionException thrown = assertThrows(
+                    CompletionException.class,
+                    () -> cleanup.toCompletableFuture().join());
+            assertSame(cancellationFailure, thrown.getCause());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (coordinator.pendingCount() != 0
+                    && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-pre-commit-cancellation-rejected").close();
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
     void interruptedPreCommitCleanupFailsResultThenDrainsResourcesAfterQuiescence()
             throws Exception {
         SimpleMeterRegistry metricsRegistry = new SimpleMeterRegistry();
@@ -939,6 +1366,57 @@ class VueTurnCancellationCoordinatorTest {
     }
 
     @Test
+    void 非阻塞线程预提交清理连续被拒绝时仍须释放静默资源()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-pre-commit-double-rejection";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        assertEquals(VueTurnContext.PreCommitTerminationDecision.PRE_COMMIT_WON,
+                context.claimPreCommitTermination());
+        AtomicInteger submissions = new AtomicInteger();
+        java.util.concurrent.Executor rejecting = task -> {
+            submissions.incrementAndGet();
+            throw new RejectedExecutionException("executor closed");
+        };
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        reactor.core.scheduler.Scheduler scheduler =
+                reactor.core.scheduler.Schedulers.newParallel(
+                        "test-pre-commit-double-rejection", 1);
+        AtomicReference<CompletionStage<Void>> cleanup = new AtomicReference<>();
+        CountDownLatch requestReturned = new CountDownLatch(1);
+
+        try (var coordinator = new VueTurnCancellationCoordinator(
+                finalizer, rejecting, Duration.ofMillis(20))) {
+            scheduler.schedule(() -> {
+                cleanup.set(coordinator.requestPreCommitCleanup(context));
+                requestReturned.countDown();
+            });
+
+            assertTrue(requestReturned.await(1, TimeUnit.SECONDS));
+            CompletionException failure = assertThrows(
+                    CompletionException.class,
+                    () -> cleanup.get().toCompletableFuture().join());
+            assertTrue(failure.getCause()
+                    instanceof RejectedExecutionException);
+            assertEquals(2, submissions.get());
+            assertEquals(0, coordinator.pendingCount());
+            verify(finalizer, org.mockito.Mockito.never())
+                    .finalizeOnce(any(), any());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-pre-commit-double-rejection").close();
+        } finally {
+            scheduler.dispose();
+            context.closeResources();
+        }
+    }
+
+    @Test
     void deleteTakeoverUsesDedicatedTerminalClaimAndSharedFinalization()
             throws Exception {
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
@@ -986,6 +1464,63 @@ class VueTurnCancellationCoordinatorTest {
                 assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
                         deleteLease.operationType());
             }
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 删除接管执行器出现非标准运行时异常时必须失败终态并释放资源()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-delete-executor-runtime-failure";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = new VueBuildSessionManager().open(operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        context.registerDeleteTakeoverParticipant();
+        AtomicReference<VueTurnContext.DeleteTakeoverRequest> request =
+                new AtomicReference<>();
+        CountDownLatch requestObserved = new CountDownLatch(1);
+        context.deleteTakeoverSignal().subscribe(observed -> {
+            request.set(observed);
+            requestObserved.countDown();
+        });
+        IllegalStateException schedulingFailure =
+                new IllegalStateException("删除任务装饰器异常");
+        java.util.concurrent.Executor failing = task -> {
+            throw schedulingFailure;
+        };
+
+        try (var deletionExecutor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     mock(VueTurnFinalizer.class), failing,
+                     Duration.ofSeconds(1))) {
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    deletionExecutor.submit(() -> manager.cancelAndAcquireDelete(
+                            7L, "delete-runtime-failure",
+                            Duration.ofSeconds(1)));
+            assertTrue(requestObserved.await(1, TimeUnit.SECONDS));
+
+            IllegalStateException thrown = assertThrows(
+                    IllegalStateException.class,
+                    () -> coordinator.requestDeleteTakeover(
+                            context, request.get(), () -> "已生成部分"));
+
+            assertSame(schedulingFailure, thrown);
+            ExecutionException deletionFailure = assertThrows(
+                    ExecutionException.class,
+                    () -> deletion.get(1, TimeUnit.SECONDS));
+            assertSame(schedulingFailure, deletionFailure.getCause());
+            assertEquals(VueTurnContext.TurnStage.FINALIZED,
+                    context.turnState().stage());
+            assertEquals(0, coordinator.pendingCount());
+            manager.acquire(
+                    7L, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-delete-runtime-failure").close();
         } finally {
             context.closeResources();
         }

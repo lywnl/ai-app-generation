@@ -36,6 +36,8 @@ import java.util.stream.Stream;
  * @author lyw
  */
 @Service
+@ConditionalOnProperty(prefix = "rag", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 @ConditionalOnProperty(prefix = "rag.ingest", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 @Slf4j

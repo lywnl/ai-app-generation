@@ -73,6 +73,9 @@ public class VueRetrievalResourceProvider {
     private VueRetrievalResources load(RagProperties properties,
                                        ObjectMapper objectMapper,
                                        Bm25RetrieverFactory bm25RetrieverFactory) {
+        if (!properties.isEnabled()) {
+            return null;
+        }
         String templatesDir = properties.getTemplatesDir();
         if (templatesDir == null || templatesDir.isBlank()) {
             log.error("[Vue RAG] 模板根目录未配置,Vue 检索将返回无 RAG");

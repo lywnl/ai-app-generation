@@ -180,7 +180,7 @@ class ToolLoopTerminationProtocolTest {
                 {"protocol":"vue-build-tool/v1","invocationStatus":"REJECTED",
                 "success":null,"attempt":null,"maxAttempts":3,"stage":null,
                 "failureKind":null,"timedOut":null,"repairable":false,
-                "reflectionRequired":false,"nextAction":null,
+                "reflectionRequired":false,"nextAction":"STOP",
                 "message":"PROTOCOL_ERROR: 旧租约已经失效","errorSummary":null,
                 "terminateToolLoop":true,
                 "finalResponse":"抱歉，系统遇到了一些问题，请您稍后重试修复"}

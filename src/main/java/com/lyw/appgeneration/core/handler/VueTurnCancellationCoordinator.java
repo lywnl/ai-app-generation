@@ -102,12 +102,21 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         }
         try {
             context.cancelGeneration();
+        } catch (RuntimeException | Error failure) {
+            cleanup.completion().completeExceptionally(failure);
+            schedulePreCommitDrain(cleanup, failure);
+            log.error("Vue 预提交取消动作失败,等待资源排空,appId={},turnId={}",
+                    context.appId(), context.turnId(), failure);
+            return cleanup.completion();
+        }
+        try {
             executor.execute(() -> completePreCommitCleanup(cleanup));
         } catch (RejectedExecutionException rejection) {
             handleRejectedPreCommitCleanup(cleanup, rejection);
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | Error failure) {
             cleanup.completion().completeExceptionally(failure);
-            log.error("Vue 预提交清理启动失败,保留租约,appId={},turnId={}",
+            schedulePreCommitDrain(cleanup, failure);
+            log.error("Vue 预提交清理启动失败,等待资源排空,appId={},turnId={}",
                     context.appId(), context.turnId(), failure);
         }
         return cleanup.completion();
@@ -150,7 +159,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             }
         }
         cleanup.completion().completeExceptionally(rejection);
-        log.error("Vue 预提交清理任务被拒绝且不能安全同步释放,保留租约,appId={},turnId={}",
+        schedulePreCommitDrain(cleanup, rejection);
+        log.error("Vue 预提交清理任务被拒绝且不能安全同步释放,尝试资源排空,appId={},turnId={}",
                 context.appId(), context.turnId(), rejection);
     }
 
@@ -162,8 +172,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         try {
             executor.execute(() -> drainPreCommitResources(
                     cleanup, originalFailure));
-        } catch (RejectedExecutionException rejection) {
-            addSuppressed(originalFailure, rejection);
+        } catch (RuntimeException | Error schedulingFailure) {
+            addSuppressed(originalFailure, schedulingFailure);
             drainPreCommitSynchronouslyIfQuiescent(cleanup, originalFailure);
         }
     }
@@ -191,8 +201,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     private void drainPreCommitSynchronouslyIfQuiescent(
             PendingPreCommitCleanup cleanup, Throwable originalFailure) {
         VueTurnContext context = cleanup.context();
-        if (Schedulers.isInNonBlockingThread()
-                || !context.awaitQuiescence(Duration.ZERO)) {
+        if (!context.awaitQuiescence(Duration.ZERO)) {
             log.error("Vue 预提交资源排空任务被拒绝且回调未静默,保留租约,appId={},turnId={}",
                     context.appId(), context.turnId(), originalFailure);
             return;
@@ -248,6 +257,9 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             } else {
                 failCancellation(cancellation, rejection);
             }
+        } catch (RuntimeException | Error failure) {
+            failCancellation(cancellation, failure);
+            throw failure;
         }
         return Optional.of(result.asMono());
     }
@@ -292,9 +304,62 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 == VueTurnOutcome.TurnOutcomeType.TIMED_OUT
                 ? VueTurnContext.TerminalTrigger.TIMED_OUT
                 : VueTurnContext.TerminalTrigger.CANCELLED;
-        if (!context.tryStartCancellation(trigger)) {
+        boolean claimed;
+        try {
+            claimed = context.tryStartCancellation(trigger);
+        } catch (RuntimeException | Error failure) {
+            if (!isClaimedCancellation(context, trigger)) {
+                throw failure;
+            }
+            PendingCancellation cancellation = registerCancellation(
+                    context, canonicalPrefix, outcomeType, result);
+            failCancellation(cancellation, failure);
+            throw failure;
+        }
+        if (!claimed) {
             return false;
         }
+        PendingCancellation cancellation = registerCancellation(
+                context, canonicalPrefix, outcomeType, result);
+        try {
+            executor.execute(() -> finalizeCancellation(cancellation));
+        } catch (RejectedExecutionException exception) {
+            if (!Schedulers.isInNonBlockingThread()
+                    && context.awaitQuiescence(Duration.ZERO)) {
+                try {
+                    finalizeQuiescentCancellation(cancellation);
+                } catch (RuntimeException | Error finalizationFailure) {
+                    failCancellation(cancellation, finalizationFailure);
+                    throw finalizationFailure;
+                }
+                return true;
+            }
+            recordCancellation(cancellation.metricTrigger(),
+                    VueBuildRepairMetricsCollector.CancellationResult.FAILED);
+            context.failFinalization(exception);
+            scheduleResourceDrain(cancellation, exception);
+            log.error("Vue 取消后台任务被拒绝且回调未静默,保留终态门与租约,appId={},turnId={}",
+                    context.appId(), context.turnId(), exception);
+            throw exception;
+        } catch (RuntimeException | Error failure) {
+            failCancellation(cancellation, failure);
+            throw failure;
+        }
+        return true;
+    }
+
+    private boolean isClaimedCancellation(
+            VueTurnContext context, VueTurnContext.TerminalTrigger trigger) {
+        VueTurnContext.TurnState state = context.turnState();
+        return state.stage() == VueTurnContext.TurnStage.FINALIZING
+                && state.trigger() == trigger;
+    }
+
+    private PendingCancellation registerCancellation(
+            VueTurnContext context,
+            Supplier<String> canonicalPrefix,
+            VueTurnOutcome.TurnOutcomeType outcomeType,
+            Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
         VueBuildRepairMetricsCollector.CancellationTrigger metricTrigger =
                 cancellationTrigger(outcomeType);
         recordCancellation(metricTrigger,
@@ -304,28 +369,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                         context, canonicalPrefix, outcomeType,
                         metricTrigger, result);
         pending.put(context.turnId(), cancellation);
-        try {
-            executor.execute(() -> finalizeCancellation(cancellation));
-        } catch (RejectedExecutionException exception) {
-            if (context.awaitQuiescence(Duration.ZERO)) {
-                try {
-                    finalizeQuiescentCancellation(cancellation);
-                } catch (RuntimeException finalizationFailure) {
-                    recordCancellation(metricTrigger,
-                            VueBuildRepairMetricsCollector.CancellationResult.FAILED);
-                    throw finalizationFailure;
-                }
-                return true;
-            }
-            recordCancellation(metricTrigger,
-                    VueBuildRepairMetricsCollector.CancellationResult.FAILED);
-            context.failFinalization(exception);
-            scheduleResourceDrain(cancellation, exception);
-            log.error("Vue 取消后台任务被拒绝且回调未静默,保留终态门与租约,appId={},turnId={}",
-                    context.appId(), context.turnId(), exception);
-            throw exception;
-        }
-        return true;
+        return cancellation;
     }
 
     private void finalizeCancellation(PendingCancellation cancellation) {
@@ -391,8 +435,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
         try {
             executor.execute(() -> drainResources(
                     cancellation, originalFailure));
-        } catch (RejectedExecutionException rejection) {
-            addSuppressed(originalFailure, rejection);
+        } catch (RuntimeException | Error schedulingFailure) {
+            addSuppressed(originalFailure, schedulingFailure);
             drainSynchronouslyIfQuiescent(cancellation, originalFailure);
         }
     }
@@ -420,8 +464,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     private void drainSynchronouslyIfQuiescent(
             PendingCancellation cancellation, Throwable originalFailure) {
         VueTurnContext context = cancellation.context();
-        if (Schedulers.isInNonBlockingThread()
-                || !context.awaitQuiescence(Duration.ZERO)) {
+        if (!context.awaitQuiescence(Duration.ZERO)) {
             log.error("Vue 取消资源排空任务被拒绝且回调未静默,保留租约,appId={},turnId={}",
                     context.appId(), context.turnId(), originalFailure);
             return;
