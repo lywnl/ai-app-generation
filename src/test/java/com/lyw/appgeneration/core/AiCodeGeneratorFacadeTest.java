@@ -258,6 +258,41 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
+    void onlineCompleteOnlyToolRequestIsEmittedBeforeToolExecution() {
+        properties.setEnabled(false);
+        CompleteOnlyToolRequestTokenStream stream =
+                new CompleteOnlyToolRequestTokenStream();
+        when(serviceFactory.getAiCodeGeneratorService(
+                APP_ID, CodeGenTypeEnum.VUE_PROJECT)).thenReturn(generatorService);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+        AppOperationLeaseManager operationManager = new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-complete-tool-request");
+        var lease = sessionManager.open(
+                operation, 9L, "turn-complete-tool-request");
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, 9L, "turn-complete-tool-request", operation, lease,
+                admissionPermit(),
+                new FileToolBudgetGuard().newSession());
+
+        List<String> output = facade.generateVueProjectStream(
+                        RAW_QUERY, APP_ID, false, context)
+                .collectList().block();
+
+        assertEquals(2, output.size());
+        assertTrue(output.get(0).contains("\"type\":\"tool_request\""),
+                output.toString());
+        assertTrue(output.get(0).contains("\"name\":\"buildProject\""),
+                output.toString());
+        assertTrue(output.get(1).contains("\"type\":\"tool_executed\""),
+                output.toString());
+        context.closeResources();
+    }
+
+    @Test
     void onlineTurnRunsRealToolThreadInExactScopeAndRecordsTermination() {
         properties.setEnabled(false);
         CapturingTokenStream stream = new CapturingTokenStream(
@@ -840,6 +875,69 @@ class AiCodeGeneratorFacadeTest {
                         RESOURCE_LIMIT_EXCEEDED,
                         EVALUATION_COMPLETED -> null;
             };
+        }
+    }
+
+    /** 模拟供应商只上报完整无参数工具请求，不产生参数分片回调。 */
+    private static final class CompleteOnlyToolRequestTokenStream
+            implements TokenStream {
+
+        private BiConsumer<Integer,
+                dev.langchain4j.agent.tool.ToolExecutionRequest> completeToolHandler;
+        private Consumer<dev.langchain4j.service.tool.ToolExecution> toolHandler;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeResponseHandler;
+
+        @Override public TokenStream onPartialResponse(
+                Consumer<String> handler) { return this; }
+        @Override public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            completeToolHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
+            return this;
+        }
+        @Override public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            toolHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            completeResponseHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onError(Consumer<Throwable> handler) {
+            return this;
+        }
+        @Override public TokenStream ignoreErrors() { return this; }
+
+        @Override
+        public void start() {
+            var request = dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                    .id("build-complete-only")
+                    .name("buildProject")
+                    .arguments("{}")
+                    .build();
+            completeToolHandler.accept(0, request);
+            toolHandler.accept(dev.langchain4j.service.tool.ToolExecution.builder()
+                    .request(request)
+                    .result("{\"protocol\":\"vue-build/v1\","
+                            + "\"invocationStatus\":\"COMPLETED\","
+                            + "\"success\":true,\"attempt\":1}")
+                    .build());
+            completeResponseHandler.accept(
+                    dev.langchain4j.model.chat.response.ChatResponse.builder()
+                            .aiMessage(dev.langchain4j.data.message.AiMessage.from("完成"))
+                            .build());
         }
     }
 

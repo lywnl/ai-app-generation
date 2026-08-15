@@ -283,7 +283,7 @@
           </div>
           <div v-else-if="isGenerating" class="preview-loading">
             <a-spin size="large" />
-            <p>{{ generatingStatusText }}</p>
+            <p>正在生成网站...</p>
           </div>
           <iframe
             v-else
@@ -456,34 +456,6 @@ const isOwner = computed(() => {
 
 const isAdmin = computed(() => {
   return loginUserStore.loginUser.userRole === 'admin'
-})
-
-const isCodeChecking = computed(() => {
-  if (!isGenerating.value) {
-    return false
-  }
-  if (appInfo.value?.codeGenType !== CodeGenTypeEnum.VUE_PROJECT) {
-    return false
-  }
-  const idx = sessionMessageIndex.value
-  if (idx === null) {
-    return false
-  }
-  const currentAiMessage = messages.value[idx]
-  const toolCalls = currentAiMessage?.toolCalls
-  if (!toolCalls || toolCalls.size === 0) {
-    return false
-  }
-  for (const [, view] of toolCalls) {
-    if (view.name === 'exit' && view.status === 'done') {
-      return true
-    }
-  }
-  return false
-})
-
-const generatingStatusText = computed(() => {
-  return isCodeChecking.value ? '正在检查代码，请耐心等待...' : '正在生成网站...'
 })
 
 // 应用详情相关

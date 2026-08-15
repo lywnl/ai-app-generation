@@ -223,6 +223,35 @@ class JsonMessageStreamHandlerTest {
                 eq("{\"success\":false,\"secretLog\":\"raw\"}"));
     }
 
+    @Test
+    void buildToolRequestReachesRealtimeClientBeforeDisplayText() {
+        VueTurnContext context = context(
+                "turn-build-request", VueBuildPhase.GENERATING);
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool("buildProject")).thenReturn(tool);
+        when(tool.generateToolRequestResponse())
+                .thenReturn("\n\n[选择工具] 构建项目\n\n");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        String event = "{\"type\":\"tool_request\",\"id\":\"build-1\","
+                + "\"name\":\"buildProject\",\"arguments\":null}";
+
+        List<GenerationStreamEvent> output = handler.handle(
+                        Flux.just(event), context)
+                .collectList().block();
+
+        JSONObject realtimeRequest = JSONUtil.parseObj(
+                contentText(output.get(0)));
+        assertEquals("tool_request", realtimeRequest.getStr("type"));
+        assertEquals("build-1", realtimeRequest.getStr("id"));
+        assertEquals("buildProject", realtimeRequest.getStr("name"));
+        assertFalse(realtimeRequest.containsKey("arguments"));
+        assertEquals("\n\n[选择工具] 构建项目\n\n",
+                contentText(output.get(1)));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"readFile", "readDir"})
     void readToolContentIsVisibleToModelButRedactedFromRealtimeSse(

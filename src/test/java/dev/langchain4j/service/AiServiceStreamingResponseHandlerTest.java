@@ -106,6 +106,71 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void completeToolRequestCallbackRunsBeforeRealExecutor() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        List<String> events = new ArrayList<>();
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partial -> { },
+                        (index, request) -> { },
+                        (index, request) -> events.add(
+                                "callback:on-complete-tool-request:"
+                                        + request.id()),
+                        execution -> { }, response -> { },
+                        throwable -> fail("不应触发错误回调"),
+                        MessageWindowChatMemory.withMaxMessages(100),
+                        new TokenUsage(), List.of(),
+                        Map.of("buildProject", (request, memoryId) -> {
+                            events.add("executor:" + request.id());
+                            return BUILD_FIRST_FAILURE;
+                        }),
+                        null, "method-1", new StreamingRequestController(),
+                        ToolExecutionGuard.direct());
+
+        handler.onCompleteResponse(
+                responseWithTools(tool("build-start", "buildProject")));
+
+        assertEquals(List.of(
+                "callback:on-complete-tool-request:build-start",
+                "executor:build-start"), events);
+    }
+
+    @Test
+    void providerCompleteToolRequestCallbackIsNotRepeatedBeforeExecutor() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        List<String> events = new ArrayList<>();
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partial -> { },
+                        (index, request) -> { },
+                        (index, request) -> events.add(
+                                "callback:on-complete-tool-request:"
+                                        + request.id()),
+                        execution -> { }, response -> { },
+                        throwable -> fail("不应触发错误回调"),
+                        MessageWindowChatMemory.withMaxMessages(100),
+                        new TokenUsage(), List.of(),
+                        Map.of("buildProject", (request, memoryId) -> {
+                            events.add("executor:" + request.id());
+                            return BUILD_FIRST_FAILURE;
+                        }),
+                        null, "method-1", new StreamingRequestController(),
+                        ToolExecutionGuard.direct());
+        ToolExecutionRequest request = tool("build-provider", "buildProject");
+
+        handler.onCompleteToolExecutionRequest(0, request);
+        handler.onCompleteResponse(responseWithTools(request));
+
+        assertEquals(List.of(
+                "callback:on-complete-tool-request:build-provider",
+                "executor:build-provider"), events);
+    }
+
+    @Test
     void controlledTerminationPublishesFinalTextWithoutOrdinaryCompletionAndSkipsRemainingBatch()
             throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);

@@ -512,6 +512,7 @@ public class AiCodeGeneratorFacade {
             });
             Map<String, ToolRequestStreamParser> parsers =
                     new ConcurrentHashMap<>();
+            Set<String> announcedToolIds = ConcurrentHashMap.newKeySet();
             Set<String> completedToolIds = ConcurrentHashMap.newKeySet();
             FileToolBudgetGuard.Session budgetSession = scope.budgetSession();
             try {
@@ -527,8 +528,12 @@ public class AiCodeGeneratorFacade {
                                     }
                                     ToolRequestStreamParser parser = parsers.get(request.id());
                                     if (parser == null) {
-                                        sink.next(JSONUtil.toJsonStr(new ToolRequestMessage(
-                                                request.id(), request.name(), null)));
+                                        if (announcedToolIds.add(request.id())) {
+                                            sink.next(JSONUtil.toJsonStr(
+                                                    new ToolRequestMessage(
+                                                            request.id(),
+                                                            request.name(), null)));
+                                        }
                                         parser = new ToolRequestStreamParser(request.name(), evt -> {
                                             if (sink.isCancelled()) {
                                                 return;
@@ -555,6 +560,16 @@ public class AiCodeGeneratorFacade {
                                         parsers.put(request.id(), parser);
                                     }
                                     parser.feed(request.arguments());
+                                }))
+                        .onCompleteToolExecutionRequest((index, request) ->
+                                context.tryRunCallback(() -> {
+                                    if (!sink.isCancelled()
+                                            && announcedToolIds.add(request.id())) {
+                                        sink.next(JSONUtil.toJsonStr(
+                                                new ToolRequestMessage(
+                                                        request.id(),
+                                                        request.name(), null)));
+                                    }
                                 }))
                         .onToolExecuted(execution -> context.tryRunCallback(() -> {
                             if (sink.isCancelled()) {

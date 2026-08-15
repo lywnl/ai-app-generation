@@ -24,6 +24,8 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -62,6 +64,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final StreamingRequestController requestController;
     private final ToolExecutionGuard toolExecutionGuard;
     private final long requestGeneration;
+    private final Set<String> completedToolRequestIds =
+            ConcurrentHashMap.newKeySet();
 
     AiServiceStreamingResponseHandler(
             ChatExecutor chatExecutor,
@@ -192,6 +196,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             int index, ToolExecutionRequest completeToolExecutionRequest) {
         try (var callback = requestController.enterCallback()) {
             if (callback != null && completeToolExecutionRequestHandler != null
+                    && claimCompleteToolRequest(completeToolExecutionRequest)
                     && requestController.isOpen()) {
                 requestController.runIfOpen(() -> completeToolExecutionRequestHandler
                         .accept(index, completeToolExecutionRequest));
@@ -265,6 +270,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         }
                     }
                     rethrow(failure);
+                    return;
+                }
+                int toolRequestIndex = index;
+                if (completeToolExecutionRequestHandler != null
+                        && claimCompleteToolRequest(normalizedRequest)
+                        && !requestController.runIfOpen(() ->
+                        completeToolExecutionRequestHandler.accept(
+                                toolRequestIndex, normalizedRequest))) {
                     return;
                 }
                 ToolExecutionGuard.GuardedToolExecution guardedExecution;
@@ -528,5 +541,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 .name(request.name())
                 .arguments(normalized.normalizedArguments())
                 .build();
+    }
+
+    /**
+     * 某些模型只在完整响应中携带工具请求，另一些模型还会提前发送完整工具请求回调。
+     * 以工具调用 ID 去重，确保执行前兜底不会让同一调用被通知两次。
+     */
+    private boolean claimCompleteToolRequest(ToolExecutionRequest request) {
+        String requestId = request.id();
+        return requestId == null || completedToolRequestIds.add(requestId);
     }
 }

@@ -279,8 +279,12 @@ public final class JsonMessageStreamHandler {
                 ToolRequestMessage request = JSONUtil.toBean(
                         chunk, ToolRequestMessage.class);
                 if (request.getId() != null && seenToolIds.add(request.getId())) {
-                    yield Flux.just(toolManager.getTool(request.getName())
-                            .generateToolRequestResponse());
+                    String realtimeEvent = JSONUtil.toJsonStr(
+                            new ToolRequestMessage(
+                                    request.getId(), request.getName(), null));
+                    String displayText = toolManager.getTool(request.getName())
+                            .generateToolRequestResponse();
+                    yield Flux.just(realtimeEvent, displayText);
                 }
                 yield Flux.empty();
             }
