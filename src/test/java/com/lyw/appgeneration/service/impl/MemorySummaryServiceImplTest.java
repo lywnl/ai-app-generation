@@ -795,6 +795,64 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
+    @DisplayName("writer 获取异常的迟到 catch 不得在 tombstone 后复活 L1 索引")
+    @SuppressWarnings("unchecked")
+    void Writer获取异常迟到后不恢复Fallback或InFlight() throws Exception {
+        AppDataLifecycleFence realFence = new AppDataLifecycleFence();
+        AppDataLifecycleFence delegatedFence = mock(
+                AppDataLifecycleFence.class,
+                withSettings().mockMaker(INLINE));
+        CountDownLatch writerAcquireStarted = new CountDownLatch(1);
+        CountDownLatch allowAcquireFailure = new CountDownLatch(1);
+        AtomicBoolean firstAcquire = new AtomicBoolean(true);
+        when(delegatedFence.tryAcquireWriter(1L)).thenAnswer(invocation -> {
+            if (!firstAcquire.compareAndSet(true, false)) {
+                return realFence.tryAcquireWriter(1L);
+            }
+            writerAcquireStarted.countDown();
+            try {
+                if (!allowAcquireFailure.await(1, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("等待删除失效超时");
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "等待删除失效时被中断", exception);
+            }
+            throw new IllegalStateException("writer 获取迟到异常");
+        });
+        ExecutorService backgroundExecutor = mock(ExecutorService.class);
+        MemorySummaryServiceImpl background = newService(
+                backgroundExecutor, modelExecutor, delegatedFence);
+
+        try (ExecutorService threads = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<?> lateTrigger = threads.submit(() ->
+                    background.triggerSummarizationAsync(1L, 2L));
+            assertTrue(writerAcquireStarted.await(1, TimeUnit.SECONDS));
+            AppDataLifecycleFence.DeletePermit deletion =
+                    realFence.beginDelete(1L, Duration.ofSeconds(1));
+            assertNotNull(deletion);
+            deletion.commitTombstone();
+            background.invalidateCache(1L);
+            allowAcquireFailure.countDown();
+            lateTrigger.get(1, TimeUnit.SECONDS);
+        }
+
+        Map<Long, Instant> fallbackRetryAfter =
+                (Map<Long, Instant>) ReflectionTestUtils.getField(
+                        background, "fallbackRetryAfter");
+        Map<Long, ?> inFlight = (Map<Long, ?>) ReflectionTestUtils.getField(
+                background, "inFlight");
+        assertNotNull(fallbackRetryAfter);
+        assertNotNull(inFlight);
+        assertFalse(fallbackRetryAfter.containsKey(1L));
+        assertFalse(inFlight.containsKey(1L));
+        verify(delegatedFence, times(2)).tryAcquireWriter(1L);
+        verifyNoInteractions(backgroundExecutor);
+    }
+
+    @Test
     @DisplayName("缓存未命中的数据库读取与回填全程持有删除栅栏")
     void cacheMissReadThroughHoldsWriterPermitUntilCacheFill()
             throws Exception {
@@ -1093,14 +1151,13 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
-    @DisplayName("提交失败元数据写库异常时后台至少退避五秒")
-    void rejectedSubmissionCleansFlightEvenWhenFailureMetadataWriteFails() {
+    @DisplayName("无摘要行时线程池拒绝只设置本地退避且不写数据库")
+    @SuppressWarnings("unchecked")
+    void rejectedSubmissionWithoutSummaryUsesOnlyLocalFallback() {
         ExecutorService executor = mock(ExecutorService.class);
         when(executor.submit(any(Runnable.class)))
                 .thenThrow(new RejectedExecutionException("queue full"));
         when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
-        when(summaryMapper.insert(any(AppMemorySummary.class)))
-                .thenThrow(new IllegalStateException("database down"));
         MemorySummaryServiceImpl background = newService(executor);
 
         assertDoesNotThrow(() ->
@@ -1108,6 +1165,15 @@ class MemorySummaryServiceImplTest {
         background.triggerSummarizationAsync(1L, 2L);
 
         verify(executor).submit(any(Runnable.class));
+        verify(summaryMapper, never()).insert(any(AppMemorySummary.class));
+        verify(summaryMapper, never()).update(any(AppMemorySummary.class));
+        verify(summaryMapper, never()).update(
+                any(AppMemorySummary.class), eq(false));
+        Map<Long, Instant> fallbackRetryAfter =
+                (Map<Long, Instant>) ReflectionTestUtils.getField(
+                        background, "fallbackRetryAfter");
+        assertNotNull(fallbackRetryAfter);
+        assertTrue(fallbackRetryAfter.containsKey(1L));
 
         AppDataLifecycleFence.DeletePermit deletion =
                 lifecycleFence.beginDelete(1L, Duration.ZERO);
@@ -1116,6 +1182,71 @@ class MemorySummaryServiceImplTest {
         clock.advance(Duration.ofSeconds(5));
         background.triggerSummarizationAsync(1L, 2L);
         verify(executor, times(2)).submit(any(Runnable.class));
+    }
+
+    @Test
+    @DisplayName("已有摘要行时线程池拒绝不修改持久化退避元数据")
+    @SuppressWarnings("unchecked")
+    void rejectedSubmissionPreservesExistingPersistentFailureMetadata() {
+        ExecutorService executor = mock(ExecutorService.class);
+        when(executor.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"));
+        AppMemorySummary current = currentSummary(8L, "旧摘要", 100, 4);
+        LocalDateTime existingRetryTime = LocalDateTime.ofInstant(
+                clock.instant().minusSeconds(1), clock.getZone());
+        current.setNextRetryTime(existingRetryTime);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        MemorySummaryServiceImpl background = newService(executor);
+
+        background.triggerSummarizationAsync(1L, 10L);
+
+        assertEquals(4, current.getFailCount());
+        assertEquals(existingRetryTime, current.getNextRetryTime());
+        verify(summaryMapper, never()).insert(any(AppMemorySummary.class));
+        verify(summaryMapper, never()).update(any(AppMemorySummary.class));
+        verify(summaryMapper, never()).update(
+                any(AppMemorySummary.class), eq(false));
+        Map<Long, Instant> fallbackRetryAfter =
+                (Map<Long, Instant>) ReflectionTestUtils.getField(
+                        background, "fallbackRetryAfter");
+        assertNotNull(fallbackRetryAfter);
+        assertTrue(fallbackRetryAfter.containsKey(1L));
+    }
+
+    @Test
+    @DisplayName("新服务实例不继承其他节点的线程池拒绝退避")
+    void restartedServiceDoesNotInheritRejectedSubmissionBackoff() {
+        AtomicReference<AppMemorySummary> store = new AtomicReference<>();
+        when(summaryMapper.selectOneByQuery(any())).thenAnswer(invocation ->
+                store.get());
+        when(summaryMapper.insert(any(AppMemorySummary.class)))
+                .thenAnswer(invocation -> {
+                    store.set(invocation.getArgument(0));
+                    return 1;
+                });
+        when(summaryMapper.update(any(AppMemorySummary.class)))
+                .thenAnswer(invocation -> {
+                    store.set(invocation.getArgument(0));
+                    return 1;
+                });
+        ExecutorService rejectedExecutor = mock(ExecutorService.class);
+        when(rejectedExecutor.submit(any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("queue full"));
+        MemorySummaryServiceImpl rejected = newService(rejectedExecutor);
+        rejected.triggerSummarizationAsync(1L, 2L);
+
+        ExecutorService healthyExecutor = mock(ExecutorService.class);
+        when(healthyExecutor.submit(any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<Runnable>getArgument(0).run();
+                    return mock(Future.class);
+                });
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of());
+        MemorySummaryServiceImpl restarted = newService(healthyExecutor);
+        restarted.triggerSummarizationAsync(1L, 2L);
+
+        verify(healthyExecutor).submit(any(Runnable.class));
     }
 
     @Test
@@ -1416,13 +1547,13 @@ class MemorySummaryServiceImplTest {
                 failing.triggerSummarizationAsync(1L, 2L));
         failing.triggerSummarizationAsync(1L, 2L);
 
-        verify(failingFence).tryAcquireWriter(1L);
+        verify(failingFence, times(2)).tryAcquireWriter(1L);
         verify(backgroundExecutor, never()).submit(any(Runnable.class));
 
         clock.advance(Duration.ofSeconds(5));
         failing.triggerSummarizationAsync(1L, 2L);
 
-        verify(failingFence, times(2)).tryAcquireWriter(1L);
+        verify(failingFence, times(3)).tryAcquireWriter(1L);
         verify(backgroundExecutor).submit(any(Runnable.class));
     }
 

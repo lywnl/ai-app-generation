@@ -158,21 +158,11 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             completion = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "摘要任务提交失败");
-            if (writerPermit != null) {
-                try {
-                    completion = recordFailure(
-                            appId,
-                            current,
-                            MemoryCompressionResult.Status.MODEL_FAILED,
-                            "摘要任务提交失败");
-                } catch (RuntimeException metadataException) {
-                    log.error("记录摘要提交失败元数据异常 appId={} type={}",
-                            appId,
-                            metadataException.getClass().getSimpleName(),
-                            metadataException);
-                }
+            if (writerPermit == null) {
+                ensureFallbackRetryDelayIfWritable(appId);
+            } else {
+                ensureFallbackRetryDelay(appId);
             }
-            ensureFallbackRetryDelay(appId);
             log.warn("启动摘要任务失败 appId={} type={}",
                     appId, exception.getClass().getSimpleName());
         } finally {
