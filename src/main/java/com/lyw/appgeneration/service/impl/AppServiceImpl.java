@@ -44,8 +44,6 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
-import com.lyw.appgeneration.monitor.MonitorContext;
-import com.lyw.appgeneration.monitor.MonitorContextHolder;
 import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
@@ -280,9 +278,6 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 boolean firstMessage = prepareSimpleTurn(
                         appId, message, loginUser, context);
                 userCommitted = true;
-                MonitorContextHolder.setContext(MonitorContext.builder()
-                        .userId(loginUser.getId().toString())
-                        .appId(Long.toString(appId)).build());
                 Flux<String> codeStream = Flux.defer(() ->
                         aiCodeGeneratorFacade.generateAndSaveCodeStream(
                                 message, codeGenType, appId,
@@ -356,11 +351,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 invalidateUnstableSimpleMemory(context.appId(), codeGenType);
             }
         } finally {
-            try {
-                context.close();
-            } finally {
-                MonitorContextHolder.clearContext();
-            }
+            context.close();
         }
     }
 
@@ -485,13 +476,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                                         turn.firstMessage(), context,
                                         turn.generatorService()))
                         .orElseGet(Flux::empty));
-                MonitorContextHolder.setContext(MonitorContext.builder()
-                        .userId(Long.toString(context.userId()))
-                        .appId(Long.toString(context.appId())).build());
                 Flux<GenerationStreamEvent> business = streamHandlerExecutor
                         .doExecuteVue(codeStream, context);
-                return context.mergeProgress(business)
-                        .doFinally(ignored -> MonitorContextHolder.clearContext());
+                return context.mergeProgress(business);
             } catch (RuntimeException exception) {
                 return finalizeCommittedVueFailure(context, exception);
             }

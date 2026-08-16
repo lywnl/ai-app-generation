@@ -58,7 +58,6 @@ class AiModelMonitorListenerTest {
 
     @AfterEach
     void tearDown() {
-        MonitorContextHolder.clearContext();
         registry.close();
     }
 
@@ -136,9 +135,8 @@ class AiModelMonitorListenerTest {
     }
 
     @Test
-    void onErrorUsesFixedFamilyAndErrorTypeWithoutThreadLocalContext() {
+    void onErrorUsesFixedFamilyAndErrorTypeFromOpaqueObservation() {
         AiModelMonitorListener listener = newListener();
-        MonitorContextHolder.clearContext();
         Map<Object, Object> attributes = new HashMap<>();
         ChatRequest request = request("deepseek-chat", "错误回调正文");
         when(tokenEstimator.estimateRequest(anyList(), anyList()))
