@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 
@@ -43,7 +44,13 @@ public class TokenAwareChatMemory implements ChatMemory {
 
     @Override
     public void add(ChatMessage message) {
-        withMemoryLock(() -> delegate.add(message));
+        ChatMessage requiredMessage = Objects.requireNonNull(
+                message, "待追加消息不能为空");
+        if (requiredMessage instanceof SystemMessage systemMessage) {
+            addSystemMessage(systemMessage);
+            return;
+        }
+        withMemoryLock(() -> delegate.add(requiredMessage));
     }
 
     @Override
@@ -105,6 +112,45 @@ public class TokenAwareChatMemory implements ChatMemory {
                 Objects.requireNonNull(replacement, "新快照不能为空"));
         return withMemoryLock(() -> replaceSnapshot(
                 expectedSnapshot, replacementSnapshot));
+    }
+
+    private void addSystemMessage(SystemMessage systemMessage) {
+        withMemoryLock(() -> {
+            List<ChatMessage> current = List.copyOf(delegate.messages());
+            List<ChatMessage> replacement = new ArrayList<>(
+                    current.size() + 1);
+            replacement.add(systemMessage);
+            for (ChatMessage existingMessage : current) {
+                if (!(existingMessage instanceof SystemMessage)) {
+                    replacement.add(existingMessage);
+                }
+            }
+            if (current.equals(replacement)) {
+                return;
+            }
+            boolean replaced;
+            try {
+                replaced = replaceSystemSnapshot(current, replacement);
+            } catch (RuntimeException exception) {
+                throw new IllegalStateException(
+                        "原子前置 L0 系统消息失败，memoryId=" + memoryId,
+                        exception);
+            }
+            if (!replaced) {
+                throw new IllegalStateException(
+                        "L0 系统消息快照在替换前已变化，memoryId=" + memoryId);
+            }
+        });
+    }
+
+    private boolean replaceSystemSnapshot(
+            List<ChatMessage> expected,
+            List<ChatMessage> replacement) {
+        if (atomicStore == null) {
+            return replaceSnapshot(expected, replacement);
+        }
+        return atomicStore.replaceMessagesIfMatches(
+                memoryId, expected, replacement);
     }
 
     private boolean replaceSnapshot(

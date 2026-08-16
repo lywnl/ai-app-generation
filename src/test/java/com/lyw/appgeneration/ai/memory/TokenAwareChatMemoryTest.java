@@ -79,6 +79,38 @@ class TokenAwareChatMemoryTest {
     }
 
     @Test
+    void keepsSingleSystemAtFrontAcrossColdHistoryAndSystemUpdates() {
+        MessageWindowChatMemory delegate = memory();
+        addStableTurn(delegate, "冷加载第一轮", "冷加载第一轮完成");
+        addStableTurn(delegate, "冷加载第二轮", "冷加载第二轮完成");
+        TokenAwareChatMemory memory = new TokenAwareChatMemory(delegate);
+
+        memory.add(SystemMessage.from("初始系统约束"));
+        addStableTurn(memory, "在线第三轮", "在线第三轮完成");
+        SystemMessage updatedSystem = SystemMessage.from("更新后的系统约束");
+        memory.add(updatedSystem);
+        UserMessage currentUser = UserMessage.from("当前未完成回合");
+        memory.add(currentUser);
+
+        List<ChatMessage> messages = memory.messages();
+        ConversationTurnSnapshotParser.Snapshot snapshot =
+                new ConversationTurnSnapshotParser().parse(messages);
+
+        assertEquals(updatedSystem, messages.getFirst());
+        assertEquals(1, messages.stream()
+                .filter(SystemMessage.class::isInstance)
+                .count());
+        assertEquals(List.of(updatedSystem), snapshot.leadingMessages());
+        assertEquals(List.of(
+                        "冷加载第一轮", "冷加载第二轮", "在线第三轮"),
+                snapshot.completedTurns().stream()
+                        .map(turn -> ((UserMessage) turn.messages().getFirst())
+                                .singleText())
+                        .toList());
+        assertEquals(List.of(currentUser), snapshot.unfinishedTail());
+    }
+
+    @Test
     void removesOldCompletedPrefixButKeepsCurrentToolTurnWhole() {
         MessageWindowChatMemory delegate = memory();
         UserMessage firstUser = UserMessage.from("第一轮");
@@ -186,6 +218,12 @@ class TokenAwareChatMemoryTest {
 
     private void addStableTurn(
             MessageWindowChatMemory memory, String user, String ai) {
+        memory.add(UserMessage.from(user));
+        memory.add(AiMessage.from(ai));
+    }
+
+    private void addStableTurn(
+            TokenAwareChatMemory memory, String user, String ai) {
         memory.add(UserMessage.from(user));
         memory.add(AiMessage.from(ai));
     }

@@ -7,6 +7,7 @@ import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
@@ -23,7 +24,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
@@ -86,6 +89,129 @@ class L0AtomicMemoryBoundaryTest {
                 mock(ChatTokenEstimator.class));
 
         assertEquals(HistoryLoadStatus.FAILED, result.status());
+    }
+
+    @Test
+    void 系统消息在共享存储中始终唯一前置且保留完整回合边界() {
+        StatefulStore store = new StatefulStore(
+                stableTurns("冷加载第一轮", "冷加载第二轮"));
+        AtomicChatMemoryStore atomicStore = new AtomicChatMemoryStore(store);
+        TokenAwareChatMemory memory = new TokenAwareChatMemory(
+                memory(atomicStore), atomicStore);
+
+        memory.add(SystemMessage.from("初始系统约束"));
+        memory.add(UserMessage.from("在线第三轮"));
+        memory.add(AiMessage.from("在线第三轮完成"));
+        SystemMessage updatedSystem = SystemMessage.from("更新后的系统约束");
+        memory.add(updatedSystem);
+        UserMessage currentUser = UserMessage.from("当前未完成回合");
+        memory.add(currentUser);
+
+        List<ChatMessage> stored = store.getMessages(APP_ID);
+        ConversationTurnSnapshotParser.Snapshot snapshot =
+                new ConversationTurnSnapshotParser().parse(stored);
+
+        assertEquals(updatedSystem, stored.getFirst());
+        assertEquals(1, stored.stream()
+                .filter(SystemMessage.class::isInstance)
+                .count());
+        assertEquals(3, snapshot.completedTurns().size());
+        assertEquals(List.of(currentUser), snapshot.unfinishedTail());
+    }
+
+    @Test
+    void 遗留多个系统消息时只保留最新系统消息并恢复回合边界() {
+        List<ChatMessage> legacy = List.of(
+                SystemMessage.from("遗留系统约束一"),
+                UserMessage.from("第一轮"),
+                AiMessage.from("第一轮完成"),
+                SystemMessage.from("遗留系统约束二"),
+                UserMessage.from("第二轮"),
+                AiMessage.from("第二轮完成"));
+        StatefulStore store = new StatefulStore(legacy);
+        AtomicChatMemoryStore atomicStore = new AtomicChatMemoryStore(store);
+        TokenAwareChatMemory memory = new TokenAwareChatMemory(
+                memory(atomicStore), atomicStore);
+        SystemMessage latestSystem = SystemMessage.from("最新系统约束");
+
+        memory.add(latestSystem);
+
+        List<ChatMessage> stored = store.getMessages(APP_ID);
+        ConversationTurnSnapshotParser.Snapshot snapshot =
+                new ConversationTurnSnapshotParser().parse(stored);
+        assertEquals(List.of(
+                latestSystem,
+                UserMessage.from("第一轮"),
+                AiMessage.from("第一轮完成"),
+                UserMessage.from("第二轮"),
+                AiMessage.from("第二轮完成")), stored);
+        assertEquals(2, snapshot.completedTurns().size());
+        assertTrue(snapshot.unfinishedTail().isEmpty());
+    }
+
+    @Test
+    void 系统消息原子前置写失败时抛错且保留原窗口() {
+        List<ChatMessage> original = stableTurns("第一轮", "第二轮");
+        FailingUpdateStore store = new FailingUpdateStore(original);
+        AtomicChatMemoryStore atomicStore = new AtomicChatMemoryStore(store);
+        TokenAwareChatMemory memory = new TokenAwareChatMemory(
+                memory(atomicStore), atomicStore);
+
+        IllegalStateException failure = assertThrows(
+                IllegalStateException.class,
+                () -> memory.add(SystemMessage.from("系统约束")));
+
+        IllegalStateException cause = assertInstanceOf(
+                IllegalStateException.class, failure.getCause());
+        assertEquals("替换写失败", cause.getMessage());
+        assertEquals(original, store.getMessages(APP_ID));
+        assertEquals(0, store.deleteCount());
+    }
+
+    @Test
+    void 系统消息前置与另一实例追加共享原子边界() throws Exception {
+        List<ChatMessage> original = stableTurns("第一轮", "第二轮");
+        SystemUpdateBarrierStore store =
+                new SystemUpdateBarrierStore(original);
+        AtomicChatMemoryStore atomicStore = new AtomicChatMemoryStore(store);
+        TokenAwareChatMemory systemMemory = new TokenAwareChatMemory(
+                memory(atomicStore), atomicStore);
+        TokenAwareChatMemory appendingMemory = new TokenAwareChatMemory(
+                memory(atomicStore), atomicStore);
+        SystemMessage system = SystemMessage.from("系统约束");
+        UserMessage lateTail = UserMessage.from("系统重排期间追加的问题");
+        CountDownLatch appendStarted = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        Thread replacing = Thread.ofPlatform().name("l0-system").start(() -> {
+            try {
+                systemMemory.add(system);
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        });
+        assertTrue(store.systemUpdateEntered().await(2, TimeUnit.SECONDS));
+        Thread appending = Thread.ofPlatform().name("l0-appending").start(() -> {
+            try {
+                appendStarted.countDown();
+                appendingMemory.add(lateTail);
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        });
+        assertTrue(appendStarted.await(2, TimeUnit.SECONDS));
+        assertFalse(store.appendUpdated().await(300, TimeUnit.MILLISECONDS));
+        store.allowSystemUpdate().countDown();
+
+        replacing.join(Duration.ofSeconds(2));
+        appending.join(Duration.ofSeconds(2));
+
+        assertNull(failure.get());
+        assertEquals(List.of(
+                system,
+                original.get(0), original.get(1),
+                original.get(2), original.get(3),
+                lateTail), store.getMessages(APP_ID));
     }
 
     @Test
@@ -332,6 +458,44 @@ class L0AtomicMemoryBoundaryTest {
 
         private CountDownLatch allowCollapseUpdate() {
             return allowCollapseUpdate;
+        }
+
+        private CountDownLatch appendUpdated() {
+            return appendUpdated;
+        }
+    }
+
+    private static final class SystemUpdateBarrierStore extends StatefulStore {
+
+        private final CountDownLatch systemUpdateEntered =
+                new CountDownLatch(1);
+        private final CountDownLatch allowSystemUpdate =
+                new CountDownLatch(1);
+        private final CountDownLatch appendUpdated = new CountDownLatch(1);
+
+        private SystemUpdateBarrierStore(List<ChatMessage> initialMessages) {
+            super(initialMessages);
+        }
+
+        @Override
+        public void updateMessages(
+                Object memoryId, List<ChatMessage> updatedMessages) {
+            if (Thread.currentThread().getName().equals("l0-system")) {
+                systemUpdateEntered.countDown();
+                await(allowSystemUpdate);
+            }
+            super.updateMessages(memoryId, updatedMessages);
+            if (Thread.currentThread().getName().equals("l0-appending")) {
+                appendUpdated.countDown();
+            }
+        }
+
+        private CountDownLatch systemUpdateEntered() {
+            return systemUpdateEntered;
+        }
+
+        private CountDownLatch allowSystemUpdate() {
+            return allowSystemUpdate;
         }
 
         private CountDownLatch appendUpdated() {
