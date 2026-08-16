@@ -25,6 +25,8 @@ public final class SimpleGenerationTurnContext
     private final CancellationRegistration cancellationRegistration;
     private final DeleteTakeoverRegistration deleteTakeoverRegistration;
     private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicBoolean stableAiMessagePersisted =
+            new AtomicBoolean();
     private final AtomicReference<UpstreamCancellation> upstreamCancellation =
             new AtomicReference<>();
     private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
@@ -66,6 +68,15 @@ public final class SimpleGenerationTurnContext
 
     public boolean isCancelled() {
         return cancelled.get() || operationLease.isCancellationRequested();
+    }
+
+    /** 标记完整 AI 回复已成功写入 MySQL，之后的下游取消不再代表 L0 不可信。 */
+    public void markStableAiMessagePersisted() {
+        stableAiMessagePersisted.set(true);
+    }
+
+    public boolean hasStableAiMessagePersisted() {
+        return stableAiMessagePersisted.get();
     }
 
     /** 在普通回合原子门内执行快速提交或模型启动动作。 */

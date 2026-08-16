@@ -345,9 +345,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             CodeGenTypeEnum codeGenType,
             SignalType signal) {
         try {
-            if (signal == SignalType.ON_ERROR
+            if (!context.hasStableAiMessagePersisted()
+                    && (signal == SignalType.ON_ERROR
                     || signal == SignalType.CANCEL
-                    || context.isCancelled()) {
+                    || context.isCancelled())) {
                 invalidateUnstableSimpleMemory(context.appId(), codeGenType);
             }
         } finally {

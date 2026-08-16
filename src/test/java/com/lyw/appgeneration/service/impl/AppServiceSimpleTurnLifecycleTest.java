@@ -4,6 +4,7 @@ import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.controller.AppController;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -91,6 +93,26 @@ class AppServiceSimpleTurnLifecycleTest {
                 .verifyComplete();
 
         assertEquals(1, businessSubscriptions.get());
+    }
+
+    @Test
+    void SSE心跳扇出在稳定回合完成后触发内部取消不得清除完整L0() {
+        when(facade.generateAndSaveCodeStream(
+                any(), any(), eq(APP_ID), anyBoolean(), any(), any()))
+                .thenReturn(Flux.just("回答"));
+        AppController controller = new AppController();
+        Flux<ServerSentEvent<String>> encoded = ReflectionTestUtils
+                .invokeMethod(controller, "encodeBusinessWithHeartbeat",
+                        service.chatToGenCode(APP_ID, "需求", user()));
+
+        StepVerifier.create(encoded)
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(history).addChatMessageAndReturn(
+                APP_ID, "回答", "ai", USER_ID);
+        verify(aiFactory, never()).invalidateAndClearMemory(
+                APP_ID, CodeGenTypeEnum.HTML);
     }
 
     private static final long APP_ID = 7L;

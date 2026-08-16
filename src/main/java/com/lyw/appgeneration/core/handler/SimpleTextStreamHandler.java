@@ -117,6 +117,7 @@ public class SimpleTextStreamHandler {
             if (!triggerMemory) {
                 return PersistenceResult.SAVED;
             }
+            context.markStableAiMessagePersisted();
             triggerStableMemoryHooks(
                     appId, loginUser.getId(), saved.getId(),
                     memorySummaryService, userMemoryService);
