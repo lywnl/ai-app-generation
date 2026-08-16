@@ -27,11 +27,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
 
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -70,7 +70,7 @@ class AiModelMonitorListenerTest {
     }
 
     @Test
-    void onRequestReestimatesFinalMessagesAndToolsAndStoresResult() {
+    void onRequestReestimatesFinalMessagesAndToolsAndStoresOpaqueObservation() {
         AiModelMonitorListener listener = newListener();
         ChatModelRequestContext requestContext =
                 org.mockito.Mockito.mock(ChatModelRequestContext.class);
@@ -84,9 +84,11 @@ class AiModelMonitorListenerTest {
 
         listener.onRequest(requestContext);
 
-        assertEquals(200, attributes.get("request_estimated_tokens"));
-        assertEquals(AiModelMetricsCollector.ModelFamily.QWEN,
-                attributes.get("request_model_family"));
+        assertEquals(1, attributes.size(),
+                "一次请求只能写入一个不透明观察状态");
+        assertFalse(attributes.containsKey("request_start_time"));
+        assertFalse(attributes.containsKey("request_estimated_tokens"));
+        assertFalse(attributes.containsKey("request_model_family"));
         verify(tokenEstimator).estimateRequest(
                 request.messages(), request.toolSpecifications());
         assertEquals(1D, counter("ai_model_requests_total",
@@ -127,8 +129,6 @@ class AiModelMonitorListenerTest {
                 .thenReturn(0);
         listener.onRequest(requestContext(request, attributes));
 
-        assertEquals(0, attributes.get("request_estimated_tokens"));
-
         listener.onResponse(responseContext(attributes, 300, 50, 350));
 
         assertTrue(registry.find("memory_token_estimation_ratio")
@@ -139,12 +139,13 @@ class AiModelMonitorListenerTest {
     void onErrorUsesFixedFamilyAndErrorTypeWithoutThreadLocalContext() {
         AiModelMonitorListener listener = newListener();
         MonitorContextHolder.clearContext();
+        Map<Object, Object> attributes = new HashMap<>();
+        ChatRequest request = request("deepseek-chat", "错误回调正文");
+        when(tokenEstimator.estimateRequest(anyList(), anyList()))
+                .thenReturn(100);
+        listener.onRequest(requestContext(request, attributes));
         ChatModelErrorContext errorContext =
                 org.mockito.Mockito.mock(ChatModelErrorContext.class);
-        Map<Object, Object> attributes = new HashMap<>();
-        attributes.put("request_start_time", Instant.now());
-        attributes.put("request_model_family",
-                AiModelMetricsCollector.ModelFamily.DEEPSEEK);
         when(errorContext.attributes()).thenReturn(attributes);
         when(errorContext.error()).thenReturn(
                 new IllegalStateException("敏感原始异常消息"));
@@ -159,6 +160,76 @@ class AiModelMonitorListenerTest {
         assertEquals(1L, timer("ai_model_response_duration_seconds",
                 "model_family", "deepseek", "outcome", "error").count());
         assertFalse(registry.scrape().contains("敏感原始异常消息"));
+    }
+
+    @Test
+    void legacyStringAttributesWithWrongTypesCannotEscapeCallbacks() {
+        AiModelMonitorListener listener = newListener();
+        Map<Object, Object> attributes = new HashMap<>();
+        attributes.put("request_start_time", "错误时间类型");
+        attributes.put("request_estimated_tokens", new Object());
+        attributes.put("request_model_family", 42);
+        ChatModelErrorContext errorContext =
+                org.mockito.Mockito.mock(ChatModelErrorContext.class);
+        when(errorContext.attributes()).thenReturn(attributes);
+        when(errorContext.error()).thenReturn(
+                new IllegalStateException("旧属性污染"));
+
+        assertAll(
+                () -> assertDoesNotThrow(() -> listener.onResponse(
+                        responseContext(attributes, 300, 50, 350))),
+                () -> assertDoesNotThrow(() ->
+                        listener.onError(errorContext)));
+    }
+
+    @Test
+    void onResponseIgnoresMissingResponseOrMetadata() {
+        AiModelMonitorListener listener = newListener();
+        Map<Object, Object> attributes = new HashMap<>();
+        ChatRequest request = request("qwen-max", "空响应正文");
+        when(tokenEstimator.estimateRequest(anyList(), anyList()))
+                .thenReturn(100);
+        listener.onRequest(requestContext(request, attributes));
+        ChatModelResponseContext missingResponse =
+                org.mockito.Mockito.mock(ChatModelResponseContext.class);
+        when(missingResponse.attributes()).thenReturn(attributes);
+        ChatModelResponseContext missingMetadata =
+                org.mockito.Mockito.mock(ChatModelResponseContext.class);
+        ChatResponse response = org.mockito.Mockito.mock(ChatResponse.class);
+        when(missingMetadata.attributes()).thenReturn(attributes);
+        when(missingMetadata.chatResponse()).thenReturn(response);
+        when(response.metadata()).thenReturn(null);
+
+        assertAll(
+                () -> assertDoesNotThrow(() ->
+                        listener.onResponse(missingResponse)),
+                () -> assertDoesNotThrow(() ->
+                        listener.onResponse(missingMetadata)));
+    }
+
+    @Test
+    void observationDependencyFailuresCannotEscapeAnyCallback() {
+        AiModelMonitorListener listener = newListener();
+        ChatModelRequestContext requestContext =
+                org.mockito.Mockito.mock(ChatModelRequestContext.class);
+        ChatModelResponseContext responseContext =
+                org.mockito.Mockito.mock(ChatModelResponseContext.class);
+        ChatModelErrorContext errorContext =
+                org.mockito.Mockito.mock(ChatModelErrorContext.class);
+        when(requestContext.attributes()).thenThrow(
+                new IllegalStateException("请求属性敏感异常"));
+        when(responseContext.attributes()).thenThrow(
+                new IllegalStateException("响应属性敏感异常"));
+        when(errorContext.attributes()).thenThrow(
+                new IllegalStateException("错误属性敏感异常"));
+
+        assertAll(
+                () -> assertDoesNotThrow(() ->
+                        listener.onRequest(requestContext)),
+                () -> assertDoesNotThrow(() ->
+                        listener.onResponse(responseContext)),
+                () -> assertDoesNotThrow(() ->
+                        listener.onError(errorContext)));
     }
 
     @Test

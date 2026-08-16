@@ -6,6 +6,7 @@ import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.chat.listener.ChatModelRequestContext;
 import dev.langchain4j.model.chat.listener.ChatModelResponseContext;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.ChatResponseMetadata;
 import dev.langchain4j.model.output.TokenUsage;
 import lombok.extern.slf4j.Slf4j;
@@ -20,11 +21,7 @@ import java.util.Objects;
 @Slf4j
 public class AiModelMonitorListener implements ChatModelListener {
 
-    private static final String REQUEST_START_TIME_KEY = "request_start_time";
-    private static final String REQUEST_ESTIMATED_TOKENS_KEY =
-            "request_estimated_tokens";
-    private static final String REQUEST_MODEL_FAMILY_KEY =
-            "request_model_family";
+    private static final Object REQUEST_OBSERVATION_KEY = new Object();
 
     private final AiModelMetricsCollector aiModelMetricsCollector;
     private final ChatTokenEstimator tokenEstimator;
@@ -40,14 +37,19 @@ public class AiModelMonitorListener implements ChatModelListener {
 
     @Override
     public void onRequest(ChatModelRequestContext requestContext) {
+        observeSafely("request", () -> observeRequest(requestContext));
+    }
+
+    private void observeRequest(ChatModelRequestContext requestContext) {
         Map<Object, Object> attributes = requestContext.attributes();
-        attributes.put(REQUEST_START_TIME_KEY, Instant.now());
+        Instant startedAt = Instant.now();
         ChatRequest chatRequest = requestContext.chatRequest();
         AiModelMetricsCollector.ModelFamily modelFamily =
                 AiModelMetricsCollector.ModelFamily.fromModelName(
                         chatRequest.modelName());
-        attributes.put(REQUEST_MODEL_FAMILY_KEY, modelFamily);
-        estimateRequestTokens(chatRequest, attributes);
+        Integer estimatedTokens = estimateRequestTokens(chatRequest);
+        attributes.put(REQUEST_OBSERVATION_KEY, new RequestObservation(
+                startedAt, modelFamily, estimatedTokens));
         safeRecord(() -> aiModelMetricsCollector.recordRequest(
                 modelFamily,
                 AiModelMetricsCollector.RequestStatus.STARTED));
@@ -55,24 +57,34 @@ public class AiModelMonitorListener implements ChatModelListener {
 
     @Override
     public void onResponse(ChatModelResponseContext responseContext) {
+        observeSafely("response", () -> observeResponse(responseContext));
+    }
+
+    private void observeResponse(ChatModelResponseContext responseContext) {
         Map<Object, Object> attributes = responseContext.attributes();
-        AiModelMetricsCollector.ModelFamily modelFamily =
-                requestModelFamily(attributes);
+        RequestObservation observation = requestObservation(attributes);
+        AiModelMetricsCollector.ModelFamily modelFamily = requestModelFamily(
+                observation);
         safeRecord(() -> aiModelMetricsCollector.recordRequest(
                 modelFamily,
                 AiModelMetricsCollector.RequestStatus.SUCCESS));
         recordResponseTime(
-                attributes,
+                observation,
                 modelFamily,
                 AiModelMetricsCollector.ResponseOutcome.SUCCESS);
-        recordTokenUsage(responseContext, attributes, modelFamily);
+        recordTokenUsage(responseContext, observation, modelFamily);
     }
 
     @Override
     public void onError(ChatModelErrorContext errorContext) {
+        observeSafely("error", () -> observeError(errorContext));
+    }
+
+    private void observeError(ChatModelErrorContext errorContext) {
         Map<Object, Object> attributes = errorContext.attributes();
-        AiModelMetricsCollector.ModelFamily modelFamily =
-                requestModelFamily(attributes);
+        RequestObservation observation = requestObservation(attributes);
+        AiModelMetricsCollector.ModelFamily modelFamily = requestModelFamily(
+                observation);
         AiModelMetricsCollector.ErrorType errorType =
                 AiModelMetricsCollector.ErrorType.fromThrowable(
                         errorContext.error());
@@ -82,29 +94,29 @@ public class AiModelMonitorListener implements ChatModelListener {
         safeRecord(() -> aiModelMetricsCollector.recordError(
                 modelFamily, errorType));
         recordResponseTime(
-                attributes,
+                observation,
                 modelFamily,
                 AiModelMetricsCollector.ResponseOutcome.ERROR);
     }
 
-    private void estimateRequestTokens(
-            ChatRequest chatRequest, Map<Object, Object> attributes) {
+    private Integer estimateRequestTokens(ChatRequest chatRequest) {
         try {
-            int estimatedTokens = tokenEstimator.estimateRequest(
+            return tokenEstimator.estimateRequest(
                     chatRequest.messages(), chatRequest.toolSpecifications());
-            attributes.put(REQUEST_ESTIMATED_TOKENS_KEY, estimatedTokens);
         } catch (RuntimeException exception) {
             log.warn("AI 请求 Token 估算失败，exceptionType={}",
                     exception.getClass().getSimpleName());
+            return null;
         }
     }
 
     private void recordResponseTime(
-            Map<Object, Object> attributes,
+            RequestObservation observation,
             AiModelMetricsCollector.ModelFamily modelFamily,
             AiModelMetricsCollector.ResponseOutcome outcome) {
-        Instant startTime = (Instant) attributes.get(REQUEST_START_TIME_KEY);
-        if (startTime == null) {
+        Object startedAt = observation == null
+                ? null : observation.startedAt();
+        if (!(startedAt instanceof Instant startTime)) {
             return;
         }
         Duration responseTime = Duration.between(startTime, Instant.now());
@@ -114,10 +126,13 @@ public class AiModelMonitorListener implements ChatModelListener {
 
     private void recordTokenUsage(
             ChatModelResponseContext responseContext,
-            Map<Object, Object> attributes,
+            RequestObservation observation,
             AiModelMetricsCollector.ModelFamily modelFamily) {
-        ChatResponseMetadata metadata =
-                responseContext.chatResponse().metadata();
+        ChatResponse chatResponse = responseContext.chatResponse();
+        if (chatResponse == null) {
+            return;
+        }
+        ChatResponseMetadata metadata = chatResponse.metadata();
         TokenUsage tokenUsage = metadata == null ? null : metadata.tokenUsage();
         if (tokenUsage == null) {
             return;
@@ -134,7 +149,7 @@ public class AiModelMonitorListener implements ChatModelListener {
         recordTokenCount(
                 modelFamily, AiModelMetricsCollector.TokenType.TOTAL,
                 totalTokens);
-        recordEstimationRatio(attributes, modelFamily, inputTokens);
+        recordEstimationRatio(observation, modelFamily, inputTokens);
     }
 
     private void recordTokenCount(
@@ -149,10 +164,11 @@ public class AiModelMonitorListener implements ChatModelListener {
     }
 
     private void recordEstimationRatio(
-            Map<Object, Object> attributes,
+            RequestObservation observation,
             AiModelMetricsCollector.ModelFamily modelFamily,
             Integer actualInputTokens) {
-        Object estimatedValue = attributes.get(REQUEST_ESTIMATED_TOKENS_KEY);
+        Object estimatedValue = observation == null
+                ? null : observation.estimatedTokens();
         if (actualInputTokens == null || !(estimatedValue instanceof Number)) {
             return;
         }
@@ -166,12 +182,31 @@ public class AiModelMonitorListener implements ChatModelListener {
     }
 
     private AiModelMetricsCollector.ModelFamily requestModelFamily(
-            Map<Object, Object> attributes) {
-        Object value = attributes.get(REQUEST_MODEL_FAMILY_KEY);
+            RequestObservation observation) {
+        Object value = observation == null
+                ? null : observation.modelFamily();
         if (value instanceof AiModelMetricsCollector.ModelFamily modelFamily) {
             return modelFamily;
         }
         return AiModelMetricsCollector.ModelFamily.UNKNOWN;
+    }
+
+    private RequestObservation requestObservation(
+            Map<Object, Object> attributes) {
+        Object value = attributes.get(REQUEST_OBSERVATION_KEY);
+        if (value instanceof RequestObservation observation) {
+            return observation;
+        }
+        return null;
+    }
+
+    private void observeSafely(String phase, Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException exception) {
+            log.warn("AI 模型观测回调失败，phase={}，exceptionType={}",
+                    phase, exception.getClass().getSimpleName());
+        }
     }
 
     private void safeRecord(Runnable action) {
@@ -181,5 +216,11 @@ public class AiModelMonitorListener implements ChatModelListener {
             log.warn("AI 模型指标记录失败，exceptionType={}",
                     exception.getClass().getSimpleName());
         }
+    }
+
+    private record RequestObservation(
+            Instant startedAt,
+            AiModelMetricsCollector.ModelFamily modelFamily,
+            Integer estimatedTokens) {
     }
 }
