@@ -199,10 +199,43 @@ ai.memory.token:
 
 ## 7. 非破坏性回滚
 
+### 7.1 旧后端直接回滚兼容性门禁
+
+不能只凭新增列有默认值就认定旧包可直接回滚。V3 之前的后端召回 L2 时不识别 `status`，会把 `CANDIDATE` 当成正式偏好；旧 L1/L2 还会把 `failCount >= 3` 当作永久熔断，并忽略数据库中的 `nextRetryTime`。回滚前必须先执行以下只读审计：
+
+```sql
+SELECT COUNT(*) AS candidateRows
+FROM app_memory
+WHERE isDelete = 0
+  AND status <> 'ACTIVE';
+
+SELECT COUNT(*) AS l1LegacyRetryBlockedRows
+FROM app_memory_summary
+WHERE isDelete = 0
+  AND (failCount >= 3 OR nextRetryTime > NOW());
+
+SELECT COUNT(*) AS l2LegacyRetryBlockedRows
+FROM app_memory_extract_cursor
+WHERE isDelete = 0
+  AND (failCount >= 3 OR nextRetryTime > NOW());
+```
+
+只有三个结果都为 `0` 时，才允许直接启动未经兼容修订的 V3 前旧后端。任一结果非零时立即停止直接回滚，且不得通过提升候选为 `ACTIVE`、软删除候选、清空证据或擅自重置退避元数据来“做绿”检查。
+
+此时必须使用经过验证的**兼容回滚包**。该包以旧业务版本为基线，但至少需要满足：L2 召回只读取 `status='ACTIVE'`；回滚期间禁用旧 L2 抽取器，避免它覆盖 V3 证据状态；L1 不把 `failCount >= 3` 解释为永久停更，并尊重或保守延后数据库 `nextRetryTime`。没有兼容回滚包时，以上任一阻断结果都表示本次回滚不可继续。
+
+### 7.2 回滚执行顺序
+
 1. 停止新生成流，等待正在执行的门禁、压缩和 L2 抽取任务静默；确认相关 counter 不再增长且日志没有进行中的 owner。
-2. 先回滚后端应用包，再按兼容性需要回滚前端；如果旧后端仍在线，新前端可以继续兼容。
-3. 保留新增数据库列、L1 摘要、L2 证据、游标和原始 `chat_history`。新增非空列带有 `ACTIVE / EXPLICIT / 1` 默认值，旧应用不写这些字段仍可插入。
-4. 回滚后执行一条旧版本兼容写入和读取检查，确认旧包不会因新增列失败；同时核对三张记忆表行数没有减少。
-5. 默认不恢复整库备份，因为这会覆盖 migration 后产生的新业务数据。只有确认 migration 造成数据损坏、完成影响审计并获得单独授权后，才按数据库恢复流程处理。
+2. 执行 7.1 的只读兼容性审计，记录查询结果和将要使用的回滚包 SHA；不满足直接回滚条件且没有兼容包时停止。
+3. 在旧后端启动前做**定向缓存失效**：按受影响 app 调用现有 L0 清理路径 `RedisChatMemoryStore.deleteMessages(appId)`，使旧版从 MySQL 冷重建；删除对应 `mem:summary:{appId}`，并按 user 同时删除 `mem:pref:{userId}` 与 `mem:pref:v2:{userId}`。禁止使用 `FLUSHDB` 或清理无关业务缓存。
+4. 先回滚后端应用包，再按兼容性需要回滚前端；如果旧后端仍在线，新前端可以继续兼容。
+5. 回滚后执行一条旧版本兼容写入和读取检查：旧实体不提供新字段时，`status/evidenceType/evidenceCount` 必须落为 `ACTIVE/EXPLICIT/1`，两个 `nextRetryTime` 保持可空；同时确认 L2 实际召回不包含 `CANDIDATE`。
+6. 核对三张记忆表和 `chat_history` 行数没有减少，L1 摘要、L2 证据和游标仍在；旧版 L0 从 MySQL 重建成功后再恢复小流量。
+7. 默认不恢复整库备份，因为这会覆盖 migration 后产生的新业务数据。只有确认 migration 造成数据损坏、完成影响审计并获得单独授权后，才按数据库恢复流程处理。
+
+### 7.3 数据保留与破坏性操作边界
+
+应用回滚默认保留新增数据库列、L1 摘要、L2 候选与活跃证据、游标和原始 `chat_history`。缓存失效只是让不同版本按各自协议重新回源，不删除 MySQL 事实数据。
 
 破坏性 `DROP COLUMN` 不是常规回滚步骤。确需删列时，必须先停止所有新版本流量、导出六个新增列的内容、验证导出可恢复，再由人工逐条执行 migration 末尾注释中的明确列名 SQL；禁止把删列命令接入正向 migration、自动部署或普通应用回滚脚本。
