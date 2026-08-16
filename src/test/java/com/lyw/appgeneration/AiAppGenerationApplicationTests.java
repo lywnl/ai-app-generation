@@ -1,7 +1,6 @@
 package com.lyw.appgeneration;
 
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
-import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.image.ImageCollectionPlanService;
 import com.lyw.appgeneration.ai.image.tools.ImageSearchTool;
 import com.lyw.appgeneration.ai.image.tools.LogoGeneratorTool;
@@ -87,9 +86,6 @@ class AiAppGenerationApplicationTests {
 
     @MockitoBean
     private UserMapper userMapper;
-
-    @MockitoBean
-    private AiCodeGeneratorService aiCodeGeneratorService;
 
     @MockitoBean
     private AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService;
