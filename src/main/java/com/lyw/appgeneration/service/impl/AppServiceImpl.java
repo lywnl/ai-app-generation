@@ -468,9 +468,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         return Flux.defer(() -> {
             try {
-                context.registerDeleteTakeoverParticipant();
-                // Handler 同步装配也属于活跃回合，取消收尾必须等待它退出双门边界。
                 return context.tryCallCallback(() -> {
+                    // 参与者可见前先持有双门，删除接管必须等待 Handler 装配或同步失败收尾。
+                    context.registerDeleteTakeoverParticipant();
                     Flux<String> codeStream = Flux.defer(() -> context
                             .tryCallCallback(() -> aiCodeGeneratorFacade
                                     .generateVueProjectStream(
@@ -481,7 +481,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     Flux<GenerationStreamEvent> business = streamHandlerExecutor
                             .doExecuteVue(codeStream, context);
                     return context.mergeProgress(business);
-                }).orElseGet(Flux::empty);
+                }).orElseGet(() -> finalizeCommittedVueFailure(
+                        context, new IllegalStateException(
+                                "Vue Handler 装配前回调门已经关闭")));
             } catch (RuntimeException exception) {
                 return finalizeCommittedVueFailure(context, exception);
             }
