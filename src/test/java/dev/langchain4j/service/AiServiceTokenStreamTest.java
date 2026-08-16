@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 class AiServiceTokenStreamTest {
@@ -117,6 +118,56 @@ class AiServiceTokenStreamTest {
             gate.awaitIdle();
 
             assertEquals(0, modelCalls.get());
+        }
+    }
+
+    @Test
+    void 首次门禁硬拒绝必须保留拒绝类型与阶段且不调用模型()
+            throws Exception {
+        MutableChatMemory memory = new MutableChatMemory(7L);
+        memory.add(UserMessage.from("超长上下文"));
+        AtomicInteger modelCalls = new AtomicInteger();
+        StreamingChatModel model = new StreamingChatModel() {
+            @Override
+            public void doChat(
+                    ChatRequest request,
+                    dev.langchain4j.model.chat.response
+                            .StreamingChatResponseHandler handler) {
+                modelCalls.incrementAndGet();
+            }
+        };
+        TestAiService service = AiServices.builder(TestAiService.class)
+                .streamingChatModel(model)
+                .chatMemoryProvider(ignored -> memory)
+                .build();
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
+                request -> CompletableFuture.completedFuture(
+                        new ModelRequestGate.Decision(
+                                ModelRequestGate.Status.HARD_LIMIT_REJECTED,
+                                request.latestMemory().get().messages(),
+                                37_785,
+                                "对话上下文过长，请开启新会话后重试")))) {
+            TokenStream stream = service.chat(7L, "本轮问题");
+
+            stream.modelRequestGate(gate, action -> {
+                        action.run();
+                        return true;
+                    })
+                    .onPartialResponse(ignored -> { })
+                    .onError(error::set)
+                    .start();
+            gate.awaitIdle();
+
+            assertEquals(0, modelCalls.get());
+            ModelRequestGateException rejection = assertInstanceOf(
+                    ModelRequestGateException.class, error.get());
+            assertEquals(ModelRequestGateException.Stage.INITIAL,
+                    rejection.stage());
+            assertEquals(ModelRequestGate.Status.HARD_LIMIT_REJECTED,
+                    rejection.status());
+            assertEquals("对话上下文过长，请开启新会话后重试",
+                    rejection.getMessage());
         }
     }
 

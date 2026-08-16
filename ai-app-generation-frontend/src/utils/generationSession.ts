@@ -548,7 +548,6 @@ function handleContextCompression(appId: string, requestId: number, data: string
   if (!session || session.snapshot.status !== 'streaming') {
     return
   }
-  session.semanticEventSeen = true
   const payload = tryParseJson(data)
   const phase = payload?.phase
   const validPhase = phase === 'STARTED' || phase === 'COMPLETED'

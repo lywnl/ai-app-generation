@@ -2,7 +2,7 @@ package com.lyw.appgeneration.exception;
 
 import java.util.Objects;
 
-/** 只表达本轮原始 User 成功持久化之前的生成失败。 */
+/** 表达正文或工具语义事件开始前可通过 business-error 安全编码的失败。 */
 public final class GenerationPreflightException extends RuntimeException {
 
     private static final String SYSTEM_SAFE_MESSAGE =

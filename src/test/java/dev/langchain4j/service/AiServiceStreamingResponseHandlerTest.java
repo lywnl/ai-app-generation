@@ -252,7 +252,12 @@ class AiServiceStreamingResponseHandlerTest {
             gate.awaitIdle();
 
             assertEquals(0, model.chatInvocations);
-            assertEquals("上下文门禁安全提示", error.get().getMessage());
+            ModelRequestGateException rejection = assertInstanceOf(
+                    ModelRequestGateException.class, error.get());
+            assertEquals(ModelRequestGateException.Stage.CONTINUATION,
+                    rejection.stage());
+            assertEquals(status, rejection.status());
+            assertEquals("上下文门禁安全提示", rejection.getMessage());
         }
     }
 

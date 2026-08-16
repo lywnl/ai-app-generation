@@ -536,7 +536,7 @@ event: done
 data:
 ```
 
-若 User 尚未提交就被参数、鉴权或业务门禁拒绝，则不发送正文和 `turn-outcome`，改为：
+若生成在正文或工具语义事件开始前被安全拒绝，例如参数、鉴权、同步预检或普通生成的首次模型门禁拒绝，则不发送正文和 `turn-outcome`，改为：
 
 ```text
 event: business-error
@@ -551,7 +551,7 @@ data:
 - 命名事件只允许 `heartbeat`、`context-compression`、`business-error`、`turn-outcome`、`done`；未知命名事件属于协议错误，不能退化为聊天正文
 - 30K 同步压缩使用受信 `context-compression/v1` 控制事件：`STARTED` 展示“正在压缩上下文，请稍候…”，`COMPLETED` 后恢复原加载文案；控制事件只更新页面状态，不进入 AI 正文
 - `turn-outcome` 是已提交 Vue 回合的唯一业务终态，随后发送唯一 `done`；`done` 只表示 SSE 传输正常收尾，不表示业务成功
-- `business-error` 只承载 User 提交前的安全错误，并以 `done` 结束
+- `business-error` 只承载正文或工具语义事件开始前的安全错误，包括同步预检和普通生成的首次模型门禁拒绝，并以 `done` 结束；已提交 Vue 回合仍使用唯一 `turn-outcome`，工具续调用门禁拒绝也不得伪装成首次拒绝
 - 前端只有在 `turn-outcome.outcome=SUCCEEDED` 且收到 `done` 后刷新预览；失败、取消、超时、系统错误和协议错误都保留旧预览
 - 心跳每 15 秒发送一次。Vue 回合是从操作租约领取开始计算的 1,800 秒绝对截止，不会因持续输出 token 而重置；Spring MVC 异步超时为 1,845 秒，Nginx 读写超时为 1,860 秒，给取消和终态持久化留出收尾余量
 - 生成 POST 只消费 JSON，并使用显式可信 Origin；HTTP 413、其他非 2xx 或错误的 SSE `Content-Type` 由前端转换为固定安全文案，不显示代理响应正文

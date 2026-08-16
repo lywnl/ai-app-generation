@@ -390,6 +390,25 @@ describe('generationSession Vue SSE 状态机', () => {
     })
   })
 
+  it('压缩开始后首次门禁 business-error 安全结束且不污染正文', async () => {
+    const snapshot = await runSession(
+      [
+        contextCompressionEvent('STARTED'),
+        businessErrorEvent('BUSINESS', '对话上下文过长，请开启新会话后重试'),
+        event('done'),
+      ],
+      false,
+    )
+
+    expect(snapshot).toMatchObject({
+      content: '',
+      status: 'done',
+      outcome: 'system_error',
+      errorMessage: '对话上下文过长，请开启新会话后重试',
+      contextCompression: 'idle',
+    })
+  })
+
   it('意外 EOF 标记为协议错误', async () => {
     const snapshot = await runSession([outcomeEvent('SUCCEEDED', true)])
 

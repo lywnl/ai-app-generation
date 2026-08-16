@@ -494,8 +494,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     decision.messages(), accumulatedUsage);
             case CANCELLED -> requestController.cancel();
             case COMPRESSION_FAILED, HARD_LIMIT_REJECTED ->
-                    deliverError(new IllegalStateException(
-                            decision.safeMessage()));
+                    deliverError(new ModelRequestGateException(
+                            ModelRequestGateException.Stage.CONTINUATION,
+                            decision.status(), decision.safeMessage()));
         }
     }
 

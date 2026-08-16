@@ -16,6 +16,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.UserService;
+import dev.langchain4j.service.ModelRequestGate;
+import dev.langchain4j.service.ModelRequestGateException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -298,6 +300,92 @@ class AppControllerSseTest {
                 "generation_sse_protocol_results_total").meters().isEmpty());
         assertEquals(1.0, metricsRegistry.get("generation_sse_publisher_terminations_total")
                 .tag("result", "publisher_error").counter().count());
+    }
+
+    @Test
+    void 首次硬门禁拒绝必须编码为安全业务错误并正常结束Sse() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.error(new ModelRequestGateException(
+                        ModelRequestGateException.Stage.INITIAL,
+                        ModelRequestGate.Status.HARD_LIMIT_REJECTED,
+                        "对话上下文过长，请开启新会话后重试")));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(List.of("business-error", "done"),
+                events.stream().map(ServerSentEvent::event).toList());
+        var error = JSONUtil.parseObj(events.getFirst().data());
+        assertEquals("BUSINESS", error.getStr("kind"));
+        assertEquals(ErrorCode.OPERATION_ERROR.getCode(),
+                error.getInt("code"));
+        assertEquals("对话上下文过长，请开启新会话后重试",
+                error.getStr("message"));
+        assertEquals(1.0, metricsRegistry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "business_error",
+                        "error_kind", "business").counter().count());
+    }
+
+    @Test
+    void 首次压缩失败必须隐藏内部文案并编码为安全系统错误() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.error(new ModelRequestGateException(
+                        ModelRequestGateException.Stage.INITIAL,
+                        ModelRequestGate.Status.COMPRESSION_FAILED,
+                        "对话上下文整理失败，请稍后重试")));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(List.of("business-error", "done"),
+                events.stream().map(ServerSentEvent::event).toList());
+        var error = JSONUtil.parseObj(events.getFirst().data());
+        assertEquals("SYSTEM", error.getStr("kind"));
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), error.getInt("code"));
+        assertEquals("生成服务暂时不可用，请稍后重试。",
+                error.getStr("message"));
+        assertEquals(1.0, metricsRegistry.get(
+                        "generation_sse_protocol_results_total")
+                .tags("result", "business_error",
+                        "error_kind", "system").counter().count());
+    }
+
+    @Test
+    void 压缩开始后的首次硬门禁拒绝仍必须安全结束而非传播Servlet异常() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.concat(
+                        Flux.just(GenerationStreamEvent.contextCompression(
+                                ContextCompressionMessage.started())),
+                        Flux.error(new ModelRequestGateException(
+                                ModelRequestGateException.Stage.INITIAL,
+                                ModelRequestGate.Status.HARD_LIMIT_REJECTED,
+                                "对话上下文过长，请开启新会话后重试"))));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(List.of(
+                        "context-compression", "business-error", "done"),
+                events.stream().map(ServerSentEvent::event).toList());
+        assertEquals("对话上下文过长，请开启新会话后重试",
+                JSONUtil.parseObj(events.get(1).data()).getStr("message"));
+    }
+
+    @Test
+    void 工具续调用门禁拒绝仍属于已提交流错误不得伪装成首次拒绝() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.error(new ModelRequestGateException(
+                        ModelRequestGateException.Stage.CONTINUATION,
+                        ModelRequestGate.Status.HARD_LIMIT_REJECTED,
+                        "工具续调用上下文过长")));
+
+        StepVerifier.create(controller.chatToGenCode(requestBody(), request))
+                .expectErrorMatches(error -> error instanceof
+                        ModelRequestGateException rejection
+                        && rejection.stage()
+                        == ModelRequestGateException.Stage.CONTINUATION)
+                .verify();
     }
 
     @Test

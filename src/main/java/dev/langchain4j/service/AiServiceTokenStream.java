@@ -260,8 +260,9 @@ public class AiServiceTokenStream implements TokenStream {
                     decision.messages(), temporaryMemory);
             case CANCELLED -> requestController.cancel();
             case COMPRESSION_FAILED, HARD_LIMIT_REJECTED ->
-                    deliverGateFailure(new IllegalStateException(
-                            decision.safeMessage()));
+                    deliverGateFailure(new ModelRequestGateException(
+                            ModelRequestGateException.Stage.INITIAL,
+                            decision.status(), decision.safeMessage()));
         }
     }
 

@@ -22,6 +22,8 @@ import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.UserService;
+import dev.langchain4j.service.ModelRequestGate;
+import dev.langchain4j.service.ModelRequestGateException;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryWrapper;
 import jakarta.annotation.Resource;
@@ -103,7 +105,9 @@ public class AppController {
                                     GenerationPreflightException),
                             GenerationPreflightException::system);
             Flux<GenerationStreamEvent> business = publisher.flatMapMany(
-                    Function.identity());
+                            Function.identity())
+                    .onErrorMap(this::isInitialGateRejection,
+                            this::toInitialGatePreflight);
             Flux<ServerSentEvent<String>> protocol =
                     encodeBusinessWithHeartbeat(observeVueProtocolOutcome(
                             business, protocolObservation))
@@ -140,6 +144,25 @@ public class AppController {
             BusinessException error) {
         return GenerationPreflightException.business(
                 error.getCode(), error.getMessage(), error);
+    }
+
+    private boolean isInitialGateRejection(Throwable error) {
+        return error instanceof ModelRequestGateException rejection
+                && rejection.stage()
+                == ModelRequestGateException.Stage.INITIAL;
+    }
+
+    private GenerationPreflightException toInitialGatePreflight(
+            Throwable error) {
+        ModelRequestGateException rejection =
+                (ModelRequestGateException) error;
+        if (rejection.status()
+                == ModelRequestGate.Status.HARD_LIMIT_REJECTED) {
+            return GenerationPreflightException.business(
+                    ErrorCode.OPERATION_ERROR.getCode(),
+                    rejection.getMessage(), rejection);
+        }
+        return GenerationPreflightException.system(rejection);
     }
 
     private Flux<GenerationStreamEvent> observeVueProtocolOutcome(
