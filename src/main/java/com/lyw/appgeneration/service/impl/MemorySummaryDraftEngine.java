@@ -46,7 +46,7 @@ public class MemorySummaryDraftEngine {
     @Autowired
     public MemorySummaryDraftEngine(
             ChatHistoryService chatHistoryService,
-            @Qualifier("openAiChatModel") ChatModel summarizationModel,
+            @Qualifier("memorySummaryChatModel") ChatModel summarizationModel,
             @Qualifier("memorySummaryModelExecutor") ExecutorService modelExecutor,
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties) {
