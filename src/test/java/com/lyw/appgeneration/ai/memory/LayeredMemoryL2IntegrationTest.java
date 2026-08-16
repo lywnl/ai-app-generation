@@ -1,19 +1,22 @@
 package com.lyw.appgeneration.ai.memory;
 
-import com.lyw.appgeneration.mapper.AppMapper;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
-import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.impl.UserMemoryServiceImpl;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -30,6 +33,14 @@ import static org.mockito.Mockito.*;
 
 /** L2 跨 app 集成:appA 抽取偏好 → 落库 → appB 召回带出。 */
 class LayeredMemoryL2IntegrationTest {
+
+    private final SimpleMeterRegistry metricsRegistry =
+            new SimpleMeterRegistry();
+
+    @AfterEach
+    void closeMetricsRegistry() {
+        metricsRegistry.close();
+    }
 
     @Test
     @SuppressWarnings("unchecked")
@@ -62,7 +73,8 @@ class LayeredMemoryL2IntegrationTest {
                 mock(TaskScheduler.class), redis,
                 new AppDataLifecycleFence(), tokenEstimator,
                 tokenProperties,
-                TransactionOperations.withoutTransaction());
+                TransactionOperations.withoutTransaction(),
+                new MemoryCompressionMetricsCollector(metricsRegistry));
 
         // —— appA:用户表达跨 app 偏好,抽取落库 ——
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);

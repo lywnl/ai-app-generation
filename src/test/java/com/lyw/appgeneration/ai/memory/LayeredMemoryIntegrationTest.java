@@ -5,6 +5,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.UserMemoryService;
@@ -15,6 +16,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,6 +74,7 @@ class LayeredMemoryIntegrationTest {
 
     private MemorySummaryServiceImpl summaryService;
     private ExecutorService modelExecutor;
+    private SimpleMeterRegistry metricsRegistry;
     /** 内存 store 模拟 app_memory_summary 单行持久化。 */
     private final AtomicReference<AppMemorySummary> store = new AtomicReference<>();
 
@@ -95,6 +98,7 @@ class LayeredMemoryIntegrationTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOps); // 缓存未命中(get→null)→回退 store(MySQL mock)
         modelExecutor = java.util.concurrent.Executors
                 .newVirtualThreadPerTaskExecutor();
+        metricsRegistry = new SimpleMeterRegistry();
         MemoryTokenProperties properties = new MemoryTokenProperties();
         ChatTokenEstimator tokenEstimator =
                 new ConservativeChatTokenEstimator(properties);
@@ -112,12 +116,14 @@ class LayeredMemoryIntegrationTest {
                 redisTemplate,
                 new AppDataLifecycleFence(),
                 tokenEstimator,
-                properties);
+                properties,
+                new MemoryCompressionMetricsCollector(metricsRegistry));
     }
 
     @AfterEach
     void tearDown() {
         modelExecutor.shutdownNow();
+        metricsRegistry.close();
     }
 
     private ChatHistory msg(long id, String type, String text) {

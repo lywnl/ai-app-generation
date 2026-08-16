@@ -15,10 +15,16 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.ChatModel;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,7 +57,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -83,7 +91,27 @@ class UserMemoryServiceImplTest {
     private ChatTokenEstimator tokenEstimator;
     private AppDataLifecycleFence lifecycleFence;
     private RecordingTransactionOperations transactions;
+    private SimpleMeterRegistry metricsRegistry;
+    private MemoryCompressionMetricsCollector metricsCollector;
     private UserMemoryServiceImpl service;
+
+    @Test
+    void exposesMetricsAwareProductionConstructor() {
+        assertDoesNotThrow(() -> UserMemoryServiceImpl.class.getConstructor(
+                ChatHistoryService.class,
+                AppMemoryMapper.class,
+                AppMemoryExtractCursorMapper.class,
+                AppMapper.class,
+                ChatModel.class,
+                ExecutorService.class,
+                TaskScheduler.class,
+                StringRedisTemplate.class,
+                AppDataLifecycleFence.class,
+                ChatTokenEstimator.class,
+                MemoryTokenProperties.class,
+                TransactionOperations.class,
+                MemoryCompressionMetricsCollector.class));
+    }
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -93,8 +121,6 @@ class UserMemoryServiceImplTest {
         cursorMapper = mock(AppMemoryExtractCursorMapper.class);
         appMapper = mock(AppMapper.class);
         model = mock(ChatModel.class);
-        ExecutorService worker = mock(ExecutorService.class);
-        TaskScheduler scheduler = mock(TaskScheduler.class);
         redisTemplate = mock(StringRedisTemplate.class);
         valueOperations = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -103,13 +129,10 @@ class UserMemoryServiceImplTest {
         tokenEstimator = new ConservativeChatTokenEstimator(properties);
         lifecycleFence = new AppDataLifecycleFence();
         transactions = new RecordingTransactionOperations();
-        service = new UserMemoryServiceImpl(
-                chatHistoryService, memoryMapper, cursorMapper, appMapper,
-                model, worker, scheduler, redisTemplate,
-                lifecycleFence, tokenEstimator, properties,
-                transactions,
-                Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"),
-                        ZoneOffset.UTC));
+        metricsRegistry = new SimpleMeterRegistry();
+        metricsCollector = new MemoryCompressionMetricsCollector(
+                metricsRegistry);
+        service = newService(metricsCollector);
 
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of());
@@ -119,6 +142,11 @@ class UserMemoryServiceImplTest {
         when(cursorMapper.update(any())).thenReturn(1);
         when(cursorMapper.update(
                 any(AppMemoryExtractCursor.class), eq(false))).thenReturn(1);
+    }
+
+    @AfterEach
+    void closeMetricsRegistry() {
+        metricsRegistry.close();
     }
 
     @Test
@@ -140,6 +168,9 @@ class UserMemoryServiceImplTest {
         assertEquals(1, inserted.getEvidenceCount());
         assertEquals(11L, inserted.getLastEvidenceTurnId());
         断言游标新增到(12L);
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_l2_candidate_total",
+                "status", "active").count());
     }
 
     @Test
@@ -154,7 +185,8 @@ class UserMemoryServiceImplTest {
                             appMapper, model, mock(ExecutorService.class),
                             mock(TaskScheduler.class), redisTemplate,
                             lifecycleFence, tokenEstimator, properties,
-                            transactions);
+                            transactions,
+                            metricsCollector);
             提供历史(完整回合(13L, 14L,
                     "以后所有应用都使用简体中文", "已收到"));
             when(model.chat(any(String.class))).thenReturn("""
@@ -193,6 +225,9 @@ class UserMemoryServiceImplTest {
         assertEquals("CANDIDATE", inserted.getStatus());
         assertEquals("IMPLICIT", inserted.getEvidenceType());
         assertEquals(1, inserted.getEvidenceCount());
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_l2_candidate_total",
+                "status", "candidate").count());
     }
 
     @Test
@@ -212,6 +247,9 @@ class UserMemoryServiceImplTest {
 
         verify(memoryMapper, never()).update(any());
         断言游标新增到(32L);
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_l2_candidate_total",
+                "status", "unchanged").count());
     }
 
     @Test
@@ -306,6 +344,45 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
+    @DisplayName("候选指标只在事务执行器成功返回后记录")
+    void 候选指标不会在事务Callback内提前记录() {
+        提供历史(完整回合(47L, 48L,
+                "以后都使用中文", "已收到"));
+        when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(model.chat(any(String.class))).thenReturn("""
+                [{"name":"语言偏好","content":"简体中文",
+                "evidenceType":"EXPLICIT","turnIds":[47]}]
+                """);
+        transactions.afterCallback(() -> assertTrue(metricsRegistry
+                .find("memory_l2_candidate_total").counters().isEmpty()));
+
+        service.extractNow(USER_ID, APP_ID);
+
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_l2_candidate_total",
+                "status", "active").count());
+    }
+
+    @Test
+    @DisplayName("事务 callback 完成后提交失败不得记录候选指标")
+    void 候选指标不会在事务提交失败时记录() {
+        提供历史(完整回合(49L, 50L,
+                "以后都使用中文", "已收到"));
+        when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(model.chat(any(String.class))).thenReturn("""
+                [{"name":"语言偏好","content":"简体中文",
+                "evidenceType":"EXPLICIT","turnIds":[49]}]
+                """);
+        transactions.failAfterCallback(
+                new IllegalStateException("模拟事务提交失败"));
+
+        service.extractNow(USER_ID, APP_ID);
+
+        assertTrue(metricsRegistry.find("memory_l2_candidate_total")
+                .counters().isEmpty());
+    }
+
+    @Test
     @DisplayName("非白名单和字段非法候选全部丢弃但合法数组可推进")
     void 非法候选被丢弃且批次仍推进() {
         提供历史(完整回合(51L, 52L,
@@ -324,6 +401,8 @@ class UserMemoryServiceImplTest {
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
         断言游标新增到(52L);
+        assertTrue(metricsRegistry.find("memory_l2_candidate_total")
+                .counters().isEmpty());
     }
 
     @Test
@@ -725,6 +804,8 @@ class UserMemoryServiceImplTest {
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
         断言游标新增到(212L);
+        assertTrue(metricsRegistry.find("memory_l2_candidate_total")
+                .counters().isEmpty());
     }
 
     @Test
@@ -758,6 +839,14 @@ class UserMemoryServiceImplTest {
         assertEquals("简体中文", inserted.getContent());
         verify(memoryMapper, never()).update(any());
         断言游标新增到(222L);
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_l2_candidate_total",
+                "status", "active").count());
+        assertEquals(1D, metricsRegistry
+                .find("memory_l2_candidate_total")
+                .counters().stream()
+                .mapToDouble(Counter::count)
+                .sum());
     }
 
     @Test
@@ -794,6 +883,11 @@ class UserMemoryServiceImplTest {
         String recalled = service.recallByApp(APP_ID);
 
         assertEquals("- 语言偏好:简体中文", recalled);
+        DistributionSummary recallTokens = summary(
+                metricsRegistry, "memory_l2_recall_tokens");
+        assertEquals(1L, recallTokens.count());
+        assertEquals(tokenEstimator.estimateText(recalled),
+                recallTokens.totalAmount());
         ArgumentCaptor<QueryWrapper> query =
                 ArgumentCaptor.forClass(QueryWrapper.class);
         verify(memoryMapper).selectListByQuery(query.capture());
@@ -806,6 +900,54 @@ class UserMemoryServiceImplTest {
                         "evidenceType ASC",
                         "updateTime DESC"),
                 读取排序(query.getValue()));
+    }
+
+    @Test
+    @DisplayName("候选指标故障不改变偏好落库与游标推进")
+    void 候选指标故障不改变抽取结果() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);
+        try {
+            提供历史(完整回合(301L, 302L,
+                    "以后所有应用都使用简体中文", "已收到"));
+            when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
+            when(model.chat(any(String.class))).thenReturn("""
+                    [{"name":"语言偏好","content":"简体中文",
+                    "evidenceType":"EXPLICIT","turnIds":[301]}]
+                    """);
+            UserMemoryServiceImpl observed = newService(
+                    new MemoryCompressionMetricsCollector(registry));
+
+            observed.extractNow(USER_ID, APP_ID);
+
+            assertEquals("ACTIVE", 捕获新增偏好().getStatus());
+            断言游标新增到(302L);
+            assertTrue(registry.failureTriggered());
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    @DisplayName("召回指标故障不改变最终注入文本")
+    void 召回指标故障不改变召回结果() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.SUMMARY_RECORD);
+        try {
+            提供应用归属();
+            when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
+                    偏好("语言偏好", "简体中文",
+                            "EXPLICIT", "ACTIVE", 1, 311L)));
+            UserMemoryServiceImpl observed = newService(
+                    new MemoryCompressionMetricsCollector(registry));
+
+            String recalled = observed.recallByApp(APP_ID);
+
+            assertEquals("- 语言偏好:简体中文", recalled);
+            assertTrue(registry.failureTriggered());
+        } finally {
+            registry.close();
+        }
     }
 
     @Test
@@ -1094,6 +1236,38 @@ class UserMemoryServiceImplTest {
         return memory.getValue();
     }
 
+    private UserMemoryServiceImpl newService(
+            MemoryCompressionMetricsCollector collector) {
+        return new UserMemoryServiceImpl(
+                chatHistoryService, memoryMapper, cursorMapper, appMapper,
+                model, mock(ExecutorService.class),
+                mock(TaskScheduler.class), redisTemplate,
+                lifecycleFence, tokenEstimator, properties,
+                transactions, collector,
+                Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"),
+                        ZoneOffset.UTC));
+    }
+
+    private Counter counter(
+            io.micrometer.core.instrument.MeterRegistry registry,
+            String name,
+            String... tags) {
+        Counter counter = registry.find(name).tags(tags).counter();
+        assertNotNull(counter, () -> "缺少 Counter：" + name);
+        return counter;
+    }
+
+    private DistributionSummary summary(
+            io.micrometer.core.instrument.MeterRegistry registry,
+            String name,
+            String... tags) {
+        DistributionSummary summary = registry.find(name)
+                .tags(tags)
+                .summary();
+        assertNotNull(summary, () -> "缺少 DistributionSummary：" + name);
+        return summary;
+    }
+
     private AppMemory 捕获更新偏好() {
         ArgumentCaptor<AppMemory> memory =
                 ArgumentCaptor.forClass(AppMemory.class);
@@ -1264,17 +1438,32 @@ class UserMemoryServiceImplTest {
 
         private int executionCount;
         private boolean active;
+        private Runnable afterCallback = () -> { };
+        private RuntimeException completionFailure;
 
         @Override
         public <T> T execute(TransactionCallback<T> action) {
             executionCount++;
             active = true;
             try {
-                return action.doInTransaction(
+                T result = action.doInTransaction(
                         new SimpleTransactionStatus());
+                afterCallback.run();
+                if (completionFailure != null) {
+                    throw completionFailure;
+                }
+                return result;
             } finally {
                 active = false;
             }
+        }
+
+        private void afterCallback(Runnable action) {
+            afterCallback = action;
+        }
+
+        private void failAfterCallback(RuntimeException failure) {
+            completionFailure = failure;
         }
 
         private int executionCount() {

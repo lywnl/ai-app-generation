@@ -12,6 +12,9 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector.CandidateStatus;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector.DebounceOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
@@ -86,6 +89,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
     private final UserPreferenceBatchBuilder preferenceBatchBuilder;
     private final UserPreferenceCandidateParser preferenceCandidateParser;
     private final TransactionOperations transactionOperations;
+    private final MemoryCompressionMetricsCollector metricsCollector;
     private final Clock clock;
     private final UserMemoryConsistencyCoordinator consistencyCoordinator;
 
@@ -108,11 +112,14 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                                  ChatTokenEstimator tokenEstimator,
                                  MemoryTokenProperties tokenProperties,
                                  ObjectProvider<PlatformTransactionManager>
-                                         transactionManagerProvider) {
+                                         transactionManagerProvider,
+                                 MemoryCompressionMetricsCollector
+                                         metricsCollector) {
         this(chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
                 extractionModel, executor, debounceScheduler, redisTemplate,
                 lifecycleFence, tokenEstimator, tokenProperties,
-                resolveTransactionOperations(transactionManagerProvider));
+                resolveTransactionOperations(transactionManagerProvider),
+                metricsCollector);
     }
 
     public UserMemoryServiceImpl(ChatHistoryService chatHistoryService,
@@ -126,11 +133,14 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                                  AppDataLifecycleFence lifecycleFence,
                                  ChatTokenEstimator tokenEstimator,
                                  MemoryTokenProperties tokenProperties,
-                                 TransactionOperations transactionOperations) {
-        this(chatHistoryService, appMemoryMapper, cursorMapper, appMapper, extractionModel, executor,
-                debounceScheduler, redisTemplate, lifecycleFence,
+                                 TransactionOperations transactionOperations,
+                                 MemoryCompressionMetricsCollector
+                                         metricsCollector) {
+        this(chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                extractionModel, executor, debounceScheduler, redisTemplate,
+                lifecycleFence,
                 tokenEstimator, tokenProperties, transactionOperations,
-                Clock.systemDefaultZone());
+                metricsCollector, Clock.systemDefaultZone());
     }
 
     private static TransactionOperations resolveTransactionOperations(
@@ -153,6 +163,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                           ChatTokenEstimator tokenEstimator,
                           MemoryTokenProperties tokenProperties,
                           TransactionOperations transactionOperations,
+                          MemoryCompressionMetricsCollector metricsCollector,
                           Clock clock) {
         this.chatHistoryService = Objects.requireNonNull(
                 chatHistoryService, "对话历史服务不能为空");
@@ -180,6 +191,8 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 new UserPreferenceCandidateParser();
         this.transactionOperations = Objects.requireNonNull(
                 transactionOperations, "事务执行器不能为空");
+        this.metricsCollector = Objects.requireNonNull(
+                metricsCollector, "记忆压缩指标收集器不能为空");
         this.clock = Objects.requireNonNull(clock, "时钟不能为空");
         this.consistencyCoordinator =
                 new UserMemoryConsistencyCoordinator();
@@ -213,8 +226,11 @@ public class UserMemoryServiceImpl implements UserMemoryService {
 
     private void registerDirtyApp(
             Long userId, Long appId, long stableAiMessageId) {
-        Instant quietUntil = clock.instant().plus(tokenProperties.getL2Debounce());
+        Instant quietUntil = clock.instant()
+                .plus(tokenProperties.getL2Debounce());
+        AtomicBoolean rescheduled = new AtomicBoolean();
         pendingByUser.compute(userId, (ignored, current) -> {
+            rescheduled.set(current != null);
             UserDirtyState state = current == null
                     ? new UserDirtyState() : current;
             DirtyApp previous = state.apps.get(appId);
@@ -232,6 +248,9 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             }
             return state;
         });
+        metricsCollector.recordL2Debounce(rescheduled.get()
+                ? DebounceOutcome.RESCHEDULED
+                : DebounceOutcome.REGISTERED);
     }
 
     private void scheduleNext(Long userId, UserDirtyState state) {
@@ -256,6 +275,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             state.scheduled = scheduled;
         } catch (RuntimeException exception) {
             state.scheduled = null;
+            metricsCollector.recordL2Debounce(DebounceOutcome.REJECTED);
             log.warn("调度 L2 偏好抽取失败 userId={} type={}",
                     userId, exception.getClass().getSimpleName());
         }
@@ -302,9 +322,18 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             return;
         }
         try {
-            executor.submit(() -> runDirtyRound(
-                    userId, expectedState, List.copyOf(snapshots)));
+            executor.submit(() -> {
+                try {
+                    runDirtyRound(
+                            userId, expectedState, List.copyOf(snapshots));
+                } finally {
+                    metricsCollector.recordL2Debounce(
+                            DebounceOutcome.COMPLETED);
+                }
+            });
+            metricsCollector.recordL2Debounce(DebounceOutcome.SUBMITTED);
         } catch (RuntimeException exception) {
+            metricsCollector.recordL2Debounce(DebounceOutcome.REJECTED);
             log.warn("提交 L2 偏好抽取轮次失败 userId={} type={}",
                     userId, exception.getClass().getSimpleName());
             finishDirtyRound(userId, expectedState, snapshots,
@@ -324,6 +353,8 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 AppProcessResult persistedRetry =
                         persistedRetryResult(cursor);
                 if (persistedRetry != null) {
+                    metricsCollector.recordL2Debounce(
+                            DebounceOutcome.DATABASE_BACKOFF_DEFERRED);
                     results.put(snapshot.appId, persistedRetry);
                     continue;
                 }
@@ -543,16 +574,20 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         return candidates;
     }
 
-    private boolean persistPreferenceCandidates(
+    private PreferenceBatchPersistence persistPreferenceCandidates(
             Long userId,
             Long appId,
             List<UserPreferenceCandidate> candidates) {
         boolean preferenceChanged = false;
+        List<CandidateStatus> statuses = new ArrayList<>(candidates.size());
         for (UserPreferenceCandidate candidate : candidates) {
-            preferenceChanged |= upsertPreference(
+            CandidateStatus status = upsertPreference(
                     userId, appId, candidate);
+            statuses.add(status);
+            preferenceChanged |= status != CandidateStatus.UNCHANGED;
         }
-        return preferenceChanged;
+        return new PreferenceBatchPersistence(
+                preferenceChanged, List.copyOf(statuses));
     }
 
     private AppProcessResult completePreferenceBatch(
@@ -585,17 +620,21 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             AppMemoryExtractCursor cursor,
             UserPreferenceBatchBuilder.Batch batch,
             List<UserPreferenceCandidate> candidates) {
-        Boolean preferenceChanged = transactionOperations.execute(status -> {
-            boolean changed = persistPreferenceCandidates(
-                    userId, appId, candidates);
-            advanceCursor(
-                    userId, appId, cursor, batch.completedThroughId());
-            return changed;
-        });
-        if (preferenceChanged == null) {
+        PreferenceBatchPersistence persistence =
+                transactionOperations.execute(status -> {
+                    PreferenceBatchPersistence persisted =
+                            persistPreferenceCandidates(
+                                    userId, appId, candidates);
+                    advanceCursor(
+                            userId, appId, cursor,
+                            batch.completedThroughId());
+                    return persisted;
+                });
+        if (persistence == null) {
             throw new IllegalStateException("L2 批次事务未返回持久化结果");
         }
-        return preferenceChanged;
+        persistence.statuses().forEach(metricsCollector::recordL2Candidate);
+        return persistence.preferenceChanged();
     }
 
     private UserPreferenceBatchBuilder.Batch buildPreferenceBatch(
@@ -740,6 +779,11 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         }
     }
 
+    private record PreferenceBatchPersistence(
+            boolean preferenceChanged,
+            List<CandidateStatus> statuses) {
+    }
+
     private enum MissingTransactionOperations
             implements TransactionOperations {
         INSTANCE;
@@ -752,6 +796,12 @@ public class UserMemoryServiceImpl implements UserMemoryService {
 
     @Override
     public String recallByApp(Long appId) {
+        String recalled = recallByAppWithoutMetrics(appId);
+        recordFinalRecallTokens(recalled);
+        return recalled;
+    }
+
+    private String recallByAppWithoutMetrics(Long appId) {
         if (appId == null || appId <= 0L) {
             return "";
         }
@@ -772,6 +822,15 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             log.warn("释放 L2 召回许可失败 appId={} type={}",
                     appId, exception.getClass().getSimpleName());
             return "";
+        }
+    }
+
+    private void recordFinalRecallTokens(String recalled) {
+        try {
+            metricsCollector.recordL2RecallTokens(
+                    tokenEstimator.estimateText(recalled));
+        } catch (RuntimeException ignored) {
+            // 最终 Token 观测不得改变实际注入文本。
         }
     }
 
@@ -835,7 +894,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         });
     }
 
-    private boolean upsertPreference(
+    private CandidateStatus upsertPreference(
             Long userId,
             Long appId,
             UserPreferenceCandidate candidate) {
@@ -848,14 +907,16 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 ? newPreference(userId, appId, candidate)
                 : mergePreference(existing, candidate);
         if (next == null) {
-            return false;
+            return CandidateStatus.UNCHANGED;
         }
         int affectedRows = existing == null
                 ? appMemoryMapper.insert(next)
                 : appMemoryMapper.update(next);
         requireExactlyOneRow(affectedRows,
                 existing == null ? "新增用户偏好" : "更新用户偏好");
-        return true;
+        return STATUS_ACTIVE.equals(next.getStatus())
+                ? CandidateStatus.ACTIVE
+                : CandidateStatus.CANDIDATE;
     }
 
     private AppMemory newPreference(

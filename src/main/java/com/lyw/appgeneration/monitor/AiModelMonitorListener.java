@@ -1,11 +1,13 @@
 package com.lyw.appgeneration.monitor;
 
+import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import dev.langchain4j.model.chat.listener.ChatModelErrorContext;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.chat.listener.ChatModelRequestContext;
 import dev.langchain4j.model.chat.listener.ChatModelResponseContext;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
 import dev.langchain4j.model.output.TokenUsage;
-import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -18,106 +20,166 @@ import java.util.Objects;
 @Slf4j
 public class AiModelMonitorListener implements ChatModelListener {
 
-    // 用于存储请求开始时间的键
     private static final String REQUEST_START_TIME_KEY = "request_start_time";
-    // 用于监控上下文传递（因为请求和响应事件的触发不是同一个线程）
-    private static final String MONITOR_CONTEXT_KEY = "monitor_context";
+    private static final String REQUEST_ESTIMATED_TOKENS_KEY =
+            "request_estimated_tokens";
+    private static final String REQUEST_MODEL_FAMILY_KEY =
+            "request_model_family";
 
-    @Resource
-    private AiModelMetricsCollector aiModelMetricsCollector;
+    private final AiModelMetricsCollector aiModelMetricsCollector;
+    private final ChatTokenEstimator tokenEstimator;
+
+    public AiModelMonitorListener(
+            AiModelMetricsCollector aiModelMetricsCollector,
+            ChatTokenEstimator tokenEstimator) {
+        this.aiModelMetricsCollector = Objects.requireNonNull(
+                aiModelMetricsCollector, "AI 模型指标收集器不能为空");
+        this.tokenEstimator = Objects.requireNonNull(
+                tokenEstimator, "Token 估算器不能为空");
+    }
 
     @Override
     public void onRequest(ChatModelRequestContext requestContext) {
-        // 记录请求开始时间
-        requestContext.attributes().put(REQUEST_START_TIME_KEY, Instant.now());
-        // 从监控上下文中获取信息（ThreadLocal 可能为空）
-        MonitorContext context = safeContext(MonitorContextHolder.getContext());
-        requestContext.attributes().put(MONITOR_CONTEXT_KEY, context);
-        // 获取模型名称
-        String modelName = safeModelName(requestContext.chatRequest().modelName());
-        // 记录请求指标（监控失败不影响主流程）
-        safeRecord(() -> aiModelMetricsCollector.recordRequest(context.getUserId(), context.getAppId(), modelName, "started"));
+        Map<Object, Object> attributes = requestContext.attributes();
+        attributes.put(REQUEST_START_TIME_KEY, Instant.now());
+        ChatRequest chatRequest = requestContext.chatRequest();
+        AiModelMetricsCollector.ModelFamily modelFamily =
+                AiModelMetricsCollector.ModelFamily.fromModelName(
+                        chatRequest.modelName());
+        attributes.put(REQUEST_MODEL_FAMILY_KEY, modelFamily);
+        estimateRequestTokens(chatRequest, attributes);
+        safeRecord(() -> aiModelMetricsCollector.recordRequest(
+                modelFamily,
+                AiModelMetricsCollector.RequestStatus.STARTED));
     }
 
     @Override
     public void onResponse(ChatModelResponseContext responseContext) {
-        // 从属性中获取监控信息（由 onRequest 方法存储）
         Map<Object, Object> attributes = responseContext.attributes();
-        // 优先从 attributes 获取，避免跨线程 ThreadLocal 丢失
-        MonitorContext context = safeContext((MonitorContext) attributes.get(MONITOR_CONTEXT_KEY));
-        String userId = context.getUserId();
-        String appId = context.getAppId();
-        // 获取模型名称
-        String modelName = safeModelName(responseContext.chatResponse().modelName());
-        // 记录成功请求
-        safeRecord(() -> aiModelMetricsCollector.recordRequest(userId, appId, modelName, "success"));
-        // 记录响应时间
-        recordResponseTime(attributes, userId, appId, modelName);
-        // 记录 Token 使用情况
-        recordTokenUsage(responseContext, userId, appId, modelName);
+        AiModelMetricsCollector.ModelFamily modelFamily =
+                requestModelFamily(attributes);
+        safeRecord(() -> aiModelMetricsCollector.recordRequest(
+                modelFamily,
+                AiModelMetricsCollector.RequestStatus.SUCCESS));
+        recordResponseTime(
+                attributes,
+                modelFamily,
+                AiModelMetricsCollector.ResponseOutcome.SUCCESS);
+        recordTokenUsage(responseContext, attributes, modelFamily);
     }
 
     @Override
     public void onError(ChatModelErrorContext errorContext) {
-        // 错误回调线程可能与请求线程不同，必须从 attributes 取上下文
         Map<Object, Object> attributes = errorContext.attributes();
-        MonitorContext context = safeContext((MonitorContext) attributes.get(MONITOR_CONTEXT_KEY));
-        String userId = context.getUserId();
-        String appId = context.getAppId();
-        // 获取模型名称和错误类型
-        String modelName = safeModelName(errorContext.chatRequest().modelName());
-        String errorMessage = errorContext.error() == null ? "unknown" : String.valueOf(errorContext.error().getMessage());
-        // 记录失败请求
-        safeRecord(() -> aiModelMetricsCollector.recordRequest(userId, appId, modelName, "error"));
-        safeRecord(() -> aiModelMetricsCollector.recordError(userId, appId, modelName, errorMessage));
-        // 记录响应时间（即使是错误响应）
-        recordResponseTime(attributes, userId, appId, modelName);
+        AiModelMetricsCollector.ModelFamily modelFamily =
+                requestModelFamily(attributes);
+        AiModelMetricsCollector.ErrorType errorType =
+                AiModelMetricsCollector.ErrorType.fromThrowable(
+                        errorContext.error());
+        safeRecord(() -> aiModelMetricsCollector.recordRequest(
+                modelFamily,
+                AiModelMetricsCollector.RequestStatus.ERROR));
+        safeRecord(() -> aiModelMetricsCollector.recordError(
+                modelFamily, errorType));
+        recordResponseTime(
+                attributes,
+                modelFamily,
+                AiModelMetricsCollector.ResponseOutcome.ERROR);
     }
 
+    private void estimateRequestTokens(
+            ChatRequest chatRequest, Map<Object, Object> attributes) {
+        try {
+            int estimatedTokens = tokenEstimator.estimateRequest(
+                    chatRequest.messages(), chatRequest.toolSpecifications());
+            attributes.put(REQUEST_ESTIMATED_TOKENS_KEY, estimatedTokens);
+        } catch (RuntimeException exception) {
+            log.warn("AI 请求 Token 估算失败，exceptionType={}",
+                    exception.getClass().getSimpleName());
+        }
+    }
 
-    /**
-     * 记录响应时间
-     */
-    private void recordResponseTime(Map<Object, Object> attributes, String userId, String appId, String modelName) {
+    private void recordResponseTime(
+            Map<Object, Object> attributes,
+            AiModelMetricsCollector.ModelFamily modelFamily,
+            AiModelMetricsCollector.ResponseOutcome outcome) {
         Instant startTime = (Instant) attributes.get(REQUEST_START_TIME_KEY);
         if (startTime == null) {
             return;
         }
         Duration responseTime = Duration.between(startTime, Instant.now());
-        safeRecord(() -> aiModelMetricsCollector.recordResponseTime(userId, appId, modelName, responseTime));
+        safeRecord(() -> aiModelMetricsCollector.recordResponseTime(
+                modelFamily, outcome, responseTime));
     }
 
-    /**
-     * 记录Token使用情况
-     */
-    private void recordTokenUsage(ChatModelResponseContext responseContext, String userId, String appId, String modelName) {
-        TokenUsage tokenUsage = responseContext.chatResponse().metadata().tokenUsage();
-        if (tokenUsage != null) {
-            safeRecord(() -> aiModelMetricsCollector.recordTokenUsage(userId, appId, modelName, "input", tokenUsage.inputTokenCount()));
-            safeRecord(() -> aiModelMetricsCollector.recordTokenUsage(userId, appId, modelName, "output", tokenUsage.outputTokenCount()));
-            safeRecord(() -> aiModelMetricsCollector.recordTokenUsage(userId, appId, modelName, "total", tokenUsage.totalTokenCount()));
+    private void recordTokenUsage(
+            ChatModelResponseContext responseContext,
+            Map<Object, Object> attributes,
+            AiModelMetricsCollector.ModelFamily modelFamily) {
+        ChatResponseMetadata metadata =
+                responseContext.chatResponse().metadata();
+        TokenUsage tokenUsage = metadata == null ? null : metadata.tokenUsage();
+        if (tokenUsage == null) {
+            return;
         }
+        Integer inputTokens = tokenUsage.inputTokenCount();
+        Integer outputTokens = tokenUsage.outputTokenCount();
+        Integer totalTokens = tokenUsage.totalTokenCount();
+        recordTokenCount(
+                modelFamily, AiModelMetricsCollector.TokenType.INPUT,
+                inputTokens);
+        recordTokenCount(
+                modelFamily, AiModelMetricsCollector.TokenType.OUTPUT,
+                outputTokens);
+        recordTokenCount(
+                modelFamily, AiModelMetricsCollector.TokenType.TOTAL,
+                totalTokens);
+        recordEstimationRatio(attributes, modelFamily, inputTokens);
     }
 
-    private MonitorContext safeContext(MonitorContext context) {
-        if (context == null) {
-            return MonitorContext.builder().userId("unknown").appId("unknown").build();
+    private void recordTokenCount(
+            AiModelMetricsCollector.ModelFamily modelFamily,
+            AiModelMetricsCollector.TokenType tokenType,
+            Integer tokenCount) {
+        if (tokenCount == null) {
+            return;
         }
-        String userId = Objects.toString(context.getUserId(), "unknown");
-        String appId = Objects.toString(context.getAppId(), "unknown");
-        return MonitorContext.builder().userId(userId).appId(appId).build();
+        safeRecord(() -> aiModelMetricsCollector.recordTokenUsage(
+                modelFamily, tokenType, tokenCount));
     }
 
-    private String safeModelName(String modelName) {
-        return (modelName == null || modelName.isBlank()) ? "unknown" : modelName;
+    private void recordEstimationRatio(
+            Map<Object, Object> attributes,
+            AiModelMetricsCollector.ModelFamily modelFamily,
+            Integer actualInputTokens) {
+        Object estimatedValue = attributes.get(REQUEST_ESTIMATED_TOKENS_KEY);
+        if (actualInputTokens == null || !(estimatedValue instanceof Number)) {
+            return;
+        }
+        int estimatedTokens = ((Number) estimatedValue).intValue();
+        if (estimatedTokens <= 0) {
+            return;
+        }
+        double ratio = actualInputTokens.doubleValue() / estimatedTokens;
+        safeRecord(() -> aiModelMetricsCollector.recordTokenEstimationRatio(
+                modelFamily, ratio));
+    }
+
+    private AiModelMetricsCollector.ModelFamily requestModelFamily(
+            Map<Object, Object> attributes) {
+        Object value = attributes.get(REQUEST_MODEL_FAMILY_KEY);
+        if (value instanceof AiModelMetricsCollector.ModelFamily modelFamily) {
+            return modelFamily;
+        }
+        return AiModelMetricsCollector.ModelFamily.UNKNOWN;
     }
 
     private void safeRecord(Runnable action) {
         try {
             action.run();
-        } catch (Exception e) {
-            log.warn("monitor metric record failed: {}", e.getMessage());
+        } catch (RuntimeException exception) {
+            log.warn("AI 模型指标记录失败，exceptionType={}",
+                    exception.getClass().getSimpleName());
         }
     }
 }
-

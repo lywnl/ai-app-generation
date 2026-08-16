@@ -9,8 +9,13 @@ import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import dev.langchain4j.model.chat.ChatModel;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -83,6 +88,8 @@ class UserMemoryDebounceBehaviorTest {
     private QueuedExecutor worker;
     private MemoryTokenProperties properties;
     private ChatTokenEstimator tokenEstimator;
+    private SimpleMeterRegistry metricsRegistry;
+    private MemoryCompressionMetricsCollector metricsCollector;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -104,6 +111,9 @@ class UserMemoryDebounceBehaviorTest {
         properties = new MemoryTokenProperties();
         properties.setEstimationSafetyFactor(1D);
         tokenEstimator = new ConservativeChatTokenEstimator(properties);
+        metricsRegistry = new SimpleMeterRegistry();
+        metricsCollector = new MemoryCompressionMetricsCollector(
+                metricsRegistry);
 
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of());
         when(memoryMapper.insert(any())).thenReturn(1);
@@ -121,6 +131,11 @@ class UserMemoryDebounceBehaviorTest {
                             .messageType("ai").message("最新稳定回复")
                             .build();
                 });
+    }
+
+    @AfterEach
+    void closeMetricsRegistry() {
+        metricsRegistry.close();
     }
 
     @Test
@@ -156,6 +171,10 @@ class UserMemoryDebounceBehaviorTest {
         scheduler.advance(Duration.ofMinutes(1));
         worker.runAll();
         verify(model).chat(any(String.class));
+        assertEquals(1D, debounceCounter("registered").count());
+        assertEquals(2D, debounceCounter("rescheduled").count());
+        assertEquals(1D, debounceCounter("submitted").count());
+        assertEquals(1D, debounceCounter("completed").count());
     }
 
     @Test
@@ -258,6 +277,8 @@ class UserMemoryDebounceBehaviorTest {
 
         verify(model, never()).chat(any(String.class));
         verify(cursorMapper, never()).update(any());
+        assertEquals(1D, debounceCounter(
+                "database_backoff_deferred").count());
         assertNotNull(scheduler.oldestTask());
         assertEquals(databaseRetryAt,
                 scheduler.oldestTask().startTime());
@@ -673,6 +694,30 @@ class UserMemoryDebounceBehaviorTest {
     }
 
     @Test
+    @DisplayName("防抖指标故障不改变 dirty 版本与工作轮次")
+    void 防抖指标故障不改变调度结果() {
+        ThrowingMeterRegistry registry = new ThrowingMeterRegistry(
+                ThrowingMeterRegistry.FailurePoint.COUNTER_INCREMENT);
+        try {
+            UserMemoryServiceImpl service = newService(
+                    new MemoryCompressionMetricsCollector(registry));
+            when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+            when(chatHistoryService.listMessagesAfterCursor(
+                    eq(APP_A), anyLong(), anyInt()))
+                    .thenReturn(八条完整消息(APP_A, "指标旁路"));
+
+            触发(service, APP_A);
+            scheduler.advance(Duration.ofSeconds(30));
+            worker.runAll();
+
+            verify(model).chat(any(String.class));
+            assertTrue(registry.failureTriggered());
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
     @DisplayName("旧 worker 完成不得清理撤销后重新登记的同 app 新版本")
     void 旧工作轮次完成不会改写重新登记状态() {
         UserMemoryServiceImpl service = newService();
@@ -714,6 +759,7 @@ class UserMemoryDebounceBehaviorTest {
         worker.runAll();
 
         verify(model).chat(any(String.class));
+        assertEquals(1D, debounceCounter("rejected").count());
     }
 
     @Test
@@ -735,6 +781,9 @@ class UserMemoryDebounceBehaviorTest {
 
         worker.runAll();
         verify(model).chat(any(String.class));
+        assertEquals(1D, debounceCounter("rejected").count());
+        assertEquals(1D, debounceCounter("submitted").count());
+        assertEquals(1D, debounceCounter("completed").count());
     }
 
     @Test
@@ -847,6 +896,11 @@ class UserMemoryDebounceBehaviorTest {
     }
 
     private UserMemoryServiceImpl newService() {
+        return newService(metricsCollector);
+    }
+
+    private UserMemoryServiceImpl newService(
+            MemoryCompressionMetricsCollector collector) {
         return new UserMemoryServiceImpl(
                 chatHistoryService,
                 memoryMapper,
@@ -860,7 +914,16 @@ class UserMemoryDebounceBehaviorTest {
                 tokenEstimator,
                 properties,
                 TransactionOperations.withoutTransaction(),
+                collector,
                 clock);
+    }
+
+    private Counter debounceCounter(String outcome) {
+        Counter counter = metricsRegistry.find("memory_l2_debounce_total")
+                .tags("outcome", outcome)
+                .counter();
+        assertNotNull(counter, () -> "缺少 debounce Counter：" + outcome);
+        return counter;
     }
 
     private AppMemoryExtractCursor 游标(long appId, long lastId) {

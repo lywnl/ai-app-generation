@@ -26,6 +26,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 
 /** 生成 L1 摘要草稿，负责分页、完整回合、动态分批和 reducer 收敛。 */
@@ -177,7 +178,8 @@ public class MemorySummaryDraftEngine {
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     "摘要模型输入超过硬上限");
         }
-        ModelOutput generated = callModel(appId, prompt, deadlineNanos);
+        ModelOutput generated = callModel(
+                appId, prompt, deadlineNanos).output();
         if (generated.failureStatus() != null) {
             return generated;
         }
@@ -188,23 +190,30 @@ public class MemorySummaryDraftEngine {
             Long appId, String sourceSummary, long deadlineNanos) {
         String current = sourceSummary;
         int currentTokens = tokenEstimator.estimateText(current);
+        int reducerRounds = 0;
         while (currentTokens
                 > MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS) {
             if (isDeadlineExpired(deadlineNanos)) {
                 return ModelOutput.failure(
                         MemoryCompressionResult.Status.TIMED_OUT,
-                        "摘要压缩截止时间已到");
+                        "摘要压缩截止时间已到")
+                        .withReducerRounds(reducerRounds);
             }
             String prompt = SummaryCompressionPromptBuilder.build(current);
             if (!isPromptWithinInputBudget(prompt)) {
                 return ModelOutput.failure(
                         MemoryCompressionResult.Status.OUTPUT_STILL_TOO_LARGE,
-                        "现有摘要过大，无法进入 reducer");
+                        "现有摘要过大，无法进入 reducer")
+                        .withReducerRounds(reducerRounds);
             }
-            ModelOutput reduced = callModel(
+            ModelInvocation invocation = callModel(
                     appId, prompt, deadlineNanos);
+            if (invocation.started()) {
+                reducerRounds++;
+            }
+            ModelOutput reduced = invocation.output();
             if (reduced.failureStatus() != null) {
-                return reduced;
+                return reduced.withReducerRounds(reducerRounds);
             }
             int reducedTokens = tokenEstimator.estimateText(
                     reduced.summary());
@@ -212,82 +221,87 @@ public class MemorySummaryDraftEngine {
                     || reducedTokens >= currentTokens) {
                 return ModelOutput.failure(
                         MemoryCompressionResult.Status.OUTPUT_STILL_TOO_LARGE,
-                        "摘要 reducer 未继续收敛");
+                        "摘要 reducer 未继续收敛")
+                        .withReducerRounds(reducerRounds);
             }
             current = reduced.summary();
             currentTokens = reducedTokens;
         }
-        return ModelOutput.success(current, currentTokens);
+        return ModelOutput.success(current, currentTokens)
+                .withReducerRounds(reducerRounds);
     }
 
-    private ModelOutput callModel(
+    private ModelInvocation callModel(
             Long appId, String prompt, long deadlineNanos) {
         if (isDeadlineExpired(deadlineNanos)) {
-            return ModelOutput.failure(
+            return ModelInvocation.notStarted(ModelOutput.failure(
                     MemoryCompressionResult.Status.TIMED_OUT,
-                    "摘要截止时间已到");
+                    "摘要截止时间已到"));
         }
+        AtomicBoolean started = new AtomicBoolean();
         Future<String> modelCall;
         try {
-            modelCall = modelExecutor.submit(() ->
-                    summarizationModel.chat(prompt));
+            modelCall = modelExecutor.submit(() -> {
+                started.set(true);
+                return summarizationModel.chat(prompt);
+            });
         } catch (RejectedExecutionException exception) {
             log.warn("摘要模型任务被拒绝 appId={}", appId);
-            return ModelOutput.failure(
+            return ModelInvocation.notStarted(ModelOutput.failure(
                     MemoryCompressionResult.Status.MODEL_FAILED,
-                    "摘要模型执行器已满");
+                    "摘要模型执行器已满"));
         } catch (RuntimeException exception) {
             log.error("提交摘要模型任务失败 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
-            return ModelOutput.failure(
+                    exception.getClass().getSimpleName());
+            return ModelInvocation.notStarted(ModelOutput.failure(
                     MemoryCompressionResult.Status.MODEL_FAILED,
-                    "提交摘要模型任务失败");
+                    "提交摘要模型任务失败"));
         }
         long remainingNanos = deadlineNanos - nanoTime.getAsLong();
         if (remainingNanos <= 0L) {
             modelCall.cancel(true);
-            return ModelOutput.failure(
+            return ModelInvocation.completed(ModelOutput.failure(
                     MemoryCompressionResult.Status.TIMED_OUT,
-                    "摘要模型等待时间已耗尽");
+                    "摘要模型等待时间已耗尽"), started);
         }
         try {
             String output = modelCall.get(
                     remainingNanos, TimeUnit.NANOSECONDS);
             if (isDeadlineExpired(deadlineNanos)) {
-                return ModelOutput.failure(
+                return ModelInvocation.completed(ModelOutput.failure(
                         MemoryCompressionResult.Status.TIMED_OUT,
-                        "摘要模型返回时截止时间已到");
+                        "摘要模型返回时截止时间已到"), started);
             }
             if (StrUtil.isBlank(output)) {
-                return ModelOutput.failure(
+                return ModelInvocation.completed(ModelOutput.failure(
                         MemoryCompressionResult.Status.MODEL_FAILED,
-                        "摘要模型返回空内容");
+                        "摘要模型返回空内容"), started);
             }
-            return ModelOutput.success(
-                    output, tokenEstimator.estimateText(output));
+            return ModelInvocation.completed(ModelOutput.success(
+                    output, tokenEstimator.estimateText(output)), started);
         } catch (TimeoutException exception) {
             modelCall.cancel(true);
-            return ModelOutput.failure(
+            return ModelInvocation.completed(ModelOutput.failure(
                     MemoryCompressionResult.Status.TIMED_OUT,
-                    "摘要模型调用超时");
+                    "摘要模型调用超时"), started);
         } catch (InterruptedException exception) {
             modelCall.cancel(true);
             Thread.currentThread().interrupt();
-            return ModelOutput.failure(
+            return ModelInvocation.completed(ModelOutput.failure(
                     MemoryCompressionResult.Status.TIMED_OUT,
-                    "等待摘要模型时被中断");
+                    "等待摘要模型时被中断"), started);
         } catch (CancellationException exception) {
-            return ModelOutput.failure(
+            return ModelInvocation.completed(ModelOutput.failure(
                     MemoryCompressionResult.Status.MODEL_FAILED,
-                    "摘要模型任务被取消");
+                    "摘要模型任务被取消"), started);
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause() == null
                     ? exception : exception.getCause();
             log.error("摘要模型调用失败 appId={} type={}", appId,
-                    cause.getClass().getSimpleName(), cause);
-            return ModelOutput.failure(
+                    cause.getClass().getSimpleName());
+            return ModelInvocation.completed(ModelOutput.failure(
                     MemoryCompressionResult.Status.MODEL_FAILED,
-                    "摘要模型调用失败");
+                    "摘要模型调用失败"), started);
         }
     }
 
@@ -324,6 +338,7 @@ public class MemorySummaryDraftEngine {
         private String workingSummary;
         private int persistedSummaryTokens;
         private int workingTokens;
+        private int reducerRounds;
         private long summarizedThroughId;
         private boolean changed;
         private MemoryCompressionResult.Status failureStatus;
@@ -395,6 +410,7 @@ public class MemorySummaryDraftEngine {
                 return DraftResult.failure(
                         persistedCursor,
                         persistedSummaryTokens,
+                        reducerRounds,
                         failureStatus,
                         failureDetail);
             }
@@ -402,6 +418,7 @@ public class MemorySummaryDraftEngine {
                 return DraftResult.failure(
                         persistedCursor,
                         persistedSummaryTokens,
+                        reducerRounds,
                         MemoryCompressionResult.Status.TIMED_OUT,
                         "摘要草稿完成时截止时间已到");
             }
@@ -409,6 +426,7 @@ public class MemorySummaryDraftEngine {
                     workingSummary,
                     summarizedThroughId,
                     workingTokens,
+                    reducerRounds,
                     changed);
         }
 
@@ -431,6 +449,7 @@ public class MemorySummaryDraftEngine {
         }
 
         private void applyModelOutput(ModelOutput output) {
+            reducerRounds += output.reducerRounds();
             if (output.failureStatus() != null) {
                 fail(output.failureStatus(), output.detail());
                 return;
@@ -485,6 +504,7 @@ public class MemorySummaryDraftEngine {
             String summary,
             long summarizedThroughId,
             int summaryTokens,
+            int reducerRounds,
             boolean changed,
             MemoryCompressionResult.Status failureStatus,
             String detail) {
@@ -493,34 +513,57 @@ public class MemorySummaryDraftEngine {
                 String summary,
                 long summarizedThroughId,
                 int summaryTokens,
+                int reducerRounds,
                 boolean changed) {
             return new DraftResult(summary, summarizedThroughId,
-                    summaryTokens, changed, null, "");
+                    summaryTokens, reducerRounds, changed, null, "");
         }
 
         private static DraftResult failure(
                 long persistedCursor,
                 int existingSummaryTokens,
+                int reducerRounds,
                 MemoryCompressionResult.Status status,
                 String detail) {
             return new DraftResult("", persistedCursor,
-                    existingSummaryTokens, false, status, detail);
+                    existingSummaryTokens, reducerRounds,
+                    false, status, detail);
         }
     }
 
     private record ModelOutput(
             String summary,
             int tokens,
+            int reducerRounds,
             MemoryCompressionResult.Status failureStatus,
             String detail) {
 
         private static ModelOutput success(String summary, int tokens) {
-            return new ModelOutput(summary, tokens, null, "");
+            return new ModelOutput(summary, tokens, 0, null, "");
         }
 
         private static ModelOutput failure(
                 MemoryCompressionResult.Status status, String detail) {
-            return new ModelOutput("", 0, status, detail);
+            return new ModelOutput("", 0, 0, status, detail);
+        }
+
+        private ModelOutput withReducerRounds(int reducerRounds) {
+            return new ModelOutput(summary, tokens, reducerRounds,
+                    failureStatus, detail);
+        }
+    }
+
+    private record ModelInvocation(
+            ModelOutput output,
+            boolean started) {
+
+        private static ModelInvocation notStarted(ModelOutput output) {
+            return new ModelInvocation(output, false);
+        }
+
+        private static ModelInvocation completed(
+                ModelOutput output, AtomicBoolean started) {
+            return new ModelInvocation(output, started.get());
         }
     }
 }

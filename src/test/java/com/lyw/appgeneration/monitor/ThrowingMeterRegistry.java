@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.monitor;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
@@ -13,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 
@@ -65,6 +67,27 @@ public final class ThrowingMeterRegistry extends SimpleMeterRegistry {
         return proxy;
     }
 
+    @Override
+    protected DistributionSummary newDistributionSummary(
+            Meter.Id id,
+            DistributionStatisticConfig distributionStatisticConfig,
+            double scale) {
+        if (failurePoint == FailurePoint.SUMMARY_REGISTRATION) {
+            throw failure();
+        }
+        DistributionSummary summary = super.newDistributionSummary(
+                id, distributionStatisticConfig, scale);
+        if (failurePoint != FailurePoint.SUMMARY_RECORD) {
+            return summary;
+        }
+        DistributionSummary proxy = mock(
+                DistributionSummary.class, delegatesTo(summary));
+        doAnswer(ignored -> {
+            throw failure();
+        }).when(proxy).record(anyDouble());
+        return proxy;
+    }
+
     private IllegalStateException failure() {
         failureTriggered.set(true);
         return new IllegalStateException("指标故障注入: " + failurePoint);
@@ -74,6 +97,8 @@ public final class ThrowingMeterRegistry extends SimpleMeterRegistry {
         COUNTER_REGISTRATION,
         COUNTER_INCREMENT,
         TIMER_REGISTRATION,
-        TIMER_RECORD
+        TIMER_RECORD,
+        SUMMARY_REGISTRATION,
+        SUMMARY_RECORD
     }
 }

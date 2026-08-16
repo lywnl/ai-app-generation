@@ -2,6 +2,8 @@ package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -10,8 +12,13 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Duration;
@@ -28,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,6 +51,102 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ContextCompressionCoordinatorTest {
+
+    @org.junit.jupiter.api.Test
+    void exposesMetricsAwareConstructor() {
+        assertDoesNotThrow(() -> ContextCompressionCoordinator.class
+                .getConstructor(
+                        ChatTokenEstimator.class,
+                        ChatHistoryService.class,
+                        MemorySummaryService.class,
+                        MemoryTokenProperties.class,
+                        ExecutorService.class,
+                        AppDataLifecycleFence.class,
+                        MemoryCompressionMetricsCollector.class));
+    }
+
+    @org.junit.jupiter.api.Test
+    void publicAdmitOverloadsRecordOneFinalGateEach() {
+        try (Fixture fixture = fixture(1_000, 1_000)) {
+            fixture.coordinator().admit(fixture.memory(), List.of());
+            fixture.coordinator().admit(
+                    fixture.memory(), List.of(), ignored -> { });
+            fixture.coordinator().admit(
+                    fixture.memory(), List.of(), ignored -> { },
+                    ContextContinuationGate.alwaysOpen());
+
+            Counter normal = counter(fixture.registry(),
+                    "memory_context_gate_total",
+                    "mode", "normal", "outcome", "none");
+            assertEquals(3D, normal.count());
+            assertEquals(3D, fixture.registry()
+                    .find("memory_context_gate_total")
+                    .counters().stream()
+                    .mapToDouble(Counter::count)
+                    .sum());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void blockingAdmissionRecordsFinalGateAndActualTokenStages() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of(), ignored -> { });
+
+            assertEquals(ContextCompressionMode.BLOCKING_COMPLETED,
+                    result.mode());
+            assertEquals(1D, counter(fixture.registry(),
+                    "memory_context_gate_total",
+                    "mode", "blocking_completed",
+                    "outcome", "none").count());
+            assertEquals(1D, fixture.registry()
+                    .find("memory_context_gate_total")
+                    .counters().stream()
+                    .mapToDouble(Counter::count)
+                    .sum());
+            DistributionSummary before = summary(fixture.registry(),
+                    "memory_context_estimated_tokens",
+                    "stage", "before");
+            DistributionSummary after = summary(fixture.registry(),
+                    "memory_context_estimated_tokens",
+                    "stage", "after");
+            assertEquals(1L, before.count());
+            assertEquals(30_720D, before.totalAmount());
+            assertEquals(1L, after.count());
+            assertEquals(27_000D, after.totalAmount());
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ThrowingMeterRegistry.FailurePoint.class,
+            names = {
+                    "COUNTER_REGISTRATION", "COUNTER_INCREMENT",
+                    "SUMMARY_REGISTRATION", "SUMMARY_RECORD"
+            })
+    void metricFailureDoesNotChangeAdmissionResult(
+            ThrowingMeterRegistry.FailurePoint failurePoint) {
+        try (Fixture fixture = fixture(1_000, 1_000)) {
+            ThrowingMeterRegistry registry =
+                    new ThrowingMeterRegistry(failurePoint);
+            try {
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(
+                            fixture.estimator(), fixture.historyService(),
+                            fixture.summaryService(), fixture.properties(),
+                            fixture.executor(), new AppDataLifecycleFence(),
+                            new MemoryCompressionMetricsCollector(registry));
+
+            ContextAdmissionResult result = coordinator.admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.NORMAL, result.mode());
+            assertTrue(result.canProceed());
+            assertTrue(registry.failureTriggered());
+            } finally {
+                registry.close();
+            }
+        }
+    }
 
     @ParameterizedTest
     @MethodSource("exactThresholds")
@@ -334,7 +438,8 @@ class ContextCompressionCoordinatorTest {
                     new ContextCompressionCoordinator(
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
-                            rejectingExecutor, new AppDataLifecycleFence());
+                            rejectingExecutor, new AppDataLifecycleFence(),
+                            fixture.metricsCollector());
 
             ContextAdmissionResult result = coordinator.admit(
                     fixture.memory(), List.of());
@@ -346,6 +451,13 @@ class ContextCompressionCoordinatorTest {
             assertTrue(result.detail().contains("appId=7"));
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
+            assertEquals(1D, counter(fixture.registry(),
+                    "memory_compression_total",
+                    "mode", "blocking",
+                    "outcome", "executor_rejected").count());
+            assertTrue(fixture.registry()
+                    .find("memory_compression_duration_seconds")
+                    .timers().isEmpty());
         }
     }
 
@@ -368,7 +480,8 @@ class ContextCompressionCoordinatorTest {
                     new ContextCompressionCoordinator(
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
-                            fixture.executor(), lifecycleFence);
+                            fixture.executor(), lifecycleFence,
+                            fixture.metricsCollector());
             List<ChatMessage> before = fixture.memory()
                     .completeTurnSnapshot().completedTurns().stream()
                     .flatMap(turn -> turn.messages().stream())
@@ -401,7 +514,8 @@ class ContextCompressionCoordinatorTest {
                     new ContextCompressionCoordinator(
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
-                            fixture.executor(), lifecycleFence);
+                            fixture.executor(), lifecycleFence,
+                            fixture.metricsCollector());
             List<ContextAdmissionResult> transitions = new ArrayList<>();
 
             ContextAdmissionResult result = coordinator.admit(
@@ -538,7 +652,8 @@ class ContextCompressionCoordinatorTest {
                     new ContextCompressionCoordinator(
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
-                            queuedExecutor, new AppDataLifecycleFence());
+                            queuedExecutor, new AppDataLifecycleFence(),
+                            fixture.metricsCollector());
 
             ContextAdmissionResult result = coordinator.admit(
                     fixture.memory(), List.of(), ignored -> { },
@@ -589,6 +704,7 @@ class ContextCompressionCoordinatorTest {
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
                             queuedExecutor, new AppDataLifecycleFence(),
+                            fixture.metricsCollector(),
                             nanoTime::get);
 
             ContextAdmissionResult result = coordinator.admit(
@@ -617,6 +733,7 @@ class ContextCompressionCoordinatorTest {
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
                             queuedExecutor, new AppDataLifecycleFence(),
+                            fixture.metricsCollector(),
                             nanoTime::get);
 
             ContextAdmissionResult result = coordinator.admit(
@@ -659,6 +776,7 @@ class ContextCompressionCoordinatorTest {
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
                             queuedExecutor, new AppDataLifecycleFence(),
+                            fixture.metricsCollector(),
                             nanoTime::get);
             List<ChatMessage> before = fixture.memory()
                     .completeTurnSnapshot().completedTurns().stream()
@@ -694,7 +812,8 @@ class ContextCompressionCoordinatorTest {
                     new ContextCompressionCoordinator(
                             fixture.estimator(), fixture.historyService(),
                             fixture.summaryService(), fixture.properties(),
-                            executor, new AppDataLifecycleFence());
+                            executor, new AppDataLifecycleFence(),
+                            fixture.metricsCollector());
             List<ContextAdmissionResult> transitions = new ArrayList<>();
             Thread.interrupted();
             try {
@@ -765,6 +884,8 @@ class ContextCompressionCoordinatorTest {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         ExecutorService executor = java.util.concurrent.Executors
                 .newSingleThreadExecutor();
+        PrometheusMeterRegistry registry = new PrometheusMeterRegistry(
+                PrometheusConfig.DEFAULT);
         CompressionAwareChatMemory memory = memory(
                 summaryService, userMemoryService);
         when(estimator.estimateRequest(anyList(), anyList()))
@@ -786,12 +907,16 @@ class ContextCompressionCoordinatorTest {
                 .thenReturn(new MemoryCompressionResult(
                         MemoryCompressionResult.Status.COMPRESSED,
                         2L, 800, "完成"));
+        MemoryCompressionMetricsCollector metricsCollector =
+                new MemoryCompressionMetricsCollector(registry);
         ContextCompressionCoordinator coordinator =
                 new ContextCompressionCoordinator(
-                        estimator, historyService, summaryService,
-                        properties, executor, new AppDataLifecycleFence());
+                estimator, historyService, summaryService,
+                properties, executor, new AppDataLifecycleFence(),
+                metricsCollector);
         return new Fixture(coordinator, memory, summaryService,
-                historyService, estimator, properties, executor);
+                historyService, estimator, properties, executor,
+                metricsCollector, registry);
     }
 
     private CompressionAwareChatMemory memory(
@@ -817,6 +942,26 @@ class ContextCompressionCoordinatorTest {
                         ? userMessage.singleText()
                         : ((AiMessage) message).text())
                 .toList();
+    }
+
+    private Counter counter(
+            PrometheusMeterRegistry registry,
+            String name,
+            String... tags) {
+        Counter counter = registry.find(name).tags(tags).counter();
+        assertNotNull(counter, () -> "缺少 Counter：" + name);
+        return counter;
+    }
+
+    private DistributionSummary summary(
+            PrometheusMeterRegistry registry,
+            String name,
+            String... tags) {
+        DistributionSummary summary = registry.find(name)
+                .tags(tags)
+                .summary();
+        assertNotNull(summary, () -> "缺少 DistributionSummary：" + name);
+        return summary;
     }
 
     /** 与回合终态使用同一把监视器，确定性模拟 callback gate 的胜负。 */
@@ -846,11 +991,14 @@ class ContextCompressionCoordinatorTest {
             ChatHistoryService historyService,
             ChatTokenEstimator estimator,
             MemoryTokenProperties properties,
-            ExecutorService executor) implements AutoCloseable {
+            ExecutorService executor,
+            MemoryCompressionMetricsCollector metricsCollector,
+            PrometheusMeterRegistry registry) implements AutoCloseable {
 
         @Override
         public void close() {
             executor.shutdownNow();
+            registry.close();
         }
     }
 }

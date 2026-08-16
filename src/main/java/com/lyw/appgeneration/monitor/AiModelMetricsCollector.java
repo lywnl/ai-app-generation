@@ -1,95 +1,163 @@
 package com.lyw.appgeneration.monitor;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import jakarta.annotation.Resource;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.time.Duration;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.TimeoutException;
 
+/** AI 模型调用的低基数旁路指标收集器。 */
 @Component
-@Slf4j
-public class AiModelMetricsCollector {
+public final class AiModelMetricsCollector {
 
-    @Resource
-    private MeterRegistry meterRegistry;
+    private final MeterRegistry registry;
 
-    // 缓存已创建的指标，避免重复创建（按指标类型分离缓存）
-    private final ConcurrentMap<String, Counter> requestCountersCache = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Counter> errorCountersCache = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Counter> tokenCountersCache = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Timer> responseTimersCache = new ConcurrentHashMap<>();
-
-    /**
-     * 记录请求次数
-     */
-    public void recordRequest(String userId, String appId, String modelName, String status) {
-        String key = String.format("%s_%s_%s_%s", userId, appId, modelName, status);
-        Counter counter = requestCountersCache.computeIfAbsent(key, k ->
-                Counter.builder("ai_model_requests_total")
-                        .description("AI模型总请求次数")
-                        .tag("user_id", userId)
-                        .tag("app_id", appId)
-                        .tag("model_name", modelName)
-                        .tag("status", status)
-                        .register(meterRegistry)
-        );
-        counter.increment();
+    public AiModelMetricsCollector(MeterRegistry registry) {
+        this.registry = Objects.requireNonNull(
+                registry, "MeterRegistry 不能为空");
     }
 
-    /**
-     * 记录错误
-     */
-    public void recordError(String userId, String appId, String modelName, String errorMessage) {
-        String key = String.format("%s_%s_%s_%s", userId, appId, modelName, errorMessage);
-        Counter counter = errorCountersCache.computeIfAbsent(key, k ->
-                Counter.builder("ai_model_errors_total")
-                        .description("AI模型错误次数")
-                        .tag("user_id", userId)
-                        .tag("app_id", appId)
-                        .tag("model_name", modelName)
-                        .tag("error_message", errorMessage)
-                        .register(meterRegistry)
-        );
-        counter.increment();
+    public void recordRequest(ModelFamily modelFamily, RequestStatus status) {
+        safely(() -> counter("ai_model_requests_total",
+                "model_family", tag(modelFamily),
+                "status", tag(status)).increment());
     }
 
-    /**
-     * 记录Token消耗
-     */
-    public void recordTokenUsage(String userId, String appId, String modelName,
-                                 String tokenType, long tokenCount) {
-        String key = String.format("%s_%s_%s_%s", userId, appId, modelName, tokenType);
-        Counter counter = tokenCountersCache.computeIfAbsent(key, k ->
-                Counter.builder("ai_model_tokens_total")
-                        .description("AI模型Token消耗总数")
-                        .tag("user_id", userId)
-                        .tag("app_id", appId)
-                        .tag("model_name", modelName)
-                        .tag("token_type", tokenType)
-                        .register(meterRegistry)
-        );
-        counter.increment(tokenCount);
+    public void recordError(ModelFamily modelFamily, ErrorType errorType) {
+        safely(() -> counter("ai_model_errors_total",
+                "model_family", tag(modelFamily),
+                "error_type", tag(errorType)).increment());
     }
 
-    /**
-     * 记录响应时间
-     */
-    public void recordResponseTime(String userId, String appId, String modelName, Duration duration) {
-        String key = String.format("%s_%s_%s", userId, appId, modelName);
-        Timer timer = responseTimersCache.computeIfAbsent(key, k ->
-                Timer.builder("ai_model_response_duration_seconds")
-                        .description("AI模型响应时间")
-                        .tag("user_id", userId)
-                        .tag("app_id", appId)
-                        .tag("model_name", modelName)
-                        .register(meterRegistry)
-        );
-        timer.record(duration);
+    public void recordTokenUsage(
+            ModelFamily modelFamily, TokenType tokenType, long tokenCount) {
+        if (tokenCount < 0L) {
+            return;
+        }
+        safely(() -> counter("ai_model_tokens_total",
+                "model_family", tag(modelFamily),
+                "token_type", tag(tokenType)).increment(tokenCount));
+    }
+
+    public void recordResponseTime(
+            ModelFamily modelFamily,
+            ResponseOutcome outcome,
+            Duration duration) {
+        safely(() -> Timer.builder("ai_model_response_duration_seconds")
+                .description("AI 模型响应耗时")
+                .publishPercentileHistogram()
+                .tags("model_family", tag(modelFamily),
+                        "outcome", tag(outcome))
+                .register(registry)
+                .record(duration));
+    }
+
+    public void recordTokenEstimationRatio(
+            ModelFamily modelFamily, double ratio) {
+        if (!Double.isFinite(ratio) || ratio < 0D) {
+            return;
+        }
+        safely(() -> DistributionSummary
+                .builder("memory_token_estimation_ratio")
+                .description("模型实际输入 Token 与统一估算 Token 的比值")
+                .tag("model_family", tag(modelFamily))
+                .register(registry)
+                .record(ratio));
+    }
+
+    private Counter counter(String name, String... tags) {
+        return Counter.builder(name).tags(tags).register(registry);
+    }
+
+    private void safely(Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException ignored) {
+            // 指标注册或记录失败不能改变模型调用结果。
+        }
+    }
+
+    private static String tag(Enum<?> value) {
+        return Objects.requireNonNull(value, "指标枚举不能为空")
+                .name().toLowerCase(Locale.ROOT);
+    }
+
+    public enum ModelFamily {
+        DEEPSEEK,
+        QWEN,
+        OPENAI,
+        UNKNOWN;
+
+        public static ModelFamily fromModelName(String modelName) {
+            String normalized = Objects.toString(modelName, "")
+                    .trim().toLowerCase(Locale.ROOT);
+            if (normalized.contains("deepseek")) {
+                return DEEPSEEK;
+            }
+            if (normalized.contains("qwen")) {
+                return QWEN;
+            }
+            if (normalized.contains("openai")
+                    || normalized.contains("gpt")) {
+                return OPENAI;
+            }
+            return UNKNOWN;
+        }
+    }
+
+    public enum RequestStatus {
+        STARTED, SUCCESS, ERROR
+    }
+
+    public enum ErrorType {
+        TIMEOUT,
+        RATE_LIMIT,
+        AUTHENTICATION,
+        NETWORK,
+        CANCELLED,
+        UNKNOWN;
+
+        public static ErrorType fromThrowable(Throwable error) {
+            Throwable current = error;
+            for (int depth = 0; current != null && depth < 8; depth++) {
+                if (current instanceof TimeoutException) {
+                    return TIMEOUT;
+                }
+                if (current instanceof CancellationException
+                        || current instanceof InterruptedException) {
+                    return CANCELLED;
+                }
+                if (current instanceof IOException) {
+                    return NETWORK;
+                }
+                String type = current.getClass().getSimpleName()
+                        .toLowerCase(Locale.ROOT);
+                if (type.contains("ratelimit")
+                        || type.contains("toomanyrequests")) {
+                    return RATE_LIMIT;
+                }
+                if (type.contains("authentication")
+                        || type.contains("unauthorized")) {
+                    return AUTHENTICATION;
+                }
+                current = current.getCause();
+            }
+            return UNKNOWN;
+        }
+    }
+
+    public enum TokenType {
+        INPUT, OUTPUT, TOTAL
+    }
+
+    public enum ResponseOutcome {
+        SUCCESS, ERROR
     }
 }
-

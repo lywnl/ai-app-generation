@@ -11,6 +11,7 @@ import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import dev.langchain4j.data.message.ChatMessage;
@@ -731,6 +732,8 @@ class ContextCompressionModelRequestGateTest {
                 Executors.newSingleThreadExecutor();
         private final ExecutorService gateExecutor =
                 Executors.newVirtualThreadPerTaskExecutor();
+        private final SimpleMeterRegistry memoryMetricsRegistry =
+                new SimpleMeterRegistry();
         private final CountDownLatch compressionStarted =
                 new CountDownLatch(1);
         private final CountDownLatch releaseCompression =
@@ -797,7 +800,9 @@ class ContextCompressionModelRequestGateTest {
                             summaryService,
                             properties,
                             compressionExecutor,
-                            new AppDataLifecycleFence());
+                            new AppDataLifecycleFence(),
+                            new MemoryCompressionMetricsCollector(
+                                    memoryMetricsRegistry));
             gate = new ContextCompressionModelRequestGate(
                     coordinator, gateExecutor);
         }
@@ -853,6 +858,7 @@ class ContextCompressionModelRequestGateTest {
             releaseCompression.countDown();
             gateExecutor.shutdownNow();
             compressionExecutor.shutdownNow();
+            memoryMetricsRegistry.close();
         }
     }
 

@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
@@ -28,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -49,6 +51,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private final AppDataLifecycleFence lifecycleFence;
     private final ChatTokenEstimator tokenEstimator;
     private final MemoryTokenProperties properties;
+    private final MemoryCompressionMetricsCollector metricsCollector;
     private final Clock clock;
 
     private final ConcurrentHashMap<Long, CompletableFuture<MemoryCompressionResult>>
@@ -71,10 +74,11 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             StringRedisTemplate redisTemplate,
             AppDataLifecycleFence lifecycleFence,
             ChatTokenEstimator tokenEstimator,
-            MemoryTokenProperties properties) {
+            MemoryTokenProperties properties,
+            MemoryCompressionMetricsCollector metricsCollector) {
         this(summaryMapper, draftEngine, executor, redisTemplate,
                 lifecycleFence, tokenEstimator, properties,
-                Clock.systemDefaultZone());
+                metricsCollector, Clock.systemDefaultZone());
     }
 
     MemorySummaryServiceImpl(
@@ -85,6 +89,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             AppDataLifecycleFence lifecycleFence,
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties,
+            MemoryCompressionMetricsCollector metricsCollector,
             Clock clock) {
         this.summaryMapper = Objects.requireNonNull(
                 summaryMapper, "摘要 Mapper 不能为空");
@@ -100,6 +105,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 tokenEstimator, "Token 估算器不能为空");
         this.properties = Objects.requireNonNull(
                 properties, "Token 配置不能为空");
+        this.metricsCollector = Objects.requireNonNull(
+                metricsCollector, "记忆压缩指标收集器不能为空");
         this.clock = Objects.requireNonNull(clock, "时钟不能为空");
     }
 
@@ -150,8 +157,14 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 return;
             }
             AppDataLifecycleFence.WriterPermit taskPermit = writerPermit;
-            executor.submit(() -> runBackgroundCompression(
-                    appId, summarizeThroughId, flight, taskPermit));
+            try {
+                executor.submit(() -> runBackgroundCompression(
+                        appId, summarizeThroughId, flight, taskPermit));
+            } catch (RejectedExecutionException exception) {
+                metricsCollector.recordCompressionExecutorRejected(
+                        MemoryCompressionMetricsCollector.CompressionMode.ASYNC);
+                throw exception;
+            }
             ownershipTransferred = true;
             writerPermit = null;
         } catch (RuntimeException exception) {
@@ -219,6 +232,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             return new CompressionAttempt(
                     awaitExistingFlight(existing, deadlineNanos), true);
         }
+        MemoryCompressionMetricsCollector.CompressionObservation observation =
+                metricsCollector.startCompression(
+                        MemoryCompressionMetricsCollector.CompressionMode.BLOCKING);
         MemoryCompressionResult compressionResult = null;
         try {
             AppDataLifecycleFence.WriterPermit writerPermit =
@@ -236,13 +252,17 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             return new CompressionAttempt(compressionResult, false);
         } catch (RuntimeException exception) {
             log.error("同步摘要 owner 异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
             compressionResult = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "同步摘要任务异常");
             return new CompressionAttempt(compressionResult, false);
         } finally {
-            finishFlight(appId, flight, compressionResult);
+            try {
+                completeObservation(observation, compressionResult);
+            } finally {
+                finishFlight(appId, flight, compressionResult);
+            }
         }
     }
 
@@ -270,6 +290,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             long summarizeThroughId,
             CompletableFuture<MemoryCompressionResult> flight,
             AppDataLifecycleFence.WriterPermit writerPermit) {
+        MemoryCompressionMetricsCollector.CompressionObservation observation =
+                metricsCollector.startCompression(
+                        MemoryCompressionMetricsCollector.CompressionMode.ASYNC);
         MemoryCompressionResult compressionResult = null;
         try (writerPermit) {
             compressionResult = compressWithinPermit(
@@ -278,13 +301,17 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     deadlineNanos(properties.getBlockingTimeout()));
         } catch (RuntimeException exception) {
             log.error("后台摘要任务异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
             ensureFallbackRetryDelayIfWritable(appId);
             compressionResult = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "后台摘要任务异常");
         } finally {
-            finishFlight(appId, flight, compressionResult);
+            try {
+                completeObservation(observation, compressionResult);
+            } finally {
+                finishFlight(appId, flight, compressionResult);
+            }
         }
     }
 
@@ -296,9 +323,13 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             MemorySummaryDraftEngine.DraftResult draft = draftEngine.buildDraft(
                     appId, summarizeThroughId, current, deadlineNanos);
             if (draft.failureStatus() != null) {
+                metricsCollector.recordSummaryDraftFailure(
+                        draft.reducerRounds());
                 return recordFailure(appId, current,
                         draft.failureStatus(), draft.detail());
             }
+            metricsCollector.recordSummaryDraftSuccess(
+                    draft.summaryTokens(), draft.reducerRounds());
             if (!draft.changed()) {
                 clearPersistentFailureMetadata(current);
                 clearFallbackRetryDelay(appId);
@@ -315,7 +346,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     "摘要压缩完成");
         } catch (RuntimeException exception) {
             log.error("摘要压缩异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
             return recordFailure(appId, current,
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     "摘要压缩内部失败");
@@ -375,7 +406,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             clearFallbackRetryDelay(appId);
         } catch (RuntimeException exception) {
             log.error("记录摘要失败元数据异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
             ensureFallbackRetryDelay(appId, delay);
         }
         return result(status, currentCursor(current),
@@ -392,7 +423,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             writerPermit = lifecycleFence.tryAcquireWriter(appId);
         } catch (RuntimeException exception) {
             log.error("获取摘要兜底退避写许可异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
             return;
         }
         if (writerPermit == null) {
@@ -402,7 +433,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             ensureFallbackRetryDelay(appId);
         } catch (RuntimeException exception) {
             log.error("设置摘要兜底退避写许可异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
         }
     }
 
@@ -419,7 +450,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                                     : candidateRetryTime);
         } catch (RuntimeException exception) {
             log.error("设置摘要兜底退避异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
         }
     }
 
@@ -636,7 +667,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             writerPermit.close();
         } catch (RuntimeException exception) {
             log.error("释放摘要写许可异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
         }
     }
 
@@ -654,6 +685,15 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         } finally {
             inFlight.remove(appId, flight);
         }
+    }
+
+    private void completeObservation(
+            MemoryCompressionMetricsCollector.CompressionObservation observation,
+            MemoryCompressionResult compressionResult) {
+        if (compressionResult == null) {
+            return;
+        }
+        observation.complete(compressionResult.status());
     }
 
     private boolean isDatabaseRetryReady(AppMemorySummary current) {
@@ -678,7 +718,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             }
         } catch (RuntimeException exception) {
             log.error("检查摘要兜底退避异常 appId={} type={}", appId,
-                    exception.getClass().getSimpleName(), exception);
+                    exception.getClass().getSimpleName());
             return false;
         }
     }

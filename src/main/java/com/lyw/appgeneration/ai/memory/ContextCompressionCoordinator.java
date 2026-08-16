@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -36,6 +37,7 @@ public class ContextCompressionCoordinator {
     private final MemoryTokenProperties properties;
     private final ExecutorService compressionExecutor;
     private final AppDataLifecycleFence lifecycleFence;
+    private final MemoryCompressionMetricsCollector metricsCollector;
     private final LongSupplier nanoTime;
     private final ConversationTurnSelector turnSelector =
             new ConversationTurnSelector();
@@ -48,9 +50,11 @@ public class ContextCompressionCoordinator {
             MemoryTokenProperties properties,
             @Qualifier("contextCompressionExecutor")
             ExecutorService compressionExecutor,
-            AppDataLifecycleFence lifecycleFence) {
+            AppDataLifecycleFence lifecycleFence,
+            MemoryCompressionMetricsCollector metricsCollector) {
         this(tokenEstimator, chatHistoryService, summaryService, properties,
-                compressionExecutor, lifecycleFence, System::nanoTime);
+                compressionExecutor, lifecycleFence, metricsCollector,
+                System::nanoTime);
     }
 
     ContextCompressionCoordinator(
@@ -60,6 +64,7 @@ public class ContextCompressionCoordinator {
             MemoryTokenProperties properties,
             ExecutorService compressionExecutor,
             AppDataLifecycleFence lifecycleFence,
+            MemoryCompressionMetricsCollector metricsCollector,
             LongSupplier nanoTime) {
         this.tokenEstimator = Objects.requireNonNull(
                 tokenEstimator, "Token 估算器不能为空");
@@ -73,6 +78,8 @@ public class ContextCompressionCoordinator {
                 compressionExecutor, "上下文压缩执行器不能为空");
         this.lifecycleFence = Objects.requireNonNull(
                 lifecycleFence, "应用数据生命周期栅栏不能为空");
+        this.metricsCollector = Objects.requireNonNull(
+                metricsCollector, "记忆压缩指标收集器不能为空");
         this.nanoTime = Objects.requireNonNull(
                 nanoTime, "单调时钟不能为空");
     }
@@ -99,6 +106,18 @@ public class ContextCompressionCoordinator {
      * 永久通行证，实际模型请求仍须再次通过同一个真实回调门。</p>
      */
     public ContextAdmissionResult admit(
+            CompressionAwareChatMemory memory,
+            List<ToolSpecification> tools,
+            Consumer<ContextAdmissionResult> transitionListener,
+            ContextContinuationGate continuationGate) {
+        ContextAdmissionResult result = admitInternal(
+                memory, tools, transitionListener, continuationGate);
+        metricsCollector.recordContextGate(
+                result.mode(), result.failureReason());
+        return result;
+    }
+
+    private ContextAdmissionResult admitInternal(
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
             Consumer<ContextAdmissionResult> transitionListener,
@@ -130,6 +149,9 @@ public class ContextCompressionCoordinator {
                     0, 0, 0L, appId);
         }
         int initialTokens = estimate(memory, stableTools);
+        metricsCollector.recordEstimatedTokens(
+                MemoryCompressionMetricsCollector.EstimationStage.BEFORE,
+                initialTokens);
         if (initialTokens < properties.getAsyncCompressionThreshold()) {
             if (!tryCommitContinuation(continuationGate)) {
                 return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
@@ -234,6 +256,8 @@ public class ContextCompressionCoordinator {
                                 remainingDuration(deadlineNanos)));
             });
         } catch (RejectedExecutionException exception) {
+            metricsCollector.recordCompressionExecutorRejected(
+                    MemoryCompressionMetricsCollector.CompressionMode.BLOCKING);
             return blockingFailure(initialTokens,
                     plan.summarizeThroughId(),
                     FailureReason.EXECUTOR_REJECTED,
@@ -452,6 +476,9 @@ public class ContextCompressionCoordinator {
                         "L0 旧前缀已变化，本次不裁剪");
             }
             int finalTokens = estimate(memory, tools);
+            metricsCollector.recordEstimatedTokens(
+                    MemoryCompressionMetricsCollector.EstimationStage.AFTER,
+                    finalTokens);
             if (finalTokens >= properties.getHardInputLimit()) {
                 return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
                         initialTokens, finalTokens,

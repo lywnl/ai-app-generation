@@ -1,21 +1,34 @@
 package com.lyw.appgeneration.service.impl;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
+import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import dev.langchain4j.model.chat.ChatModel;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -45,6 +58,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,6 +78,20 @@ import static org.mockito.Mockito.withSettings;
 /** L1 3K 硬上限、完整回合游标、single-flight 与删除栅栏测试。 */
 class MemorySummaryServiceImplTest {
 
+    @Test
+    void exposesMetricsAwareProductionConstructor() {
+        assertDoesNotThrow(() -> MemorySummaryServiceImpl.class
+                .getConstructor(
+                        AppMemorySummaryMapper.class,
+                        MemorySummaryDraftEngine.class,
+                        ExecutorService.class,
+                        StringRedisTemplate.class,
+                        AppDataLifecycleFence.class,
+                        ChatTokenEstimator.class,
+                        MemoryTokenProperties.class,
+                        MemoryCompressionMetricsCollector.class));
+    }
+
     @Mock
     ChatHistoryService chatHistoryService;
     @Mock
@@ -82,6 +110,8 @@ class MemorySummaryServiceImplTest {
     private MemoryTokenProperties properties;
     private MutableClock clock;
     private ExecutorService modelExecutor;
+    private PrometheusMeterRegistry metricsRegistry;
+    private MemoryCompressionMetricsCollector metricsCollector;
     private MemorySummaryServiceImpl service;
 
     @BeforeEach
@@ -100,12 +130,17 @@ class MemorySummaryServiceImplTest {
                 estimatedTokens.getOrDefault(invocation.getArgument(0), 1_000));
         modelExecutor = java.util.concurrent.Executors
                 .newVirtualThreadPerTaskExecutor();
+        metricsRegistry = new PrometheusMeterRegistry(
+                PrometheusConfig.DEFAULT);
+        metricsCollector = new MemoryCompressionMetricsCollector(
+                metricsRegistry);
         service = newService(mock(ExecutorService.class));
     }
 
     @AfterEach
     void tearDown() {
         modelExecutor.shutdownNow();
+        metricsRegistry.close();
     }
 
     @Test
@@ -132,6 +167,16 @@ class MemorySummaryServiceImplTest {
         assertEquals(3_000, persisted.getValue().getSummaryTokens());
         assertNotNull(persisted.getValue().getCreateTime());
         verify(valueOps).set(eq("mem:summary:1"), eq(summary), any(Duration.class));
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_compression_total",
+                "mode", "blocking", "outcome", "compressed").count());
+        assertEquals(1L, timer(metricsRegistry,
+                "memory_compression_duration_seconds",
+                "mode", "blocking", "outcome", "compressed").count());
+        assertEquals(3_000D, summary(metricsRegistry,
+                "memory_summary_tokens").totalAmount());
+        assertEquals(0D, summary(metricsRegistry,
+                "memory_summary_reduce_rounds").totalAmount());
     }
 
     @Test
@@ -156,6 +201,8 @@ class MemorySummaryServiceImplTest {
         assertTrue(prompts.getAllValues().get(1).contains(oversized));
         assertFalse(prompts.getAllValues().get(1).contains("新增问题"),
                 "二次压缩只能处理现有摘要，不能重新引入原始对话");
+        assertEquals(1D, summary(metricsRegistry,
+                "memory_summary_reduce_rounds").totalAmount());
     }
 
     @Test
@@ -201,6 +248,11 @@ class MemorySummaryServiceImplTest {
         assertEquals(1, current.getFailCount());
         verify(summaryMapper).update(any(AppMemorySummary.class));
         verify(valueOps, never()).set(anyString(), anyString(), any(Duration.class));
+        assertTrue(metricsRegistry.find("memory_summary_tokens")
+                .summaries().isEmpty(),
+                "失败 DraftResult 不得用旧摘要冒充本次最终草稿");
+        assertEquals(1D, summary(metricsRegistry,
+                "memory_summary_reduce_rounds").totalAmount());
     }
 
     @Test
@@ -1125,7 +1177,8 @@ class MemorySummaryServiceImplTest {
                         redisTemplate,
                         lifecycleFence,
                         tokenEstimator,
-                        properties);
+                        properties,
+                        metricsCollector);
 
         Clock productionClock = (Clock) ReflectionTestUtils.getField(
                 defaultClockService, "clock");
@@ -1148,6 +1201,100 @@ class MemorySummaryServiceImplTest {
                 lifecycleFence.beginDelete(1L, Duration.ZERO);
         assertNotNull(deletion);
         deletion.abortAndReopen();
+        assertEquals(1D, counter(metricsRegistry,
+                "memory_compression_total",
+                "mode", "async",
+                "outcome", "executor_rejected").count());
+        assertTrue(metricsRegistry
+                .find("memory_compression_duration_seconds")
+                .timers().isEmpty());
+    }
+
+    @Test
+    void synchronousWaiterDoesNotDuplicateAsyncOwnerMetrics()
+            throws Exception {
+        ExecutorService executor = mock(ExecutorService.class);
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            submitted.set(invocation.getArgument(0));
+            return mock(Future.class);
+        });
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "问题"),
+                        message(2L, "ai", "回复")));
+        when(summarizationModel.chat(anyString()))
+                .thenReturn(textWithTokens("异步摘要", 600));
+        MemorySummaryServiceImpl background = newService(executor);
+        background.triggerSummarizationAsync(1L, 2L);
+        AtomicReference<Thread> waiterThread = new AtomicReference<>();
+        CountDownLatch waiterStarted = new CountDownLatch(1);
+
+        try (ExecutorService callers = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<MemoryCompressionResult> waiter = callers.submit(() -> {
+                waiterThread.set(Thread.currentThread());
+                waiterStarted.countDown();
+                return background.compressNow(
+                        1L, 2L, Duration.ofSeconds(2));
+            });
+            assertTrue(waiterStarted.await(1L, TimeUnit.SECONDS));
+            assertTrue(awaitWaiting(waiterThread.get()));
+
+            submitted.get().run();
+            MemoryCompressionResult result = waiter.get(
+                    1L, TimeUnit.SECONDS);
+
+            assertEquals(MemoryCompressionResult.Status.COMPRESSED,
+                    result.status());
+            assertEquals(1D, counter(metricsRegistry,
+                    "memory_compression_total",
+                    "mode", "async", "outcome", "compressed").count());
+            assertEquals(1D, metricsRegistry
+                    .find("memory_compression_total")
+                    .counters().stream()
+                    .mapToDouble(Counter::count)
+                    .sum());
+            assertEquals(1L, metricsRegistry
+                    .find("memory_compression_duration_seconds")
+                    .timers().stream()
+                    .mapToLong(Timer::count)
+                    .sum());
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ThrowingMeterRegistry.FailurePoint.class,
+            names = {
+                    "COUNTER_REGISTRATION",
+                    "TIMER_RECORD",
+                    "SUMMARY_RECORD"
+            })
+    void metricFailureDoesNotChangeBlockingCompressionResult(
+            ThrowingMeterRegistry.FailurePoint failurePoint) {
+        ThrowingMeterRegistry registry =
+                new ThrowingMeterRegistry(failurePoint);
+        try {
+            when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+            when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                    .thenReturn(List.of());
+            MemorySummaryServiceImpl observed = newService(
+                    mock(ExecutorService.class),
+                    modelExecutor,
+                    lifecycleFence,
+                    clock,
+                    new MemoryCompressionMetricsCollector(registry));
+
+            MemoryCompressionResult result = observed.compressNow(
+                    1L, 2L, Duration.ofSeconds(1));
+
+            assertEquals(MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
+                    result.status());
+            assertTrue(registry.failureTriggered());
+        } finally {
+            registry.close();
+        }
     }
 
     @Test
@@ -1424,30 +1571,54 @@ class MemorySummaryServiceImplTest {
     @Test
     @DisplayName("同步 owner 获取写许可异常后必须清理 single-flight")
     void synchronousOwnerCleansFlightWhenWriterAcquireThrows() {
+        String sensitiveMessage = "敏感摘要正文与数据库参数";
         AppDataLifecycleFence failingFence = mock(
                 AppDataLifecycleFence.class,
                 withSettings().mockMaker(INLINE));
         AppDataLifecycleFence.WriterPermit writerPermit = mock(
                 AppDataLifecycleFence.WriterPermit.class);
         when(failingFence.tryAcquireWriter(1L))
-                .thenThrow(new IllegalStateException("fence down"))
+                .thenThrow(new IllegalStateException(sensitiveMessage))
                 .thenReturn(writerPermit);
         when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
         when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
                 .thenReturn(List.of());
         MemorySummaryServiceImpl failing = newService(
                 mock(ExecutorService.class), modelExecutor, failingFence);
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                MemorySummaryServiceImpl.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
 
-        MemoryCompressionResult first = assertDoesNotThrow(() ->
-                failing.compressNow(1L, 2L, Duration.ofSeconds(1)));
-        MemoryCompressionResult second = failing.compressNow(
-                1L, 2L, Duration.ofSeconds(1));
+        MemoryCompressionResult first;
+        MemoryCompressionResult second;
+        try {
+            first = assertDoesNotThrow(() ->
+                    failing.compressNow(1L, 2L, Duration.ofSeconds(1)));
+            second = failing.compressNow(
+                    1L, 2L, Duration.ofSeconds(1));
+        } finally {
+            logger.detachAppender(appender);
+        }
 
         assertEquals(MemoryCompressionResult.Status.MODEL_FAILED,
                 first.status());
         assertEquals(MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
                 second.status());
         verify(failingFence, times(2)).tryAcquireWriter(1L);
+        ILoggingEvent ownerFailure = appender.list.stream()
+                .filter(event -> event.getFormattedMessage()
+                        .contains("同步摘要 owner 异常"))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(ownerFailure.getFormattedMessage()
+                .contains("IllegalStateException"));
+        assertTrue(ownerFailure.getFormattedMessage().contains("appId=1"));
+        assertFalse(ownerFailure.getFormattedMessage()
+                .contains(sensitiveMessage));
+        assertNull(ownerFailure.getThrowableProxy(),
+                "安全日志不得附带会渲染原始异常消息的 Throwable");
     }
 
     @Test
@@ -1661,6 +1832,16 @@ class MemorySummaryServiceImplTest {
             ExecutorService summaryModelExecutor,
             AppDataLifecycleFence fence,
             Clock serviceClock) {
+        return newService(executor, summaryModelExecutor, fence,
+                serviceClock, metricsCollector);
+    }
+
+    private MemorySummaryServiceImpl newService(
+            ExecutorService executor,
+            ExecutorService summaryModelExecutor,
+            AppDataLifecycleFence fence,
+            Clock serviceClock,
+            MemoryCompressionMetricsCollector collector) {
         MemorySummaryDraftEngine draftEngine = new MemorySummaryDraftEngine(
                 chatHistoryService,
                 summarizationModel,
@@ -1675,7 +1856,50 @@ class MemorySummaryServiceImplTest {
                 fence,
                 tokenEstimator,
                 properties,
+                collector,
                 serviceClock);
+    }
+
+    private Counter counter(
+            io.micrometer.core.instrument.MeterRegistry registry,
+            String name,
+            String... tags) {
+        Counter counter = registry.find(name).tags(tags).counter();
+        assertNotNull(counter, () -> "缺少 Counter：" + name);
+        return counter;
+    }
+
+    private Timer timer(
+            io.micrometer.core.instrument.MeterRegistry registry,
+            String name,
+            String... tags) {
+        Timer timer = registry.find(name).tags(tags).timer();
+        assertNotNull(timer, () -> "缺少 Timer：" + name);
+        return timer;
+    }
+
+    private DistributionSummary summary(
+            io.micrometer.core.instrument.MeterRegistry registry,
+            String name,
+            String... tags) {
+        DistributionSummary summary = registry.find(name)
+                .tags(tags)
+                .summary();
+        assertNotNull(summary, () -> "缺少 DistributionSummary：" + name);
+        return summary;
+    }
+
+    private boolean awaitWaiting(Thread thread) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (System.nanoTime() < deadline) {
+            Thread.State state = thread.getState();
+            if (state == Thread.State.WAITING
+                    || state == Thread.State.TIMED_WAITING) {
+                return true;
+            }
+            Thread.onSpinWait();
+        }
+        return false;
     }
 
     private String textWithTokens(String text, int tokens) {
