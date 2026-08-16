@@ -228,7 +228,7 @@ WHERE isDelete = 0
 
 1. 停止新生成流，等待正在执行的门禁、压缩和 L2 抽取任务静默；确认相关 counter 不再增长且日志没有进行中的 owner。
 2. 执行 7.1 的只读兼容性审计，记录查询结果和将要使用的回滚包 SHA；不满足直接回滚条件且没有兼容包时停止。
-3. 在旧后端启动前做**定向缓存失效**：按受影响 app 调用现有 L0 清理路径 `RedisChatMemoryStore.deleteMessages(appId)`，使旧版从 MySQL 冷重建；删除对应 `mem:summary:{appId}`，并按 user 同时删除 `mem:pref:{userId}` 与 `mem:pref:v2:{userId}`。禁止使用 `FLUSHDB` 或清理无关业务缓存。
+3. 在旧后端启动前做**定向缓存失效**：按受影响 app 通过应用相同 Redis 配置调用 `AtomicChatMemoryStore.deleteMessages(appId)`，使旧版从 MySQL 冷重建；删除对应 `mem:summary:{appId}`，并按 user 同时删除 `mem:pref:{userId}` 与 `mem:pref:v2:{userId}`。仓库当前没有可直接运行的批量运维命令，因此发布前必须准备一份受审计的一次性维护任务，并在非生产环境验证 ID 清单、执行结果和重复执行安全性；没有准备并验证该任务时，本次回滚必须停止。禁止现场猜测 L0 底层 Redis 键、直接操作不明确的序列化值、使用 `FLUSHDB` 或清理无关业务缓存。
 4. 先回滚后端应用包，再按兼容性需要回滚前端；如果旧后端仍在线，新前端可以继续兼容。
 5. 回滚后执行一条旧版本兼容写入和读取检查：旧实体不提供新字段时，`status/evidenceType/evidenceCount` 必须落为 `ACTIVE/EXPLICIT/1`，两个 `nextRetryTime` 保持可空；同时确认 L2 实际召回不包含 `CANDIDATE`。
 6. 核对三张记忆表和 `chat_history` 行数没有减少，L1 摘要、L2 证据和游标仍在；旧版 L0 从 MySQL 重建成功后再恢复小流量。
