@@ -192,7 +192,23 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 || stableAiMessageId == null || stableAiMessageId <= 0) {
             return;
         }
-        registerDirtyApp(userId, appId, stableAiMessageId);
+        AppDataLifecycleFence.WriterPermit writerPermit;
+        try {
+            writerPermit = lifecycleFence.tryAcquireWriter(appId);
+        } catch (RuntimeException exception) {
+            log.warn("获取 L2 trigger 写许可失败 userId={} appId={} type={}",
+                    userId, appId, exception.getClass().getSimpleName());
+            return;
+        }
+        if (writerPermit == null) {
+            return;
+        }
+        try (writerPermit) {
+            registerDirtyApp(userId, appId, stableAiMessageId);
+        } catch (RuntimeException exception) {
+            log.warn("登记 L2 待处理版本失败 userId={} appId={} type={}",
+                    userId, appId, exception.getClass().getSimpleName());
+        }
     }
 
     private void registerDirtyApp(
@@ -305,6 +321,12 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             try {
                 AppMemoryExtractCursor cursor = cursorMapper.selectOneByQuery(
                         QueryWrapper.create().eq("appId", snapshot.appId));
+                AppProcessResult persistedRetry =
+                        persistedRetryResult(cursor);
+                if (persistedRetry != null) {
+                    results.put(snapshot.appId, persistedRetry);
+                    continue;
+                }
                 long currentCursor = cursorValue(cursor);
                 works.add(new AppExtractionWork(
                         snapshot, cursor,
@@ -393,17 +415,8 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                         ? AppProcessResult.FAILED
                         : results.getOrDefault(
                                 snapshot.appId, AppProcessResult.FAILED);
-                if (result == AppProcessResult.COMPLETE) {
-                    state.apps.remove(snapshot.appId);
-                } else if (result == AppProcessResult.MORE_PENDING) {
-                    state.apps.put(snapshot.appId,
-                            current.readyForNextBatch());
-                } else if (result == AppProcessResult.DEFERRED) {
-                    continue;
-                } else {
-                    state.apps.put(snapshot.appId,
-                            current.failedAt(now));
-                }
+                applyProcessResult(
+                        state, snapshot.appId, current, result, now);
             }
             if (state.apps.isEmpty()) {
                 cancelScheduled(state);
@@ -412,6 +425,29 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             scheduleNext(userId, state);
             return state;
         });
+    }
+
+    private void applyProcessResult(UserDirtyState state,
+                                    long appId,
+                                    DirtyApp current,
+                                    AppProcessResult result,
+                                    Instant now) {
+        switch (result.status()) {
+            case COMPLETE -> state.apps.remove(appId);
+            case MORE_PENDING -> state.apps.put(
+                    appId, current.readyForNextBatch());
+            case DEFERRED -> {
+                if (result.retryAt() != null) {
+                    state.apps.put(appId, current.retryAt(
+                            result.retryAt(), result.failCount()));
+                }
+            }
+            case FAILED -> state.apps.put(appId,
+                    result.retryAt() == null
+                            ? current.failedAt(now)
+                            : current.retryAt(
+                                    result.retryAt(), result.failCount()));
+        }
     }
 
     /** 同步抽取一次。best-effort,不抛异常。 */
@@ -463,21 +499,22 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             UserPreferenceBatchBuilder.Batch batch = buildPreferenceBatch(
                     appId, lastId, historyUpperBound, existing);
             if (batch.completedThroughId() == lastId) {
+                if (hasFailureMetadata(cursor)) {
+                    advanceCursor(userId, appId, cursor, lastId);
+                }
                 return AppProcessResult.COMPLETE;
             }
             List<UserPreferenceCandidate> candidates =
                     extractPreferenceCandidates(userId, appId, batch);
             if (candidates == null) {
-                recordFailureSafely(userId, appId, cursor);
-                return AppProcessResult.FAILED;
+                return recordFailureSafely(userId, appId, cursor);
             }
             return completePreferenceBatch(userId, appId, cursor, lastId,
                     batch, candidates);
         } catch (RuntimeException exception) {
             log.error("L2 偏好抽取失败 userId={} appId={} type={}",
                     userId, appId, exception.getClass().getSimpleName());
-            recordFailureSafely(userId, appId, cursor);
-            return AppProcessResult.FAILED;
+            return recordFailureSafely(userId, appId, cursor);
         }
     }
 
@@ -635,6 +672,11 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                     now.plus(retryDelay(nextFailCount)), nextFailCount);
         }
 
+        private DirtyApp retryAt(Instant nextRetryAt, int nextFailCount) {
+            return new DirtyApp(version, historyUpperBound,
+                    nextRetryAt, Math.max(0, nextFailCount));
+        }
+
         private DirtyApp readyForNextBatch() {
             return new DirtyApp(version, historyUpperBound, null, 0);
         }
@@ -664,11 +706,38 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         }
     }
 
-    private enum AppProcessResult {
+    private enum AppProcessStatus {
         COMPLETE,
         MORE_PENDING,
         DEFERRED,
         FAILED
+    }
+
+    private record AppProcessResult(AppProcessStatus status,
+                                    Instant retryAt,
+                                    int failCount) {
+
+        private static final AppProcessResult COMPLETE = new AppProcessResult(
+                AppProcessStatus.COMPLETE, null, 0);
+        private static final AppProcessResult MORE_PENDING =
+                new AppProcessResult(
+                        AppProcessStatus.MORE_PENDING, null, 0);
+        private static final AppProcessResult DEFERRED = new AppProcessResult(
+                AppProcessStatus.DEFERRED, null, 0);
+        private static final AppProcessResult FAILED = new AppProcessResult(
+                AppProcessStatus.FAILED, null, 0);
+
+        private static AppProcessResult deferredUntil(
+                Instant retryAt, int failCount) {
+            return new AppProcessResult(
+                    AppProcessStatus.DEFERRED, retryAt, failCount);
+        }
+
+        private static AppProcessResult failedAt(
+                Instant retryAt, int failCount) {
+            return new AppProcessResult(
+                    AppProcessStatus.FAILED, retryAt, failCount);
+        }
     }
 
     private enum MissingTransactionOperations
@@ -918,31 +987,36 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 .userId(userId)
                 .lastExtractedId(newCursor)
                 .failCount(0)
+                .nextRetryTime(null)
                 .createTime(cursor == null ? now : cursor.getCreateTime())
                 .updateTime(now)
                 .isDelete(cursor == null ? null : cursor.getIsDelete())
                 .build();
         int affectedRows = cursor == null
                 ? cursorMapper.insert(next)
-                : cursorMapper.update(next);
+                // next 复制了游标行全部字段；false 用于显式写入 nextRetryTime=NULL。
+                : cursorMapper.update(next, false);
         requireExactlyOneRow(affectedRows,
                 cursor == null ? "新增 L2 抽取游标" : "更新 L2 抽取游标");
     }
 
-    private void recordFailureSafely(
+    private AppProcessResult recordFailureSafely(
             Long userId,
             Long appId,
             AppMemoryExtractCursor cursor) {
+        LocalDateTime now = LocalDateTime.now(clock);
+        int failCount = cursor == null || cursor.getFailCount() == null
+                ? 1 : cursor.getFailCount() + 1;
+        LocalDateTime nextRetryTime = now.plus(retryDelay(failCount));
+        Instant retryAt = nextRetryTime.atZone(clock.getZone()).toInstant();
         try {
-            LocalDateTime now = LocalDateTime.now(clock);
-            int failCount = cursor == null || cursor.getFailCount() == null
-                    ? 1 : cursor.getFailCount() + 1;
             AppMemoryExtractCursor failed = AppMemoryExtractCursor.builder()
                     .id(cursor == null ? null : cursor.getId())
                     .appId(appId)
                     .userId(userId)
                     .lastExtractedId(cursorValue(cursor))
                     .failCount(failCount)
+                    .nextRetryTime(nextRetryTime)
                     .createTime(cursor == null ? now : cursor.getCreateTime())
                     .updateTime(now)
                     .isDelete(cursor == null ? null : cursor.getIsDelete())
@@ -956,6 +1030,31 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             log.error("记录 L2 抽取失败元数据异常 userId={} appId={} type={}",
                     userId, appId, exception.getClass().getSimpleName());
         }
+        return AppProcessResult.failedAt(retryAt, failCount);
+    }
+
+    private AppProcessResult persistedRetryResult(
+            AppMemoryExtractCursor cursor) {
+        LocalDateTime nextRetryTime = cursor == null
+                ? null : cursor.getNextRetryTime();
+        if (nextRetryTime == null
+                || !LocalDateTime.now(clock).isBefore(nextRetryTime)) {
+            return null;
+        }
+        Instant retryAt = nextRetryTime.atZone(clock.getZone()).toInstant();
+        return AppProcessResult.deferredUntil(
+                retryAt, cursorFailCount(cursor));
+    }
+
+    private boolean hasFailureMetadata(AppMemoryExtractCursor cursor) {
+        return cursor != null
+                && (cursorFailCount(cursor) > 0
+                || cursor.getNextRetryTime() != null);
+    }
+
+    private int cursorFailCount(AppMemoryExtractCursor cursor) {
+        return cursor == null || cursor.getFailCount() == null
+                ? 0 : Math.max(0, cursor.getFailCount());
     }
 
     private long cursorValue(AppMemoryExtractCursor cursor) {

@@ -60,10 +60,16 @@ public class AppMemorySummary implements Serializable {
     private Integer summaryTokens;
 
     /**
-     * 连续失败计数（circuit breaker）
+     * 连续失败计数
      */
     @Column("failCount")
     private Integer failCount;
+
+    /**
+     * 下一次允许后台重试的时间
+     */
+    @Column("nextRetryTime")
+    private LocalDateTime nextRetryTime;
 
     /**
      * 创建时间

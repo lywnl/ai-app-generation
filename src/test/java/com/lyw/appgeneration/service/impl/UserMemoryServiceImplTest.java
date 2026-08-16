@@ -117,6 +117,8 @@ class UserMemoryServiceImplTest {
         when(memoryMapper.update(any())).thenReturn(1);
         when(cursorMapper.insert(any())).thenReturn(1);
         when(cursorMapper.update(any())).thenReturn(1);
+        when(cursorMapper.update(
+                any(AppMemoryExtractCursor.class), eq(false))).thenReturn(1);
     }
 
     @Test
@@ -402,6 +404,34 @@ class UserMemoryServiceImplTest {
         verify(cursorMapper).insert(cursor.capture());
         assertEquals(0L, cursor.getValue().getLastExtractedId());
         assertEquals(1, cursor.getValue().getFailCount());
+        assertEquals(LocalDateTime.of(2026, 8, 16, 0, 0, 5),
+                cursor.getValue().getNextRetryTime());
+    }
+
+    @Test
+    @DisplayName("已有失败游标再次失败时同次更新精确指数退避时间")
+    void 已有失败游标更新精确下一次重试时间() {
+        AppMemoryExtractCursor current = AppMemoryExtractCursor.builder()
+                .id(1L)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .lastExtractedId(0L)
+                .failCount(2)
+                .build();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(current);
+        提供历史(完整回合(93L, 94L,
+                "以后都用中文", "已收到"));
+        when(model.chat(any(String.class))).thenReturn("不是 JSON 数组");
+
+        service.extractNow(USER_ID, APP_ID);
+
+        ArgumentCaptor<AppMemoryExtractCursor> cursor =
+                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursorMapper).update(cursor.capture());
+        assertEquals(0L, cursor.getValue().getLastExtractedId());
+        assertEquals(3, cursor.getValue().getFailCount());
+        assertEquals(LocalDateTime.of(2026, 8, 16, 0, 0, 20),
+                cursor.getValue().getNextRetryTime());
     }
 
     @Test
@@ -414,6 +444,72 @@ class UserMemoryServiceImplTest {
         service.extractNow(USER_ID, APP_ID);
 
         断言游标新增到(102L);
+    }
+
+    @Test
+    @DisplayName("成功推进已有游标时清除持久化失败元数据")
+    void 成功推进已有游标清零失败元数据() {
+        AppMemoryExtractCursor current = AppMemoryExtractCursor.builder()
+                .id(2L)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .lastExtractedId(0L)
+                .failCount(3)
+                .nextRetryTime(LocalDateTime.of(
+                        2026, 8, 16, 0, 1))
+                .createTime(LocalDateTime.of(2026, 8, 15, 23, 0))
+                .updateTime(LocalDateTime.of(2026, 8, 15, 23, 30))
+                .isDelete(0)
+                .build();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(current);
+        提供历史(完整回合(103L, 104L,
+                "帮我做个页面", "已完成"));
+        when(model.chat(any(String.class))).thenReturn("[]");
+
+        service.extractNow(USER_ID, APP_ID);
+
+        ArgumentCaptor<AppMemoryExtractCursor> cursor =
+                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursorMapper).update(cursor.capture(), eq(false));
+        assertEquals(104L, cursor.getValue().getLastExtractedId());
+        assertEquals(0, cursor.getValue().getFailCount());
+        assertNull(cursor.getValue().getNextRetryTime());
+        assertEquals(current.getCreateTime(),
+                cursor.getValue().getCreateTime());
+        assertEquals(current.getIsDelete(), cursor.getValue().getIsDelete());
+    }
+
+    @Test
+    @DisplayName("没有待处理稳定回合时也清除已有失败元数据")
+    void 无待处理稳定回合清零失败元数据() {
+        AppMemoryExtractCursor current = AppMemoryExtractCursor.builder()
+                .id(3L)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .lastExtractedId(10L)
+                .failCount(2)
+                .nextRetryTime(LocalDateTime.of(
+                        2026, 8, 16, 0, 1))
+                .createTime(LocalDateTime.of(2026, 8, 15, 23, 0))
+                .updateTime(LocalDateTime.of(2026, 8, 15, 23, 30))
+                .isDelete(0)
+                .build();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_ID), eq(10L), anyInt())).thenReturn(List.of());
+
+        service.extractNow(USER_ID, APP_ID);
+
+        ArgumentCaptor<AppMemoryExtractCursor> cursor =
+                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursorMapper).update(cursor.capture(), eq(false));
+        assertEquals(10L, cursor.getValue().getLastExtractedId());
+        assertEquals(0, cursor.getValue().getFailCount());
+        assertNull(cursor.getValue().getNextRetryTime());
+        assertEquals(current.getCreateTime(),
+                cursor.getValue().getCreateTime());
+        assertEquals(current.getIsDelete(), cursor.getValue().getIsDelete());
+        verify(model, never()).chat(any(String.class));
     }
 
     @Test
@@ -455,8 +551,12 @@ class UserMemoryServiceImplTest {
         assertTrue(twoTurnTokens > oneTurnTokens);
         properties.setAsyncCompressionThreshold(oneTurnTokens);
         AppMemoryExtractCursor secondCursor = AppMemoryExtractCursor.builder()
-                .appId(APP_ID).userId(USER_ID)
-                .lastExtractedId(112L).failCount(0).build();
+                .id(4L).appId(APP_ID).userId(USER_ID)
+                .lastExtractedId(112L).failCount(0)
+                .createTime(LocalDateTime.of(2026, 8, 15, 23, 0))
+                .updateTime(LocalDateTime.of(2026, 8, 15, 23, 30))
+                .isDelete(0)
+                .build();
         when(cursorMapper.selectOneByQuery(any()))
                 .thenReturn(null, secondCursor);
         when(chatHistoryService.listMessagesAfterCursor(
@@ -485,7 +585,7 @@ class UserMemoryServiceImplTest {
         assertEquals(112L, inserted.getValue().getLastExtractedId());
         ArgumentCaptor<AppMemoryExtractCursor> updated =
                 ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
-        verify(cursorMapper).update(updated.capture());
+        verify(cursorMapper).update(updated.capture(), eq(false));
         assertEquals(122L, updated.getValue().getLastExtractedId());
     }
 
@@ -964,6 +1064,29 @@ class UserMemoryServiceImplTest {
         verify(redisTemplate).delete("mem:pref:v2:" + USER_ID);
     }
 
+    @Test
+    @DisplayName("tombstone 后 L2 召回不得重建归属或 Redis 缓存")
+    void 删除接管后迟到召回不复活本地映射或缓存() {
+        提供应用归属();
+        String cacheKey = "mem:pref:v2:" + USER_ID;
+        when(valueOperations.get(cacheKey))
+                .thenReturn("- 语言偏好:简体中文");
+        assertEquals("- 语言偏好:简体中文",
+                service.recallByApp(APP_ID));
+
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP_ID, Duration.ZERO);
+        assertTrue(deletion != null);
+        deletion.commitTombstone();
+        service.invalidateCaches(APP_ID, USER_ID);
+
+        assertEquals("", service.recallByApp(APP_ID));
+        verify(appMapper, times(1)).selectOneById(APP_ID);
+        verify(valueOperations, times(1)).get(cacheKey);
+        verify(valueOperations, never()).set(any(), any(), any());
+        verify(memoryMapper, never()).selectListByQuery(any());
+    }
+
     private AppMemory 捕获新增偏好() {
         ArgumentCaptor<AppMemory> memory =
                 ArgumentCaptor.forClass(AppMemory.class);
@@ -984,6 +1107,7 @@ class UserMemoryServiceImplTest {
         verify(cursorMapper).insert(cursor.capture());
         assertEquals(expected, cursor.getValue().getLastExtractedId());
         assertEquals(0, cursor.getValue().getFailCount());
+        assertNull(cursor.getValue().getNextRetryTime());
     }
 
     private void 断言失败游标保留在(long expected) {

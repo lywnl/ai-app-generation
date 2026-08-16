@@ -87,6 +87,11 @@ class LayeredMemoryIntegrationTest {
             store.set(inv.getArgument(0));
             return 1;
         });
+        when(summaryMapper.update(
+                any(AppMemorySummary.class), eq(false))).thenAnswer(inv -> {
+            store.set(inv.getArgument(0));
+            return 1;
+        });
         when(redisTemplate.opsForValue()).thenReturn(valueOps); // 缓存未命中(get→null)→回退 store(MySQL mock)
         modelExecutor = java.util.concurrent.Executors
                 .newVirtualThreadPerTaskExecutor();

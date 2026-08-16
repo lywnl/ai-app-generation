@@ -20,6 +20,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,6 +40,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private static final Duration CACHE_TTL = Duration.ofHours(1);
     private static final Duration RETRY_BASE_DELAY = Duration.ofSeconds(5);
     private static final Duration RETRY_MAX_DELAY = Duration.ofMinutes(5);
+    private static final int FALLBACK_RETRY_MAX_ENTRIES = 1_024;
 
     private final AppMemorySummaryMapper summaryMapper;
     private final MemorySummaryDraftEngine draftEngine;
@@ -49,8 +53,15 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
 
     private final ConcurrentHashMap<Long, CompletableFuture<MemoryCompressionResult>>
             inFlight = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Instant> retryAfter =
-            new ConcurrentHashMap<>();
+    private final Map<Long, Instant> fallbackRetryAfter =
+            Collections.synchronizedMap(new LinkedHashMap<>(
+                    16, 0.75F, true) {
+                @Override
+                protected boolean removeEldestEntry(
+                        Map.Entry<Long, Instant> eldest) {
+                    return size() > FALLBACK_RETRY_MAX_ENTRIES;
+                }
+            });
 
     @Autowired
     public MemorySummaryServiceImpl(
@@ -62,7 +73,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties) {
         this(summaryMapper, draftEngine, executor, redisTemplate,
-                lifecycleFence, tokenEstimator, properties, Clock.systemUTC());
+                lifecycleFence, tokenEstimator, properties,
+                Clock.systemDefaultZone());
     }
 
     MemorySummaryServiceImpl(
@@ -95,7 +107,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     public void triggerSummarizationAsync(
             Long appId, long summarizeThroughId) {
         if (!isValidBoundary(appId, summarizeThroughId)
-                || !isBackgroundRetryReady(appId)) {
+                || !isFallbackRetryReady(appId)) {
             return;
         }
         CompletableFuture<MemoryCompressionResult> flight =
@@ -104,6 +116,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             return;
         }
         AppDataLifecycleFence.WriterPermit writerPermit = null;
+        AppMemorySummary current = null;
         MemoryCompressionResult completion = null;
         boolean ownershipTransferred = false;
         try {
@@ -112,6 +125,28 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 completion = result(
                         MemoryCompressionResult.Status.DELETE_REJECTED,
                         0L, 0, "应用删除流程已接管");
+                return;
+            }
+            try {
+                current = selectCurrentSummary(appId);
+                if (!isDatabaseRetryReady(current)
+                        || !isFallbackRetryReady(appId)) {
+                    completion = result(
+                            MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
+                            currentCursor(current),
+                            currentSummaryTokens(current),
+                            "后台摘要退避尚未到期");
+                    return;
+                }
+            } catch (RuntimeException exception) {
+                completion = result(
+                        MemoryCompressionResult.Status.MODEL_FAILED,
+                        currentCursor(current),
+                        currentSummaryTokens(current),
+                        "读取摘要退避元数据失败");
+                ensureFallbackRetryDelay(appId);
+                log.warn("读取摘要退避元数据失败 appId={} type={}",
+                        appId, exception.getClass().getSimpleName());
                 return;
             }
             AppDataLifecycleFence.WriterPermit taskPermit = writerPermit;
@@ -127,7 +162,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 try {
                     completion = recordFailure(
                             appId,
-                            selectCurrentSummary(appId),
+                            current,
                             MemoryCompressionResult.Status.MODEL_FAILED,
                             "摘要任务提交失败");
                 } catch (RuntimeException metadataException) {
@@ -254,7 +289,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         } catch (RuntimeException exception) {
             log.error("后台摘要任务异常 appId={} type={}", appId,
                     exception.getClass().getSimpleName(), exception);
-            ensureFallbackRetryDelay(appId);
+            ensureFallbackRetryDelayIfWritable(appId);
             compressionResult = result(
                     MemoryCompressionResult.Status.MODEL_FAILED,
                     0L, 0, "后台摘要任务异常");
@@ -275,7 +310,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                         draft.failureStatus(), draft.detail());
             }
             if (!draft.changed()) {
-                retryAfter.remove(appId);
+                clearPersistentFailureMetadata(current);
+                clearFallbackRetryDelay(appId);
                 return result(
                         MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
                         draft.summarizedThroughId(), draft.summaryTokens(),
@@ -283,7 +319,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             }
             upsertSummary(appId, current, draft.summary(),
                     draft.summarizedThroughId(), draft.summaryTokens());
-            retryAfter.remove(appId);
+            clearFallbackRetryDelay(appId);
             return result(MemoryCompressionResult.Status.COMPRESSED,
                     draft.summarizedThroughId(), draft.summaryTokens(),
                     "摘要压缩完成");
@@ -308,9 +344,13 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             String detail) {
         int failCount = current == null || current.getFailCount() == null
                 ? 1 : current.getFailCount() + 1;
+        Duration delay = retryDelay(failCount);
+        LocalDateTime now;
+        LocalDateTime nextRetryTime;
         try {
+            now = LocalDateTime.now(clock);
+            nextRetryTime = now.plus(delay);
             if (current == null) {
-                LocalDateTime now = LocalDateTime.now(clock);
                 int affectedRows = summaryMapper.insert(
                         AppMemorySummary.builder()
                         .appId(appId)
@@ -318,31 +358,69 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                         .lastSummarizedId(0L)
                         .summaryTokens(0)
                         .failCount(failCount)
+                        .nextRetryTime(nextRetryTime)
                         .createTime(now)
                         .updateTime(now)
                         .build());
                 requireExactlyOneRow(affectedRows, "新增摘要失败元数据");
             } else {
-                current.setFailCount(failCount);
-                current.setUpdateTime(LocalDateTime.now(clock));
-                int affectedRows = summaryMapper.update(current);
+                AppMemorySummary failed = AppMemorySummary.builder()
+                        .id(current.getId())
+                        .appId(current.getAppId())
+                        .summary(current.getSummary())
+                        .lastSummarizedId(current.getLastSummarizedId())
+                        .summaryTokens(current.getSummaryTokens())
+                        .failCount(failCount)
+                        .nextRetryTime(nextRetryTime)
+                        .createTime(current.getCreateTime())
+                        .updateTime(now)
+                        .isDelete(current.getIsDelete())
+                        .build();
+                int affectedRows = summaryMapper.update(failed);
                 requireExactlyOneRow(affectedRows, "更新摘要失败元数据");
+                current.setFailCount(failCount);
+                current.setNextRetryTime(nextRetryTime);
+                current.setUpdateTime(now);
             }
+            clearFallbackRetryDelay(appId);
         } catch (RuntimeException exception) {
             log.error("记录摘要失败元数据异常 appId={} type={}", appId,
                     exception.getClass().getSimpleName(), exception);
+            ensureFallbackRetryDelay(appId, delay);
         }
-        retryAfter.put(appId,
-                clock.instant().plus(retryDelay(failCount)));
         return result(status, currentCursor(current),
                 currentSummaryTokens(current), detail);
     }
 
     private void ensureFallbackRetryDelay(Long appId) {
+        ensureFallbackRetryDelay(appId, RETRY_BASE_DELAY);
+    }
+
+    private void ensureFallbackRetryDelayIfWritable(Long appId) {
+        AppDataLifecycleFence.WriterPermit writerPermit;
+        try {
+            writerPermit = lifecycleFence.tryAcquireWriter(appId);
+        } catch (RuntimeException exception) {
+            log.error("获取摘要兜底退避写许可异常 appId={} type={}", appId,
+                    exception.getClass().getSimpleName(), exception);
+            return;
+        }
+        if (writerPermit == null) {
+            return;
+        }
+        try (writerPermit) {
+            ensureFallbackRetryDelay(appId);
+        } catch (RuntimeException exception) {
+            log.error("设置摘要兜底退避写许可异常 appId={} type={}", appId,
+                    exception.getClass().getSimpleName(), exception);
+        }
+    }
+
+    private void ensureFallbackRetryDelay(Long appId, Duration delay) {
         try {
             Instant fallbackRetryTime = clock.instant()
-                    .plus(RETRY_BASE_DELAY);
-            retryAfter.merge(
+                    .plus(delay);
+            fallbackRetryAfter.merge(
                     appId,
                     fallbackRetryTime,
                     (existingRetryTime, candidateRetryTime) ->
@@ -353,6 +431,34 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             log.error("设置摘要兜底退避异常 appId={} type={}", appId,
                     exception.getClass().getSimpleName(), exception);
         }
+    }
+
+    private void clearPersistentFailureMetadata(AppMemorySummary current) {
+        if (current == null
+                || ((current.getFailCount() == null
+                || current.getFailCount() == 0)
+                && current.getNextRetryTime() == null)) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now(clock);
+        AppMemorySummary cleared = AppMemorySummary.builder()
+                .id(current.getId())
+                .appId(current.getAppId())
+                .summary(current.getSummary())
+                .lastSummarizedId(current.getLastSummarizedId())
+                .summaryTokens(current.getSummaryTokens())
+                .failCount(0)
+                .nextRetryTime(null)
+                .createTime(current.getCreateTime())
+                .updateTime(now)
+                .isDelete(current.getIsDelete())
+                .build();
+        // cleared 复制了数据库行全部字段；false 用于显式写入 nextRetryTime=NULL。
+        requireExactlyOneRow(summaryMapper.update(cleared, false),
+                "清除摘要失败元数据");
+        current.setFailCount(0);
+        current.setNextRetryTime(null);
+        current.setUpdateTime(now);
     }
 
     private Duration retryDelay(int failCount) {
@@ -381,11 +487,13 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     .lastSummarizedId(summarizedThroughId)
                     .summaryTokens(summaryTokens)
                     .failCount(0)
+                    .nextRetryTime(null)
                     .createTime(now)
                     .updateTime(now)
                     .build());
             requireExactlyOneRow(affectedRows, "新增摘要");
         } else {
+            // 更新实体覆盖完整数据库行；false 用于显式清除持久化退避时间。
             int affectedRows = summaryMapper.update(
                     AppMemorySummary.builder()
                     .id(current.getId())
@@ -394,10 +502,11 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     .lastSummarizedId(summarizedThroughId)
                     .summaryTokens(summaryTokens)
                     .failCount(0)
+                    .nextRetryTime(null)
                     .createTime(current.getCreateTime())
                     .updateTime(now)
                     .isDelete(current.getIsDelete())
-                    .build());
+                    .build(), false);
             requireExactlyOneRow(affectedRows, "更新摘要");
         }
         writeCache(CACHE_KEY_PREFIX + appId, summary);
@@ -491,6 +600,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     @Override
     public MemoryCacheInvalidationResult invalidateCache(Long appId) {
         requirePositiveId(appId, "应用 ID");
+        clearFallbackRetryDelay(appId);
+        inFlight.remove(appId);
         try {
             redisTemplate.delete(CACHE_KEY_PREFIX + appId);
             return MemoryCacheInvalidationResult.success();
@@ -555,10 +666,35 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         }
     }
 
-    private boolean isBackgroundRetryReady(Long appId) {
-        Instant nextRetryTime = retryAfter.get(appId);
+    private boolean isDatabaseRetryReady(AppMemorySummary current) {
+        LocalDateTime nextRetryTime = current == null
+                ? null : current.getNextRetryTime();
         return nextRetryTime == null
-                || !clock.instant().isBefore(nextRetryTime);
+                || !LocalDateTime.now(clock).isBefore(nextRetryTime);
+    }
+
+    private boolean isFallbackRetryReady(Long appId) {
+        try {
+            synchronized (fallbackRetryAfter) {
+                Instant nextRetryTime = fallbackRetryAfter.get(appId);
+                if (nextRetryTime == null) {
+                    return true;
+                }
+                if (clock.instant().isBefore(nextRetryTime)) {
+                    return false;
+                }
+                fallbackRetryAfter.remove(appId);
+                return true;
+            }
+        } catch (RuntimeException exception) {
+            log.error("检查摘要兜底退避异常 appId={} type={}", appId,
+                    exception.getClass().getSimpleName(), exception);
+            return false;
+        }
+    }
+
+    private void clearFallbackRetryDelay(Long appId) {
+        fallbackRetryAfter.remove(appId);
     }
 
     private boolean isValidBoundary(Long appId, long summarizeThroughId) {

@@ -14,6 +14,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -22,6 +23,7 @@ import org.springframework.transaction.support.TransactionOperations;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayDeque;
@@ -38,6 +40,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -45,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -106,6 +110,8 @@ class UserMemoryDebounceBehaviorTest {
         when(memoryMapper.update(any())).thenReturn(1);
         when(cursorMapper.insert(any())).thenReturn(1);
         when(cursorMapper.update(any())).thenReturn(1);
+        when(cursorMapper.update(
+                any(AppMemoryExtractCursor.class), eq(false))).thenReturn(1);
         when(model.chat(any(String.class))).thenReturn("[]");
         when(chatHistoryService.getLastMessage(anyLong()))
                 .thenAnswer(invocation -> {
@@ -150,6 +156,186 @@ class UserMemoryDebounceBehaviorTest {
         scheduler.advance(Duration.ofMinutes(1));
         worker.runAll();
         verify(model).chat(any(String.class));
+    }
+
+    @Test
+    @DisplayName("tombstone 后迟到 trigger 不得重建 L2 pending")
+    void 删除接管后迟到Trigger不再创建调度任务() {
+        UserMemoryServiceImpl service = newService();
+        AppDataLifecycleFence.DeletePermit deletion =
+                lifecycleFence.beginDelete(APP_A, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.commitTombstone();
+        service.invalidateCaches(APP_A, USER_ID);
+
+        触发(service, APP_A);
+
+        assertNull(scheduler.oldestTask());
+        scheduler.advance(Duration.ofMinutes(10));
+        assertEquals(0, worker.queuedTaskCount());
+        verify(model, never()).chat(any(String.class));
+        verify(cursorMapper, never()).selectOneByQuery(any());
+    }
+
+    @Test
+    @DisplayName("删除失效后迟到失败 worker 不得恢复 L2 pending")
+    void Writer释放后的迟到失败结果不复活待处理状态() throws Exception {
+        AppDataLifecycleFence realFence = new AppDataLifecycleFence();
+        lifecycleFence = mock(
+                AppDataLifecycleFence.class,
+                withSettings().mockMaker(INLINE));
+        AtomicBoolean workerPhase = new AtomicBoolean();
+        CountDownLatch writerReleased = new CountDownLatch(1);
+        CountDownLatch allowWorkerFinish = new CountDownLatch(1);
+        when(lifecycleFence.tryAcquireWriter(APP_A)).thenAnswer(invocation -> {
+            AppDataLifecycleFence.WriterPermit realPermit =
+                    realFence.tryAcquireWriter(APP_A);
+            if (realPermit == null || !workerPhase.get()) {
+                return realPermit;
+            }
+            return (AppDataLifecycleFence.WriterPermit) () -> {
+                realPermit.close();
+                writerReleased.countDown();
+                try {
+                    if (!allowWorkerFinish.await(1, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("等待删除失效超时");
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "等待删除失效时被中断", exception);
+                }
+            };
+        });
+        UserMemoryServiceImpl service = newService();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "迟到失败"));
+        when(model.chat(any(String.class)))
+                .thenThrow(new IllegalStateException("模型暂不可用"));
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        workerPhase.set(true);
+        try (ExecutorService threads = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<?> lateWorker = threads.submit(worker::runAll);
+            assertTrue(writerReleased.await(1, TimeUnit.SECONDS));
+            AppDataLifecycleFence.DeletePermit deletion =
+                    realFence.beginDelete(APP_A, Duration.ofSeconds(1));
+            assertNotNull(deletion);
+            deletion.commitTombstone();
+            service.invalidateCaches(APP_A, USER_ID);
+            allowWorkerFinish.countDown();
+            lateWorker.get(1, TimeUnit.SECONDS);
+        }
+
+        scheduler.advance(Duration.ofMinutes(10));
+        assertNull(scheduler.oldestTask());
+        assertEquals(0, worker.queuedTaskCount());
+        verify(model, times(1)).chat(any(String.class));
+    }
+
+    @Test
+    @DisplayName("新服务先等待静默期再服从数据库剩余退避")
+    void 新服务实例遵守数据库持久化退避且不忙等() {
+        UserMemoryServiceImpl service = newService();
+        Instant databaseRetryAt = clock.instant().plusSeconds(60);
+        AppMemoryExtractCursor cursor = 游标(APP_A, 10L);
+        cursor.setFailCount(2);
+        cursor.setNextRetryTime(LocalDateTime.ofInstant(
+                databaseRetryAt, clock.getZone()));
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(cursor);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "数据库退避"));
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        assertEquals(1, worker.queuedTaskCount());
+        worker.runAll();
+
+        verify(model, never()).chat(any(String.class));
+        verify(cursorMapper, never()).update(any());
+        assertNotNull(scheduler.oldestTask());
+        assertEquals(databaseRetryAt,
+                scheduler.oldestTask().startTime());
+
+        scheduler.advance(Duration.ofSeconds(29));
+        assertEquals(0, worker.queuedTaskCount());
+        scheduler.advance(Duration.ofSeconds(1));
+        assertEquals(1, worker.queuedTaskCount());
+        worker.runAll();
+
+        verify(model).chat(any(String.class));
+    }
+
+    @Test
+    @DisplayName("数据库退避中的 app 不会饿死同用户其他到期 app")
+    void 数据库退避只延后目标应用且其他应用继续处理() {
+        UserMemoryServiceImpl service = newService();
+        Instant appARetryAt = clock.instant().plusSeconds(120);
+        AppMemoryExtractCursor appACursor = 游标(APP_A, 10L);
+        appACursor.setFailCount(4);
+        appACursor.setNextRetryTime(LocalDateTime.ofInstant(
+                appARetryAt, clock.getZone()));
+        AppMemoryExtractCursor appBCursor = 游标(APP_B, 20L);
+        when(cursorMapper.selectOneByQuery(any()))
+                .thenReturn(appACursor, appBCursor);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "退避应用"));
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_B), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_B, "正常应用"));
+
+        触发(service, APP_A);
+        触发(service, APP_B);
+        scheduler.advance(Duration.ofSeconds(30));
+        worker.runAll();
+
+        ArgumentCaptor<AppMemoryExtractCursor> updated =
+                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursorMapper).update(updated.capture(), eq(false));
+        assertEquals(APP_B, updated.getValue().getAppId());
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(model).chat(prompt.capture());
+        assertTrue(prompt.getValue().contains("正常应用"));
+        assertFalse(prompt.getValue().contains("退避应用"));
+        assertNotNull(scheduler.oldestTask());
+        assertEquals(appARetryAt,
+                scheduler.oldestTask().startTime());
+    }
+
+    @Test
+    @DisplayName("失败元数据写库成功时本地资格与数据库时间一致")
+    void 持久化失败时间决定下一次本地调度资格() {
+        UserMemoryServiceImpl service = newService();
+        AppMemoryExtractCursor cursor = 游标(APP_A, 0L);
+        cursor.setFailCount(2);
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(cursor);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "失败退避"));
+        when(model.chat(any(String.class)))
+                .thenThrow(new IllegalStateException("模型暂不可用"));
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        Instant expectedRetryAt = clock.instant().plusSeconds(20);
+        worker.runAll();
+
+        ArgumentCaptor<AppMemoryExtractCursor> failed =
+                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursorMapper).update(failed.capture());
+        assertEquals(3, failed.getValue().getFailCount());
+        assertEquals(LocalDateTime.ofInstant(
+                        expectedRetryAt, clock.getZone()),
+                failed.getValue().getNextRetryTime());
+        assertNotNull(scheduler.oldestTask());
+        assertEquals(expectedRetryAt,
+                scheduler.oldestTask().startTime());
     }
 
     @Test
@@ -355,15 +541,22 @@ class UserMemoryDebounceBehaviorTest {
         lifecycleFence = mock(
                 AppDataLifecycleFence.class,
                 withSettings().mockMaker(INLINE));
+        AppDataLifecycleFence.WriterPermit triggerPermit =
+                mock(AppDataLifecycleFence.WriterPermit.class);
         AppDataLifecycleFence.WriterPermit writerPermit =
                 mock(AppDataLifecycleFence.WriterPermit.class);
         AtomicReference<UserMemoryServiceImpl> serviceRef =
                 new AtomicReference<>();
-        doAnswer(invocation -> {
-            serviceRef.get().triggerPreferenceExtractionAsync(
-                    USER_ID, APP_A, 4L);
-            return writerPermit;
-        }).when(lifecycleFence).tryAcquireWriter(APP_A);
+        AtomicInteger writerAcquisitions = new AtomicInteger();
+        when(lifecycleFence.tryAcquireWriter(APP_A))
+                .thenAnswer(invocation -> {
+                    if (writerAcquisitions.incrementAndGet() == 2) {
+                        serviceRef.get().triggerPreferenceExtractionAsync(
+                                USER_ID, APP_A, 4L);
+                        return writerPermit;
+                    }
+                    return triggerPermit;
+                });
         UserMemoryServiceImpl service = newService();
         serviceRef.set(service);
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
@@ -550,10 +743,13 @@ class UserMemoryDebounceBehaviorTest {
         lifecycleFence = mock(
                 AppDataLifecycleFence.class,
                 withSettings().mockMaker(INLINE));
-        doThrow(new IllegalStateException("写许可暂不可用"))
-                .when(lifecycleFence).tryAcquireWriter(APP_A);
-        doReturn(mock(AppDataLifecycleFence.WriterPermit.class))
-                .when(lifecycleFence).tryAcquireWriter(APP_B);
+        when(lifecycleFence.tryAcquireWriter(APP_A))
+                .thenReturn(mock(AppDataLifecycleFence.WriterPermit.class))
+                .thenThrow(new IllegalStateException("写许可暂不可用"));
+        when(lifecycleFence.tryAcquireWriter(APP_B))
+                .thenReturn(
+                        mock(AppDataLifecycleFence.WriterPermit.class),
+                        mock(AppDataLifecycleFence.WriterPermit.class));
         UserMemoryServiceImpl service = newService();
         when(cursorMapper.selectOneByQuery(any()))
                 .thenReturn(游标(APP_A, 10L), 游标(APP_B, 20L));
@@ -572,8 +768,8 @@ class UserMemoryDebounceBehaviorTest {
 
         assertEquals(1, worker.queuedTaskCount());
         assertDoesNotThrow(worker::runAll);
-        verify(lifecycleFence).tryAcquireWriter(APP_A);
-        verify(lifecycleFence).tryAcquireWriter(APP_B);
+        verify(lifecycleFence, times(2)).tryAcquireWriter(APP_A);
+        verify(lifecycleFence, times(2)).tryAcquireWriter(APP_B);
         assertEquals(1, prompts.size());
         assertTrue(prompts.getFirst().contains("正常应用"));
 
@@ -588,7 +784,26 @@ class UserMemoryDebounceBehaviorTest {
     @DisplayName("appA 进入五分钟退避时 appB 仍按自身静默期执行")
     void 单个应用长退避不会饿死同用户其他应用() {
         UserMemoryServiceImpl service = newService();
-        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        AtomicReference<AppMemoryExtractCursor> appACursor =
+                new AtomicReference<>();
+        AtomicInteger cursorReads = new AtomicInteger();
+        when(cursorMapper.selectOneByQuery(any())).thenAnswer(invocation ->
+                cursorReads.getAndIncrement() < 7
+                        ? appACursor.get() : null);
+        when(cursorMapper.insert(any())).thenAnswer(invocation -> {
+            AppMemoryExtractCursor cursor = invocation.getArgument(0);
+            if (cursor.getAppId() == APP_A) {
+                appACursor.set(cursor);
+            }
+            return 1;
+        });
+        when(cursorMapper.update(any())).thenAnswer(invocation -> {
+            AppMemoryExtractCursor cursor = invocation.getArgument(0);
+            if (cursor.getAppId() == APP_A) {
+                appACursor.set(cursor);
+            }
+            return 1;
+        });
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(APP_A), anyLong(), anyInt()))
                 .thenReturn(八条完整消息(APP_A, "失败应用"));
@@ -649,11 +864,17 @@ class UserMemoryDebounceBehaviorTest {
     }
 
     private AppMemoryExtractCursor 游标(long appId, long lastId) {
+        LocalDateTime now = LocalDateTime.ofInstant(
+                clock.instant(), clock.getZone());
         return AppMemoryExtractCursor.builder()
+                .id(appId)
                 .appId(appId)
                 .userId(USER_ID)
                 .lastExtractedId(lastId)
                 .failCount(0)
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
                 .build();
     }
 

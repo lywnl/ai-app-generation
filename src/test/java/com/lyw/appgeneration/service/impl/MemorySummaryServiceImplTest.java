@@ -18,10 +18,12 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -53,7 +55,6 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -93,6 +94,8 @@ class MemorySummaryServiceImplTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(summaryMapper.insert(any(AppMemorySummary.class))).thenReturn(1);
         when(summaryMapper.update(any(AppMemorySummary.class))).thenReturn(1);
+        when(summaryMapper.update(
+                any(AppMemorySummary.class), eq(false))).thenReturn(1);
         when(tokenEstimator.estimateText(anyString())).thenAnswer(invocation ->
                 estimatedTokens.getOrDefault(invocation.getArgument(0), 1_000));
         modelExecutor = java.util.concurrent.Executors
@@ -196,7 +199,7 @@ class MemorySummaryServiceImplTest {
         assertEquals(5L, current.getLastSummarizedId());
         assertEquals("旧摘要", current.getSummary());
         assertEquals(1, current.getFailCount());
-        verify(summaryMapper).update(same(current));
+        verify(summaryMapper).update(any(AppMemorySummary.class));
         verify(valueOps, never()).set(anyString(), anyString(), any(Duration.class));
     }
 
@@ -435,7 +438,7 @@ class MemorySummaryServiceImplTest {
             assertEquals("旧摘要", current.getSummary());
             assertEquals(0L, current.getLastSummarizedId());
             verify(summaryMapper, never()).insert(any());
-            verify(summaryMapper).update(same(current));
+            verify(summaryMapper).update(any(AppMemorySummary.class));
             verify(valueOps, never()).set(
                     anyString(), anyString(), any(Duration.class));
         }
@@ -465,7 +468,7 @@ class MemorySummaryServiceImplTest {
                 result.status());
         verifyNoInteractions(summarizationModel);
         verify(summaryMapper, never()).insert(any());
-        verify(summaryMapper).update(same(current));
+        verify(summaryMapper).update(any(AppMemorySummary.class));
         verify(valueOps, never()).set(
                 anyString(), anyString(), any(Duration.class));
     }
@@ -538,8 +541,10 @@ class MemorySummaryServiceImplTest {
                         message(7L, "ai", "回复")));
         when(summarizationModel.chat(anyString())).thenReturn(newSummary);
         AtomicReference<AppMemorySummary> failureMetadata = new AtomicReference<>();
+        when(summaryMapper.update(
+                any(AppMemorySummary.class), eq(false)))
+                .thenThrow(new IllegalStateException("database down"));
         when(summaryMapper.update(any(AppMemorySummary.class)))
-                .thenThrow(new IllegalStateException("database down"))
                 .thenAnswer(invocation -> {
                     failureMetadata.set(invocation.getArgument(0));
                     return 1;
@@ -585,8 +590,8 @@ class MemorySummaryServiceImplTest {
         String newSummary = textWithTokens("本次新摘要", 700);
         AppMemorySummary current = currentSummary(5L, "旧摘要", 100, 0);
         when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
-        when(summaryMapper.update(any(AppMemorySummary.class)))
-                .thenReturn(0, 1);
+        when(summaryMapper.update(
+                any(AppMemorySummary.class), eq(false))).thenReturn(0);
         when(chatHistoryService.listMessagesAfterCursor(1L, 5L, 100))
                 .thenReturn(List.of(
                         message(6L, "user", "问题"),
@@ -600,7 +605,8 @@ class MemorySummaryServiceImplTest {
                 result.status());
         assertEquals("旧摘要", current.getSummary());
         assertEquals(5L, current.getLastSummarizedId());
-        verify(summaryMapper, times(2)).update(any(AppMemorySummary.class));
+        verify(summaryMapper).update(any(AppMemorySummary.class), eq(false));
+        verify(summaryMapper).update(any(AppMemorySummary.class));
         verify(valueOps, never()).set(
                 anyString(), anyString(), any(Duration.class));
     }
@@ -717,6 +723,78 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
+    @DisplayName("writer 释放后的迟到异常不得在 tombstone 后复活 L1 索引")
+    @SuppressWarnings("unchecked")
+    void 删除失效后迟到后台异常不恢复Fallback或InFlight() throws Exception {
+        AppDataLifecycleFence realFence = new AppDataLifecycleFence();
+        AppDataLifecycleFence delegatedFence = mock(
+                AppDataLifecycleFence.class,
+                withSettings().mockMaker(INLINE));
+        CountDownLatch writerReleased = new CountDownLatch(1);
+        CountDownLatch allowCloseFailure = new CountDownLatch(1);
+        when(delegatedFence.tryAcquireWriter(1L)).thenAnswer(invocation -> {
+            AppDataLifecycleFence.WriterPermit realPermit =
+                    realFence.tryAcquireWriter(1L);
+            if (realPermit == null) {
+                return null;
+            }
+            return (AppDataLifecycleFence.WriterPermit) () -> {
+                realPermit.close();
+                writerReleased.countDown();
+                try {
+                    if (!allowCloseFailure.await(1, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("等待删除失效超时");
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "等待删除失效时被中断", exception);
+                }
+                throw new IllegalStateException("writer 关闭迟到异常");
+            };
+        });
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        ExecutorService backgroundExecutor = mock(ExecutorService.class);
+        when(backgroundExecutor.submit(any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    submitted.set(invocation.getArgument(0));
+                    return mock(Future.class);
+                });
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of());
+        MemorySummaryServiceImpl background = newService(
+                backgroundExecutor, modelExecutor, delegatedFence);
+        background.triggerSummarizationAsync(1L, 2L);
+
+        try (ExecutorService threads = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<?> lateWorker = threads.submit(submitted.get());
+            assertTrue(writerReleased.await(1, TimeUnit.SECONDS));
+            AppDataLifecycleFence.DeletePermit deletion =
+                    realFence.beginDelete(1L, Duration.ofSeconds(1));
+            assertNotNull(deletion);
+            deletion.commitTombstone();
+            background.invalidateCache(1L);
+            allowCloseFailure.countDown();
+            lateWorker.get(1, TimeUnit.SECONDS);
+        }
+
+        Map<Long, Instant> fallbackRetryAfter =
+                (Map<Long, Instant>) ReflectionTestUtils.getField(
+                        background, "fallbackRetryAfter");
+        Map<Long, ?> inFlight = (Map<Long, ?>) ReflectionTestUtils.getField(
+                background, "inFlight");
+        assertNotNull(fallbackRetryAfter);
+        assertNotNull(inFlight);
+        assertFalse(fallbackRetryAfter.containsKey(1L));
+        assertFalse(inFlight.containsKey(1L));
+
+        background.triggerSummarizationAsync(1L, 2L);
+        verify(backgroundExecutor, times(1)).submit(any(Runnable.class));
+    }
+
+    @Test
     @DisplayName("缓存未命中的数据库读取与回填全程持有删除栅栏")
     void cacheMissReadThroughHoldsWriterPermitUntilCacheFill()
             throws Exception {
@@ -821,6 +899,184 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
+    void normalFailurePersistsExactExponentialRetryTime() {
+        AppMemorySummary current = currentSummary(0L, "旧摘要", 100, 2);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "问题"),
+                        message(2L, "ai", "回复")));
+        when(summarizationModel.chat(anyString()))
+                .thenThrow(new IllegalStateException("model down"));
+
+        MemoryCompressionResult result = service.compressNow(
+                1L, 2L, Duration.ofSeconds(1));
+
+        assertEquals(MemoryCompressionResult.Status.MODEL_FAILED,
+                result.status());
+        ArgumentCaptor<AppMemorySummary> persisted =
+                ArgumentCaptor.forClass(AppMemorySummary.class);
+        verify(summaryMapper).update(persisted.capture());
+        assertEquals(3, persisted.getValue().getFailCount());
+        assertEquals(LocalDateTime.ofInstant(
+                        clock.instant().plusSeconds(20), clock.getZone()),
+                persisted.getValue().getNextRetryTime());
+    }
+
+    @Test
+    void successfulCompressionClearsPersistentFailureMetadata() {
+        AppMemorySummary current = currentSummary(0L, "旧摘要", 100, 3);
+        current.setNextRetryTime(LocalDateTime.ofInstant(
+                clock.instant().plusSeconds(40), clock.getZone()));
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "问题"),
+                        message(2L, "ai", "回复")));
+        when(summarizationModel.chat(anyString()))
+                .thenReturn(textWithTokens("新摘要", 600));
+
+        MemoryCompressionResult result = service.compressNow(
+                1L, 2L, Duration.ofSeconds(1));
+
+        assertEquals(MemoryCompressionResult.Status.COMPRESSED,
+                result.status());
+        ArgumentCaptor<AppMemorySummary> persisted =
+                ArgumentCaptor.forClass(AppMemorySummary.class);
+        verify(summaryMapper).update(persisted.capture(), eq(false));
+        assertEquals(0, persisted.getValue().getFailCount());
+        assertEquals(null, persisted.getValue().getNextRetryTime());
+        assertEquals(current.getId(), persisted.getValue().getId());
+        assertEquals(current.getCreateTime(),
+                persisted.getValue().getCreateTime());
+        assertEquals(current.getIsDelete(), persisted.getValue().getIsDelete());
+    }
+
+    @Test
+    void noStableTurnsClearPersistentFailureMetadata() {
+        AppMemorySummary current = currentSummary(8L, "旧摘要", 100, 3);
+        current.setNextRetryTime(LocalDateTime.ofInstant(
+                clock.instant().plusSeconds(40), clock.getZone()));
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 8L, 100))
+                .thenReturn(List.of());
+
+        MemoryCompressionResult result = service.compressNow(
+                1L, 10L, Duration.ofSeconds(1));
+
+        assertEquals(MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
+                result.status());
+        ArgumentCaptor<AppMemorySummary> persisted =
+                ArgumentCaptor.forClass(AppMemorySummary.class);
+        verify(summaryMapper).update(persisted.capture(), eq(false));
+        assertEquals(0, persisted.getValue().getFailCount());
+        assertEquals(null, persisted.getValue().getNextRetryTime());
+        assertEquals(current.getId(), persisted.getValue().getId());
+        assertEquals(current.getCreateTime(),
+                persisted.getValue().getCreateTime());
+        assertEquals(current.getIsDelete(), persisted.getValue().getIsDelete());
+    }
+
+    @Test
+    void synchronousCompressionBypassesPersistentBackgroundBackoff() {
+        AppMemorySummary current = currentSummary(0L, "旧摘要", 100, 2);
+        current.setNextRetryTime(LocalDateTime.ofInstant(
+                clock.instant().plusSeconds(40), clock.getZone()));
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "问题"),
+                        message(2L, "ai", "回复")));
+        when(summarizationModel.chat(anyString()))
+                .thenReturn(textWithTokens("同步摘要", 600));
+
+        MemoryCompressionResult result = service.compressNow(
+                1L, 2L, Duration.ofSeconds(1));
+
+        assertEquals(MemoryCompressionResult.Status.COMPRESSED,
+                result.status());
+        verify(summarizationModel).chat(anyString());
+    }
+
+    @Test
+    void restartedServiceHonorsDatabaseRetryBeforeSubmittingBackgroundWork() {
+        ExecutorService executor = mock(ExecutorService.class);
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            invocation.<Runnable>getArgument(0).run();
+            return mock(Future.class);
+        });
+        AppMemorySummary persisted = currentSummary(8L, "旧摘要", 100, 2);
+        persisted.setNextRetryTime(LocalDateTime.ofInstant(
+                clock.instant().plusSeconds(20), clock.getZone()));
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(persisted);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 8L, 100))
+                .thenReturn(List.of());
+        MemorySummaryServiceImpl restarted = newService(executor);
+
+        restarted.triggerSummarizationAsync(1L, 10L);
+
+        verify(executor, never()).submit(any(Runnable.class));
+        verifyNoInteractions(summarizationModel);
+
+        clock.advance(Duration.ofSeconds(20));
+        restarted.triggerSummarizationAsync(1L, 10L);
+
+        verify(executor).submit(any(Runnable.class));
+        verifyNoInteractions(summarizationModel);
+    }
+
+    @Test
+    void persistedFailureDoesNotLeaveNormalRetryAsLocalFactSource() {
+        ExecutorService executor = mock(ExecutorService.class);
+        when(executor.submit(any(Runnable.class))).thenAnswer(invocation -> {
+            invocation.<Runnable>getArgument(0).run();
+            return mock(Future.class);
+        });
+        AppMemorySummary current = currentSummary(0L, "旧摘要", 100, 0);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(current);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "问题"),
+                        message(2L, "ai", "回复")));
+        when(summarizationModel.chat(anyString()))
+                .thenThrow(new IllegalStateException("model down"))
+                .thenReturn(textWithTokens("恢复摘要", 600));
+        MemorySummaryServiceImpl sameInstance = newService(executor);
+        sameInstance.compressNow(1L, 2L, Duration.ofSeconds(1));
+        current.setNextRetryTime(null);
+
+        sameInstance.triggerSummarizationAsync(1L, 2L);
+
+        verify(executor).submit(any(Runnable.class));
+        verify(summarizationModel, times(2)).chat(anyString());
+    }
+
+    @Test
+    void productionConstructorUsesSystemDefaultClockZone() {
+        MemorySummaryDraftEngine draftEngine = new MemorySummaryDraftEngine(
+                chatHistoryService,
+                summarizationModel,
+                modelExecutor,
+                tokenEstimator,
+                properties);
+        MemorySummaryServiceImpl defaultClockService =
+                new MemorySummaryServiceImpl(
+                        summaryMapper,
+                        draftEngine,
+                        mock(ExecutorService.class),
+                        redisTemplate,
+                        lifecycleFence,
+                        tokenEstimator,
+                        properties);
+
+        Clock productionClock = (Clock) ReflectionTestUtils.getField(
+                defaultClockService, "clock");
+
+        assertNotNull(productionClock);
+        assertEquals(ZoneId.systemDefault(), productionClock.getZone());
+    }
+
+    @Test
     void rejectedSubmissionReleasesFlightAndWriterPermit() {
         ExecutorService executor = mock(ExecutorService.class);
         when(executor.submit(any(Runnable.class)))
@@ -837,12 +1093,13 @@ class MemorySummaryServiceImplTest {
     }
 
     @Test
-    @DisplayName("提交失败元数据查询再次异常时后台至少退避五秒")
-    void rejectedSubmissionCleansFlightEvenWhenFailureMetadataLookupFails() {
+    @DisplayName("提交失败元数据写库异常时后台至少退避五秒")
+    void rejectedSubmissionCleansFlightEvenWhenFailureMetadataWriteFails() {
         ExecutorService executor = mock(ExecutorService.class);
         when(executor.submit(any(Runnable.class)))
                 .thenThrow(new RejectedExecutionException("queue full"));
-        when(summaryMapper.selectOneByQuery(any()))
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+        when(summaryMapper.insert(any(AppMemorySummary.class)))
                 .thenThrow(new IllegalStateException("database down"));
         MemorySummaryServiceImpl background = newService(executor);
 
@@ -991,10 +1248,12 @@ class MemorySummaryServiceImplTest {
             store.set(invocation.getArgument(0));
             return 1;
         });
-        when(summaryMapper.update(any(AppMemorySummary.class))).thenAnswer(invocation -> {
-            store.set(invocation.getArgument(0));
-            return 1;
-        });
+        when(summaryMapper.update(
+                any(AppMemorySummary.class), eq(false)))
+                .thenAnswer(invocation -> {
+                    store.set(invocation.getArgument(0));
+                    return 1;
+                });
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(1L), any(Long.class), eq(100))).thenAnswer(invocation -> {
             long cursor = invocation.getArgument(1);
@@ -1197,13 +1456,13 @@ class MemorySummaryServiceImplTest {
         failing.triggerSummarizationAsync(1L, 2L);
 
         verify(backgroundExecutor).submit(any(Runnable.class));
-        verify(failingFence).tryAcquireWriter(1L);
+        verify(failingFence, times(2)).tryAcquireWriter(1L);
 
         clock.advance(Duration.ofSeconds(5));
         failing.triggerSummarizationAsync(1L, 2L);
 
         verify(backgroundExecutor, times(2)).submit(any(Runnable.class));
-        verify(failingFence, times(2)).tryAcquireWriter(1L);
+        verify(failingFence, times(3)).tryAcquireWriter(1L);
     }
 
     @Test
@@ -1312,12 +1571,18 @@ class MemorySummaryServiceImplTest {
 
     private AppMemorySummary currentSummary(
             long cursor, String summary, int tokens, int failCount) {
+        LocalDateTime now = LocalDateTime.ofInstant(
+                clock.instant(), clock.getZone());
         return AppMemorySummary.builder()
+                .id(1L)
                 .appId(1L)
                 .lastSummarizedId(cursor)
                 .summary(summary)
                 .summaryTokens(tokens)
                 .failCount(failCount)
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
                 .build();
     }
 
