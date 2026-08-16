@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -92,6 +93,37 @@ class OpenAiStreamingChatModelTest {
 
         verify(errors).execute();
         verify(responseHandle).cancel();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void unexpectedUnsupportedCancellationStillEscapes() {
+        OpenAiStreamingChatModel model = OpenAiStreamingChatModel.builder()
+                .apiKey("test-key").modelName("test-model").build();
+        OpenAiClient client = mock(OpenAiClient.class);
+        SyncOrAsyncOrStreaming<dev.langchain4j.model.openai.internal.chat.ChatCompletionResponse>
+                request = mock(SyncOrAsyncOrStreaming.class);
+        StreamingResponseHandling partial = mock(StreamingResponseHandling.class);
+        StreamingCompletionHandling completion = mock(StreamingCompletionHandling.class);
+        ErrorHandling errors = mock(ErrorHandling.class);
+        ResponseHandle responseHandle = mock(ResponseHandle.class);
+        when(client.chatCompletion(any())).thenReturn(request);
+        when(request.onPartialResponse(any())).thenReturn(partial);
+        when(partial.onComplete(any())).thenReturn(completion);
+        when(completion.onError(any())).thenReturn(errors);
+        when(errors.execute()).thenReturn(responseHandle);
+        UnsupportedOperationException failure =
+                new UnsupportedOperationException("取消链路内部状态异常");
+        doThrow(failure).when(responseHandle).cancel();
+        ReflectionTestUtils.setField(model, "client", client);
+        AtomicReference<StreamingRequestHandle> published =
+                new AtomicReference<>();
+
+        model.doChat(request(), handlerWithHandle(published));
+
+        assertSame(failure, assertThrows(
+                UnsupportedOperationException.class,
+                () -> published.get().cancel()));
     }
 
     @Test

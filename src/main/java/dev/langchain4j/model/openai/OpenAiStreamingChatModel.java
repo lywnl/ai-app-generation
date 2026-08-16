@@ -197,7 +197,10 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
     private static void cancelResponseSafely(ResponseHandle responseHandle) {
         try {
             responseHandle.cancel();
-        } catch (UnsupportedOperationException ignored) {
+        } catch (UnsupportedOperationException exception) {
+            if (!"Not supported yet".equals(exception.getMessage())) {
+                throw exception;
+            }
             // langchain4j-open-ai 1.1.0 的句柄尚不支持物理取消；
             // 上层请求控制器仍会关闭语义门，所有迟到回调都会被拒绝。
         }
