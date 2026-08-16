@@ -151,7 +151,10 @@ class LayeredMemoryIntegrationTest {
         assertTrue(persisted.getSummary().contains("不要登录"), "摘要应保留用户硬约束(最不可推导)");
 
         // 3. 冷启动:全新空 delegate(模拟 Redis 失效/重启)+ 回填最近原文 + 装饰器包裹
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(APP_ID).maxMessages(100).build();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(APP_ID)
+                .maxMessages(Integer.MAX_VALUE)
+                .build();
         delegate.add(UserMessage.from("继续:加个搜索框"));   // 模拟 loadChatHistoryToMemory 回填的最近原文
         delegate.add(AiMessage.from("已添加搜索框"));
         LayeredChatMemory mem = new LayeredChatMemory(delegate, summaryService, userMemoryService);

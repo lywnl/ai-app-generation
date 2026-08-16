@@ -103,7 +103,10 @@ class LayeredMemoryL2IntegrationTest {
         when(appMapper.selectOneById(appB)).thenReturn(App.builder().id(appB).userId(user).build());
         when(ops.get("mem:pref:v2:" + user)).thenReturn(null);
 
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(appB).maxMessages(100).build();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(appB)
+                .maxMessages(Integer.MAX_VALUE)
+                .build();
         delegate.add(UserMessage.from("帮我做个新页面"));
         MemorySummaryService summary = mock(MemorySummaryService.class);
         when(summary.getCurrentSummary(appB)).thenReturn("");

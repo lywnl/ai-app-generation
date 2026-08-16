@@ -48,7 +48,7 @@
 | 代码下载 | 生成目录打包为 ZIP，支持完整工程导出 |
 | 网页截图 | Selenium + Chromium + WebDriverManager 容器内自动截屏，封面同步上传腾讯云 COS |
 | 应用市场 | 精选作品（priority 排序）+ 我的应用 + 管理员后台，分页缓存 + 游标查询 |
-| 分层对话记忆 | L0 Redis 热窗口（100 条 + tool 对成对驱逐）· L1 App 级 5 段滚动摘要 · L2 跨 App 用户偏好抽取，三层 best-effort 降级 |
+| 分层对话记忆 | 统一 Token 门禁：L0 12K 完整回合热窗口 · L1 唯一 3K 滚动摘要 · L2 30 秒防抖与 1K 跨 App 偏好召回 |
 | 对话历史 | 按 `appId + createTime` 联合索引的游标分页 |
 | 双层缓存 | Caffeine 本地缓存 + Redis 分布式缓存 + Spring `@Cacheable` 自动失效 |
 | 可观测 | Spring Actuator + Micrometer + Prometheus + Grafana AI 模型可观测看板 |
@@ -308,7 +308,10 @@ ai-app-generation/
 │   │   │   ├── annotation/PromptSafetyCheck.java
 │   │   │   └── aspect/PromptSafetyAspect.java  # AOP 切面
 │   │   └── memory/                             # 分层对话记忆（L0/L1/L2）
-│   │       ├── LayeredChatMemory.java          # 装饰器：messages() 拼三层，add/clear/id 委托 delegate
+│   │       ├── LayeredChatMemory.java          # 按 L2 → L1 → L0 拼装最终模型上下文
+│   │       ├── TokenAwareChatMemory.java       # 按完整回合原子维护 12K L0
+│   │       ├── ContextCompressionCoordinator.java # 28K/30K/32K 压缩状态机
+│   │       ├── ContextCompressionModelRequestGate.java # 首次请求与工具续调统一门禁
 │   │       ├── MemorySummaryPromptBuilder.java # L1 五段摘要 Prompt
 │   │       └── UserPreferencePromptBuilder.java # L2 偏好抽取 Prompt
 │   │
@@ -346,7 +349,10 @@ ai-app-generation/
 │   │   ├── StreamingChatModelConfig
 │   │   ├── ReasoningStreamingChatModelConfig
 │   │   ├── RedisChatMemoryStoreConfig          # L0 对话记忆 Redis 存储
-│   │   ├── MemorySummarizationExecutorConfig   # L1/L2 记忆后台线程池（DiscardPolicy）
+│   │   ├── MemorySummarizationExecutorConfig   # L1/L2 有界线程池（AbortPolicy）
+│   │   ├── ContextCompressionExecutorConfig    # 30K 同步压缩独立有界线程池
+│   │   ├── ModelRequestGateExecutorConfig      # 模型门禁受管虚拟线程执行器
+│   │   ├── UserMemoryDebounceExecutorConfig    # L2 30 秒防抖调度器
 │   │   ├── RedisCacheManagerConfig             # Redis Cache
 │   │   ├── RagConfig + RagProperties           # RAG 配置类
 │   │   └── ...
@@ -542,7 +548,8 @@ data:
 - 请求正文使用 JSON，`appId` 保持字符串，用户消息不进入 URL 和访问日志
 - 原始请求体在 Jackson 反序列化前受 **262,144 字节**硬上限保护；反序列化后的用户消息再受 **32,000 Unicode code point** 业务上限保护
 - 默认 `message` 事件用 `{"d": "片段"}` 包装；工具消息也走该正文通道
-- 命名事件只允许 `heartbeat`、`business-error`、`turn-outcome`、`done`；未知命名事件属于协议错误，不能退化为聊天正文
+- 命名事件只允许 `heartbeat`、`context-compression`、`business-error`、`turn-outcome`、`done`；未知命名事件属于协议错误，不能退化为聊天正文
+- 30K 同步压缩使用受信 `context-compression/v1` 控制事件：`STARTED` 展示“正在压缩上下文，请稍候…”，`COMPLETED` 后恢复原加载文案；控制事件只更新页面状态，不进入 AI 正文
 - `turn-outcome` 是已提交 Vue 回合的唯一业务终态，随后发送唯一 `done`；`done` 只表示 SSE 传输正常收尾，不表示业务成功
 - `business-error` 只承载 User 提交前的安全错误，并以 `done` 结束
 - 前端只有在 `turn-outcome.outcome=SUCCEEDED` 且收到 `done` 后刷新预览；失败、取消、超时、系统错误和协议错误都保留旧预览
@@ -551,53 +558,62 @@ data:
 
 ### 7. 分层对话记忆（L0 / L1 / L2）
 
-**模块**：`ai/memory/`（`LayeredChatMemory` / `MemorySummaryPromptBuilder` / `UserPreferencePromptBuilder`）、`service/{MemorySummaryService, UserMemoryService}`、`config/{RedisChatMemoryStoreConfig, MemorySummarizationExecutorConfig}`
+**核心模块**：`LayeredChatMemory`、`TokenAwareChatMemory`、`ContextCompressionCoordinator`、`ContextCompressionModelRequestGate`、`MemorySummaryService`、`UserMemoryService`。
 
-零代码生成是**多轮、长周期**的：用户会反复说"换个配色""刚才那版不要了""我习惯用 Vue3 + TS"。每轮都把全部历史塞给模型会让 Token 爆掉；只留最近几条又会丢掉早期的关键约束。为此项目实现了一套**三层记忆**，在"上下文完整"与"Token 可控"之间取平衡 —— 设计参考了 Claude Code 的会话记忆机制（`sessionMemory.ts` 的衰减分层、`extractMemories.ts` 的游标抽取、5 段摘要模板、连续失败熔断阈值）。
+项目按最终 `ChatRequest` 的 **Token** 管理上下文。统一估算器覆盖系统提示、L2、L1、L0、当前用户消息、RAG/图片增强、工具定义、工具参数/结果和协议开销，并乘 `1.15` 安全系数。32K 是输入预算，不包含最大 8K 输出，因此主模型真实上下文窗口必须至少为 `32768 + 8192 = 40960 Token`。
 
+```text
+LayeredChatMemory.messages()：
+
+  L2 跨 App 活跃偏好（最多 1024 Token）
+        ↓
+  L1 本 App 五段滚动摘要（唯一硬上限 3072 Token）
+        ↓
+  L0 最近稳定完整回合（压缩后目标 12288 Token）
+        ↓
+  当前未完成 User / AI / tool 回合（永不摘要、永不裁剪）
 ```
-LayeredChatMemory.messages() 每轮拼装后送入大模型：
 
-  ┌─ L2 跨 App 用户偏好 ──────┐  "该用户的通用偏好"（语言 / 视觉风格 / 技术栈 / 交互习惯）
-  │   (UserMessage, AiMessage) │   ← 跨应用，源自 app_memory
-  ├─ L1 本 App 滚动摘要 ──────┤  "本应用早期对话的 5 段摘要"
-  │   (UserMessage, AiMessage) │   ← 单应用，源自 app_memory_summary
-  ├─ L0 热窗口 ───────────────┤  执行期含 user / ai / tool；Vue 终态折叠本轮工具尾部
-  │   delegate.messages()      │   ← Redis，MessageWindowChatMemory
-  └────────────────────────────┘
-```
+**统一模型请求门禁**
 
-**L0 · 原始热窗口**（`RedisChatMemoryStore` + LangChain4j `MessageWindowChatMemory`）
+首次模型请求和每次工具续调用都经过同一个 `ModelRequestGate`，避免首轮安全但工具结果把下一次请求推爆。每次判定先冻结一份不可变消息快照，`Decision.messages` 与 `estimatedInputTokens` 始终来自这同一份快照：28K 非阻塞路径继续发送已审核原快照；30K/32K 同步路径则在压缩后重新读取、重新冻结并重新估算活动 `ChatMemory`，不会继续发送代理创建时保存的旧消息快照，也不会拿旧 Token 结论放行新消息。
 
-- 按 `appId` 持久化到 Redis（TTL `3600s`），窗口上限 **100 条消息**，满后由 `MessageWindowChatMemory` 内置逻辑裁剪，并保证 **tool 调用 / 结果成对驱逐**（不留孤儿 tool 消息把模型搞崩）
-- 冷启动（应用重启 / 缓存过期）时，`loadChatHistoryToMemory(appId, delegate, 20)` 从 MySQL 回填最近 20 条原文重建窗口
-- 在线 Vue 的 ReAct 执行期会临时保留模型消息、工具请求和工具结果，供下一次模型调用继续诊断。唯一终态收尾器定位本轮最后一条 User，删除其后的原始 AI/tool 尾部，再追加一条 `AiMessage(canonicalAiText)`；同一个不可变 `canonicalAiText` 同时写入 MySQL `chat_history`，因此修复后的真实落盘代码和精简构建轨迹可在刷新后恢复，而错误工具尾部不会长期占据 L0
-- `canonicalAiText` 中的代码变更只接受受信 `file-tool/v1 APPLIED && changed=true` 证明已真实落盘的内容。构建错误摘要只进入当前模型工具结果和实时构建卡片；原始 npm 日志只进入专用服务端日志；`readFile/readDir` 正文只进入当前模型工具结果，前端完成事件保留安全状态元数据但固定 `content=null`
-- L0 折叠无法确认成功时，系统清除不可信的 Redis/Caffeine L0，下一轮从 MySQL 冷重建，避免残留工具消息或读取正文继续参与上下文
-- 当前首轮 RAG/图片增强后的 `UserMessage` 仍可能进入 L0，直到窗口淘汰、显式清理或 MySQL 冷重建。当前 L0 仍按 **100 条消息**而非 token 裁剪；本次 ReAct 改造没有改变这一算法
+| 压缩前输入估算 | 动作 | 当前模型调用 |
+| :--- | :--- | :--- |
+| `< 28672` | 正常通过 | 立即开始 |
+| `28672..30719` | 提交 App 级 single-flight 异步压缩 | 本次继续使用已审核快照，不等待后台任务 |
+| `30720..32767` | 专用执行器同步压缩，最长等待 60 秒 | 先发 `STARTED`，复检通过后发 `COMPLETED` 并继续 |
+| `>= 32768` | 有稳定旧回合时先尝试同步压缩 | 复检仍 `>=32768` 时硬拒绝，模型调用次数为 0 |
 
-**L1 · App 级滚动摘要**（`MemorySummaryService` + `app_memory_summary`，每 App 一行）
+**L0 · 12K 完整回合热窗口**
 
-- **何时**：对话结束钩子异步触发，新增满 **8 条** 才提炼（避免高频小提炼），单次最多并入 60 条
-- **摘要什么**：`MemorySummaryPromptBuilder` 用 **5 段固定模板**（应用目标与定位 / 用户偏好与硬约束 / 已否决的方案 / 关键设计决策与理由 / 当前进度速览），预算约 1800 token。铁律是**只摘"从当前代码状态推导不出来"的信息** —— 已生成的代码持久在 `vue_project_<appId>` 可随时读取，绝不复述进摘要
-- **怎么滚动**：`lastSummarizedId` 游标（指向 `chat_history.id`）+ 旧摘要增量合并，**成功才推进游标**
-- **读取**：`getCurrentSummary` 先查 Redis 缓存（`mem:summary:{appId}`，堵住工具循环里的 N+1 次 MySQL 读），未命中回查 MySQL 并 write-through 回填
+- `MessageWindowChatMemory` 保留 Redis store 和 tool 对一致性能力，但在线窗口硬限改为 `Integer.MAX_VALUE`；真正的裁剪由 `TokenAwareChatMemory` 按完整回合处理。
+- 压缩时从最新稳定 `USER → AI` 回合向前累计，保留不超过 `12288 Token` 的完整回合；下一个回合会越界时整轮进入 L1 候选，不拆分 User/AI，也不留下孤立 tool 消息。
+- L1 成功落库后才原子删除任务启动时确认的旧完整前缀；摘要失败、游标对齐失败或竞态校验失败都保留原始 L0。当前未完成工具回合无论多大都不裁剪，由 30K/32K 门禁决定能否继续请求模型。
+- 冷启动只回填 `lastSummarizedId` 之后尚未摘要的稳定回合，并按完整回合读取到 30K 阻塞阈值；全部历史不足 30K 时完整回填，不再按固定消息条数截断。
+- Vue 终态仍把本轮原始 AI/tool 尾部折叠为稳定 `canonicalAiText`；可信文件变更、构建日志和读取正文边界保持不变。
 
-**L2 · 跨 App 用户偏好**（`UserMemoryService` + `app_memory` / `app_memory_extract_cursor`）
+**L1 · 唯一 3K 硬上限滚动摘要**
 
-- **解决什么**：L1 只在单个应用内有效；但"喜欢深色极简""技术栈用 Vue3 + TS"这类偏好，对该用户的**每个**应用都成立。L2 把它们抽出来，在用户新建 / 打开任意应用时带出
-- **抽取**：对话结束异步触发，模型输出**结构化 JSON 偏好数组**，按半封闭类别（语言偏好 / 视觉风格 / 技术栈倾向 / 交互习惯 / 其他）归类，按 `(userId, type, name)` **去重 upsert**（同类只更新内容）。Prompt 明确**排除"应用特有需求"**，杜绝与 L1 重叠
-- **召回**：`recallByApp(appId)` → `appId → userId` 反查（进程内 `ConcurrentHashMap` 缓存，归属永不变）→ 取 top-10 最新偏好 → Redis 缓存（`mem:pref:{userId}`），偏好变更时主动失效
+- 只处理被 L0 淘汰的稳定完整回合，继续使用五段结构：应用目标与定位、用户偏好与硬约束、已否决方案、关键设计决策与理由、当前进度速览。
+- `3072 Token` 是唯一摘要上限。模型首次输出超限时，reducer 只压缩现有摘要且不得引入新事实；每轮重新估算，在截止时间内持续压缩，禁止字符串截断伪造达标。
+- 只有最终摘要 `<=3072` 时，才原子更新 `summary`、`summaryTokens`、`lastSummarizedId` 和失败状态并刷新 Redis。空输出、模型失败、超时或仍超限时，旧摘要和旧游标保持不变，MySQL `chat_history` 原文永不删除。
+- 后台失败使用数据库 `failCount + nextRetryTime` 做可恢复指数退避：5 秒起步、最高 5 分钟，不存在“三次失败后永久停更”。30K 同步门禁可绕过后台退避，但仍受 single-flight、删除栅栏和 60 秒截止约束。
 
-**装饰器，而非文本切片**：`LayeredChatMemory implements ChatMemory`，**包裹** `MessageWindowChatMemory`，只重写 `messages()` 做三层拼接，`add / clear / id` 全部委托 delegate。这样 L0 的 Redis 持久化、窗口裁剪、tool 对成对驱逐全部复用，装饰器自身不存储、不裁剪。每层在 `messages()` 里各自前置一对 `(UserMessage, AiMessage)`，既给摘要 / 偏好加上"这是背景、不是新指令"的引导语，又保证 user / ai 严格交替（LangChain4j 的硬约束）。
+**L2 · 30 秒防抖、证据状态机和 1K 召回**
 
-**关键决策与权衡**：
+- 稳定回合落库后按 `userId` 重置 30 秒防抖；同一用户多个 App 使用带版本的 dirty 状态，执行中到达的新回合不会被旧快照清除。
+- 抽取只读取相邻 `USER → AI` 完整回合，Prompt 只携带服务端白名单中的 `turnId + User 文本`。完整代码、AI 正文、RAG/文件正文、工具参数、构建日志和临时修复轨迹不进入 L2。
+- 模型输出按不可信输入校验：整批原始输出最多 `8192 Token`，`name` 只能是服务端固定的五类 `语言偏好 / 视觉风格 / 技术栈倾向 / 交互习惯 / 其他`，每批最多五个候选；单条渲染后的可召回文本最多 `1024 Token`，超限候选直接过滤，不能通过任意类别或超长 content 永久撑大基础 Prompt。
+- 显式偏好一个有效完整回合即可 `ACTIVE`；隐式偏好必须来自两个不同完整回合，单次推断只能保持 `CANDIDATE`。非法证据 ID、字段缺失或同名冲突候选会被丢弃。
+- 召回只读取 `ACTIVE`，显式优先、同级按更新时间倒序，逐条按统一估算器累加，最终注入严格 `<=1024 Token`；单条自身超限直接跳过，不截断事实文本。
 
-- **全链路 best-effort**：L1 / L2 的提炼跑在共享后台线程池（core 5 / max 10 / queue 200，**队列满直接 `DiscardPolicy` 丢弃**），失败则 `failCount++` 且游标不前进，连续失败 ≥ 3 触发 **circuit breaker** 暂停 —— 任意一层挂掉都自动降级回纯 L0，绝不阻塞或拖慢主对话流
-- **零竞态**：异步线程只读 `chat_history`、只写各自的记忆表（L1 写 `app_memory_summary`，L2 写 `app_memory` / 游标表），不碰 delegate 与 Redis 窗口；L1 按 `appId`、L2 按 `userId` 各自 single-flight 去重
-- **摘要 ≠ 压缩**：L1 在第 4 轮（满 8 条）就可能生成，但 L0 要累计到 100 条才真正驱逐。早期摘要与原文**双重存在**是有意的安全冗余 —— 等窗口满时，L1 的价值才从"冗余"变成"唯一上下文来源"
-- **构建信息边界**：L1 只吸收仍有效的应用目标、硬约束、已否决方案和关键设计决策；L2 只提取跨应用稳定偏好。两层都排除构建错误、原始日志、读取正文和一次性修复轨迹，并且只在 MySQL/L0 稳定终态闭合后异步触发
-- **当前按消息条数（100）而非 token 裁剪**：HTML / 多文件无工具循环、每轮约 +2 条（100 条 ≈ 50 轮，偏宽松），Vue 工程含工具循环、每轮可达几十条（偏紧）。这是已知权衡，后续可演进为 token 感知或按 `CodeGenType` 分档
+**并发、降级与可观测性**
+
+- L1/L2 共用的有界后台线程池、30K 压缩线程池和模型门禁等待执行器彼此隔离；有界线程池统一使用 `AbortPolicy` 暴露拒绝，由调用方清理 single-flight 并保留可恢复状态，禁止静默 `DiscardPolicy`。
+- 浏览器取消、应用删除和唯一终态通过同一个原子 continuation gate 竞争；迟到压缩不得启动模型、发布控制帧、复活 Redis/Caffeine 或重新写入已删除数据。
+- `context-compression/v1` 只负责前端状态：STARTED 时左右区域显示“正在压缩上下文，请稍候…”，COMPLETED 后恢复原加载文案，控制事件不会进入聊天正文。
+- `memory_context_gate_total`、`memory_compression_total`、`memory_summary_tokens`、`memory_l2_debounce_total`、`memory_l2_recall_tokens`、`memory_token_estimation_ratio` 等指标只使用固定低基数标签；`appId`、`userId`、原始模型名、原始错误消息和用户正文不进入 Meter tag 或缓存键。
 
 ### 8. 数据库设计
 
@@ -608,11 +624,11 @@ LayeredChatMemory.messages() 每轮拼装后送入大模型：
 | `user` | userAccount(uk) / userRole / userAvatar | `uk_userAccount` 唯一，`idx_userName` 提速搜索 |
 | `app` | initPrompt / codeGenType / deployKey(uk) / priority / userId | `uk_deployKey` 保证部署标识唯一，`idx_userId` 加速我的列表 |
 | `chat_history` | message / messageType (user/ai) / appId / userId | **`idx_appId_createTime` 联合索引** —— 游标分页核心 |
-| `app_memory_summary` | summary(MEDIUMTEXT 5 段) / lastSummarizedId(游标) / summaryTokens / failCount | `uk_appId` 每应用一行 —— **L1 滚动摘要** |
-| `app_memory` | userId / type(USER_PREFERENCE) / name(类别) / content / appId(溯源) | `uk_userId_type_name` 偏好去重键 —— **L2 跨 App 偏好** |
-| `app_memory_extract_cursor` | appId / userId / lastExtractedId(游标) / failCount | `uk_appId` 每应用一行 —— **L2 抽取游标** |
+| `app_memory_summary` | summary(MEDIUMTEXT 5 段) / lastSummarizedId / summaryTokens / failCount / nextRetryTime | `uk_appId` 每应用一行 —— **L1 滚动摘要与持久化退避** |
+| `app_memory` | userId / type / name / content / appId / status / evidenceType / evidenceCount / lastEvidenceTurnId | `uk_userId_type_name` 偏好去重键 —— **L2 候选、活跃状态与证据** |
+| `app_memory_extract_cursor` | appId / userId / lastExtractedId / failCount / nextRetryTime | `uk_appId` 每应用一行 —— **L2 抽取游标与持久化退避** |
 
-> **记忆存储分工**：L0 窗口本身存于 **Redis**（`MessageWindowChatMemory`）；Vue 每轮原始可见 User 与折叠后的 `canonicalAiText` 同时写入 MySQL `chat_history`，作为刷新回放和 L0 冷重建的稳定来源。L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:{userId}`，TTL 1h）堵住工具循环内的高频读。
+> **记忆存储分工**：L0 窗口本身存于 **Redis**（`MessageWindowChatMemory`）；Vue 每轮原始可见 User 与折叠后的 `canonicalAiText` 同时写入 MySQL `chat_history`，作为刷新回放和 L0 冷重建的稳定来源。L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:v2:{userId}`，TTL 1h）堵住工具循环内的高频读；旧 `mem:pref:{userId}` 只在失效清理时兼容删除，不再作为召回事实源。
 
 **PostgreSQL 向量库** `ai_codegen_rag`：
 

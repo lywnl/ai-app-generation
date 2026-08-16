@@ -143,7 +143,8 @@ class ToolMessageCollapserTest {
         long appId = 555L;
         InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
         MessageWindowChatMemory memory = MessageWindowChatMemory.builder()
-                .id(appId).chatMemoryStore(store).maxMessages(100).build();
+                .id(appId).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
 
         memory.add(UserMessage.from("做一个待办App"));
         for (int i = 1; i <= 7; i++) {

@@ -23,7 +23,7 @@ class LayeredChatMemoryTest {
 
     @Test
     void messagesPrependsSummaryPairWhenPresent() {
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(100).build();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(Integer.MAX_VALUE).build();
         delegate.add(UserMessage.from("做待办App"));
         delegate.add(AiMessage.from("已生成"));
         MemorySummaryService svc = mock(MemorySummaryService.class);
@@ -45,7 +45,7 @@ class LayeredChatMemoryTest {
 
     @Test
     void messagesNoSummaryReturnsDelegateAsIs() {
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(100).build();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(Integer.MAX_VALUE).build();
         delegate.add(UserMessage.from("hi"));
         MemorySummaryService svc = mock(MemorySummaryService.class);
         when(svc.getCurrentSummary(1L)).thenReturn("");
@@ -57,7 +57,7 @@ class LayeredChatMemoryTest {
 
     @Test
     void addAndClearDelegate() {
-        MessageWindowChatMemory delegate = Mockito.spy(MessageWindowChatMemory.builder().id(1L).maxMessages(100).build());
+        MessageWindowChatMemory delegate = Mockito.spy(MessageWindowChatMemory.builder().id(1L).maxMessages(Integer.MAX_VALUE).build());
         MemorySummaryService svc = mock(MemorySummaryService.class);
         UserMemoryService l2 = mock(UserMemoryService.class);
         LayeredChatMemory mem = new LayeredChatMemory(delegate, svc, l2);
@@ -72,7 +72,7 @@ class LayeredChatMemoryTest {
 
     @Test
     void messagesPrependsL2ThenL1ThenL0() {
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(100).build();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(Integer.MAX_VALUE).build();
         delegate.add(UserMessage.from("最近一条"));
 
         MemorySummaryService summaryService = Mockito.mock(MemorySummaryService.class);
@@ -95,7 +95,7 @@ class LayeredChatMemoryTest {
 
     @Test
     void messagesSkipsL2WhenBlank() {
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(100).build();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(Integer.MAX_VALUE).build();
         delegate.add(UserMessage.from("hi"));
         MemorySummaryService summaryService = Mockito.mock(MemorySummaryService.class);
         Mockito.when(summaryService.getCurrentSummary(1L)).thenReturn(""); // L1 也空

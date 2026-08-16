@@ -64,6 +64,7 @@ class ChatHistoryServiceImplLoadTest {
     void emptyHistoryIsAValidEmptyResult() {
         ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
         doReturn(List.of()).when(service).list(any(QueryWrapper.class));
+        // 固定 20 仅用于验证保留的旧兼容 API，不代表在线 Token 热窗口策略。
         var memory = MessageWindowChatMemory.withMaxMessages(20);
 
         var result = service.loadChatHistoryToMemory(7L, memory, 20);

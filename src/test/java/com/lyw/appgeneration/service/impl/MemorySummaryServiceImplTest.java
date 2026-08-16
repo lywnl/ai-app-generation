@@ -1601,6 +1601,13 @@ class MemorySummaryServiceImplTest {
         try {
             first = assertDoesNotThrow(() ->
                     failing.compressNow(1L, 2L, Duration.ofSeconds(1)));
+            assertTrue(metricsRegistry.find("memory_compression_total")
+                    .counters().isEmpty(),
+                    "Writer 获取异常前不得生成阻塞压缩计数");
+            assertTrue(metricsRegistry
+                    .find("memory_compression_duration_seconds")
+                    .timers().isEmpty(),
+                    "Writer 获取异常前不得生成阻塞压缩耗时");
             second = failing.compressNow(
                     1L, 2L, Duration.ofSeconds(1));
         } finally {
