@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -33,6 +34,7 @@ class SimpleTextStreamHandlerTest {
 
     private static final long APP_ID = 7L;
     private static final long USER_ID = 9L;
+    private static final long AI_MESSAGE_ID = 11L;
 
     private final ChatHistoryService history = mock(ChatHistoryService.class);
     private final MemorySummaryService summaries = mock(MemorySummaryService.class);
@@ -46,11 +48,14 @@ class SimpleTextStreamHandlerTest {
         var lease = new AppOperationLeaseManager().acquire(
                 APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE, "普通回合");
         context = new SimpleGenerationTurnContext(lease);
-        when(history.addChatMessage(APP_ID, "完整回答", "ai", USER_ID))
-                .thenReturn(true);
-        when(history.addChatMessage(
+        when(history.addChatMessageAndReturn(
+                APP_ID, "完整回答", "ai", USER_ID))
+                .thenReturn(已保存消息("完整回答", AI_MESSAGE_ID));
+        when(history.addChatMessageAndReturn(
                 APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID))
-                .thenReturn(true);
+                .thenReturn(已保存消息(
+                        SimpleTextStreamHandler.FAILURE_MESSAGE,
+                        AI_MESSAGE_ID + 1));
     }
 
     @Test
@@ -59,11 +64,29 @@ class SimpleTextStreamHandlerTest {
                 .expectNext("完整", "回答")
                 .verifyComplete();
 
-        verify(history).addChatMessage(APP_ID, "完整回答", "ai", USER_ID);
-        verify(history, never()).addChatMessage(
+        verify(history).addChatMessageAndReturn(
+                APP_ID, "完整回答", "ai", USER_ID);
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID);
         verify(summaries).triggerSummarizationAsync(APP_ID);
-        verify(userMemory).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        verify(userMemory).triggerPreferenceExtractionAsync(
+                USER_ID, APP_ID, AI_MESSAGE_ID);
+        context.close();
+    }
+
+    @Test
+    void 稳定AI消息ID非法时保留已保存结果但不触发L2() {
+        when(history.addChatMessageAndReturn(
+                APP_ID, "完整回答", "ai", USER_ID))
+                .thenReturn(已保存消息("完整回答", null));
+
+        StepVerifier.create(handle(Flux.just("完整回答")))
+                .expectNext("完整回答")
+                .verifyComplete();
+
+        verify(summaries).triggerSummarizationAsync(APP_ID);
+        verify(userMemory, never()).triggerPreferenceExtractionAsync(
+                anyLong(), anyLong(), anyLong());
         context.close();
     }
 
@@ -74,12 +97,13 @@ class SimpleTextStreamHandlerTest {
                 .expectErrorMessage("供应商密钥 secret-token")
                 .verify();
 
-        verify(history).addChatMessage(
+        verify(history).addChatMessageAndReturn(
                 APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID);
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "AI回复失败: 供应商密钥 secret-token", "ai", USER_ID);
         verify(summaries, never()).triggerSummarizationAsync(APP_ID);
-        verify(userMemory, never()).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        verify(userMemory, never()).triggerPreferenceExtractionAsync(
+                anyLong(), anyLong(), anyLong());
         context.close();
     }
 
@@ -92,10 +116,11 @@ class SimpleTextStreamHandlerTest {
                 .expectNext("完整回答")
                 .verifyComplete();
 
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "完整回答", "ai", USER_ID);
         verify(summaries, never()).triggerSummarizationAsync(APP_ID);
-        verify(userMemory, never()).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        verify(userMemory, never()).triggerPreferenceExtractionAsync(
+                anyLong(), anyLong(), anyLong());
         context.close();
         delete.abortAndReopen();
     }
@@ -111,7 +136,7 @@ class SimpleTextStreamHandlerTest {
         subscription.dispose();
 
         org.junit.jupiter.api.Assertions.assertTrue(cancelled.get());
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
@@ -120,21 +145,23 @@ class SimpleTextStreamHandlerTest {
     }
 
     @Test
-    void 成功AI消息保存返回false时进入错误终态且不触发记忆() {
-        when(history.addChatMessage(APP_ID, "完整回答", "ai", USER_ID))
-                .thenReturn(false);
+    void 成功AI消息保存返回null时进入错误终态且不触发记忆() {
+        when(history.addChatMessageAndReturn(
+                APP_ID, "完整回答", "ai", USER_ID))
+                .thenReturn(null);
 
         StepVerifier.create(handle(Flux.just("完整回答")))
                 .expectNext("完整回答")
                 .expectErrorMessage("保存 AI 回复失败")
                 .verify();
 
-        verify(history).addChatMessage(APP_ID, "完整回答", "ai", USER_ID);
-        verify(history).addChatMessage(
+        verify(history).addChatMessageAndReturn(
+                APP_ID, "完整回答", "ai", USER_ID);
+        verify(history).addChatMessageAndReturn(
                 APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID);
         verify(summaries, never()).triggerSummarizationAsync(APP_ID);
         verify(userMemory, never()).triggerPreferenceExtractionAsync(
-                USER_ID, APP_ID);
+                anyLong(), anyLong(), anyLong());
         context.close();
     }
 
@@ -147,9 +174,9 @@ class SimpleTextStreamHandlerTest {
                 .expectErrorMessage("文件保存失败")
                 .verify();
 
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "半截代码", "ai", USER_ID);
-        verify(history).addChatMessage(
+        verify(history).addChatMessageAndReturn(
                 APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID);
         context.close();
     }
@@ -161,8 +188,8 @@ class SimpleTextStreamHandlerTest {
         doAnswer(invocation -> {
             writerEntered.countDown();
             assertTrue(releaseWriter.await(1, TimeUnit.SECONDS));
-            return true;
-        }).when(history).addChatMessage(
+            return 已保存消息("完整回答", AI_MESSAGE_ID);
+        }).when(history).addChatMessageAndReturn(
                 APP_ID, "完整回答", "ai", USER_ID);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -185,5 +212,15 @@ class SimpleTextStreamHandlerTest {
         return handler.handle(source, history, APP_ID,
                 User.builder().id(USER_ID).build(), summaries, userMemory,
                 fence, context);
+    }
+
+    private ChatHistory 已保存消息(String message, Long id) {
+        return ChatHistory.builder()
+                .id(id)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .messageType("ai")
+                .message(message)
+                .build();
     }
 }

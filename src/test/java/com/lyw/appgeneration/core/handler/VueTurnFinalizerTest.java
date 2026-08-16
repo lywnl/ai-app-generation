@@ -8,6 +8,7 @@ import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
@@ -38,6 +39,7 @@ class VueTurnFinalizerTest {
 
     private static final long APP_ID = 7L;
     private static final long USER_ID = 9L;
+    private static final long AI_MESSAGE_ID = 11L;
     private ChatHistoryService history;
     private ToolMessageCollapser collapser;
     private MemorySummaryService summary;
@@ -61,8 +63,10 @@ class VueTurnFinalizerTest {
         finalizer = new VueTurnFinalizer(
                 history, collapser, summary, preference, factory, lifecycleFence,
                 metrics, new FileToolBudgetGuard());
-        when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(
+                anyLong(), anyString(), eq("ai"), anyLong()))
+                .thenAnswer(invocation -> 已保存消息(
+                        invocation.getArgument(1), AI_MESSAGE_ID));
         when(collapser.collapseLastTurn(anyLong(), anyString()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(COLLAPSED, java.util.List.of()));
     }
@@ -82,16 +86,39 @@ class VueTurnFinalizerTest {
             VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(context, outcome);
 
             assertEquals(outcome.outcome(), result.outcome().outcome());
-            verify(history).addChatMessage(APP_ID, outcome.canonicalAiText(), "ai", USER_ID);
+            verify(history).addChatMessageAndReturn(
+                    APP_ID, outcome.canonicalAiText(), "ai", USER_ID);
             verify(collapser).collapseLastTurn(APP_ID, outcome.canonicalAiText());
             verify(summary).triggerSummarizationAsync(APP_ID);
-            verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+            verify(preference).triggerPreferenceExtractionAsync(
+                    USER_ID, APP_ID, AI_MESSAGE_ID);
             assertEquals(1.0, metricsRegistry.get("vue_turn_outcomes_total")
                     .tags("outcome", outcome.outcome().name().toLowerCase(),
                             "phase", outcome.phase().name().toLowerCase())
                     .counter().count());
             clearInvocations(history, collapser, summary, preference, factory);
         }
+    }
+
+    @Test
+    void 稳定AI消息ID非法时保留持久化结果但不触发L2() {
+        when(history.addChatMessageAndReturn(
+                APP_ID, "项目已生成并构建成功。", "ai", USER_ID))
+                .thenReturn(已保存消息("项目已生成并构建成功。", 0L));
+        VueTurnOutcome requested = outcome(
+                VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                "项目已生成并构建成功。", true);
+
+        VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
+                VueTurnContext.testing(APP_ID, USER_ID,
+                        "turn-invalid-ai-id", VueBuildPhase.SUCCEEDED),
+                requested);
+
+        assertTrue(result.persisted());
+        assertEquals(SUCCEEDED, result.outcome().outcome());
+        verify(summary).triggerSummarizationAsync(APP_ID);
+        verify(preference, never()).triggerPreferenceExtractionAsync(
+                anyLong(), anyLong(), anyLong());
     }
 
     @Test
@@ -114,13 +141,14 @@ class VueTurnFinalizerTest {
         assertEquals(SUCCEEDED, result.outcome().outcome());
         assertEquals(requested.canonicalAiText(),
                 result.outcome().canonicalAiText());
-        verify(history, times(1)).addChatMessage(
+        verify(history, times(1)).addChatMessageAndReturn(
                 APP_ID, requested.canonicalAiText(), "ai", USER_ID);
         verify(collapser, times(1)).collapseLastTurn(
                 APP_ID, requested.canonicalAiText());
         verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
         verify(preference, times(1))
-                .triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+                .triggerPreferenceExtractionAsync(
+                        USER_ID, APP_ID, AI_MESSAGE_ID);
         assertTrue(registry.failureTriggered());
     }
 
@@ -145,11 +173,11 @@ class VueTurnFinalizerTest {
         assertEquals(SYSTEM_ERROR, result.outcome().outcome());
         assertEquals(VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE,
                 result.outcome().canonicalAiText());
-        verify(history).addChatMessage(
+        verify(history).addChatMessageAndReturn(
                 APP_ID, VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE, "ai", USER_ID);
         verify(collapser).collapseLastTurn(
                 APP_ID, VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE);
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, oversized, "ai", USER_ID);
     }
 
@@ -222,10 +250,12 @@ class VueTurnFinalizerTest {
                     second.get(1, TimeUnit.SECONDS));
         }
 
-        verify(history, times(1)).addChatMessage(eq(APP_ID), anyString(), eq("ai"), eq(USER_ID));
+        verify(history, times(1)).addChatMessageAndReturn(
+                eq(APP_ID), anyString(), eq("ai"), eq(USER_ID));
         verify(collapser, times(1)).collapseLastTurn(eq(APP_ID), anyString());
         verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
-        verify(preference, times(1)).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        verify(preference, times(1)).triggerPreferenceExtractionAsync(
+                USER_ID, APP_ID, AI_MESSAGE_ID);
     }
 
     @Test
@@ -248,8 +278,9 @@ class VueTurnFinalizerTest {
 
     @Test
     void mysqlFalseDowngradesClientOutcomeAndSkipsAllMemorySideEffects() {
-        when(history.addChatMessage(APP_ID, "项目已生成并构建成功。", "ai", USER_ID))
-                .thenReturn(false);
+        when(history.addChatMessageAndReturn(
+                APP_ID, "项目已生成并构建成功。", "ai", USER_ID))
+                .thenReturn(null);
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-mysql", VueBuildPhase.SUCCEEDED);
 
@@ -268,7 +299,8 @@ class VueTurnFinalizerTest {
         VueTurnOutcome succeeded = outcome(
                 VueBuildPhase.SUCCEEDED, SUCCEEDED,
                 "项目已生成并构建成功。", true);
-        when(history.addChatMessage(APP_ID, succeeded.canonicalAiText(), "ai", USER_ID))
+        when(history.addChatMessageAndReturn(
+                APP_ID, succeeded.canonicalAiText(), "ai", USER_ID))
                 .thenThrow(new IllegalStateException("mysql down"));
         VueTurnContext failedContext = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-mysql-error", VueBuildPhase.SUCCEEDED);
@@ -278,8 +310,10 @@ class VueTurnFinalizerTest {
         verifyNoInteractions(collapser, summary, preference);
 
         reset(history, collapser, summary, preference, factory);
-        when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(
+                anyLong(), anyString(), eq("ai"), anyLong()))
+                .thenAnswer(invocation -> 已保存消息(
+                        invocation.getArgument(1), AI_MESSAGE_ID));
         when(collapser.collapseLastTurn(anyLong(), anyString()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         COLLAPSED, java.util.List.of()));
@@ -293,7 +327,8 @@ class VueTurnFinalizerTest {
 
         assertEquals(SUCCEEDED, result.outcome().outcome());
         assertTrue(result.persisted());
-        verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+        verify(preference).triggerPreferenceExtractionAsync(
+                USER_ID, APP_ID, AI_MESSAGE_ID);
     }
 
     @Test
@@ -319,11 +354,12 @@ class VueTurnFinalizerTest {
     void deleteWaitsUntilFinalizerCompletesAllStableMemoryHooks() throws Exception {
         CountDownLatch historyEntered = new CountDownLatch(1);
         CountDownLatch releaseHistory = new CountDownLatch(1);
-        when(history.addChatMessage(APP_ID, "项目已生成并构建成功。", "ai", USER_ID))
+        when(history.addChatMessageAndReturn(
+                APP_ID, "项目已生成并构建成功。", "ai", USER_ID))
                 .thenAnswer(invocation -> {
                     historyEntered.countDown();
                     assertTrue(releaseHistory.await(1, TimeUnit.SECONDS));
-                    return true;
+                    return 已保存消息("项目已生成并构建成功。", AI_MESSAGE_ID);
                 });
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-delete-race", VueBuildPhase.SUCCEEDED);
@@ -344,7 +380,8 @@ class VueTurnFinalizerTest {
                     deletion.get(1, TimeUnit.SECONDS);
             assertNotNull(deletePermit);
             verify(summary).triggerSummarizationAsync(APP_ID);
-            verify(preference).triggerPreferenceExtractionAsync(USER_ID, APP_ID);
+            verify(preference).triggerPreferenceExtractionAsync(
+                    USER_ID, APP_ID, AI_MESSAGE_ID);
             deletePermit.abortAndReopen();
         }
     }
@@ -390,7 +427,8 @@ class VueTurnFinalizerTest {
                 new AssertionError("persist-root");
         AssertionError closeFailure =
                 new AssertionError("close-secondary");
-        when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
+        when(history.addChatMessageAndReturn(
+                anyLong(), anyString(), eq("ai"), anyLong()))
                 .thenThrow(persistenceFailure);
         AppOperationLeaseManager operationManager =
                 new AppOperationLeaseManager();
@@ -448,7 +486,8 @@ class VueTurnFinalizerTest {
                 new AssertionError("persist-root-before-fatal-observer");
         OutOfMemoryError observerFailure =
                 new OutOfMemoryError("fatal-observer");
-        when(history.addChatMessage(anyLong(), anyString(), eq("ai"), anyLong()))
+        when(history.addChatMessageAndReturn(
+                anyLong(), anyString(), eq("ai"), anyLong()))
                 .thenThrow(persistenceFailure);
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-fatal-observer",
@@ -469,6 +508,16 @@ class VueTurnFinalizerTest {
         assertSame(persistenceFailure, sharedFailure.getCause());
         assertEquals(VueTurnContext.TurnStage.FINALIZED,
                 context.turnState().stage());
+    }
+
+    private ChatHistory 已保存消息(String message, Long id) {
+        return ChatHistory.builder()
+                .id(id)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .messageType("ai")
+                .message(message)
+                .build();
     }
 
     private VueTurnOutcome outcome(VueBuildPhase phase,

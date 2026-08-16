@@ -50,6 +50,13 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
 
     @Override
     public boolean addChatMessage(Long appId, String message, String messageType, Long userId) {
+        return addChatMessageAndReturn(
+                appId, message, messageType, userId) != null;
+    }
+
+    @Override
+    public ChatHistory addChatMessageAndReturn(
+            Long appId, String message, String messageType, Long userId) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID不能为空");
         ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "消息内容不能为空");
         ThrowUtils.throwIf(StrUtil.isBlank(messageType), ErrorCode.PARAMS_ERROR, "消息类型不能为空");
@@ -63,7 +70,7 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 .messageType(messageType)
                 .userId(userId)
                 .build();
-        return this.save(chatHistory);
+        return this.save(chatHistory) ? chatHistory : null;
     }
 
     @Override

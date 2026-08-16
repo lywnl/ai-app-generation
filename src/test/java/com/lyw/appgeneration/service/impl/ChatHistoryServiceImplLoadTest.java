@@ -15,8 +15,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -25,6 +30,35 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ChatHistoryServiceImplLoadTest {
+
+    @Test
+    void 保存消息可返回生成后实体且旧Boolean接口保持兼容() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doAnswer(invocation -> {
+            ChatHistory history = invocation.getArgument(0);
+            history.setId(99L);
+            return true;
+        }).when(service).save(any(ChatHistory.class));
+
+        ChatHistory saved = service.addChatMessageAndReturn(
+                7L, "已完成", "ai", 9L);
+
+        assertNotNull(saved);
+        assertEquals(99L, saved.getId());
+        assertTrue(service.addChatMessage(7L, "继续", "user", 9L));
+        verify(service, times(2)).save(any(ChatHistory.class));
+    }
+
+    @Test
+    void 保存失败时返回实体接口为Null且旧接口返回False() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(false).when(service).save(any(ChatHistory.class));
+
+        assertNull(service.addChatMessageAndReturn(
+                7L, "保存失败", "ai", 9L));
+        assertFalse(service.addChatMessage(
+                7L, "仍然失败", "user", 9L));
+    }
 
     @Test
     void emptyHistoryIsAValidEmptyResult() {

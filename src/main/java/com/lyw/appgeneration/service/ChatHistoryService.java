@@ -32,6 +32,15 @@ public interface ChatHistoryService extends IService<ChatHistory> {
     boolean addChatMessage(Long appId, String message, String messageType, Long userId);
 
     /**
+     * 添加对话消息并返回已持久化实体，保存失败时返回 {@code null}。
+     *
+     * <p>需要把数据库生成 ID 传给后续异步任务时使用；普通调用继续使用
+     * {@link #addChatMessage(Long, String, String, Long)}。
+     */
+    ChatHistory addChatMessageAndReturn(
+            Long appId, String message, String messageType, Long userId);
+
+    /**
      * 根据应用ID删除对话消息
      * @param appId
      * @return

@@ -806,7 +806,8 @@ class VueTurnCancellationCoordinatorTest {
         AssertionError finalizerFailure =
                 new AssertionError("chat history fatal failure");
         doThrow(finalizerFailure).when(history)
-                .addChatMessage(anyLong(), anyString(), eq("ai"), anyLong());
+                .addChatMessageAndReturn(
+                        anyLong(), anyString(), eq("ai"), anyLong());
         when(collapser.collapseLastTurn(anyLong(), anyString()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,

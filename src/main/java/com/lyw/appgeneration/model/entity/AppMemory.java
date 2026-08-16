@@ -49,6 +49,21 @@ public class AppMemory implements Serializable {
     /** 偏好内容 */
     private String content;
 
+    /** 证据类型：EXPLICIT / IMPLICIT */
+    @Column("evidenceType")
+    private String evidenceType;
+
+    /** 证据状态：CANDIDATE / ACTIVE */
+    private String status;
+
+    /** 已累计的不同完整回合证据数 */
+    @Column("evidenceCount")
+    private Integer evidenceCount;
+
+    /** 已累计证据中的最大 User 回合 ID */
+    @Column("lastEvidenceTurnId")
+    private Long lastEvidenceTurnId;
+
     @Column("createTime")
     private LocalDateTime createTime;
 

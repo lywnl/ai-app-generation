@@ -42,7 +42,7 @@ public class AppMemoryExtractCursor implements Serializable {
     @Column("lastExtractedId")
     private Long lastExtractedId;
 
-    /** 连续失败计数(circuit breaker) */
+    /** 连续失败计数；当前仅记录失败元数据，任务 8 再持久化下一次重试时间。 */
     @Column("failCount")
     private Integer failCount;
 

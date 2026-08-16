@@ -224,9 +224,9 @@ class AppServiceImplVueTurnTest {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
-        when(history.addChatMessage(
+        when(history.addChatMessageAndReturn(
                 APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID))
-                .thenReturn(true);
+                .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
         when(collapser.collapseLastTurn(
                 APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
@@ -269,7 +269,7 @@ class AppServiceImplVueTurnTest {
                             "before-cancel-finalized"));
             releaseHandler.complete(null);
 
-            verify(history, timeout(2_000).times(1)).addChatMessage(
+            verify(history, timeout(2_000).times(1)).addChatMessageAndReturn(
                     APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID);
             verify(facade, never()).generateVueProjectStream(
                     anyString(), anyLong(), anyBoolean(), any(), any());
@@ -503,7 +503,7 @@ class AppServiceImplVueTurnTest {
                 anyString(), anyLong(), anyBoolean(), any(), any());
         verify(history, never()).addChatMessage(
                 APP_ID, "新需求", "user", USER_ID);
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 eq(APP_ID), anyString(), eq("ai"), eq(USER_ID));
         verify(finalizer, never()).finalizeOnce(any(), any());
         operationManager.acquire(APP_ID,
@@ -572,9 +572,9 @@ class AppServiceImplVueTurnTest {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
-        when(history.addChatMessage(
+        when(history.addChatMessageAndReturn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID))
-                .thenReturn(true);
+                .thenReturn(savedAiMessage(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
         when(collapser.collapseLastTurn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE))
                 .thenReturn(collapsed());
@@ -593,7 +593,7 @@ class AppServiceImplVueTurnTest {
                     outcome.message().getOutcome());
         }
 
-        verify(history, times(1)).addChatMessage(
+        verify(history, times(1)).addChatMessageAndReturn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID);
         verify(collapser, times(1)).collapseLastTurn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE);
@@ -605,9 +605,9 @@ class AppServiceImplVueTurnTest {
     @Test
     void 删除参与者注册边界关闭后不得留下孤立用户消息() throws Exception {
         ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
-        when(history.addChatMessage(
+        when(history.addChatMessageAndReturn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID))
-                .thenReturn(true);
+                .thenReturn(savedAiMessage(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
         when(collapser.collapseLastTurn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE))
                 .thenReturn(collapsed());
@@ -640,7 +640,7 @@ class AppServiceImplVueTurnTest {
 
         verify(facade, never()).generateVueProjectStream(
                 anyString(), anyLong(), anyBoolean(), any(), any());
-        verify(history, times(1)).addChatMessage(
+        verify(history, times(1)).addChatMessageAndReturn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID);
         verify(collapser, times(1)).collapseLastTurn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE);
@@ -700,6 +700,16 @@ class AppServiceImplVueTurnTest {
     private ToolMessageCollapser.CollapseResult collapsed() {
         return new ToolMessageCollapser.CollapseResult(
                 ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of());
+    }
+
+    private ChatHistory savedAiMessage(String message) {
+        return ChatHistory.builder()
+                .id(11L)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .messageType("ai")
+                .message(message)
+                .build();
     }
 
     private Object createCommittedTurn(VueTurnContext context) throws Exception {

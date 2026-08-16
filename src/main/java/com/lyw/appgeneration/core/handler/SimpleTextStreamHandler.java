@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -107,18 +108,24 @@ public class SimpleTextStreamHandler {
             if (context.isCancelled()) {
                 return PersistenceResult.SKIPPED;
             }
-            boolean saved = chatHistoryService.addChatMessage(
+            ChatHistory saved = chatHistoryService.addChatMessageAndReturn(
                     appId, message, ChatHistoryMessageTypeEnum.AI.getValue(),
                     loginUser.getId());
-            if (!saved) {
+            if (saved == null) {
                 return PersistenceResult.FAILED;
             }
             if (!triggerMemory) {
                 return PersistenceResult.SAVED;
             }
             memorySummaryService.triggerSummarizationAsync(appId);
+            Long stableAiMessageId = saved.getId();
+            if (stableAiMessageId == null || stableAiMessageId <= 0L) {
+                log.warn("普通生成稳定 AI 消息缺少有效 ID，跳过 L2 触发 appId={}",
+                        appId);
+                return PersistenceResult.SAVED;
+            }
             userMemoryService.triggerPreferenceExtractionAsync(
-                    loginUser.getId(), appId);
+                    loginUser.getId(), appId, stableAiMessageId);
             return PersistenceResult.SAVED;
         }
     }

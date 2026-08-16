@@ -4,6 +4,7 @@ import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.ChatHistory;
@@ -16,10 +17,12 @@ import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -48,30 +51,45 @@ class LayeredMemoryL2IntegrationTest {
         doAnswer(inv -> { table.add(inv.getArgument(0)); return 1; }).when(memMapper).insert(any());
         when(memMapper.selectListByQuery(any())).thenReturn(table);
 
-        // 用公共生产构造器(默认阈值 8),对齐 L1 集成测试范式——跨包无法访问包级测试构造器
+        MemoryTokenProperties tokenProperties = new MemoryTokenProperties();
+        tokenProperties.setEstimationSafetyFactor(1D);
+        ChatTokenEstimator tokenEstimator =
+                new ConservativeChatTokenEstimator(tokenProperties);
+
+        // 跨包使用正式生产构造器，验证 Spring 依赖签名与真实召回契约一致。
         UserMemoryServiceImpl l2 = new UserMemoryServiceImpl(chatHistory, memMapper, cursorMapper,
-                appMapper, model, Executors.newSingleThreadExecutor(), redis,
-                new AppDataLifecycleFence());
+                appMapper, model, mock(ExecutorService.class),
+                mock(TaskScheduler.class), redis,
+                new AppDataLifecycleFence(), tokenEstimator,
+                tokenProperties,
+                TransactionOperations.withoutTransaction());
 
         // —— appA:用户表达跨 app 偏好,抽取落库 ——
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
-        // 补足到 8 条以触发默认抽取阈值(首条承载跨 app 偏好,其余为填充)
         List<ChatHistory> appAHistory = new ArrayList<>();
         appAHistory.add(ChatHistory.builder().id(11L).messageType("user")
                 .message("以后所有应用都用简体中文、扁平极简").build());
-        for (long i = 12L; i <= 18L; i++) {
-            appAHistory.add(ChatHistory.builder().id(i)
-                    .messageType(i % 2 == 0 ? "ai" : "user").message("第" + i + "轮").build());
-        }
+        appAHistory.add(ChatHistory.builder().id(12L).messageType("ai")
+                .message("已完成").build());
         when(chatHistory.listMessagesAfterCursor(eq(appA), eq(0L), anyInt())).thenReturn(appAHistory);
+        when(cursorMapper.insert(any())).thenReturn(1);
         when(model.chat(anyString()))
-                .thenReturn("[{\"name\":\"语言偏好\",\"content\":\"简体中文\"},{\"name\":\"视觉风格\",\"content\":\"扁平极简\"}]");
+                .thenReturn("""
+                        [
+                          {"name":"语言偏好","content":"简体中文",
+                           "evidenceType":"EXPLICIT","turnIds":[11]},
+                          {"name":"视觉风格","content":"扁平极简",
+                           "evidenceType":"EXPLICIT","turnIds":[11]}
+                        ]
+                        """);
         l2.extractNow(user, appA);
         assertEquals(2, table.size(), "appA 抽取应落 2 条偏好");
+        assertTrue(table.stream().allMatch(
+                memory -> "ACTIVE".equals(memory.getStatus())));
 
         // —— appB:召回(缓存未命中),应带出 appA 的偏好 ——
         when(appMapper.selectOneById(appB)).thenReturn(App.builder().id(appB).userId(user).build());
-        when(ops.get("mem:pref:" + user)).thenReturn(null);
+        when(ops.get("mem:pref:v2:" + user)).thenReturn(null);
 
         MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(appB).maxMessages(100).build();
         delegate.add(UserMessage.from("帮我做个新页面"));
@@ -84,5 +102,7 @@ class LayeredMemoryL2IntegrationTest {
         // 首条应是 appB 召回的 L2 偏好,内容来自 appA
         assertTrue(((UserMessage) msgs.get(0)).singleText().contains("简体中文"));
         assertTrue(((UserMessage) msgs.get(0)).singleText().contains("扁平极简"));
+        verify(ops).get("mem:pref:v2:" + user);
+        verify(ops, never()).get("mem:pref:" + user);
     }
 }

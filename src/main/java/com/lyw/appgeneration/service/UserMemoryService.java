@@ -10,10 +10,13 @@ package com.lyw.appgeneration.service;
  */
 public interface UserMemoryService {
 
-    /** 钩子入口:异步抽取该 app 新对话中的跨 app 用户偏好。single-flight 按 userId。 */
-    void triggerPreferenceExtractionAsync(Long userId, Long appId);
+    /**
+     * 钩子入口：登记该 app 已稳定持久化到的 AI 消息 ID，并按 userId 防抖抽取跨 app 偏好。
+     */
+    void triggerPreferenceExtractionAsync(
+            Long userId, Long appId, Long stableAiMessageId);
 
-    /** 召回:messages() 调用,内部 appId→userId 反查后取 top-N 偏好拼成文本(无则空串)。 */
+    /** 召回:messages() 调用，按证据优先级拼接不超过 1K Token 的激活偏好。 */
     String recallByApp(Long appId);
 
     MemoryCacheInvalidationResult invalidateCaches(Long appId, Long userId);

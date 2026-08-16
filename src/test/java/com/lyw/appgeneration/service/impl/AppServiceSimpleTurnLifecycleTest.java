@@ -12,6 +12,7 @@ import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.model.entity.App;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
@@ -94,6 +95,7 @@ class AppServiceSimpleTurnLifecycleTest {
 
     private static final long APP_ID = 7L;
     private static final long USER_ID = 9L;
+    private static final long AI_MESSAGE_ID = 11L;
 
     private final AiCodeGeneratorFacade facade = mock(AiCodeGeneratorFacade.class);
     private final AiCodeGeneratorService generator =
@@ -133,12 +135,16 @@ class AppServiceSimpleTurnLifecycleTest {
         ReflectionTestUtils.setField(service, "appDataLifecycleFence", fence);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
-        when(history.addChatMessage(APP_ID, "回答", "ai", USER_ID))
-                .thenReturn(true);
-        when(history.addChatMessage(
+        when(history.addChatMessageAndReturn(
+                APP_ID, "回答", "ai", USER_ID))
+                .thenReturn(savedAiMessage("回答", AI_MESSAGE_ID));
+        when(history.addChatMessageAndReturn(
                 APP_ID, com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
                         .FAILURE_MESSAGE, "ai", USER_ID))
-                .thenReturn(true);
+                .thenReturn(savedAiMessage(
+                        com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
+                                .FAILURE_MESSAGE,
+                        AI_MESSAGE_ID + 1));
         when(aiFactory.invalidateAndClearMemory(
                 APP_ID, CodeGenTypeEnum.HTML))
                 .thenReturn(MemoryCacheInvalidationResult.success());
@@ -447,5 +453,15 @@ class AppServiceSimpleTurnLifecycleTest {
 
     private User user() {
         return User.builder().id(USER_ID).build();
+    }
+
+    private ChatHistory savedAiMessage(String message, long id) {
+        return ChatHistory.builder()
+                .id(id)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .messageType("ai")
+                .message(message)
+                .build();
     }
 }

@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.ai.tools.BuildProjectToolResult;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
@@ -198,9 +199,9 @@ public class VueTurnFinalizer implements InitializingBean {
 
     private FinalizationResult persist(
             VueTurnContext context, VueTurnOutcome requestedOutcome) {
-        boolean saved;
+        ChatHistory saved;
         try {
-            saved = chatHistoryService.addChatMessage(
+            saved = chatHistoryService.addChatMessageAndReturn(
                     context.appId(), requestedOutcome.canonicalAiText(),
                     ChatHistoryMessageTypeEnum.AI.getValue(), context.userId());
         } catch (RuntimeException exception) {
@@ -209,7 +210,7 @@ public class VueTurnFinalizer implements InitializingBean {
             invalidateUnstableMemory(context);
             return new FinalizationResult(systemError(context), false);
         }
-        if (!saved) {
+        if (saved == null) {
             log.error("Vue 回合 AI 消息保存返回 false,appId={},turnId={}",
                     context.appId(), context.turnId());
             invalidateUnstableMemory(context);
@@ -226,20 +227,26 @@ public class VueTurnFinalizer implements InitializingBean {
             invalidateUnstableMemory(context);
             return new FinalizationResult(requestedOutcome, true);
         }
-        triggerStableMemoryHooks(context);
+        triggerStableMemoryHooks(context, saved.getId());
         return new FinalizationResult(requestedOutcome, true);
     }
 
-    private void triggerStableMemoryHooks(VueTurnContext context) {
+    private void triggerStableMemoryHooks(
+            VueTurnContext context, Long stableAiMessageId) {
         try {
             memorySummaryService.triggerSummarizationAsync(context.appId());
         } catch (RuntimeException exception) {
             log.warn("Vue 回合 L1 摘要触发失败,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
         }
+        if (stableAiMessageId == null || stableAiMessageId <= 0L) {
+            log.warn("Vue 稳定 AI 消息缺少有效 ID，跳过 L2 触发 appId={},turnId={}",
+                    context.appId(), context.turnId());
+            return;
+        }
         try {
             userMemoryService.triggerPreferenceExtractionAsync(
-                    context.userId(), context.appId());
+                    context.userId(), context.appId(), stableAiMessageId);
         } catch (RuntimeException exception) {
             log.warn("Vue 回合 L2 偏好触发失败,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
