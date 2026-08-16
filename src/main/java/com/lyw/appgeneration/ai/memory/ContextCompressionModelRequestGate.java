@@ -103,12 +103,7 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
                         continuationGate, transition),
                 continuationGate);
         publishCompleted(continuationGate, admission);
-        List<dev.langchain4j.data.message.ChatMessage> latestMessages =
-                Objects.requireNonNull(
-                        request.latestMemory().get(),
-                        "协调后的活动 ChatMemory 不能为空")
-                        .messages();
-        return map(admission, latestMessages);
+        return map(admission);
     }
 
     private void publishStarted(
@@ -131,23 +126,23 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
                         ContextCompressionMessage.completed()));
     }
 
-    private Decision map(
-            ContextAdmissionResult admission,
-            List<dev.langchain4j.data.message.ChatMessage> latestMessages) {
+    private Decision map(ContextAdmissionResult admission) {
         if (admission.failureReason()
                 == ContextAdmissionResult.FailureReason.TURN_TERMINATED) {
-            return new Decision(Status.CANCELLED, latestMessages,
+            return new Decision(Status.CANCELLED, admission.requestMessages(),
                     admission.finalTokens(), CANCELLED_MESSAGE);
         }
         if (admission.mode() == ContextCompressionMode.HARD_LIMIT_REJECTED) {
-            return new Decision(Status.HARD_LIMIT_REJECTED, latestMessages,
+            return new Decision(Status.HARD_LIMIT_REJECTED,
+                    admission.requestMessages(),
                     admission.finalTokens(), HARD_LIMIT_MESSAGE);
         }
         if (admission.canProceed()) {
-            return new Decision(Status.ALLOWED, latestMessages,
+            return new Decision(Status.ALLOWED, admission.requestMessages(),
                     admission.finalTokens(), "");
         }
-        return new Decision(Status.COMPRESSION_FAILED, latestMessages,
+        return new Decision(Status.COMPRESSION_FAILED,
+                admission.requestMessages(),
                 admission.finalTokens(), COMPRESSION_FAILED_MESSAGE);
     }
 

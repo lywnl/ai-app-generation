@@ -1,12 +1,21 @@
 package com.lyw.appgeneration.ai.memory;
 
+import dev.langchain4j.data.message.ChatMessage;
+
+import java.util.List;
 import java.util.Objects;
 
-/** 一次上下文门禁的类型化结果。 */
+/**
+ * 一次上下文门禁的类型化结果。
+ *
+ * <p>{@code requestMessages} 是与 {@code finalTokens}
+ * 同次估算的不可变请求快照。</p>
+ */
 public record ContextAdmissionResult(
         ContextCompressionMode mode,
         int initialTokens,
         int finalTokens,
+        List<ChatMessage> requestMessages,
         long summarizeThroughId,
         FailureReason failureReason,
         String detail) {
@@ -15,6 +24,8 @@ public record ContextAdmissionResult(
         mode = Objects.requireNonNull(mode, "压缩模式不能为空");
         failureReason = Objects.requireNonNull(
                 failureReason, "失败原因不能为空");
+        requestMessages = List.copyOf(Objects.requireNonNull(
+                requestMessages, "已审核请求快照不能为空"));
         if (initialTokens < 0 || finalTokens < 0
                 || summarizeThroughId < 0L) {
             throw new IllegalArgumentException(

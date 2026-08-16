@@ -161,14 +161,19 @@ public class ConservativeChatTokenEstimator implements ChatTokenEstimator {
         }
         long cjkTokens = 0L;
         long symbolTokens = 0L;
-        long asciiCharacters = 0L;
+        long asciiTokens = 0L;
+        long asciiRunLength = 0L;
         long otherUtf8Bytes = 0L;
         for (int index = 0; index < text.length();) {
             int codePoint = text.codePointAt(index);
             index += Character.charCount(codePoint);
             if (codePoint <= 0x7F) {
-                asciiCharacters++;
-            } else if (isCjk(codePoint)) {
+                asciiRunLength++;
+                continue;
+            }
+            asciiTokens += divideAndRoundUp(asciiRunLength, 4L);
+            asciiRunLength = 0L;
+            if (isCjk(codePoint)) {
                 cjkTokens++;
             } else if (isSymbol(codePoint)) {
                 symbolTokens += 2L;
@@ -176,8 +181,8 @@ public class ConservativeChatTokenEstimator implements ChatTokenEstimator {
                 otherUtf8Bytes += utf8Length(codePoint);
             }
         }
-        long tokens = cjkTokens + symbolTokens;
-        tokens += divideAndRoundUp(asciiCharacters, 4L);
+        asciiTokens += divideAndRoundUp(asciiRunLength, 4L);
+        long tokens = cjkTokens + symbolTokens + asciiTokens;
         tokens += divideAndRoundUp(otherUtf8Bytes, 3L);
         return saturatingInt(tokens);
     }

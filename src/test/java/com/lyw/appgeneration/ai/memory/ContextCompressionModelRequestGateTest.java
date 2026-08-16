@@ -62,6 +62,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -193,17 +194,25 @@ class ContextCompressionModelRequestGateTest {
     @ParameterizedTest
     @EnumSource(value = ContextCompressionMode.class,
             names = {"NORMAL", "ASYNC_SCHEDULED", "BLOCKING_COMPLETED"})
-    void 可继续压缩模式映射为允许并读取协调后的活动记忆(
+    void 可继续压缩模式只使用协调器审核快照且不二次读取(
             ContextCompressionMode mode) throws Exception {
         ContextCompressionCoordinator coordinator =
                 mock(ContextCompressionCoordinator.class);
         CompressionAwareChatMemory compressionMemory =
-                compressionMemory("旧上下文".repeat(10_000));
-        ChatMemory refreshedMemory = memory("压缩后的新消息");
+                compressionMemory("已审核上下文");
+        ChatMemory refreshedMemory = memory("超".repeat(40_000));
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        ConservativeChatTokenEstimator estimator =
+                new ConservativeChatTokenEstimator(properties);
+        List<ChatMessage> auditedMessages = compressionMemory.messages();
+        assertTrue(estimator.estimateRequest(
+                        refreshedMemory.messages(), List.of())
+                        >= properties.getHardInputLimit());
         AtomicInteger memoryReads = new AtomicInteger();
         when(coordinator.admit(eq(compressionMemory), eq(List.of()),
                 any(), any())).thenReturn(result(mode,
-                ContextAdmissionResult.FailureReason.NONE, 30_001, 12_345));
+                ContextAdmissionResult.FailureReason.NONE, 29_000, 29_000,
+                auditedMessages));
 
         try (ExecutorService executor =
                      Executors.newVirtualThreadPerTaskExecutor()) {
@@ -224,10 +233,10 @@ class ContextCompressionModelRequestGateTest {
                     .toCompletableFuture().get(2, TimeUnit.SECONDS);
 
             assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
-            assertEquals(refreshedMemory.messages(), decision.messages());
-            assertEquals(12_345, decision.estimatedInputTokens());
-            assertEquals(2, memoryReads.get(),
-                    "协调完成后必须重新读取代理当前使用的活动 ChatMemory");
+            assertEquals(auditedMessages, decision.messages());
+            assertEquals(29_000, decision.estimatedInputTokens());
+            assertEquals(1, memoryReads.get(),
+                    "模型请求必须复用协调器审核的同一份快照");
         }
     }
 
@@ -365,6 +374,90 @@ class ContextCompressionModelRequestGateTest {
         assertTrue(decision.messages().isEmpty());
         assertFalse(decision.safeMessage().isBlank());
         verify(coordinator, never()).admit(any(), any(), any(), any());
+    }
+
+    @Test
+    void 真实27K首次请求直接调用模型且不发布压缩控制事件()
+            throws Exception {
+        assertRealNonBlockingInitialRequest(15_600, false);
+    }
+
+    @Test
+    void 真实28K首次请求异步压旧回合且模型仍使用原审核快照()
+            throws Exception {
+        assertRealNonBlockingInitialRequest(17_000, true);
+    }
+
+    @Test
+    void 首次请求真实压缩后仍达32K时不得调用模型且只返回安全拒绝()
+            throws Exception {
+        String oversizedCurrentUser = "超".repeat(21_000);
+        try (RealGateFixture fixture = new RealGateFixture(19_000, 12_000);
+             SimpleGenerationTurnContext turnContext =
+                     fixture.openTurn("real-initial-hard-limit")) {
+            RecordingStreamingChatModel model =
+                    new RecordingStreamingChatModel();
+            RealGateAiService service = AiServices.builder(
+                            RealGateAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> fixture.memory())
+                    .build();
+            CompletableFuture<GenerationStreamEvent> businessResult =
+                    new CompletableFuture<>();
+            CompletableFuture<List<GenerationStreamEvent>> events =
+                    turnContext.mergeProgress(
+                                    Mono.fromFuture(businessResult).flux())
+                            .collectList()
+                            .toFuture();
+            AtomicReference<Throwable> error = new AtomicReference<>();
+            CountDownLatch errorDelivered = new CountDownLatch(1);
+            TokenStream stream = service.chat(7L, oversizedCurrentUser);
+            try {
+                stream.modelRequestGate(fixture.gate(), turnContext)
+                        .onPartialResponse(ignored -> { })
+                        .onError(failure -> {
+                            error.set(failure);
+                            errorDelivered.countDown();
+                        })
+                        .start();
+
+                assertTrue(fixture.awaitCompressionStarted(),
+                        "首次超长请求必须先进入真实阻塞压缩");
+                assertEquals(0, model.callCount(),
+                        "压缩完成前不得调用模型");
+
+                fixture.releaseCompression();
+
+                assertTrue(errorDelivered.await(2, TimeUnit.SECONDS));
+                assertEquals(0, model.callCount(),
+                        "压缩后仍达到 32K 时不得调用模型");
+                assertEquals("对话上下文过长，请开启新会话后重试",
+                        error.get().getMessage());
+                assertTrue(fixture.estimator().estimateRequest(
+                                fixture.memory().messages(), List.of())
+                                >= fixture.properties().getHardInputLimit());
+                assertFalse(containsText(
+                        fixture.memory().messages(), fixture.oldUser()));
+                assertTrue(containsText(
+                        fixture.memory().messages(), fixture.recentUser()));
+                assertTrue(containsText(
+                        fixture.memory().messages(), oversizedCurrentUser));
+
+                businessResult.complete(
+                        GenerationStreamEvent.content("硬拒绝后占位正文"));
+                assertEquals(List.of(
+                                GenerationStreamEvent.contextCompression(
+                                        ContextCompressionMessage.started()),
+                                GenerationStreamEvent.content(
+                                        "硬拒绝后占位正文")),
+                        events.get(2, TimeUnit.SECONDS),
+                        "硬拒绝不得伪造 COMPLETED 控制事件");
+            } finally {
+                businessResult.complete(
+                        GenerationStreamEvent.content("硬拒绝后占位正文"));
+                stream.cancel();
+            }
+        }
     }
 
     @Test
@@ -560,6 +653,79 @@ class ContextCompressionModelRequestGateTest {
                     .anyMatch(result -> largeToolResult.equals(result.text())));
             assertEquals(fixture.memory().messages(), secondRequest.messages());
             stream.cancel();
+        }
+    }
+
+    private void assertRealNonBlockingInitialRequest(
+            int oldTurnTokens, boolean expectAsyncCompression)
+            throws Exception {
+        String owner = expectAsyncCompression
+                ? "real-initial-28k" : "real-initial-27k";
+        String content = expectAsyncCompression
+                ? "28K占位正文" : "27K占位正文";
+        try (RealGateFixture fixture = new RealGateFixture(
+                oldTurnTokens, 12_000);
+             SimpleGenerationTurnContext turnContext =
+                     fixture.openTurn(owner)) {
+            RecordingStreamingChatModel model =
+                    new RecordingStreamingChatModel();
+            RealGateAiService service = AiServices.builder(
+                            RealGateAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> fixture.memory())
+                    .build();
+            CompletableFuture<GenerationStreamEvent> businessResult =
+                    new CompletableFuture<>();
+            CompletableFuture<List<GenerationStreamEvent>> events =
+                    turnContext.mergeProgress(
+                                    Mono.fromFuture(businessResult).flux())
+                            .collectList()
+                            .toFuture();
+            AtomicReference<Throwable> error = new AtomicReference<>();
+            TokenStream stream = service.chat(7L, "本轮问题");
+            try {
+                stream.modelRequestGate(fixture.gate(), turnContext)
+                        .onPartialResponse(ignored -> { })
+                        .onError(error::set)
+                        .start();
+
+                assertTrue(model.awaitCalls(1),
+                        "非阻塞阈值必须无需释放同步压缩就调用模型");
+                assertNull(error.get());
+                ChatRequest request = model.request(0);
+                int requestTokens = fixture.estimator().estimateRequest(
+                        request.messages(), List.of());
+                assertEquals(fixture.memory().messages(), request.messages());
+                assertTrue(containsText(request.messages(), fixture.oldUser()));
+                assertTrue(containsText(
+                        request.messages(), fixture.recentUser()));
+                assertTrue(containsText(request.messages(), "本轮问题"));
+                if (expectAsyncCompression) {
+                    assertTrue(requestTokens >= fixture.properties()
+                            .getAsyncCompressionThreshold());
+                    assertTrue(requestTokens < fixture.properties()
+                            .getBlockingCompressionThreshold());
+                    verify(fixture.summaryService())
+                            .triggerSummarizationAsync(7L, 2L);
+                } else {
+                    assertTrue(requestTokens < fixture.properties()
+                            .getAsyncCompressionThreshold());
+                    verify(fixture.summaryService(), never())
+                            .triggerSummarizationAsync(any(), anyLong());
+                }
+                verify(fixture.summaryService(), never()).compressNow(
+                        any(), anyLong(), any(Duration.class));
+
+                businessResult.complete(
+                        GenerationStreamEvent.content(content));
+                assertEquals(List.of(GenerationStreamEvent.content(content)),
+                        events.get(2, TimeUnit.SECONDS),
+                        "27K/28K 非阻塞路径不得发布压缩控制事件");
+            } finally {
+                businessResult.complete(
+                        GenerationStreamEvent.content(content));
+                stream.cancel();
+            }
         }
     }
 
@@ -845,6 +1011,10 @@ class ContextCompressionModelRequestGateTest {
             return properties;
         }
 
+        private MemorySummaryService summaryService() {
+            return summaryService;
+        }
+
         private String oldUser() {
             return oldUser;
         }
@@ -984,8 +1154,18 @@ class ContextCompressionModelRequestGateTest {
             ContextAdmissionResult.FailureReason failureReason,
             int initialTokens,
             int finalTokens) {
+        return result(mode, failureReason, initialTokens, finalTokens,
+                List.of(UserMessage.from("协调后的活动消息")));
+    }
+
+    private ContextAdmissionResult result(
+            ContextCompressionMode mode,
+            ContextAdmissionResult.FailureReason failureReason,
+            int initialTokens,
+            int finalTokens,
+            List<ChatMessage> requestMessages) {
         return new ContextAdmissionResult(
-                mode, initialTokens, finalTokens, 0L,
+                mode, initialTokens, finalTokens, requestMessages, 0L,
                 failureReason, "测试结果");
     }
 

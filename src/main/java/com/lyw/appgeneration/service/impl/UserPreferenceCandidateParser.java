@@ -29,7 +29,7 @@ final class UserPreferenceCandidateParser {
                 preferenceContract, "偏好契约不能为空");
     }
 
-    /** 整体非法或非空数组没有有效候选时返回 {@code null}。 */
+    /** 整体非法时返回 {@code null}，合法数组无有效候选时返回空列表。 */
     List<UserPreferenceCandidate> parse(
             String raw, List<Long> whitelist) {
         if (StrUtil.isBlank(raw)
@@ -74,7 +74,7 @@ final class UserPreferenceCandidateParser {
                             UserPreferenceCandidate::name))
                     .limit(UserPreferenceContract.MAX_CANDIDATES)
                     .toList();
-            return result.isEmpty() ? null : result;
+            return result;
         } catch (RuntimeException exception) {
             return null;
         }

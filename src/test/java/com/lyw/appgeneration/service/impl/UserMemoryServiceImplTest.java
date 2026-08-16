@@ -383,8 +383,8 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("非空数组全部候选非法时批次失败且游标不推进")
-    void 全部候选非法时批次失败() {
+    @DisplayName("合法非空数组全部候选因证据规则过滤时成功推进")
+    void 全部候选因证据规则过滤时成功推进() {
         提供历史(完整回合(51L, 52L,
                 "以后都用中文", "已收到"));
         when(model.chat(any(String.class))).thenReturn("""
@@ -400,7 +400,8 @@ class UserMemoryServiceImplTest {
 
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
-        断言失败游标保留在(0L);
+        断言游标新增到(52L);
+        assertEquals(1, transactions.executionCount());
         assertTrue(metricsRegistry.find("memory_l2_candidate_total")
                 .counters().isEmpty());
     }
@@ -787,8 +788,8 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("非空 JSON 去重后只剩冲突候选时批次失败")
-    void 只剩同名冲突候选时批次失败() {
+    @DisplayName("合法 JSON 去重后只剩冲突候选时成功推进")
+    void 只剩同名冲突候选时成功推进() {
         List<ChatHistory> history = new ArrayList<>();
         history.addAll(完整回合(201L, 202L,
                 "偏好深色界面", "已完成"));
@@ -808,7 +809,8 @@ class UserMemoryServiceImplTest {
 
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
-        断言失败游标保留在(0L);
+        断言游标新增到(212L);
+        assertEquals(1, transactions.executionCount());
         assertTrue(metricsRegistry.find("memory_l2_candidate_total")
                 .counters().isEmpty());
     }

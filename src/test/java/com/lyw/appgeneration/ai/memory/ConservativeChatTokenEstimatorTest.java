@@ -36,6 +36,20 @@ class ConservativeChatTokenEstimatorTest {
     }
 
     @Test
+    void 中英文交错时每个Ascii连续段独立向上取整() {
+        assertEquals(8, estimator.estimateText("a你b好c世d界"));
+    }
+
+    @Test
+    void 高频交错文本不会被低估到异步阈值附近() {
+        ConservativeChatTokenEstimator guarded =
+                estimatorWithSafetyFactor(1.15D);
+
+        assertEquals(46_000,
+                guarded.estimateText("a你".repeat(20_000)));
+    }
+
+    @Test
     void messageEstimateIncludesRolesNamesAndToolPayloads() {
         ToolExecutionRequest request = ToolExecutionRequest.builder()
                 .id("call-1")

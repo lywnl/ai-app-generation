@@ -31,6 +31,9 @@ import static com.lyw.appgeneration.ai.memory.ContextAdmissionResult.FailureReas
 @Component
 public class ContextCompressionCoordinator {
 
+    private static final RequestSnapshot EMPTY_REQUEST_SNAPSHOT =
+            new RequestSnapshot(List.of(), 0);
+
     private final ChatTokenEstimator tokenEstimator;
     private final ChatHistoryService chatHistoryService;
     private final MemorySummaryService summaryService;
@@ -130,35 +133,39 @@ public class ContextCompressionCoordinator {
         long appId = requireAppId(memory.id());
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
-                    0, 0, 0L, appId);
+                    EMPTY_REQUEST_SNAPSHOT, 0L, appId);
         }
         if (!isLifecycleOpen(appId)) {
             return failure(ContextCompressionMode.ADMISSION_FAILED,
-                    0, 0, 0L, FailureReason.DELETE_REJECTED,
+                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    0L, FailureReason.DELETE_REJECTED,
                     "应用删除流程已接管，appId=" + appId);
         }
         CursorApplication cursorApplication = applyCompletedSummaryPrefix(
                 appId, memory, continuationGate);
         if (!cursorApplication.applied()) {
             return failure(ContextCompressionMode.ADMISSION_FAILED,
-                    0, 0, 0L, cursorApplication.failureReason(),
+                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    0L, cursorApplication.failureReason(),
                     cursorApplication.detail());
         }
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
-                    0, 0, 0L, appId);
+                    EMPTY_REQUEST_SNAPSHOT, 0L, appId);
         }
-        int initialTokens = estimate(memory, stableTools);
+        RequestSnapshot initialRequest = captureRequestSnapshot(
+                memory, stableTools);
+        int initialTokens = initialRequest.estimatedTokens();
         metricsCollector.recordEstimatedTokens(
                 MemoryCompressionMetricsCollector.EstimationStage.BEFORE,
                 initialTokens);
         if (initialTokens < properties.getAsyncCompressionThreshold()) {
             if (!tryCommitContinuation(continuationGate)) {
                 return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
-                        initialTokens, initialTokens, 0L, appId);
+                        initialRequest, 0L, appId);
             }
             return success(ContextCompressionMode.NORMAL,
-                    initialTokens, initialTokens, 0L, "无需压缩");
+                    initialRequest, initialRequest, 0L, "无需压缩");
         }
         CompressionPlan plan = buildPlan(appId, memory);
         if (!plan.available()) {
@@ -168,25 +175,24 @@ public class ContextCompressionCoordinator {
                 if (!tryCommitContinuation(continuationGate)) {
                     return turnTerminated(
                             ContextCompressionMode.ADMISSION_FAILED,
-                            initialTokens, initialTokens, 0L, appId);
+                            initialRequest, 0L, appId);
                 }
                 return success(ContextCompressionMode.NORMAL,
-                        initialTokens, initialTokens, 0L,
+                        initialRequest, initialRequest, 0L,
                         "低于同步阈值且没有可压缩旧回合，本次继续");
             }
             return failure(planningFailureMode(initialTokens),
-                    initialTokens, initialTokens, 0L,
+                    initialRequest, initialRequest, 0L,
                     plan.failureReason(), plan.detail());
         }
         if (initialTokens < properties.getBlockingCompressionThreshold()) {
             if (!tryCommitContinuation(continuationGate)) {
                 return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
-                        initialTokens, initialTokens,
-                        plan.summarizeThroughId(), appId);
+                        initialRequest, plan.summarizeThroughId(), appId);
             }
             if (!isLifecycleOpen(appId)) {
                 return failure(ContextCompressionMode.ADMISSION_FAILED,
-                        initialTokens, initialTokens,
+                        initialRequest, initialRequest,
                         plan.summarizeThroughId(),
                         FailureReason.DELETE_REJECTED,
                         "应用删除流程已接管，appId=" + appId);
@@ -196,15 +202,14 @@ public class ContextCompressionCoordinator {
                             appId, plan.summarizeThroughId()))) {
                 return turnTerminated(
                         ContextCompressionMode.ADMISSION_FAILED,
-                        initialTokens, initialTokens,
-                        plan.summarizeThroughId(), appId);
+                        initialRequest, plan.summarizeThroughId(), appId);
             }
             return success(ContextCompressionMode.ASYNC_SCHEDULED,
-                    initialTokens, initialTokens,
+                    initialRequest, initialRequest,
                     plan.summarizeThroughId(), "已提交异步压缩");
         }
         return blockAndRecheck(
-                appId, memory, stableTools, initialTokens, plan,
+                appId, memory, stableTools, initialRequest, plan,
                 transitionListener, continuationGate);
     }
 
@@ -212,18 +217,17 @@ public class ContextCompressionCoordinator {
             long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
-            int initialTokens,
+            RequestSnapshot initialRequest,
             CompressionPlan plan,
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate) {
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
-                    plan.summarizeThroughId(), appId);
+                    initialRequest, plan.summarizeThroughId(), appId);
         }
         if (!isLifecycleOpen(appId)) {
             return failure(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
+                    initialRequest, initialRequest,
                     plan.summarizeThroughId(),
                     FailureReason.DELETE_REJECTED,
                     "应用删除流程已接管，appId=" + appId);
@@ -232,14 +236,13 @@ public class ContextCompressionCoordinator {
         long deadlineNanos = deadlineNanos(timeout);
         if (!continuationGate.tryRun(() -> transitionListener.accept(success(
                 ContextCompressionMode.BLOCKING_STARTED,
-                initialTokens, initialTokens,
+                initialRequest, initialRequest,
                 plan.summarizeThroughId(), "开始阻塞压缩")))) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
-                    plan.summarizeThroughId(), appId);
+                    initialRequest, plan.summarizeThroughId(), appId);
         }
         if (remainingNanos(deadlineNanos) <= 0L) {
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(), FailureReason.TIMED_OUT,
                     "上下文压缩绝对截止时间已到");
         }
@@ -258,7 +261,7 @@ public class ContextCompressionCoordinator {
         } catch (RejectedExecutionException exception) {
             metricsCollector.recordCompressionExecutorRejected(
                     MemoryCompressionMetricsCollector.CompressionMode.BLOCKING);
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(),
                     FailureReason.EXECUTOR_REJECTED,
                     "上下文压缩执行器已满，appId=" + appId);
@@ -268,7 +271,7 @@ public class ContextCompressionCoordinator {
             long remainingNanos = remainingNanos(deadlineNanos);
             if (remainingNanos <= 0L) {
                 future.cancel(true);
-                return blockingFailure(initialTokens,
+                return blockingFailure(initialRequest,
                         plan.summarizeThroughId(), FailureReason.TIMED_OUT,
                         "上下文压缩排队后绝对截止时间已到");
             }
@@ -276,47 +279,45 @@ public class ContextCompressionCoordinator {
                     remainingNanos, TimeUnit.NANOSECONDS);
         } catch (TimeoutException exception) {
             future.cancel(true);
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(), FailureReason.TIMED_OUT,
                     "等待上下文压缩超时");
         } catch (InterruptedException exception) {
             future.cancel(true);
             Thread.currentThread().interrupt();
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(), FailureReason.INTERRUPTED,
                     "等待上下文压缩被中断");
         } catch (ExecutionException exception) {
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(), FailureReason.MODEL_FAILED,
                     "上下文压缩任务异常");
         }
         if (execution.terminated()) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
-                    plan.summarizeThroughId(), appId);
+                    initialRequest, plan.summarizeThroughId(), appId);
         }
         MemoryCompressionResult compressionResult = execution.result();
         if (remainingNanos(deadlineNanos) <= 0L) {
             future.cancel(true);
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(), FailureReason.TIMED_OUT,
                     "上下文压缩完成时已超过绝对截止时间");
         }
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
-                    plan.summarizeThroughId(), appId);
+                    initialRequest, plan.summarizeThroughId(), appId);
         }
         if (!isCompressionSuccess(compressionResult)
                 || compressionResult.summarizedThroughId()
                 < plan.summarizeThroughId()) {
-            return blockingFailure(initialTokens,
+            return blockingFailure(initialRequest,
                     plan.summarizeThroughId(),
                     failureReason(compressionResult),
                     compressionFailureDetail(appId, compressionResult));
         }
         return applyBlockingPrefixWithinLifecyclePermit(
-                appId, memory, tools, initialTokens, plan,
+                appId, memory, tools, initialRequest, plan,
                 continuationGate);
     }
 
@@ -437,18 +438,17 @@ public class ContextCompressionCoordinator {
             long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
-            int initialTokens,
+            RequestSnapshot initialRequest,
             CompressionPlan plan,
             ContextContinuationGate continuationGate) {
         AtomicReference<ContextAdmissionResult> committed =
                 new AtomicReference<>();
         boolean accepted = continuationGate.tryRun(() -> committed.set(
                 applyBlockingPrefixCommitted(
-                        appId, memory, tools, initialTokens, plan)));
+                        appId, memory, tools, initialRequest, plan)));
         if (!accepted) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
-                    plan.summarizeThroughId(), appId);
+                    initialRequest, plan.summarizeThroughId(), appId);
         }
         return requireCommitted(committed, "阻塞压缩完成提交");
     }
@@ -457,37 +457,39 @@ public class ContextCompressionCoordinator {
             long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
-            int initialTokens,
+            RequestSnapshot initialRequest,
             CompressionPlan plan) {
         AppDataLifecycleFence.WriterPermit writerPermit =
                 tryAcquireLifecycleWriter(appId);
         if (writerPermit == null) {
             return failure(ContextCompressionMode.BLOCKING_FAILED,
-                    initialTokens, initialTokens,
+                    initialRequest, initialRequest,
                     plan.summarizeThroughId(),
                     FailureReason.DELETE_REJECTED,
                     "应用删除流程已接管，appId=" + appId);
         }
         try (writerPermit) {
             if (!memory.removeCompletedPrefixIfMatches(plan.expectedPrefix())) {
-                return blockingFailure(initialTokens,
+                return blockingFailure(initialRequest,
                         plan.summarizeThroughId(),
                         FailureReason.PREFIX_CHANGED,
                         "L0 旧前缀已变化，本次不裁剪");
             }
-            int finalTokens = estimate(memory, tools);
+            RequestSnapshot finalRequest = captureRequestSnapshot(
+                    memory, tools);
+            int finalTokens = finalRequest.estimatedTokens();
             metricsCollector.recordEstimatedTokens(
                     MemoryCompressionMetricsCollector.EstimationStage.AFTER,
                     finalTokens);
             if (finalTokens >= properties.getHardInputLimit()) {
                 return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                        initialTokens, finalTokens,
+                        initialRequest, finalRequest,
                         plan.summarizeThroughId(),
                         FailureReason.STILL_OVER_HARD_LIMIT,
                         "压缩后仍达到 32K 输入硬上限");
             }
             return success(ContextCompressionMode.BLOCKING_COMPLETED,
-                    initialTokens, finalTokens,
+                    initialRequest, finalRequest,
                     plan.summarizeThroughId(), "阻塞压缩完成");
         }
     }
@@ -535,11 +537,10 @@ public class ContextCompressionCoordinator {
 
     private ContextAdmissionResult turnTerminated(
             ContextCompressionMode mode,
-            int initialTokens,
-            int finalTokens,
+            RequestSnapshot requestSnapshot,
             long summarizeThroughId,
             long appId) {
-        return failure(mode, initialTokens, finalTokens,
+        return failure(mode, requestSnapshot, requestSnapshot,
                 summarizeThroughId, FailureReason.TURN_TERMINATED,
                 "回合已取消或终态已被占用，appId=" + appId);
     }
@@ -618,10 +619,12 @@ public class ContextCompressionCoordinator {
         return true;
     }
 
-    private int estimate(
+    private RequestSnapshot captureRequestSnapshot(
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools) {
-        return tokenEstimator.estimateRequest(memory.messages(), tools);
+        List<ChatMessage> messages = List.copyOf(memory.messages());
+        return new RequestSnapshot(messages,
+                tokenEstimator.estimateRequest(messages, tools));
     }
 
     private boolean isCompressionSuccess(MemoryCompressionResult result) {
@@ -653,15 +656,16 @@ public class ContextCompressionCoordinator {
     }
 
     private ContextAdmissionResult blockingFailure(
-            int initialTokens,
+            RequestSnapshot initialRequest,
             long summarizeThroughId,
             FailureReason reason,
             String detail) {
+        int initialTokens = initialRequest.estimatedTokens();
         ContextCompressionMode mode = initialTokens
                 >= properties.getHardInputLimit()
                 ? ContextCompressionMode.HARD_LIMIT_REJECTED
                 : ContextCompressionMode.BLOCKING_FAILED;
-        return failure(mode, initialTokens, initialTokens,
+        return failure(mode, initialRequest, initialRequest,
                 summarizeThroughId, reason, detail);
     }
 
@@ -677,23 +681,35 @@ public class ContextCompressionCoordinator {
 
     private ContextAdmissionResult success(
             ContextCompressionMode mode,
-            int initialTokens,
-            int finalTokens,
+            RequestSnapshot initialRequest,
+            RequestSnapshot requestSnapshot,
             long summarizeThroughId,
             String detail) {
-        return new ContextAdmissionResult(mode, initialTokens, finalTokens,
-                summarizeThroughId, FailureReason.NONE, detail);
+        return new ContextAdmissionResult(
+                mode,
+                initialRequest.estimatedTokens(),
+                requestSnapshot.estimatedTokens(),
+                requestSnapshot.messages(),
+                summarizeThroughId,
+                FailureReason.NONE,
+                detail);
     }
 
     private ContextAdmissionResult failure(
             ContextCompressionMode mode,
-            int initialTokens,
-            int finalTokens,
+            RequestSnapshot initialRequest,
+            RequestSnapshot requestSnapshot,
             long summarizeThroughId,
             FailureReason reason,
             String detail) {
-        return new ContextAdmissionResult(mode, initialTokens, finalTokens,
-                summarizeThroughId, reason, detail);
+        return new ContextAdmissionResult(
+                mode,
+                initialRequest.estimatedTokens(),
+                requestSnapshot.estimatedTokens(),
+                requestSnapshot.messages(),
+                summarizeThroughId,
+                reason,
+                detail);
     }
 
     private long requireAppId(Object memoryId) {
@@ -701,6 +717,20 @@ public class ContextCompressionCoordinator {
             throw new IllegalArgumentException("ChatMemory 应用 ID 必须为正数 Long");
         }
         return appId;
+    }
+
+    private record RequestSnapshot(
+            List<ChatMessage> messages,
+            int estimatedTokens) {
+
+        private RequestSnapshot {
+            messages = List.copyOf(Objects.requireNonNull(
+                    messages, "请求消息快照不能为空"));
+            if (estimatedTokens < 0) {
+                throw new IllegalArgumentException(
+                        "请求消息 Token 不能为负数");
+            }
+        }
     }
 
     private record CompressionPlan(

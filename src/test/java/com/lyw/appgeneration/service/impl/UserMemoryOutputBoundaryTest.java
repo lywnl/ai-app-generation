@@ -113,8 +113,8 @@ class UserMemoryOutputBoundaryTest {
     }
 
     @Test
-    @DisplayName("非空 JSON 没有有效候选时批次失败且游标不推进")
-    void nonEmptyJsonWithoutValidCandidatesFailsBatch() {
+    @DisplayName("合法非空数组被固定类别过滤后成功推进游标")
+    void 合法非空数组被固定类别过滤后成功推进游标() {
         provideStableTurn();
         when(model.chat(any(String.class))).thenReturn("""
                 [{"name":"未允许类别","content":"任意内容",
@@ -123,8 +123,8 @@ class UserMemoryOutputBoundaryTest {
 
         service.extractNow(USER_ID, APP_ID);
 
-        assertFailedCursorRemainsAtZero();
-        assertEquals(0, transactions.executionCount());
+        assertSuccessfulCursorAdvancedTo(12L);
+        assertEquals(1, transactions.executionCount());
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
     }
@@ -149,8 +149,8 @@ class UserMemoryOutputBoundaryTest {
     }
 
     @Test
-    @DisplayName("单条偏好超过一千零二十四 Token 时拒绝且不推进游标")
-    void singlePreferenceLineOverRecallBudgetFailsBatch() {
+    @DisplayName("单条偏好超过一千零二十四 Token 时过滤并推进游标")
+    void 单条偏好超过一千零二十四Token时过滤并推进游标() {
         provideStableTurn();
         String content = "超".repeat(2_000);
         String raw = """
@@ -165,8 +165,8 @@ class UserMemoryOutputBoundaryTest {
 
         service.extractNow(USER_ID, APP_ID);
 
-        assertFailedCursorRemainsAtZero();
-        assertEquals(0, transactions.executionCount());
+        assertSuccessfulCursorAdvancedTo(12L);
+        assertEquals(1, transactions.executionCount());
         verify(memoryMapper, never()).insert(any());
     }
 
