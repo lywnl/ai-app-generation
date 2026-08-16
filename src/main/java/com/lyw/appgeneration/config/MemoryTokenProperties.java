@@ -14,17 +14,22 @@ import java.time.Duration;
 public class MemoryTokenProperties implements InitializingBean {
 
     public static final int L1_MAX_SUMMARY_TOKENS = 3_072;
+    private static final int REQUIRED_L2_MAX_RECALL_TOKENS = 1_024;
+    private static final int REQUIRED_ASYNC_COMPRESSION_THRESHOLD = 28_672;
+    private static final Duration REQUIRED_L2_DEBOUNCE =
+            Duration.ofSeconds(30);
 
     private int l0RetainedTokens = 12_288;
     private int l1MaxSummaryTokens = L1_MAX_SUMMARY_TOKENS;
-    private int l2MaxRecallTokens = 1_024;
-    private int asyncCompressionThreshold = 28_672;
+    private int l2MaxRecallTokens = REQUIRED_L2_MAX_RECALL_TOKENS;
+    private int asyncCompressionThreshold =
+            REQUIRED_ASYNC_COMPRESSION_THRESHOLD;
     private int blockingCompressionThreshold = 30_720;
     private int hardInputLimit = 32_768;
     private int maxOutputTokens = 8_192;
     private int minimumModelContextWindow = 40_960;
     private Duration blockingTimeout = Duration.ofSeconds(60);
-    private Duration l2Debounce = Duration.ofSeconds(30);
+    private Duration l2Debounce = REQUIRED_L2_DEBOUNCE;
     private double estimationSafetyFactor = 1.15D;
 
     @Override
@@ -56,6 +61,18 @@ public class MemoryTokenProperties implements InitializingBean {
         if (!Double.isFinite(estimationSafetyFactor)
                 || estimationSafetyFactor < 1D) {
             throw new IllegalStateException("Token 估算安全系数不能小于 1");
+        }
+        if (l2MaxRecallTokens != REQUIRED_L2_MAX_RECALL_TOKENS) {
+            throw new IllegalStateException(
+                    "L2 召回预算必须严格等于 1024 Token");
+        }
+        if (asyncCompressionThreshold
+                != REQUIRED_ASYNC_COMPRESSION_THRESHOLD) {
+            throw new IllegalStateException(
+                    "异步压缩阈值必须严格等于 28672 Token");
+        }
+        if (!REQUIRED_L2_DEBOUNCE.equals(l2Debounce)) {
+            throw new IllegalStateException("L2 防抖时间必须严格等于 30 秒");
         }
     }
 

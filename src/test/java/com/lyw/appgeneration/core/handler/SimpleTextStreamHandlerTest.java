@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -87,6 +88,41 @@ class SimpleTextStreamHandlerTest {
         verify(summaries).triggerSummarizationAsync(APP_ID);
         verify(userMemory, never()).triggerPreferenceExtractionAsync(
                 anyLong(), anyLong(), anyLong());
+        context.close();
+    }
+
+    @Test
+    void L1触发失败仍尝试L2且不改写成功终态() {
+        doThrow(new IllegalStateException("L1 队列不可用"))
+                .when(summaries).triggerSummarizationAsync(APP_ID);
+
+        StepVerifier.create(handle(Flux.just("完整回答")))
+                .expectNext("完整回答")
+                .verifyComplete();
+
+        verify(summaries).triggerSummarizationAsync(APP_ID);
+        verify(userMemory).triggerPreferenceExtractionAsync(
+                USER_ID, APP_ID, AI_MESSAGE_ID);
+        verify(history, never()).addChatMessageAndReturn(
+                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID);
+        context.close();
+    }
+
+    @Test
+    void L2触发失败不影响L1和成功终态() {
+        doThrow(new IllegalStateException("L2 队列不可用"))
+                .when(userMemory).triggerPreferenceExtractionAsync(
+                        USER_ID, APP_ID, AI_MESSAGE_ID);
+
+        StepVerifier.create(handle(Flux.just("完整回答")))
+                .expectNext("完整回答")
+                .verifyComplete();
+
+        verify(summaries).triggerSummarizationAsync(APP_ID);
+        verify(userMemory).triggerPreferenceExtractionAsync(
+                USER_ID, APP_ID, AI_MESSAGE_ID);
+        verify(history, never()).addChatMessageAndReturn(
+                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE, "ai", USER_ID);
         context.close();
     }
 

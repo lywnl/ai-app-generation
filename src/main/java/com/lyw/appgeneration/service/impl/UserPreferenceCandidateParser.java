@@ -7,6 +7,7 @@ import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.memory.UserPreferenceCandidate;
 
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +20,7 @@ final class UserPreferenceCandidateParser {
     static final String EXPLICIT = "EXPLICIT";
     static final String IMPLICIT = "IMPLICIT";
 
-    /** 整体非法或同名内容冲突时返回 {@code null}。 */
+    /** 仅整体 JSON 或根结构非法时返回 {@code null}。 */
     List<UserPreferenceCandidate> parse(
             String raw, List<Long> whitelist) {
         if (StrUtil.isBlank(raw)) {
@@ -30,6 +31,7 @@ final class UserPreferenceCandidateParser {
             Set<Long> allowed = Set.copyOf(whitelist);
             Map<String, UserPreferenceCandidate> candidates =
                     new LinkedHashMap<>();
+            Set<String> conflictingNames = new HashSet<>();
             for (Object value : array) {
                 if (!(value instanceof JSONObject item)) {
                     continue;
@@ -39,13 +41,18 @@ final class UserPreferenceCandidateParser {
                 if (candidate == null) {
                     continue;
                 }
+                if (conflictingNames.contains(candidate.name())) {
+                    continue;
+                }
                 UserPreferenceCandidate previous =
                         candidates.get(candidate.name());
                 UserPreferenceCandidate merged = previous == null
                         ? candidate
                         : mergeDuplicate(previous, candidate);
                 if (merged == null) {
-                    return null;
+                    candidates.remove(candidate.name());
+                    conflictingNames.add(candidate.name());
+                    continue;
                 }
                 candidates.put(candidate.name(), merged);
             }

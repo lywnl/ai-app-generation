@@ -87,6 +87,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
     private final UserPreferenceCandidateParser preferenceCandidateParser;
     private final TransactionOperations transactionOperations;
     private final Clock clock;
+    private final UserMemoryConsistencyCoordinator consistencyCoordinator;
 
     /** 防抖状态仅通过 ConcurrentHashMap.compute 系列方法变更。 */
     private final ConcurrentHashMap<Long, UserDirtyState> pendingByUser =
@@ -180,6 +181,8 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         this.transactionOperations = Objects.requireNonNull(
                 transactionOperations, "事务执行器不能为空");
         this.clock = Objects.requireNonNull(clock, "时钟不能为空");
+        this.consistencyCoordinator =
+                new UserMemoryConsistencyCoordinator();
     }
 
     @Override
@@ -522,10 +525,13 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             long lastId,
             UserPreferenceBatchBuilder.Batch batch,
             List<UserPreferenceCandidate> candidates) {
-        boolean preferenceChanged = persistBatchAtomically(
-                userId, appId, cursor, batch, candidates);
-        if (preferenceChanged) {
-            invalidateRecallCache(userId);
+        try (UserMemoryConsistencyCoordinator.Permit ignored =
+                     consistencyCoordinator.acquire(userId)) {
+            boolean preferenceChanged = persistBatchAtomically(
+                    userId, appId, cursor, batch, candidates);
+            if (preferenceChanged) {
+                invalidateRecallCache(userId);
+            }
         }
         log.info("L2 偏好抽取完成 userId={} appId={} cursorFrom={} "
                         + "cursorTo={} candidateCount={} hasMore={}",
@@ -705,6 +711,13 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         if (userId == null) {
             return "";
         }
+        try (UserMemoryConsistencyCoordinator.Permit ignored =
+                     consistencyCoordinator.acquire(userId)) {
+            return recallUserPreferences(userId);
+        }
+    }
+
+    private String recallUserPreferences(Long userId) {
         String cacheKey = PREF_CACHE_PREFIX + userId;
         try {
             String cached = redisTemplate.opsForValue().get(cacheKey);
@@ -725,7 +738,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                             .eq("status", STATUS_ACTIVE)
                             .orderBy("evidenceType", true)
                             .orderBy("updateTime", false));
-            text = renderRecallPreferenceLines(prefs);
+            text = renderRecallPreferenceLines(userId, prefs);
         } catch (Exception exception) {
             log.warn("查询用户偏好失败 userId={} type={}",
                     userId, exception.getClass().getSimpleName());
@@ -985,14 +998,19 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         return sb.toString().trim();
     }
 
-    private String renderRecallPreferenceLines(List<AppMemory> prefs) {
+    private String renderRecallPreferenceLines(
+            Long userId, List<AppMemory> prefs) {
         if (CollUtil.isEmpty(prefs)) {
             return "";
         }
         StringBuilder recalled = new StringBuilder();
         for (AppMemory preference : prefs) {
             String line = renderPreferenceLine(preference);
-            if (!isWithinRecallBudget(line)) {
+            int estimatedTokens = tokenEstimator.estimateText(line);
+            if (estimatedTokens > tokenProperties.getL2MaxRecallTokens()) {
+                log.warn("跳过超过 L2 召回 Token 上限的单条偏好 "
+                                + "userId={} memoryId={} estimatedTokens={}",
+                        userId, preference.getId(), estimatedTokens);
                 continue;
             }
             String candidate = recalled.isEmpty()
@@ -1063,12 +1081,15 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             result = result.merge(MemoryCacheInvalidationResult.failure(
                     "L2_APP_USER_LOCAL", exception));
         }
-        result = invalidatePreferenceCacheForDeletion(
-                appId, userId, LEGACY_PREF_CACHE_PREFIX + userId,
-                "L2_PREFERENCE_REDIS_LEGACY", result);
-        result = invalidatePreferenceCacheForDeletion(
-                appId, userId, PREF_CACHE_PREFIX + userId,
-                "L2_PREFERENCE_REDIS_V2", result);
+        try (UserMemoryConsistencyCoordinator.Permit ignored =
+                     consistencyCoordinator.acquire(userId)) {
+            result = invalidatePreferenceCacheForDeletion(
+                    appId, userId, LEGACY_PREF_CACHE_PREFIX + userId,
+                    "L2_PREFERENCE_REDIS_LEGACY", result);
+            result = invalidatePreferenceCacheForDeletion(
+                    appId, userId, PREF_CACHE_PREFIX + userId,
+                    "L2_PREFERENCE_REDIS_V2", result);
+        }
         return result;
     }
 

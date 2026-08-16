@@ -117,16 +117,41 @@ public class SimpleTextStreamHandler {
             if (!triggerMemory) {
                 return PersistenceResult.SAVED;
             }
-            memorySummaryService.triggerSummarizationAsync(appId);
-            Long stableAiMessageId = saved.getId();
-            if (stableAiMessageId == null || stableAiMessageId <= 0L) {
-                log.warn("普通生成稳定 AI 消息缺少有效 ID，跳过 L2 触发 appId={}",
-                        appId);
-                return PersistenceResult.SAVED;
-            }
-            userMemoryService.triggerPreferenceExtractionAsync(
-                    loginUser.getId(), appId, stableAiMessageId);
+            triggerStableMemoryHooks(
+                    appId, loginUser.getId(), saved.getId(),
+                    memorySummaryService, userMemoryService);
             return PersistenceResult.SAVED;
+        }
+    }
+
+    private void triggerStableMemoryHooks(
+            long appId,
+            Long userId,
+            Long stableAiMessageId,
+            MemorySummaryService memorySummaryService,
+            UserMemoryService userMemoryService) {
+        try {
+            memorySummaryService.triggerSummarizationAsync(appId);
+        } catch (RuntimeException exception) {
+            log.warn("普通生成 L1 摘要触发失败 appId={} userId={} "
+                            + "stableAiMessageId={} type={}",
+                    appId, userId, stableAiMessageId,
+                    exception.getClass().getSimpleName());
+        }
+        if (stableAiMessageId == null || stableAiMessageId <= 0L) {
+            log.warn("普通生成稳定 AI 消息缺少有效 ID，跳过 L2 触发 "
+                            + "appId={} userId={}",
+                    appId, userId);
+            return;
+        }
+        try {
+            userMemoryService.triggerPreferenceExtractionAsync(
+                    userId, appId, stableAiMessageId);
+        } catch (RuntimeException exception) {
+            log.warn("普通生成 L2 偏好触发失败 appId={} userId={} "
+                            + "stableAiMessageId={} type={}",
+                    appId, userId, stableAiMessageId,
+                    exception.getClass().getSimpleName());
         }
     }
 

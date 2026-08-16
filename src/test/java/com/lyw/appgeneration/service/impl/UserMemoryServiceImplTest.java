@@ -1,5 +1,8 @@
 package com.lyw.appgeneration.service.impl;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.ConservativeChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.UserPreferencePromptBuilder;
@@ -20,6 +23,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.scheduling.TaskScheduler;
@@ -54,6 +59,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -64,6 +70,7 @@ class UserMemoryServiceImplTest {
 
     private static final long USER_ID = 7L;
     private static final long APP_ID = 100L;
+    private static final long APP_B = 200L;
 
     private ChatHistoryService chatHistoryService;
     private AppMemoryMapper memoryMapper;
@@ -596,44 +603,61 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("同批同名不同内容候选无论数组顺序都不得覆盖写入")
-    void 同批同名冲突候选按确定性失败处理() {
+    @DisplayName("合法 JSON 只剩同名冲突候选时按空列表正常推进")
+    void 只剩同名冲突候选时正常推进游标() {
         List<ChatHistory> history = new ArrayList<>();
         history.addAll(完整回合(201L, 202L,
                 "偏好深色界面", "已完成"));
         history.addAll(完整回合(211L, 212L,
                 "偏好浅色界面", "已完成"));
         提供历史(history);
-        String darkFirst = """
+        when(model.chat(any(String.class))).thenReturn("""
                 [
                   {"name":"视觉风格","content":"偏好深色界面",
                    "evidenceType":"EXPLICIT","turnIds":[201]},
                   {"name":"视觉风格","content":"偏好浅色界面",
                    "evidenceType":"EXPLICIT","turnIds":[211]}
                 ]
-                """;
-        String lightFirst = """
-                [
-                  {"name":"视觉风格","content":"偏好浅色界面",
-                   "evidenceType":"EXPLICIT","turnIds":[211]},
-                  {"name":"视觉风格","content":"偏好深色界面",
-                   "evidenceType":"EXPLICIT","turnIds":[201]}
-                ]
-                """;
-        when(model.chat(any(String.class)))
-                .thenReturn(darkFirst, lightFirst);
+                """);
 
-        service.extractNow(USER_ID, APP_ID);
         service.extractNow(USER_ID, APP_ID);
 
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
-        ArgumentCaptor<AppMemoryExtractCursor> failed =
-                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
-        verify(cursorMapper, times(2)).insert(failed.capture());
-        assertTrue(failed.getAllValues().stream().allMatch(
-                cursor -> cursor.getLastExtractedId() == 0L
-                        && cursor.getFailCount() == 1));
+        断言游标新增到(212L);
+    }
+
+    @Test
+    @DisplayName("同名冲突只丢弃该名称且后续同名不得重新进入结果")
+    void 同名冲突保留其他合法候选() {
+        List<ChatHistory> history = new ArrayList<>();
+        history.addAll(完整回合(201L, 202L,
+                "偏好深色界面", "已完成"));
+        history.addAll(完整回合(211L, 212L,
+                "偏好浅色界面", "已完成"));
+        history.addAll(完整回合(221L, 222L,
+                "以后都使用中文", "已收到"));
+        提供历史(history);
+        when(model.chat(any(String.class))).thenReturn("""
+                [
+                  {"name":"视觉风格","content":"偏好深色界面",
+                   "evidenceType":"EXPLICIT","turnIds":[201]},
+                  {"name":"视觉风格","content":"偏好浅色界面",
+                   "evidenceType":"EXPLICIT","turnIds":[211]},
+                  {"name":"视觉风格","content":"偏好深色界面",
+                   "evidenceType":"EXPLICIT","turnIds":[201]},
+                  {"name":"语言偏好","content":"简体中文",
+                   "evidenceType":"EXPLICIT","turnIds":[221]}
+                ]
+                """);
+
+        service.extractNow(USER_ID, APP_ID);
+
+        AppMemory inserted = 捕获新增偏好();
+        assertEquals("语言偏好", inserted.getName());
+        assertEquals("简体中文", inserted.getContent());
+        verify(memoryMapper, never()).update(any());
+        断言游标新增到(222L);
     }
 
     @Test
@@ -708,17 +732,43 @@ class UserMemoryServiceImplTest {
     @DisplayName("单条偏好自身超过一千零二十四 Token 时整条跳过且不截断")
     void 单条超限时跳过并继续召回后续完整条目() {
         提供应用归属();
-        String oversized = "超".repeat(1_100);
+        String sensitiveContent = "敏感偏好正文-" + "超".repeat(1_100);
+        AppMemory oversizedPreference = 偏好(
+                "敏感偏好名称", sensitiveContent,
+                "EXPLICIT", "ACTIVE", 1, 221L);
+        oversizedPreference.setId(221L);
+        AppMemory validPreference = 偏好(
+                "语言偏好", "简体中文",
+                "EXPLICIT", "ACTIVE", 1, 222L);
+        validPreference.setId(222L);
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
-                偏好("超长偏好", oversized,
-                        "EXPLICIT", "ACTIVE", 1, 221L),
-                偏好("语言偏好", "简体中文",
-                        "EXPLICIT", "ACTIVE", 1, 222L)));
+                oversizedPreference, validPreference));
+        String oversizedLine = "- 敏感偏好名称:" + sensitiveContent;
+        int estimatedTokens = tokenEstimator.estimateText(oversizedLine);
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                UserMemoryServiceImpl.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
 
-        String recalled = service.recallByApp(APP_ID);
+        try {
+            String recalled = service.recallByApp(APP_ID);
 
-        assertEquals("- 语言偏好:简体中文", recalled);
-        assertFalse(recalled.contains(oversized.substring(0, 32)));
+            assertEquals("- 语言偏好:简体中文", recalled);
+            assertFalse(recalled.contains("敏感偏好正文"));
+            List<String> logs = appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            assertEquals(List.of(
+                    "跳过超过 L2 召回 Token 上限的单条偏好 "
+                            + "userId=7 memoryId=221 estimatedTokens="
+                            + estimatedTokens), logs);
+            assertFalse(logs.getFirst().contains("敏感偏好名称"));
+            assertFalse(logs.getFirst().contains("敏感偏好正文"));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @Test
@@ -795,6 +845,115 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
+    @DisplayName("同用户其他应用回填旧快照后删除失效必须最终清空缓存")
+    void 同用户跨应用删除失效不得被迟到回填覆盖() throws Exception {
+        提供应用归属(APP_B);
+        String legacyCacheKey = "mem:pref:" + USER_ID;
+        String cacheKey = "mem:pref:v2:" + USER_ID;
+        String staleRecall = "- 语言偏好:简体中文";
+        when(valueOperations.get(cacheKey)).thenReturn(null);
+        CountDownLatch snapshotRead = new CountDownLatch(1);
+        CountDownLatch allowSnapshotReturn = new CountDownLatch(1);
+        when(memoryMapper.selectListByQuery(any())).thenAnswer(invocation -> {
+            List<AppMemory> staleSnapshot = List.of(
+                    偏好("语言偏好", "简体中文",
+                            "EXPLICIT", "ACTIVE", 1, 261L));
+            snapshotRead.countDown();
+            assertTrue(allowSnapshotReturn.await(3, TimeUnit.SECONDS));
+            return staleSnapshot;
+        });
+        AtomicReference<Thread> invalidationThread = new AtomicReference<>();
+        CountDownLatch invalidationStarted = new CountDownLatch(1);
+
+        try (ExecutorService threads = Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<String> recall = threads.submit(
+                    () -> service.recallByApp(APP_B));
+            assertTrue(snapshotRead.await(3, TimeUnit.SECONDS));
+
+            Future<MemoryCacheInvalidationResult> invalidation =
+                    threads.submit(() -> {
+                        invalidationThread.set(Thread.currentThread());
+                        invalidationStarted.countDown();
+                        return service.invalidateCaches(APP_ID, USER_ID);
+                    });
+            assertTrue(invalidationStarted.await(3, TimeUnit.SECONDS));
+            等待任务完成或线程进入锁等待(invalidation, invalidationThread);
+
+            allowSnapshotReturn.countDown();
+            assertEquals(staleRecall, recall.get(3, TimeUnit.SECONDS));
+            assertTrue(invalidation.get(3, TimeUnit.SECONDS)
+                    .failures().isEmpty());
+        }
+
+        InOrder cacheOrder = inOrder(valueOperations, redisTemplate);
+        cacheOrder.verify(valueOperations).set(
+                eq(cacheKey), eq(staleRecall), any());
+        cacheOrder.verify(redisTemplate).delete(legacyCacheKey);
+        cacheOrder.verify(redisTemplate).delete(cacheKey);
+    }
+
+    @Test
+    @DisplayName("同用户其他应用回填旧快照后偏好更新必须最终清空缓存")
+    void 同用户跨应用偏好更新失效不得被迟到回填覆盖() throws Exception {
+        提供应用归属(APP_B);
+        提供历史(完整回合(271L, 272L,
+                "以后都使用深色界面", "已调整"));
+        when(model.chat(any(String.class))).thenReturn("""
+                [{"name":"视觉风格","content":"偏好深色界面",
+                "evidenceType":"EXPLICIT","turnIds":[271]}]
+                """);
+        String legacyCacheKey = "mem:pref:" + USER_ID;
+        String cacheKey = "mem:pref:v2:" + USER_ID;
+        String staleRecall = "- 语言偏好:简体中文";
+        when(valueOperations.get(cacheKey)).thenReturn(null);
+        CountDownLatch snapshotRead = new CountDownLatch(1);
+        CountDownLatch allowSnapshotReturn = new CountDownLatch(1);
+        AtomicReference<Thread> recallThread = new AtomicReference<>();
+        when(memoryMapper.selectListByQuery(any())).thenAnswer(invocation -> {
+            if (Thread.currentThread() != recallThread.get()) {
+                return List.of();
+            }
+            List<AppMemory> staleSnapshot = List.of(
+                    偏好("语言偏好", "简体中文",
+                            "EXPLICIT", "ACTIVE", 1, 273L));
+            snapshotRead.countDown();
+            assertTrue(allowSnapshotReturn.await(3, TimeUnit.SECONDS));
+            return staleSnapshot;
+        });
+        AtomicReference<Thread> extractionThread = new AtomicReference<>();
+        CountDownLatch extractionStarted = new CountDownLatch(1);
+
+        try (ExecutorService threads = Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<String> recall = threads.submit(() -> {
+                recallThread.set(Thread.currentThread());
+                return service.recallByApp(APP_B);
+            });
+            assertTrue(snapshotRead.await(3, TimeUnit.SECONDS));
+
+            Future<?> extraction = threads.submit(() -> {
+                extractionThread.set(Thread.currentThread());
+                extractionStarted.countDown();
+                service.extractNow(USER_ID, APP_ID);
+            });
+            assertTrue(extractionStarted.await(3, TimeUnit.SECONDS));
+            等待任务完成或线程进入锁等待(extraction, extractionThread);
+
+            allowSnapshotReturn.countDown();
+            assertEquals(staleRecall, recall.get(3, TimeUnit.SECONDS));
+            extraction.get(3, TimeUnit.SECONDS);
+        }
+
+        verify(memoryMapper).insert(any());
+        InOrder cacheOrder = inOrder(valueOperations, redisTemplate);
+        cacheOrder.verify(valueOperations).set(
+                eq(cacheKey), eq(staleRecall), any());
+        cacheOrder.verify(redisTemplate).delete(legacyCacheKey);
+        cacheOrder.verify(redisTemplate).delete(cacheKey);
+    }
+
+    @Test
     @DisplayName("删除应用时同时清理新旧偏好缓存")
     void 删除失效同时清理新旧缓存键() {
         MemoryCacheInvalidationResult result =
@@ -858,8 +1017,32 @@ class UserMemoryServiceImplTest {
     }
 
     private void 提供应用归属() {
-        when(appMapper.selectOneById(APP_ID)).thenReturn(
-                App.builder().id(APP_ID).userId(USER_ID).build());
+        提供应用归属(APP_ID);
+    }
+
+    private void 提供应用归属(long appId) {
+        when(appMapper.selectOneById(appId)).thenReturn(
+                App.builder().id(appId).userId(USER_ID).build());
+    }
+
+    private void 等待任务完成或线程进入锁等待(
+            Future<?> task, AtomicReference<Thread> threadReference) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!task.isDone()) {
+            Thread thread = threadReference.get();
+            if (thread != null && isLockWaiting(thread.getState())) {
+                return;
+            }
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError("任务既未完成，也未进入锁等待状态");
+            }
+            Thread.onSpinWait();
+        }
+    }
+
+    private boolean isLockWaiting(Thread.State state) {
+        return state == Thread.State.WAITING
+                || state == Thread.State.BLOCKED;
     }
 
     private Map<String, Object> 读取等值条件(QueryWrapper query) {

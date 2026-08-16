@@ -45,6 +45,33 @@ class MemoryTokenPropertiesTest {
     }
 
     @Test
+    @DisplayName("启动校验拒绝任何非 1024 的 L2 召回上限")
+    void 启动拒绝非固定L2召回上限() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setL2MaxRecallTokens(1_025);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 28672 的异步压缩阈值")
+    void 启动拒绝非固定异步压缩阈值() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setAsyncCompressionThreshold(28_673);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非三十秒的 L2 防抖时间")
+    void 启动拒绝非固定L2防抖时间() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setL2Debounce(Duration.ofSeconds(31));
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
     void rejectsThresholdsThatAreNotStrictlyIncreasing() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         properties.setAsyncCompressionThreshold(30_720);
