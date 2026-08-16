@@ -9,7 +9,7 @@ import java.util.stream.Collectors;
 /**
  * 构建 L2 用户偏好抽取 prompt。
  *
- * <p>借鉴 Claude Code memdir 封闭类型系统:半封闭 name 类别清单稳定去重键;
+ * <p>借鉴 Claude Code memdir 封闭类型系统:固定 name 类别清单稳定去重键;
  * 明确"只抽跨 app 通用偏好、排除 app 特有需求",杜绝与 L1 摘要重叠。
  *
  * @author <a href="https://gitee.com/lywynl">lyw</a>
@@ -28,7 +28,7 @@ public final class UserPreferencePromptBuilder {
             - 构建错误、工具选择、修复尝试、依赖安装、框架堆栈和单项目代码决策都是临时或单应用信息,一律不要抽取。
             - 偏好证据只能来自用户文本。禁止从 AI 模型行为、工具结果或未由用户文本表达的单次行为猜测用户偏好。
 
-            name 字段优先归类到以下固定类别(降低重复):
+            name 字段只能使用以下固定类别(降低重复):
             语言偏好 / 视觉风格 / 技术栈倾向 / 交互习惯 / 其他
 
             参考【已有偏好】决定每条是新增、更新还是无变化:

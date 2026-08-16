@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.UserPreferenceCandidate;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
@@ -87,6 +88,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
     private final ChatTokenEstimator tokenEstimator;
     private final MemoryTokenProperties tokenProperties;
     private final UserPreferenceBatchBuilder preferenceBatchBuilder;
+    private final UserPreferenceContract preferenceContract;
     private final UserPreferenceCandidateParser preferenceCandidateParser;
     private final TransactionOperations transactionOperations;
     private final MemoryCompressionMetricsCollector metricsCollector;
@@ -187,8 +189,10 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 tokenProperties, "Token 配置不能为空");
         this.preferenceBatchBuilder = new UserPreferenceBatchBuilder(
                 this.tokenEstimator, this.tokenProperties);
-        this.preferenceCandidateParser =
-                new UserPreferenceCandidateParser();
+        this.preferenceContract = new UserPreferenceContract(
+                this.tokenEstimator, this.tokenProperties);
+        this.preferenceCandidateParser = new UserPreferenceCandidateParser(
+                this.preferenceContract);
         this.transactionOperations = Objects.requireNonNull(
                 transactionOperations, "事务执行器不能为空");
         this.metricsCollector = Objects.requireNonNull(
@@ -599,6 +603,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
             List<UserPreferenceCandidate> candidates) {
         try (UserMemoryConsistencyCoordinator.Permit ignored =
                      consistencyCoordinator.acquire(userId)) {
+            invalidateCurrentRecallCacheStrict(userId);
             boolean preferenceChanged = persistBatchAtomically(
                     userId, appId, cursor, batch, candidates);
             if (preferenceChanged) {
@@ -849,7 +854,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         String cacheKey = PREF_CACHE_PREFIX + userId;
         try {
             String cached = redisTemplate.opsForValue().get(cacheKey);
-            if (cached != null && isWithinRecallBudget(cached)) {
+            if (preferenceContract.isValidRecallCache(cached)) {
                 return cached; // 命中(含空串)
             }
             if (cached != null) {
@@ -862,8 +867,11 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         String text;
         try {
             List<AppMemory> prefs = appMemoryMapper.selectListByQuery(
-                    QueryWrapper.create().eq("userId", userId).eq("type", TYPE_USER_PREFERENCE)
+                    QueryWrapper.create()
+                            .eq("userId", userId)
+                            .eq("type", TYPE_USER_PREFERENCE)
                             .eq("status", STATUS_ACTIVE)
+                            .in("name", preferenceContract.allowedNames())
                             .orderBy("evidenceType", true)
                             .orderBy("updateTime", false));
             text = renderRecallPreferenceLines(userId, prefs);
@@ -1135,6 +1143,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 QueryWrapper.create()
                         .eq("userId", userId)
                         .eq("type", TYPE_USER_PREFERENCE)
+                        .in("name", preferenceContract.allowedNames())
                         .orderBy("updateTime", false));
         if (preferences == null) {
             throw new IllegalStateException("数据库返回了 null 已有偏好列表");
@@ -1146,13 +1155,30 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         if (CollUtil.isEmpty(prefs)) {
             return "";
         }
-        StringBuilder sb = new StringBuilder();
+        Map<String, AppMemory> latestByName = new LinkedHashMap<>();
         for (AppMemory preference : prefs) {
-            sb.append("- name=").append(preference.getName())
-                    .append("; status=").append(preference.getStatus())
-                    .append("; evidenceType=")
-                    .append(preference.getEvidenceType())
-                    .append("; content=").append(preference.getContent())
+            if (!isSupportedPreference(preference)) {
+                continue;
+            }
+            latestByName.putIfAbsent(
+                    StrUtil.trim(preference.getName()), preference);
+            if (latestByName.size()
+                    == UserPreferenceContract.MAX_CANDIDATES) {
+                break;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (AppMemory preference : latestByName.values()) {
+            String line = "- name=" + StrUtil.trim(preference.getName())
+                    + "; status=" + preference.getStatus()
+                    + "; evidenceType=" + preference.getEvidenceType()
+                    + "; content=" + normalizeContent(
+                    preference.getContent());
+            if (tokenEstimator.estimateText(line)
+                    > tokenProperties.getL2MaxRecallTokens()) {
+                continue;
+            }
+            sb.append(line)
                     .append('\n');
         }
         return sb.toString().trim();
@@ -1165,12 +1191,18 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         }
         StringBuilder recalled = new StringBuilder();
         for (AppMemory preference : prefs) {
+            if (preference == null) {
+                continue;
+            }
             String line = renderPreferenceLine(preference);
             int estimatedTokens = tokenEstimator.estimateText(line);
             if (estimatedTokens > tokenProperties.getL2MaxRecallTokens()) {
                 log.warn("跳过超过 L2 召回 Token 上限的单条偏好 "
                                 + "userId={} memoryId={} estimatedTokens={}",
                         userId, preference.getId(), estimatedTokens);
+                continue;
+            }
+            if (!isSupportedPreference(preference)) {
                 continue;
             }
             String candidate = recalled.isEmpty()
@@ -1186,8 +1218,15 @@ public class UserMemoryServiceImpl implements UserMemoryService {
     }
 
     private String renderPreferenceLine(AppMemory preference) {
-        return "- " + Objects.toString(preference.getName(), "")
-                + ":" + Objects.toString(preference.getContent(), "");
+        return preferenceContract.renderPreferenceLine(
+                Objects.toString(preference.getName(), ""),
+                Objects.toString(preference.getContent(), ""));
+    }
+
+    private boolean isSupportedPreference(AppMemory preference) {
+        return preference != null
+                && preferenceContract.isPreferenceWithinBudget(
+                preference.getName(), preference.getContent());
     }
 
     private boolean isWithinRecallBudget(String text) {
@@ -1198,6 +1237,16 @@ public class UserMemoryServiceImpl implements UserMemoryService {
     private void invalidateRecallCache(Long userId) {
         deleteCacheKey(LEGACY_PREF_CACHE_PREFIX + userId, userId);
         deleteCacheKey(PREF_CACHE_PREFIX + userId, userId);
+    }
+
+    private void invalidateCurrentRecallCacheStrict(Long userId) {
+        try {
+            redisTemplate.delete(PREF_CACHE_PREFIX + userId);
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(
+                    "失效新版偏好缓存失败，userId=" + userId,
+                    exception);
+        }
     }
 
     private void deleteCacheKey(String cacheKey, Long userId) {

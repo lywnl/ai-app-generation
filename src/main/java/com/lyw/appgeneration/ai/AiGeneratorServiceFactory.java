@@ -3,6 +3,7 @@ package com.lyw.appgeneration.ai;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.lyw.appgeneration.ai.guardrail.PromptSafetyInputGuardrail;
+import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
@@ -47,6 +48,9 @@ public class AiGeneratorServiceFactory {
 
     @Resource
     private RedisChatMemoryStore redisChatMemoryStore;
+
+    @Resource
+    private AtomicChatMemoryStore atomicChatMemoryStore;
 
     @Resource
     private ChatHistoryService chatHistoryService;
@@ -106,7 +110,7 @@ public class AiGeneratorServiceFactory {
     /** 清空不可信 L0，并让下一次获取严格从 MySQL 冷启动。 */
     public void prepareVueColdRebuild(long appId) {
         invalidateVueService(appId);
-        redisChatMemoryStore.deleteMessages(appId);
+        l0Store().deleteMessages(appId);
     }
 
     public MemoryCacheInvalidationResult invalidateAndClearMemory(
@@ -128,7 +132,7 @@ public class AiGeneratorServiceFactory {
                     "L0_SERVICE_CAFFEINE", exception));
         }
         try {
-            redisChatMemoryStore.deleteMessages(appId);
+            l0Store().deleteMessages(appId);
         } catch (Exception exception) {
             log.warn("清理 L0 Redis 记忆失败 appId={} codeGenType={}: {}",
                     appId, codeGenType.getValue(), exception.getMessage());
@@ -181,15 +185,16 @@ public class AiGeneratorServiceFactory {
     /** 按固定装饰顺序创建在线 L0/L1/L2 记忆，并从 MySQL 重建完整回合。 */
     CompressionAwareChatMemory createOnlineChatMemory(
             long appId, CodeGenTypeEnum codeGenType) {
+        AtomicChatMemoryStore store = l0Store();
         // MessageWindow 只保留 Redis store 和工具对一致性，不再按消息条数淘汰。
         MessageWindowChatMemory delegate = MessageWindowChatMemory
                 .builder()
                 .id(appId)
-                .chatMemoryStore(redisChatMemoryStore)
+                .chatMemoryStore(store)
                 .maxMessages(Integer.MAX_VALUE)
                 .build();
         TokenAwareChatMemory tokenAwareMemory =
-                new TokenAwareChatMemory(delegate);
+                new TokenAwareChatMemory(delegate, store);
         // 冷启动按完整回合回填到 30K；L1/L2 由最外层装饰器注入。
         long lastSummarizedId;
         try {
@@ -220,6 +225,14 @@ public class AiGeneratorServiceFactory {
                 : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
         return new CompressionAwareChatMemory(
                 tokenAwareMemory, memorySummaryService, userMemoryService);
+    }
+
+    private synchronized AtomicChatMemoryStore l0Store() {
+        if (atomicChatMemoryStore == null) {
+            atomicChatMemoryStore = new AtomicChatMemoryStore(
+                    redisChatMemoryStore);
+        }
+        return atomicChatMemoryStore;
     }
 
     private void recordVueColdRebuild(

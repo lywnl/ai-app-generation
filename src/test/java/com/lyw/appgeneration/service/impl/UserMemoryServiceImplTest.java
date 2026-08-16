@@ -383,8 +383,8 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("非白名单和字段非法候选全部丢弃但合法数组可推进")
-    void 非法候选被丢弃且批次仍推进() {
+    @DisplayName("非空数组全部候选非法时批次失败且游标不推进")
+    void 全部候选非法时批次失败() {
         提供历史(完整回合(51L, 52L,
                 "以后都用中文", "已收到"));
         when(model.chat(any(String.class))).thenReturn("""
@@ -400,7 +400,7 @@ class UserMemoryServiceImplTest {
 
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
-        断言游标新增到(52L);
+        断言失败游标保留在(0L);
         assertTrue(metricsRegistry.find("memory_l2_candidate_total")
                 .counters().isEmpty());
     }
@@ -760,8 +760,8 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("基础 Prompt 已超限时批次失败且不得误跳过正常回合")
-    void 基础Prompt超限保留处理游标() {
+    @DisplayName("超限旧偏好被过滤后基础 Prompt 可继续处理正常回合")
+    void 超限旧偏好不会永久阻断后续抽取() {
         String oversizedExisting = "既有偏好".repeat(2_000);
         String renderedExisting = "- name=视觉风格; status=ACTIVE; "
                 + "evidenceType=EXPLICIT; content=" + oversizedExisting;
@@ -774,16 +774,21 @@ class UserMemoryServiceImplTest {
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
                 偏好("视觉风格", oversizedExisting,
                         "EXPLICIT", "ACTIVE", 1, 171L)));
+        when(model.chat(any(String.class))).thenReturn("[]");
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
 
         service.extractNow(USER_ID, APP_ID);
 
-        verify(model, never()).chat(any(String.class));
-        断言失败游标保留在(0L);
+        verify(model).chat(prompt.capture());
+        assertFalse(prompt.getValue().contains(oversizedExisting));
+        assertTrue(tokenEstimator.estimateText(prompt.getValue())
+                <= properties.getAsyncCompressionThreshold());
+        断言游标新增到(192L);
     }
 
     @Test
-    @DisplayName("合法 JSON 只剩同名冲突候选时按空列表正常推进")
-    void 只剩同名冲突候选时正常推进游标() {
+    @DisplayName("非空 JSON 去重后只剩冲突候选时批次失败")
+    void 只剩同名冲突候选时批次失败() {
         List<ChatHistory> history = new ArrayList<>();
         history.addAll(完整回合(201L, 202L,
                 "偏好深色界面", "已完成"));
@@ -803,7 +808,7 @@ class UserMemoryServiceImplTest {
 
         verify(memoryMapper, never()).insert(any());
         verify(memoryMapper, never()).update(any());
-        断言游标新增到(212L);
+        断言失败游标保留在(0L);
         assertTrue(metricsRegistry.find("memory_l2_candidate_total")
                 .counters().isEmpty());
     }
@@ -955,19 +960,19 @@ class UserMemoryServiceImplTest {
     void 召回结果严格受一千零二十四Token限制() {
         提供应用归属();
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
-                偏好("第一项", "甲".repeat(400),
+                偏好("语言偏好", "甲".repeat(400),
                         "EXPLICIT", "ACTIVE", 1, 211L),
-                偏好("第二项", "乙".repeat(400),
+                偏好("视觉风格", "乙".repeat(400),
                         "EXPLICIT", "ACTIVE", 1, 212L),
-                偏好("第三项", "丙".repeat(400),
+                偏好("技术栈倾向", "丙".repeat(400),
                         "IMPLICIT", "ACTIVE", 2, 213L)));
 
         String recalled = service.recallByApp(APP_ID);
 
         assertTrue(tokenEstimator.estimateText(recalled) <= 1_024);
-        assertTrue(recalled.contains("第一项"));
-        assertTrue(recalled.contains("第二项"));
-        assertFalse(recalled.contains("第三项"));
+        assertTrue(recalled.contains("语言偏好"));
+        assertTrue(recalled.contains("视觉风格"));
+        assertFalse(recalled.contains("技术栈倾向"));
     }
 
     @Test
@@ -1363,7 +1368,11 @@ class UserMemoryServiceImplTest {
                 logicField.setAccessible(true);
                 valueField.setAccessible(true);
                 nextField.setAccessible(true);
-                assertEquals("=", ((String) logicField.get(condition)).trim());
+                String logic = ((String) logicField.get(condition)).trim();
+                if (!"=".equals(logic)) {
+                    condition = nextField.get(condition);
+                    continue;
+                }
                 String column = 读取原始列名(columnField.get(condition));
                 conditions.put(column, valueField.get(condition));
                 condition = nextField.get(condition);

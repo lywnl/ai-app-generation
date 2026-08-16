@@ -36,6 +36,15 @@ class MemoryTokenPropertiesTest {
     }
 
     @Test
+    @DisplayName("启动校验拒绝任何非 12288 的 L0 保留预算")
+    void rejectsNonCanonicalL0RetainedTokens() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setL0RetainedTokens(12_289);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
     @DisplayName("启动校验拒绝任何非 3072 的 L1 摘要上限")
     void rejectsNonCanonicalL1SummaryLimit() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
@@ -58,6 +67,51 @@ class MemoryTokenPropertiesTest {
     void 启动拒绝非固定异步压缩阈值() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         properties.setAsyncCompressionThreshold(28_673);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 30720 的同步压缩阈值")
+    void rejectsNonCanonicalBlockingCompressionThreshold() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setBlockingCompressionThreshold(30_721);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 32768 的输入硬上限")
+    void rejectsNonCanonicalHardInputLimit() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setHardInputLimit(32_767);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 8192 的最大输出预算")
+    void rejectsNonCanonicalMaxOutputTokens() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setMaxOutputTokens(8_191);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 40960 的模型最小上下文窗口")
+    void rejectsNonCanonicalMinimumModelContextWindow() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setMinimumModelContextWindow(40_961);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非六十秒的同步压缩超时")
+    void rejectsNonCanonicalBlockingTimeout() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setBlockingTimeout(Duration.ofSeconds(61));
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
@@ -106,6 +160,15 @@ class MemoryTokenPropertiesTest {
     void rejectsSafetyFactorBelowOne() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         properties.setEstimationSafetyFactor(0.99D);
+
+        assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
+    }
+
+    @Test
+    @DisplayName("启动校验拒绝任何非 1.15 的 Token 估算安全系数")
+    void rejectsNonCanonicalEstimationSafetyFactor() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        properties.setEstimationSafetyFactor(1.14D);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }

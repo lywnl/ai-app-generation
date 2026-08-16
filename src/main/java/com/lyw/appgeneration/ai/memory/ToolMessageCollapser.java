@@ -21,10 +21,12 @@ import java.util.List;
 @Component
 public class ToolMessageCollapser {
 
-    private final ChatMemoryStore store;
+    private final AtomicChatMemoryStore store;
 
     public ToolMessageCollapser(ChatMemoryStore store) {
-        this.store = store;
+        this.store = store instanceof AtomicChatMemoryStore atomicStore
+                ? atomicStore
+                : new AtomicChatMemoryStore(store);
     }
 
     /**
@@ -71,20 +73,31 @@ public class ToolMessageCollapser {
      */
     public CollapseResult collapseLastTurn(long appId, String mergedAiText) {
         try {
-            List<ChatMessage> raw = store.getMessages(appId);
-            if (raw == null || raw.isEmpty()) {
-                return new CollapseResult(CollapseStatus.NO_MESSAGES, List.of());
-            }
-            if (StrUtil.isBlank(mergedAiText)) {
-                return new CollapseResult(CollapseStatus.INVALID_TEXT, raw);
-            }
-            boolean hasUserBoundary = raw.stream().anyMatch(UserMessage.class::isInstance);
-            if (!hasUserBoundary) {
-                return new CollapseResult(CollapseStatus.NO_USER_BOUNDARY, raw);
-            }
-            List<ChatMessage> merged = mergeLastTurn(raw, mergedAiText);
-            store.updateMessages(appId, merged);
-            return new CollapseResult(CollapseStatus.COLLAPSED, merged);
+            return store.withMemoryLock(appId, () -> {
+                List<ChatMessage> raw = store.getMessages(appId);
+                if (raw.isEmpty()) {
+                    return new CollapseResult(
+                            CollapseStatus.NO_MESSAGES, List.of());
+                }
+                if (StrUtil.isBlank(mergedAiText)) {
+                    return new CollapseResult(
+                            CollapseStatus.INVALID_TEXT, raw);
+                }
+                boolean hasUserBoundary = raw.stream()
+                        .anyMatch(UserMessage.class::isInstance);
+                if (!hasUserBoundary) {
+                    return new CollapseResult(
+                            CollapseStatus.NO_USER_BOUNDARY, raw);
+                }
+                List<ChatMessage> merged = mergeLastTurn(
+                        raw, mergedAiText);
+                if (!store.replaceMessagesIfMatches(appId, raw, merged)) {
+                    return new CollapseResult(
+                            CollapseStatus.STORE_FAILED, raw);
+                }
+                return new CollapseResult(
+                        CollapseStatus.COLLAPSED, merged);
+            });
         } catch (Exception e) {
             log.warn("L0 窗口工具消息折叠失败,降级保留原始多条: appId={}, error={}", appId, e.getMessage());
             return new CollapseResult(CollapseStatus.STORE_FAILED, List.of());

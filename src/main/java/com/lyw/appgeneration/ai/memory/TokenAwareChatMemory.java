@@ -18,11 +18,22 @@ import java.util.concurrent.locks.ReentrantLock;
 public class TokenAwareChatMemory implements ChatMemory {
 
     private final ChatMemory delegate;
+    private final AtomicChatMemoryStore atomicStore;
+    private final Object memoryId;
     private final ReentrantLock memoryLock = new ReentrantLock(true);
 
-    public TokenAwareChatMemory(ChatMemory delegate) {
+    /** 仅供同包内无持久化 store 的既有单元测试使用。 */
+    TokenAwareChatMemory(ChatMemory delegate) {
+        this(delegate, null);
+    }
+
+    public TokenAwareChatMemory(
+            ChatMemory delegate, AtomicChatMemoryStore atomicStore) {
         this.delegate = Objects.requireNonNull(
                 delegate, "L0 ChatMemory 不能为空");
+        this.atomicStore = atomicStore;
+        this.memoryId = Objects.requireNonNull(
+                delegate.id(), "L0 memoryId 不能为空");
     }
 
     @Override
@@ -32,32 +43,17 @@ public class TokenAwareChatMemory implements ChatMemory {
 
     @Override
     public void add(ChatMessage message) {
-        memoryLock.lock();
-        try {
-            delegate.add(message);
-        } finally {
-            memoryLock.unlock();
-        }
+        withMemoryLock(() -> delegate.add(message));
     }
 
     @Override
     public List<ChatMessage> messages() {
-        memoryLock.lock();
-        try {
-            return List.copyOf(delegate.messages());
-        } finally {
-            memoryLock.unlock();
-        }
+        return withMemoryLock(() -> List.copyOf(delegate.messages()));
     }
 
     @Override
     public void clear() {
-        memoryLock.lock();
-        try {
-            delegate.clear();
-        } finally {
-            memoryLock.unlock();
-        }
+        withMemoryLock(delegate::clear);
     }
 
     /**
@@ -78,8 +74,7 @@ public class TokenAwareChatMemory implements ChatMemory {
         if (!isCompleteTurnSequence(expected)) {
             return false;
         }
-        memoryLock.lock();
-        try {
+        return withMemoryLock(() -> {
             List<ChatMessage> current = List.copyOf(delegate.messages());
             int firstUser = firstUserIndex(current);
             int expectedEnd = firstUser + expected.size();
@@ -92,12 +87,62 @@ public class TokenAwareChatMemory implements ChatMemory {
                     current.size() - expected.size());
             replacement.addAll(current.subList(0, firstUser));
             replacement.addAll(current.subList(expectedEnd, current.size()));
+            return replaceSnapshot(current, replacement);
+        });
+    }
+
+    /**
+     * 仅当旧快照未变化时一次性替换完整窗口。
+     *
+     * @return 快照匹配且底层写成功时返回 {@code true}
+     */
+    public boolean replaceSnapshotIfMatches(
+            List<ChatMessage> expected,
+            List<ChatMessage> replacement) {
+        List<ChatMessage> expectedSnapshot = List.copyOf(
+                Objects.requireNonNull(expected, "旧快照不能为空"));
+        List<ChatMessage> replacementSnapshot = List.copyOf(
+                Objects.requireNonNull(replacement, "新快照不能为空"));
+        return withMemoryLock(() -> replaceSnapshot(
+                expectedSnapshot, replacementSnapshot));
+    }
+
+    private boolean replaceSnapshot(
+            List<ChatMessage> expected,
+            List<ChatMessage> replacement) {
+        if (atomicStore == null) {
+            if (!List.copyOf(delegate.messages()).equals(expected)) {
+                return false;
+            }
             delegate.clear();
             delegate.add(replacement);
             return true;
+        }
+        try {
+            return atomicStore.replaceMessagesIfMatches(
+                    memoryId, expected, replacement);
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    private <T> T withMemoryLock(java.util.function.Supplier<T> action) {
+        if (atomicStore != null) {
+            return atomicStore.withMemoryLock(memoryId, action);
+        }
+        memoryLock.lock();
+        try {
+            return action.get();
         } finally {
             memoryLock.unlock();
         }
+    }
+
+    private void withMemoryLock(Runnable action) {
+        withMemoryLock(() -> {
+            action.run();
+            return null;
+        });
     }
 
     private boolean isCompleteTurnSequence(List<ChatMessage> messages) {

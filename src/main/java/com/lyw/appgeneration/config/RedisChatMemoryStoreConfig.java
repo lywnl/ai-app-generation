@@ -1,10 +1,12 @@
 package com.lyw.appgeneration.config;
 
+import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 @Configuration
 @ConfigurationProperties(prefix = "spring.data.redis")
@@ -30,6 +32,13 @@ public class RedisChatMemoryStoreConfig {
                 .password(password)
                 .ttl(ttl)
                 .build();
+    }
+
+    @Bean
+    @Primary
+    public AtomicChatMemoryStore atomicChatMemoryStore(
+            RedisChatMemoryStore redisChatMemoryStore) {
+        return new AtomicChatMemoryStore(redisChatMemoryStore);
     }
 
 }

@@ -4,6 +4,7 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.ConversationTurn;
+import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -241,10 +242,13 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             throw new IllegalArgumentException("阻塞压缩阈值必须大于 0");
         }
         try {
+            List<ChatMessage> oldSnapshot =
+                    List.copyOf(chatMemory.messages());
             CompleteTurnLoad load = readRecentCompleteTurns(
                     appId, afterCursorId,
                     blockingCompressionThreshold, estimator);
-            int loadedMessages = replaceColdMemory(chatMemory, load.turns());
+            int loadedMessages = replaceColdMemory(
+                    chatMemory, oldSnapshot, load.turns());
             if (loadedMessages == 0) {
                 return HistoryLoadResult.empty();
             }
@@ -345,12 +349,24 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     private int replaceColdMemory(
-            ChatMemory chatMemory, List<ConversationTurn> turns) {
+            ChatMemory chatMemory,
+            List<ChatMessage> oldSnapshot,
+            List<ConversationTurn> turns) {
         List<ChatMessage> messages = turns.stream()
                 .flatMap(turn -> turn.messages().stream())
                 .toList();
-        chatMemory.clear();
-        chatMemory.add(messages);
+        if (chatMemory instanceof TokenAwareChatMemory tokenAwareMemory) {
+            if (!tokenAwareMemory.replaceSnapshotIfMatches(
+                    oldSnapshot, messages)) {
+                throw new IllegalStateException("L0 冷重建快照替换失败");
+            }
+        } else {
+            if (!List.copyOf(chatMemory.messages()).equals(oldSnapshot)) {
+                throw new IllegalStateException("L0 冷重建期间窗口已变化");
+            }
+            chatMemory.clear();
+            chatMemory.add(messages);
+        }
         return messages.size();
     }
 

@@ -53,6 +53,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private final MemoryTokenProperties properties;
     private final MemoryCompressionMetricsCollector metricsCollector;
     private final Clock clock;
+    private final AppMemorySummaryConsistencyCoordinator
+            consistencyCoordinator =
+            new AppMemorySummaryConsistencyCoordinator();
 
     private final ConcurrentHashMap<Long, CompletableFuture<MemoryCompressionResult>>
             inFlight = new ConcurrentHashMap<>();
@@ -501,38 +504,53 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 || summaryTokens > MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS) {
             throw new IllegalStateException("摘要未满足 3K 落库门禁");
         }
+        String cacheKey = CACHE_KEY_PREFIX + appId;
+        try (AppMemorySummaryConsistencyCoordinator.Permit ignored =
+                     consistencyCoordinator.acquire(appId)) {
+            deleteCacheStrict(cacheKey, appId);
+            persistSummary(appId, current, summary,
+                    summarizedThroughId, summaryTokens);
+            writeCache(cacheKey, summary);
+        }
+    }
+
+    private void persistSummary(
+            Long appId,
+            AppMemorySummary current,
+            String summary,
+            long summarizedThroughId,
+            int summaryTokens) {
         LocalDateTime now = LocalDateTime.now(clock);
         if (current == null) {
             int affectedRows = summaryMapper.insert(
                     AppMemorySummary.builder()
-                    .appId(appId)
-                    .summary(summary)
-                    .lastSummarizedId(summarizedThroughId)
-                    .summaryTokens(summaryTokens)
-                    .failCount(0)
-                    .nextRetryTime(null)
-                    .createTime(now)
-                    .updateTime(now)
-                    .build());
+                            .appId(appId)
+                            .summary(summary)
+                            .lastSummarizedId(summarizedThroughId)
+                            .summaryTokens(summaryTokens)
+                            .failCount(0)
+                            .nextRetryTime(null)
+                            .createTime(now)
+                            .updateTime(now)
+                            .build());
             requireExactlyOneRow(affectedRows, "新增摘要");
-        } else {
-            // 更新实体覆盖完整数据库行；false 用于显式清除持久化退避时间。
-            int affectedRows = summaryMapper.update(
-                    AppMemorySummary.builder()
-                    .id(current.getId())
-                    .appId(current.getAppId())
-                    .summary(summary)
-                    .lastSummarizedId(summarizedThroughId)
-                    .summaryTokens(summaryTokens)
-                    .failCount(0)
-                    .nextRetryTime(null)
-                    .createTime(current.getCreateTime())
-                    .updateTime(now)
-                    .isDelete(current.getIsDelete())
-                    .build(), false);
-            requireExactlyOneRow(affectedRows, "更新摘要");
+            return;
         }
-        writeCache(CACHE_KEY_PREFIX + appId, summary);
+        // 更新实体覆盖完整数据库行；false 用于显式清除持久化退避时间。
+        int affectedRows = summaryMapper.update(
+                AppMemorySummary.builder()
+                        .id(current.getId())
+                        .appId(current.getAppId())
+                        .summary(summary)
+                        .lastSummarizedId(summarizedThroughId)
+                        .summaryTokens(summaryTokens)
+                        .failCount(0)
+                        .nextRetryTime(null)
+                        .createTime(current.getCreateTime())
+                        .updateTime(now)
+                        .isDelete(current.getIsDelete())
+                        .build(), false);
+        requireExactlyOneRow(affectedRows, "更新摘要");
     }
 
     private void requireExactlyOneRow(int affectedRows, String operation) {
@@ -558,7 +576,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         if (writerPermit == null) {
             return "";
         }
-        try (writerPermit) {
+        try (writerPermit;
+             AppMemorySummaryConsistencyCoordinator.Permit ignored =
+                     consistencyCoordinator.acquire(appId)) {
             return readCurrentSummaryWithinPermit(appId);
         } catch (RuntimeException exception) {
             log.warn("释放摘要读取许可失败 appId={} type={}", appId,
@@ -617,6 +637,16 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         } catch (RuntimeException exception) {
             log.warn("写摘要缓存失败 key={} type={}", cacheKey,
                     exception.getClass().getSimpleName());
+        }
+    }
+
+    private void deleteCacheStrict(String cacheKey, Long appId) {
+        try {
+            redisTemplate.delete(cacheKey);
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(
+                    "失效 L1 摘要缓存失败，appId=" + appId,
+                    exception);
         }
     }
 

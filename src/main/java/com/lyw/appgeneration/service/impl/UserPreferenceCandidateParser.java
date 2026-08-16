@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -20,14 +21,26 @@ final class UserPreferenceCandidateParser {
     static final String EXPLICIT = "EXPLICIT";
     static final String IMPLICIT = "IMPLICIT";
 
-    /** 仅整体 JSON 或根结构非法时返回 {@code null}。 */
+    private final UserPreferenceContract preferenceContract;
+
+    UserPreferenceCandidateParser(
+            UserPreferenceContract preferenceContract) {
+        this.preferenceContract = Objects.requireNonNull(
+                preferenceContract, "偏好契约不能为空");
+    }
+
+    /** 整体非法或非空数组没有有效候选时返回 {@code null}。 */
     List<UserPreferenceCandidate> parse(
             String raw, List<Long> whitelist) {
-        if (StrUtil.isBlank(raw)) {
+        if (StrUtil.isBlank(raw)
+                || !preferenceContract.isRawOutputWithinBudget(raw)) {
             return null;
         }
         try {
             JSONArray array = JSONUtil.parseArray(raw.trim());
+            if (array.isEmpty()) {
+                return List.of();
+            }
             Set<Long> allowed = Set.copyOf(whitelist);
             Map<String, UserPreferenceCandidate> candidates =
                     new LinkedHashMap<>();
@@ -56,10 +69,12 @@ final class UserPreferenceCandidateParser {
                 }
                 candidates.put(candidate.name(), merged);
             }
-            return candidates.values().stream()
+            List<UserPreferenceCandidate> result = candidates.values().stream()
                     .sorted(Comparator.comparing(
                             UserPreferenceCandidate::name))
+                    .limit(UserPreferenceContract.MAX_CANDIDATES)
                     .toList();
+            return result.isEmpty() ? null : result;
         } catch (RuntimeException exception) {
             return null;
         }
@@ -93,7 +108,7 @@ final class UserPreferenceCandidateParser {
         String content = normalizeContent(item.getStr("content"));
         String evidenceType = item.getStr("evidenceType");
         Object turnIdsValue = item.get("turnIds");
-        if (StrUtil.isBlank(name) || StrUtil.isBlank(content)
+        if (!preferenceContract.isPreferenceWithinBudget(name, content)
                 || !isSupportedEvidenceType(evidenceType)
                 || !(turnIdsValue instanceof JSONArray turnIdsArray)
                 || turnIdsArray.isEmpty()) {
