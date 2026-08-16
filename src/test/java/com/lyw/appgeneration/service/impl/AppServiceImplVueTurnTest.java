@@ -42,11 +42,13 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Hooks;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -54,6 +56,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -68,7 +71,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 
 class AppServiceImplVueTurnTest {
@@ -209,6 +211,7 @@ class AppServiceImplVueTurnTest {
     void 用户已提交但Handler尚未接管时取消仍必须完成稳定收尾()
             throws Exception {
         CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch cancellationTaskStarted = new CountDownLatch(1);
         CompletableFuture<Void> releaseHandler = new CompletableFuture<>();
         AtomicInteger modelStarts = new AtomicInteger();
         AtomicReference<VueTurnContext> capturedContext = new AtomicReference<>();
@@ -244,11 +247,16 @@ class AppServiceImplVueTurnTest {
             releaseHandler.join();
             return invocation.getArgument(0);
         });
+        Executor controlledCancellationExecutor = task -> {
+            cancellationTaskStarted.countDown();
+            task.run();
+        };
 
-        try (ExecutorService cancellationExecutor =
+        ExecutorService cancellationCaller =
                 Executors.newVirtualThreadPerTaskExecutor();
-             var realCoordinator = new VueTurnCancellationCoordinator(
-                     realFinalizer, cancellationExecutor, repairMetrics)) {
+        try (var realCoordinator = new VueTurnCancellationCoordinator(
+                realFinalizer, controlledCancellationExecutor,
+                repairMetrics)) {
             Hooks.onErrorDropped(droppedError::set);
             ReflectionTestUtils.setField(service, "vueTurnFinalizer",
                     realFinalizer);
@@ -261,15 +269,29 @@ class AppServiceImplVueTurnTest {
             assertEquals(VueTurnContext.UserCommitState.COMMITTED,
                     capturedContext.get().userCommitState());
 
-            subscription.dispose();
+            CompletableFuture<Void> cancellationCall =
+                    CompletableFuture.runAsync(
+                            subscription::dispose, cancellationCaller);
+            assertTrue(cancellationTaskStarted.await(2, TimeUnit.SECONDS),
+                    "取消收尾任务必须真正开始");
+            assertEquals(VueTurnContext.TurnStage.FINALIZING,
+                    capturedContext.get().turnState().stage());
+            assertFalse(capturedContext.get()
+                            .awaitQuiescence(Duration.ZERO),
+                    "同步 Handler 装配必须计入回合静默边界");
+            assertFalse(cancellationCall.isDone(),
+                    "Handler 未释放时取消调用不能完成");
             assertThrows(AppOperationLeaseManager.ActiveAppOperationException.class,
                     () -> operationManager.acquire(
                             APP_ID,
                             AppOperationLeaseManager.AppOperationType.GENERATE,
                             "before-cancel-finalized"));
+            verify(history, never()).addChatMessageAndReturn(
+                    APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID);
             releaseHandler.complete(null);
 
-            verify(history, timeout(2_000).times(1)).addChatMessageAndReturn(
+            cancellationCall.get(2, TimeUnit.SECONDS);
+            verify(history, times(1)).addChatMessageAndReturn(
                     APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID);
             verify(facade, never()).generateVueProjectStream(
                     anyString(), anyLong(), anyBoolean(), any(), any());
@@ -282,8 +304,9 @@ class AppServiceImplVueTurnTest {
                     APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
                     "after-cancel-finalized").close();
         } finally {
-            Hooks.resetOnErrorDropped();
             releaseHandler.complete(null);
+            cancellationCaller.close();
+            Hooks.resetOnErrorDropped();
         }
     }
 

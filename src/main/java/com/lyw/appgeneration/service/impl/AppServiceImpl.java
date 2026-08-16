@@ -469,16 +469,19 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         return Flux.defer(() -> {
             try {
                 context.registerDeleteTakeoverParticipant();
-                Flux<String> codeStream = Flux.defer(() -> context
-                        .tryCallCallback(() ->
-                                aiCodeGeneratorFacade.generateVueProjectStream(
-                                        turn.message(), context.appId(),
-                                        turn.firstMessage(), context,
-                                        turn.generatorService()))
-                        .orElseGet(Flux::empty));
-                Flux<GenerationStreamEvent> business = streamHandlerExecutor
-                        .doExecuteVue(codeStream, context);
-                return context.mergeProgress(business);
+                // Handler 同步装配也属于活跃回合，取消收尾必须等待它退出双门边界。
+                return context.tryCallCallback(() -> {
+                    Flux<String> codeStream = Flux.defer(() -> context
+                            .tryCallCallback(() -> aiCodeGeneratorFacade
+                                    .generateVueProjectStream(
+                                            turn.message(), context.appId(),
+                                            turn.firstMessage(), context,
+                                            turn.generatorService()))
+                            .orElseGet(Flux::empty));
+                    Flux<GenerationStreamEvent> business = streamHandlerExecutor
+                            .doExecuteVue(codeStream, context);
+                    return context.mergeProgress(business);
+                }).orElseGet(Flux::empty);
             } catch (RuntimeException exception) {
                 return finalizeCommittedVueFailure(context, exception);
             }
