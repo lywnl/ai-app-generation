@@ -9,6 +9,7 @@ import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapsho
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationLease;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CancellationClaimResult;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverContext;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverCallbackRegistration;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverRegistration;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController.AdmissionPermit;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTermination;
@@ -397,6 +398,11 @@ public final class VueTurnContext implements ContextContinuationGate {
                 operationLease, "测试上下文不能注册删除接管参与者");
         DeleteTakeoverRegistration registration = currentLease
                 .registerDeleteTakeoverParticipant(this::participateInDeleteTakeover);
+        storeDeleteTakeoverRegistration(registration);
+    }
+
+    private void storeDeleteTakeoverRegistration(
+            DeleteTakeoverRegistration registration) {
         if (!deleteTakeoverRegistration.compareAndSet(null, registration)) {
             registration.close();
             throw new IllegalStateException("Vue 回合已经注册删除接管参与者");
@@ -511,6 +517,32 @@ public final class VueTurnContext implements ContextContinuationGate {
             throw exception;
         } catch (Exception exception) {
             throw new IllegalStateException("关闭 Vue 回合回调票据失败", exception);
+        }
+    }
+
+    /** 原子登记删除参与者，并仅用临时 callback 票据包围同步 Handler 装配。 */
+    public <T> Optional<T> tryCallHandlerSetup(Supplier<T> action) {
+        Objects.requireNonNull(action, "Handler 装配动作不能为空");
+        if (!isUserCommitted()) {
+            throw new IllegalStateException("用户消息提交前不能装配 Handler");
+        }
+        CallbackGate.Ticket inner = callbackGate.tryEnter();
+        if (inner == null) {
+            return Optional.empty();
+        }
+        try (inner) {
+            DeleteTakeoverCallbackRegistration registration;
+            try {
+                registration = lease().enterHandlerCallback(
+                        this::participateInDeleteTakeover);
+            } catch (IllegalStateException rejected) {
+                return Optional.empty();
+            }
+            try (registration) {
+                storeDeleteTakeoverRegistration(
+                        registration.transferDeleteTakeoverRegistration());
+                return Optional.ofNullable(action.get());
+            }
         }
     }
 

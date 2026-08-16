@@ -49,10 +49,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -676,75 +678,51 @@ class AppServiceImplVueTurnTest {
     @Test
     void 删除在参与者注册后接管不得跳过Handler装配()
             throws Exception {
-        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
-        when(history.addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID))
-                .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
-        when(collapser.collapseLastTurn(
-                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE))
-                .thenReturn(collapsed());
-        AtomicInteger modelSubscriptions = new AtomicInteger();
-        when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
-                .thenReturn(Flux.defer(() -> {
-                    modelSubscriptions.incrementAndGet();
-                    return Flux.never();
-                }));
+        ToolMessageCollapser collapser = stableCancellationCollapser();
+        AtomicInteger modelSubscriptions = stubNeverEndingVueModel();
 
         String turnId = "turn-delete-after-registration";
-        var operation = operationManager.acquire(
-                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
-                turnId);
-        var vueLease = new VueBuildSessionManager().open(
-                operation, USER_ID, turnId);
-        VueTurnContext realContext = new VueTurnContext(
-                APP_ID, USER_ID, turnId, operation, vueLease,
-                admissionController.tryAcquire().orElseThrow(),
-                new FileToolBudgetGuard().newSession());
-        VueTurnContext context = org.mockito.Mockito.mock(
-                VueTurnContext.class,
-                org.mockito.Mockito.withSettings()
-                        .spiedInstance(realContext)
-                        .defaultAnswer(org.mockito.Mockito.CALLS_REAL_METHODS)
-                        .mockMaker(org.mockito.MockMakers.INLINE));
-        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
-                context.commitUser(() -> true));
-        CountDownLatch participantRegistered = new CountDownLatch(1);
+        CommittedTurnFixture fixture = createCommittedTurnFixture(turnId);
+        var operation = fixture.operation();
+        VueTurnContext context = fixture.context();
         CountDownLatch deleteClosedGate = new CountDownLatch(1);
-        CountDownLatch releaseRegistration = new CountDownLatch(1);
-        org.mockito.Mockito.doAnswer(invocation -> {
-            invocation.callRealMethod();
-            participantRegistered.countDown();
-            assertTrue(releaseRegistration.await(2, TimeUnit.SECONDS));
-            return null;
-        }).when(context).registerDeleteTakeoverParticipant();
+        CompletableFuture<Void> handlerEntered = new CompletableFuture<>();
+        CompletableFuture<Void> releaseHandler = new CompletableFuture<>();
         var cancellationRegistration = operation.registerCancellation(
                 deleteClosedGate::countDown);
-        Object committedTurn = createCommittedTurn(context);
+        Object committedTurn = fixture.committedTurn();
+        Future<List<GenerationStreamEvent>> generation = null;
+        Future<AppOperationLeaseManager.AppOperationLease> deletion = null;
 
-        try (var coordinator = installRealVuePipeline(collapser);
+        try (var coordinator = installBlockingRealVuePipeline(
+                    collapser, handlerEntered, releaseHandler);
                 var callers = Executors.newVirtualThreadPerTaskExecutor()) {
             Flux<GenerationStreamEvent> flow = ReflectionTestUtils.invokeMethod(
                     service, "runCommittedVueTurn", committedTurn);
-            var generation = callers.submit(() -> flow.collectList().block());
-            assertTrue(participantRegistered.await(1, TimeUnit.SECONDS));
+            generation = callers.submit(() -> flow.collectList().block());
+            handlerEntered.get(1, TimeUnit.SECONDS);
             boolean turnQuiescentWhenParticipantVisible =
                     context.awaitQuiescence(Duration.ZERO);
             boolean appQuiescentWhenParticipantVisible =
                     operation.awaitQuiescence(Duration.ZERO);
 
-            var deletion = callers.submit(() ->
+            deletion = callers.submit(() ->
                     operationManager.cancelAndAcquireDelete(
                             APP_ID, "delete-after-registration",
                             Duration.ofSeconds(2)));
+            Future<AppOperationLeaseManager.AppOperationLease> deletionCall =
+                    deletion;
+            Future<List<GenerationStreamEvent>> generationCall = generation;
             assertTrue(deleteClosedGate.await(1, TimeUnit.SECONDS),
                     "删除接管必须已经关闭 app 回调门");
-            releaseRegistration.countDown();
+            assertFalse(deletionCall.isDone(),
+                    "参与者可见后删除必须等待 Handler 装配完成");
+            releaseHandler.complete(null);
 
             try (var deleteLease = assertDoesNotThrow(
-                    () -> deletion.get(3, TimeUnit.SECONDS),
+                    () -> deletionCall.get(3, TimeUnit.SECONDS),
                     "参与者一旦可见，Handler 装配必须在已持有的回调票据内完成")) {
-                List<GenerationStreamEvent> events = generation.get(
+                List<GenerationStreamEvent> events = generationCall.get(
                         1, TimeUnit.SECONDS);
 
                 assertFalse(turnQuiescentWhenParticipantVisible,
@@ -764,13 +742,102 @@ class AppServiceImplVueTurnTest {
                 assertEquals(0, modelSubscriptions.get());
                 assertEquals(VueTurnContext.TurnStage.FINALIZED,
                         context.turnState().stage());
+                assertEquals(1.0, metricsRegistry
+                        .get("vue_turn_admissions_total")
+                        .tag("result", "released").counter().count());
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
             }
             operationManager.acquire(
                     APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
                     "after-delete-finalized").close();
         } finally {
-            releaseRegistration.countDown();
+            releaseHandler.complete(null);
+            if (generation != null && !generation.isDone()) {
+                generation.cancel(true);
+            }
+            if (deletion != null && !deletion.isDone()) {
+                deletion.cancel(true);
+            }
             cancellationRegistration.close();
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 删除不得观察到Handler回调已进入但参与者尚未登记()
+            throws Exception {
+        ToolMessageCollapser collapser = stableCancellationCollapser();
+        stubNeverEndingVueModel();
+
+        CompletableFuture<Void> callbackPrepared = new CompletableFuture<>();
+        CompletableFuture<Void> releaseAtomicCommit = new CompletableFuture<>();
+        AtomicBoolean boundaryArmed = new AtomicBoolean();
+        Runnable atomicCommitBoundary = () -> {
+            if (boundaryArmed.get() && callbackPrepared.complete(null)) {
+                releaseAtomicCommit.join();
+            }
+        };
+        operationManager = operationManagerWithRegistrationHook(
+                atomicCommitBoundary);
+        ReflectionTestUtils.setField(
+                service, "appOperationLeaseManager", operationManager);
+
+        String turnId = "turn-delete-before-registration";
+        CommittedTurnFixture fixture = createCommittedTurnFixture(turnId);
+        var operation = fixture.operation();
+        VueTurnContext context = fixture.context();
+        // 修复前由此独立入口触发边界；修复后同一钩子在 OperationState 原子区触发。
+        org.mockito.Mockito.doAnswer(invocation -> {
+            atomicCommitBoundary.run();
+            return invocation.callRealMethod();
+        }).when(context).registerDeleteTakeoverParticipant();
+
+        boundaryArmed.set(true);
+        Object committedTurn = fixture.committedTurn();
+        Future<List<GenerationStreamEvent>> generation = null;
+        Future<AppOperationLeaseManager.AppOperationLease> deletion = null;
+
+        try (var coordinator = installRealVuePipeline(collapser);
+                var callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            Flux<GenerationStreamEvent> flow = ReflectionTestUtils.invokeMethod(
+                    service, "runCommittedVueTurn", committedTurn);
+            generation = callers.submit(() -> flow.collectList().block());
+            callbackPrepared.get(1, TimeUnit.SECONDS);
+            assertFalse(context.awaitQuiescence(Duration.ZERO),
+                    "原子登记边界必须已经持有回合内层票据");
+
+            AtomicReference<Thread> deletionThread = new AtomicReference<>();
+            deletion = callers.submit(() -> {
+                deletionThread.set(Thread.currentThread());
+                return operationManager.cancelAndAcquireDelete(
+                        APP_ID, "delete-before-registration",
+                        Duration.ofSeconds(2));
+            });
+            Future<AppOperationLeaseManager.AppOperationLease> deletionCall =
+                    deletion;
+            Future<List<GenerationStreamEvent>> generationCall = generation;
+            awaitBlockedOrCompleted(deletionThread, deletionCall);
+            assertFalse(deletionCall.isDone(),
+                    "删除不得观察到 callback 已进入但参与者为空并快速失败");
+
+            releaseAtomicCommit.complete(null);
+
+            try (var deleteLease = assertDoesNotThrow(
+                    () -> deletionCall.get(3, TimeUnit.SECONDS),
+                    "删除接管必须取得删除租约，不能抛出裸 IllegalStateException")) {
+                generationCall.get(1, TimeUnit.SECONDS);
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
+            }
+        } finally {
+            releaseAtomicCommit.complete(null);
+            if (generation != null && !generation.isDone()) {
+                generation.cancel(true);
+            }
+            if (deletion != null && !deletion.isDone()) {
+                deletion.cancel(true);
+            }
             context.closeResources();
         }
     }
@@ -823,6 +890,30 @@ class AppServiceImplVueTurnTest {
         return coordinator;
     }
 
+    private VueTurnCancellationCoordinator installBlockingRealVuePipeline(
+            ToolMessageCollapser collapser,
+            CompletableFuture<Void> handlerEntered,
+            CompletableFuture<Void> releaseHandler) {
+        VueTurnCancellationCoordinator coordinator =
+                installRealVuePipeline(collapser);
+        StreamHandlerExecutor realExecutor =
+                (StreamHandlerExecutor) ReflectionTestUtils.getField(
+                        service, "streamHandlerExecutor");
+        StreamHandlerExecutor blockingExecutor =
+                mock(StreamHandlerExecutor.class);
+        when(blockingExecutor.doExecuteVue(any(), any()))
+                .thenAnswer(invocation -> {
+                    handlerEntered.complete(null);
+                    releaseHandler.join();
+                    return realExecutor.doExecuteVue(
+                            invocation.<Flux<String>>getArgument(0),
+                            invocation.<VueTurnContext>getArgument(1));
+                });
+        ReflectionTestUtils.setField(
+                service, "streamHandlerExecutor", blockingExecutor);
+        return coordinator;
+    }
+
     private ToolMessageCollapser.CollapseResult collapsed() {
         return new ToolMessageCollapser.CollapseResult(
                 ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of());
@@ -849,6 +940,83 @@ class AppServiceImplVueTurnTest {
                 String.class, boolean.class, Throwable.class);
         constructor.setAccessible(true);
         return constructor.newInstance(context, generator, "需求", true, null);
+    }
+
+    private CommittedTurnFixture createCommittedTurnFixture(String turnId)
+            throws Exception {
+        var operation = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var vueLease = new VueBuildSessionManager().open(
+                operation, USER_ID, turnId);
+        VueTurnContext realContext = new VueTurnContext(
+                APP_ID, USER_ID, turnId, operation, vueLease,
+                admissionController.tryAcquire().orElseThrow(),
+                new FileToolBudgetGuard().newSession());
+        VueTurnContext context = org.mockito.Mockito.mock(
+                VueTurnContext.class,
+                org.mockito.Mockito.withSettings()
+                        .spiedInstance(realContext)
+                        .defaultAnswer(org.mockito.Mockito.CALLS_REAL_METHODS)
+                        .mockMaker(org.mockito.MockMakers.INLINE));
+        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
+                context.commitUser(() -> true));
+        return new CommittedTurnFixture(
+                operation, context, createCommittedTurn(context));
+    }
+
+    private ToolMessageCollapser stableCancellationCollapser() {
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(history.addChatMessageAndReturn(
+                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID))
+                .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
+        when(collapser.collapseLastTurn(
+                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE))
+                .thenReturn(collapsed());
+        return collapser;
+    }
+
+    private AtomicInteger stubNeverEndingVueModel() {
+        AtomicInteger modelSubscriptions = new AtomicInteger();
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenReturn(Flux.defer(() -> {
+                    modelSubscriptions.incrementAndGet();
+                    return Flux.never();
+                }));
+        return modelSubscriptions;
+    }
+
+    private AppOperationLeaseManager operationManagerWithRegistrationHook(
+            Runnable hook) throws Exception {
+        var constructor = AppOperationLeaseManager.class
+                .getDeclaredConstructor(Runnable.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(hook);
+    }
+
+    private void awaitBlockedOrCompleted(
+            AtomicReference<Thread> threadReference, Future<?> future) {
+        long deadlineNanos = System.nanoTime()
+                + Duration.ofSeconds(1).toNanos();
+        Thread thread;
+        while (!future.isDone()
+                && ((thread = threadReference.get()) == null
+                || thread.getState() != Thread.State.BLOCKED)
+                && System.nanoTime() < deadlineNanos) {
+            Thread.onSpinWait();
+        }
+        thread = threadReference.get();
+        assertTrue(future.isDone()
+                        || thread != null
+                        && thread.getState() == Thread.State.BLOCKED,
+                "删除线程未进入原子提交竞争边界");
+    }
+
+    private record CommittedTurnFixture(
+            AppOperationLeaseManager.AppOperationLease operation,
+            VueTurnContext context,
+            Object committedTurn) {
     }
 
 }

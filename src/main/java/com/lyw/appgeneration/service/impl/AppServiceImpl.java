@@ -468,9 +468,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         return Flux.defer(() -> {
             try {
-                return context.tryCallCallback(() -> {
-                    // 参与者可见前先持有双门，删除接管必须等待 Handler 装配或同步失败收尾。
-                    context.registerDeleteTakeoverParticipant();
+                return context.tryCallHandlerSetup(() -> {
                     Flux<String> codeStream = Flux.defer(() -> context
                             .tryCallCallback(() -> aiCodeGeneratorFacade
                                     .generateVueProjectStream(

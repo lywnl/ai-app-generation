@@ -4,6 +4,8 @@ import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperat
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationType;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CallbackRegistration;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CancellationRegistration;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverCallbackRegistration;
+import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverParticipant;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -119,6 +121,12 @@ public final class VueBuildSessionManager {
         public AutoCloseable enterCallback() {
             ensureOpen();
             return session.enterCallback();
+        }
+
+        public DeleteTakeoverCallbackRegistration enterHandlerCallback(
+                DeleteTakeoverParticipant participant) {
+            ensureOpen();
+            return session.enterHandlerCallback(participant);
         }
 
         public boolean awaitQuiescence(Duration timeout) throws InterruptedException {
@@ -417,6 +425,15 @@ public final class VueBuildSessionManager {
             }
             CallbackRegistration registration = operationLease.enterCallback();
             return registration::close;
+        }
+
+        private synchronized DeleteTakeoverCallbackRegistration enterHandlerCallback(
+                DeleteTakeoverParticipant participant) {
+            ensureOpen();
+            if (phase == VueBuildPhase.CANCELLED) {
+                throw new IllegalStateException("Vue 构建回合已经取消");
+            }
+            return operationLease.enterDeleteTakeoverCallback(participant);
         }
 
         private boolean awaitQuiescence(Duration timeout) throws InterruptedException {

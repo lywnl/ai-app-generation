@@ -420,6 +420,13 @@ public final class AppOperationLeaseManager {
             return state.registerDeleteTakeoverParticipant(participant);
         }
 
+        /** 在同一状态提交点领取回调并登记唯一删除接管参与者。 */
+        public DeleteTakeoverCallbackRegistration enterDeleteTakeoverCallback(
+                DeleteTakeoverParticipant participant) {
+            ensureActive();
+            return state.enterDeleteTakeoverCallback(participant);
+        }
+
         public CallbackRegistration enterCallback() {
             ensureActive();
             return state.enterCallback();
@@ -521,6 +528,59 @@ public final class AppOperationLeaseManager {
         public void close() {
             if (closed.compareAndSet(false, true)) {
                 state.manager.callbackClosed(state);
+            }
+        }
+    }
+
+    /**
+     * 原子领取的 Handler 临时回调票据与持久删除接管登记。
+     *
+     * <p>调用方必须把删除登记转移给回合资源所有者；关闭本对象只释放临时回调票据，
+     * 未完成转移时则同时回滚删除登记。</p>
+     */
+    public static final class DeleteTakeoverCallbackRegistration
+            implements AutoCloseable {
+
+        private final CallbackRegistration callbackRegistration;
+        private final AtomicReference<DeleteTakeoverRegistration>
+                deleteTakeoverRegistration;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private DeleteTakeoverCallbackRegistration(
+                CallbackRegistration callbackRegistration,
+                DeleteTakeoverRegistration deleteTakeoverRegistration) {
+            this.callbackRegistration = callbackRegistration;
+            this.deleteTakeoverRegistration =
+                    new AtomicReference<>(deleteTakeoverRegistration);
+        }
+
+        /** 把持久登记的关闭责任转移给回合上下文。 */
+        public DeleteTakeoverRegistration
+                transferDeleteTakeoverRegistration() {
+            if (closed.get()) {
+                throw new IllegalStateException("组合回调票据已经关闭");
+            }
+            DeleteTakeoverRegistration registration =
+                    deleteTakeoverRegistration.getAndSet(null);
+            if (registration == null) {
+                throw new IllegalStateException("删除接管登记已经转移");
+            }
+            return registration;
+        }
+
+        @Override
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            DeleteTakeoverRegistration registration =
+                    deleteTakeoverRegistration.getAndSet(null);
+            try {
+                if (registration != null) {
+                    registration.close();
+                }
+            } finally {
+                callbackRegistration.close();
             }
         }
     }
@@ -664,6 +724,50 @@ public final class AppOperationLeaseManager {
             return new CallbackRegistration(this);
         }
 
+        private synchronized DeleteTakeoverCallbackRegistration
+                enterDeleteTakeoverCallback(
+                        DeleteTakeoverParticipant participant) {
+            Objects.requireNonNull(participant, "删除接管参与者不能为空");
+            if (operationType != AppOperationType.GENERATE) {
+                throw new IllegalStateException(
+                        "只有生成租约可以登记删除接管回调");
+            }
+            if (ownerClosed || replaced || cancellationRequested
+                    || cancellationRegistrationSealed) {
+                throw new IllegalStateException(
+                        "回调与删除接管参与者登记边界已经关闭");
+            }
+            if (deleteTakeoverParticipantRegistered) {
+                throw new IllegalStateException(
+                        "生成租约只能注册一个删除接管参与者");
+            }
+
+            callbackCount++;
+            try {
+                Runnable hook = manager.registrationTestHook;
+                if (hook != null) {
+                    hook.run();
+                }
+                DeleteTakeoverEntry entry = new DeleteTakeoverEntry(
+                        ++nextDeleteTakeoverParticipantId, participant);
+                CallbackRegistration callbackRegistration =
+                        new CallbackRegistration(this);
+                DeleteTakeoverRegistration deleteRegistration =
+                        new DeleteTakeoverRegistration(this, entry);
+                DeleteTakeoverCallbackRegistration combinedRegistration =
+                        new DeleteTakeoverCallbackRegistration(
+                                callbackRegistration, deleteRegistration);
+                deleteTakeoverParticipantRegistered = true;
+                deleteTakeoverParticipant = entry;
+                return combinedRegistration;
+            } catch (Throwable failure) {
+                callbackCount--;
+                notifyIfQuiescent();
+                throwUnchecked(failure);
+                return null;
+            }
+        }
+
         private synchronized boolean exitCallback() {
             if (callbackCount <= 0) {
                 throw new IllegalStateException("回调引用计数不合法");
@@ -719,11 +823,13 @@ public final class AppOperationLeaseManager {
             if (deleteTakeoverParticipantRegistered) {
                 throw new IllegalStateException("生成租约只能注册一个删除接管参与者");
             }
-            deleteTakeoverParticipantRegistered = true;
             DeleteTakeoverEntry entry = new DeleteTakeoverEntry(
                     ++nextDeleteTakeoverParticipantId, participant);
+            DeleteTakeoverRegistration registration =
+                    new DeleteTakeoverRegistration(this, entry);
+            deleteTakeoverParticipantRegistered = true;
             deleteTakeoverParticipant = entry;
-            return new DeleteTakeoverRegistration(this, entry);
+            return registration;
         }
 
         private synchronized void removeDeleteTakeoverParticipant(
