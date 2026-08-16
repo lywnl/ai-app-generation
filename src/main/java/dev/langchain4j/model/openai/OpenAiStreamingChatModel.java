@@ -14,6 +14,7 @@ import dev.langchain4j.model.chat.request.DefaultChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.openai.internal.OpenAiClient;
+import dev.langchain4j.model.openai.internal.ResponseHandle;
 import dev.langchain4j.model.openai.internal.chat.*;
 import dev.langchain4j.model.openai.internal.shared.StreamOptions;
 import dev.langchain4j.model.openai.spi.OpenAiStreamingChatModelBuilderFactory;
@@ -164,9 +165,10 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
                 })
                 .execute();
             try {
-                registerRequestHandle(handler, responseHandle::cancel);
+                registerRequestHandle(
+                        handler, () -> cancelResponseSafely(responseHandle));
             } catch (RuntimeException exception) {
-                responseHandle.cancel();
+                cancelResponseSafely(responseHandle);
                 throw exception;
             }
         } catch (RuntimeException exception) {
@@ -190,6 +192,15 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
     static void registerRequestHandle(
             StreamingChatResponseHandler handler, Runnable cancellation) {
         handler.onRequestHandle(cancellation::run);
+    }
+
+    private static void cancelResponseSafely(ResponseHandle responseHandle) {
+        try {
+            responseHandle.cancel();
+        } catch (UnsupportedOperationException ignored) {
+            // langchain4j-open-ai 1.1.0 的句柄尚不支持物理取消；
+            // 上层请求控制器仍会关闭语义门，所有迟到回调都会被拒绝。
+        }
     }
 
     private static boolean shouldDisableReasoningEffort(OpenAiChatRequestParameters parameters) {

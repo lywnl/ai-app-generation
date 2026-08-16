@@ -16,10 +16,12 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -64,7 +66,7 @@ class OpenAiStreamingChatModelTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void doChatPublishesRealExecuteHandleAndCancellationReachesIt() {
+    void doChatPublishesRealExecuteHandleAndUnsupportedCancellationDoesNotEscape() {
         OpenAiStreamingChatModel model = OpenAiStreamingChatModel.builder()
                 .apiKey("test-key").modelName("test-model").build();
         OpenAiClient client = mock(OpenAiClient.class);
@@ -79,12 +81,14 @@ class OpenAiStreamingChatModelTest {
         when(partial.onComplete(any())).thenReturn(completion);
         when(completion.onError(any())).thenReturn(errors);
         when(errors.execute()).thenReturn(responseHandle);
+        doThrow(new UnsupportedOperationException("Not supported yet"))
+                .when(responseHandle).cancel();
         ReflectionTestUtils.setField(model, "client", client);
         AtomicReference<StreamingRequestHandle> published = new AtomicReference<>();
         StreamingChatResponseHandler handler = handlerWithHandle(published);
 
         model.doChat(request(), handler);
-        published.get().cancel();
+        assertDoesNotThrow(() -> published.get().cancel());
 
         verify(errors).execute();
         verify(responseHandle).cancel();
