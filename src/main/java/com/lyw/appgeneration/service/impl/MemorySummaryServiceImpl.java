@@ -233,8 +233,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                     awaitExistingFlight(existing, deadlineNanos), true);
         }
         MemoryCompressionMetricsCollector.CompressionObservation observation =
-                metricsCollector.startCompression(
-                        MemoryCompressionMetricsCollector.CompressionMode.BLOCKING);
+                null;
         MemoryCompressionResult compressionResult = null;
         try {
             AppDataLifecycleFence.WriterPermit writerPermit =
@@ -245,6 +244,9 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                         0L, 0, "应用删除流程已接管");
             } else {
                 try (writerPermit) {
+                    observation = metricsCollector.startCompression(
+                            MemoryCompressionMetricsCollector
+                                    .CompressionMode.BLOCKING);
                     compressionResult = compressWithinPermit(
                             appId, summarizeThroughId, deadlineNanos);
                 }
@@ -690,7 +692,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private void completeObservation(
             MemoryCompressionMetricsCollector.CompressionObservation observation,
             MemoryCompressionResult compressionResult) {
-        if (compressionResult == null) {
+        if (observation == null || compressionResult == null) {
             return;
         }
         observation.complete(compressionResult.status());

@@ -1434,6 +1434,11 @@ class MemorySummaryServiceImplTest {
                 result.status());
         verifyNoInteractions(executor, summaryMapper,
                 chatHistoryService, summarizationModel);
+        assertTrue(metricsRegistry.find("memory_compression_total")
+                .counters().isEmpty());
+        assertTrue(metricsRegistry
+                .find("memory_compression_duration_seconds")
+                .timers().isEmpty());
         deletion.abortAndReopen();
     }
 
