@@ -40,4 +40,27 @@ class UserMemoryDebounceExecutorConfigTest {
             scheduler.destroy();
         }
     }
+
+    @Test
+    @DisplayName("L2 恢复使用独立单线程且任务取消后移出队列")
+    void 恢复任务运行在独立单线程() throws Exception {
+        ThreadPoolTaskScheduler scheduler =
+                new UserMemoryRecoverySchedulerConfig()
+                        .userMemoryRecoveryScheduler();
+        scheduler.initialize();
+        try {
+            CountDownLatch completed = new CountDownLatch(1);
+            AtomicReference<String> taskThread = new AtomicReference<>();
+            scheduler.schedule(() -> {
+                taskThread.set(Thread.currentThread().getName());
+                completed.countDown();
+            }, Instant.now());
+
+            assertTrue(completed.await(1, TimeUnit.SECONDS));
+            assertEquals(1, scheduler.getPoolSize());
+            assertTrue(taskThread.get().startsWith("User-Memory-Recovery-"));
+        } finally {
+            scheduler.destroy();
+        }
+    }
 }

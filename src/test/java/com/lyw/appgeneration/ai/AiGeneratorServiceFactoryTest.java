@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
+import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.manger.ToolManager;
@@ -15,7 +16,6 @@ import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
-import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -56,8 +56,9 @@ class AiGeneratorServiceFactoryTest {
     @SuppressWarnings("unchecked")
     void invalidationTargetsOneServiceKeyAndStillClearsCaffeineWhenRedisFails() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
-        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        AtomicChatMemoryStore redisStore = atomicStore(
+                failingDeleteStore());
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
         Cache<String, AiCodeGeneratorService> cache =
                 (Cache<String, AiCodeGeneratorService>) ReflectionTestUtils.getField(
                         factory, "serviceCache");
@@ -69,9 +70,6 @@ class AiGeneratorServiceFactoryTest {
         cache.put("7_html", html);
         cache.put("7_multi_file", multiFile);
         cache.put("8_vue_project", otherAppVue);
-        doThrow(new IllegalStateException("redis down"))
-                .when(redisStore).deleteMessages(7L);
-
         MemoryCacheInvalidationResult result = factory.invalidateAndClearMemory(
                 7L, CodeGenTypeEnum.VUE_PROJECT);
 
@@ -80,39 +78,41 @@ class AiGeneratorServiceFactoryTest {
         assertEquals(multiFile, cache.getIfPresent("7_multi_file"));
         assertEquals(otherAppVue, cache.getIfPresent("8_vue_project"));
         assertEquals(Set.of("L0_REDIS"), result.failedTargets());
-        verify(redisStore).deleteMessages(7L);
-        verify(redisStore, never()).deleteMessages(8L);
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void caffeineFailureDoesNotPreventAppRedisCleanup() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
-        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        dev.langchain4j.store.memory.chat.ChatMemoryStore delegate =
+                mock(dev.langchain4j.store.memory.chat.ChatMemoryStore.class);
+        AtomicChatMemoryStore redisStore = atomicStore(delegate);
         Cache<String, AiCodeGeneratorService> cache = mock(Cache.class);
         doThrow(new IllegalStateException("caffeine down"))
                 .when(cache).invalidate("7_vue_project");
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "serviceCache", cache);
 
         MemoryCacheInvalidationResult result = factory.invalidateAndClearMemory(
                 7L, CodeGenTypeEnum.VUE_PROJECT);
 
         assertEquals(Set.of("L0_SERVICE_CAFFEINE"), result.failedTargets());
-        verify(redisStore).deleteMessages(7L);
+        verify(delegate).deleteMessages(7L);
     }
 
     @Test
     void invalidationRejectsInvalidScopeBeforeSideEffects() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
-        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        dev.langchain4j.store.memory.chat.ChatMemoryStore delegate =
+                mock(dev.langchain4j.store.memory.chat.ChatMemoryStore.class);
+        AtomicChatMemoryStore redisStore = atomicStore(delegate);
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
 
         assertThrows(IllegalArgumentException.class, () ->
                 factory.invalidateAndClearMemory(0L, CodeGenTypeEnum.VUE_PROJECT));
         assertThrows(IllegalArgumentException.class, () ->
                 factory.invalidateAndClearMemory(7L, null));
-        verifyNoInteractions(redisStore);
+        verifyNoInteractions(delegate);
     }
 
     @Test
@@ -140,7 +140,9 @@ class AiGeneratorServiceFactoryTest {
     void eachEvaluationCreatesIndependentAgentAndModelWithoutPersistentMemoryServices() {
         AiGeneratorServiceFactory factory = spy(new AiGeneratorServiceFactory());
         ToolManager toolManager = mock(ToolManager.class);
-        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        dev.langchain4j.store.memory.chat.ChatMemoryStore delegate =
+                mock(dev.langchain4j.store.memory.chat.ChatMemoryStore.class);
+        AtomicChatMemoryStore redisStore = atomicStore(delegate);
         ChatHistoryService chatHistoryService = mock(ChatHistoryService.class);
         MemorySummaryService memorySummaryService = mock(MemorySummaryService.class);
         UserMemoryService userMemoryService = mock(UserMemoryService.class);
@@ -150,7 +152,7 @@ class AiGeneratorServiceFactoryTest {
         when(toolManager.requireTools(any(String[].class)))
                 .thenReturn(new BaseTool[]{new EvaluationTools()});
         ReflectionTestUtils.setField(factory, "toolManager", toolManager);
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", chatHistoryService);
         ReflectionTestUtils.setField(factory, "memorySummaryService", memorySummaryService);
         ReflectionTestUtils.setField(factory, "userMemoryService", userMemoryService);
@@ -162,19 +164,19 @@ class AiGeneratorServiceFactoryTest {
 
         assertNotSame(first, second, "同一 appId 的两个评测也必须使用不同代理");
         verify(factory, times(2)).evaluationStreamingChatModel();
-        verifyNoInteractions(redisStore, chatHistoryService,
+        verifyNoInteractions(delegate, chatHistoryService,
                 memorySummaryService, userMemoryService);
     }
 
     @Test
     void onlineMemoryUsesTokenAwareUnlimitedWindowAndTokenColdLoad() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
-        RedisChatMemoryStore redisStore = statefulRedisStore();
+        AtomicChatMemoryStore redisStore = statefulRedisStore();
         ChatHistoryService history = mock(ChatHistoryService.class);
         MemorySummaryService summary = mock(MemorySummaryService.class);
         ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "chatTokenEstimator", estimator);
         ReflectionTestUtils.setField(factory, "memoryTokenProperties", properties);
@@ -214,11 +216,11 @@ class AiGeneratorServiceFactoryTest {
     @Test
     void failedColdHistoryLoadDoesNotReturnOrCacheVueService() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
-        RedisChatMemoryStore redisStore = mock(RedisChatMemoryStore.class);
+        AtomicChatMemoryStore redisStore = emptyAtomicStore();
         ChatHistoryService history = mock(ChatHistoryService.class);
         MemorySummaryService summary = mock(MemorySummaryService.class);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
@@ -250,8 +252,8 @@ class AiGeneratorServiceFactoryTest {
         ChatHistoryService history = mock(ChatHistoryService.class);
         MemorySummaryService summary = mock(MemorySummaryService.class);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore",
-                mock(RedisChatMemoryStore.class));
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore",
+                emptyAtomicStore());
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
@@ -281,8 +283,8 @@ class AiGeneratorServiceFactoryTest {
         ChatHistoryService history = mock(ChatHistoryService.class);
         MemorySummaryService summary = mock(MemorySummaryService.class);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        ReflectionTestUtils.setField(factory, "redisChatMemoryStore",
-                mock(RedisChatMemoryStore.class));
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore",
+                emptyAtomicStore());
         ReflectionTestUtils.setField(factory, "chatHistoryService", history);
         ReflectionTestUtils.setField(factory, "memorySummaryService", summary);
         ReflectionTestUtils.setField(factory, "vueBuildRepairMetricsCollector",
@@ -302,18 +304,38 @@ class AiGeneratorServiceFactoryTest {
         assertEquals(null, registry.find("vue_memory_l0_sync_total").counter());
     }
 
-    private RedisChatMemoryStore statefulRedisStore() {
-        RedisChatMemoryStore store = mock(RedisChatMemoryStore.class);
+    private AtomicChatMemoryStore statefulRedisStore() {
+        dev.langchain4j.store.memory.chat.ChatMemoryStore delegate = mock(
+                dev.langchain4j.store.memory.chat.ChatMemoryStore.class);
         AtomicReference<List<ChatMessage>> messages =
                 new AtomicReference<>(List.of());
-        when(store.getMessages(any())).thenAnswer(invocation ->
+        when(delegate.getMessages(any())).thenAnswer(invocation ->
                 messages.get());
         org.mockito.Mockito.doAnswer(invocation -> {
             List<ChatMessage> updated = invocation.getArgument(1);
             messages.set(List.copyOf(updated));
             return null;
-        }).when(store).updateMessages(any(), anyList());
-        return store;
+        }).when(delegate).updateMessages(any(), anyList());
+        return new AtomicChatMemoryStore(delegate);
+    }
+
+    private AtomicChatMemoryStore emptyAtomicStore() {
+        return atomicStore(mock(
+                dev.langchain4j.store.memory.chat.ChatMemoryStore.class));
+    }
+
+    private AtomicChatMemoryStore atomicStore(
+            dev.langchain4j.store.memory.chat.ChatMemoryStore delegate) {
+        return new AtomicChatMemoryStore(delegate);
+    }
+
+    private dev.langchain4j.store.memory.chat.ChatMemoryStore
+            failingDeleteStore() {
+        dev.langchain4j.store.memory.chat.ChatMemoryStore delegate = mock(
+                dev.langchain4j.store.memory.chat.ChatMemoryStore.class);
+        doThrow(new IllegalStateException("redis down"))
+                .when(delegate).deleteMessages(7L);
+        return delegate;
     }
 
     private static final class EvaluationTools extends BaseTool {

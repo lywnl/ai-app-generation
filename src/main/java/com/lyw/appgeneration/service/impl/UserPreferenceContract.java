@@ -2,6 +2,9 @@ package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.MemoryTextSafety;
+import com.lyw.appgeneration.ai.memory.UserPreferenceValueCatalog;
+import com.lyw.appgeneration.ai.memory.UserPreferenceMessageFragmentBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 
 import java.util.HashSet;
@@ -14,13 +17,14 @@ final class UserPreferenceContract {
 
     static final int MAX_CANDIDATES = 5;
 
-    private static final List<String> ALLOWED_NAMES = List.of(
-            "语言偏好", "视觉风格", "技术栈倾向", "交互习惯", "其他");
+    private static final List<String> ALLOWED_NAMES =
+            UserPreferenceValueCatalog.categoryNames();
     private static final Set<String> ALLOWED_NAME_SET =
             Set.copyOf(ALLOWED_NAMES);
 
     private final ChatTokenEstimator tokenEstimator;
     private final MemoryTokenProperties tokenProperties;
+    private final UserPreferenceMessageFragmentBuilder fragmentBuilder;
 
     UserPreferenceContract(ChatTokenEstimator tokenEstimator,
                            MemoryTokenProperties tokenProperties) {
@@ -28,6 +32,8 @@ final class UserPreferenceContract {
                 tokenEstimator, "Token 估算器不能为空");
         this.tokenProperties = Objects.requireNonNull(
                 tokenProperties, "Token 配置不能为空");
+        this.fragmentBuilder = new UserPreferenceMessageFragmentBuilder(
+                this.tokenEstimator, this.tokenProperties);
     }
 
     List<String> allowedNames() {
@@ -47,9 +53,13 @@ final class UserPreferenceContract {
         String normalizedContent =
                 UserPreferenceCandidateParser.normalizeContent(content);
         return isAllowedName(name)
+                && MemoryTextSafety.isSafe(content)
                 && StrUtil.isNotBlank(normalizedContent)
-                && estimatePreferenceLine(name, normalizedContent)
-                <= tokenProperties.getL2MaxRecallTokens();
+                && content.equals(normalizedContent)
+                && UserPreferenceValueCatalog.isCanonical(
+                StrUtil.trim(name), content)
+                && fragmentBuilder.isWithinBudget(
+                renderPreferenceLine(name, normalizedContent));
     }
 
     String renderPreferenceLine(String name, String content) {
@@ -63,9 +73,7 @@ final class UserPreferenceContract {
     }
 
     boolean isValidRecallCache(String cached) {
-        if (cached == null
-                || tokenEstimator.estimateText(cached)
-                > tokenProperties.getL2MaxRecallTokens()) {
+        if (cached == null || !fragmentBuilder.isWithinBudget(cached)) {
             return false;
         }
         if (cached.isEmpty()) {

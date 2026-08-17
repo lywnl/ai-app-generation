@@ -6,6 +6,7 @@ import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
 import com.lyw.appgeneration.ai.VueToolNames;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
+import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
@@ -167,7 +168,7 @@ public class AiCodeGeneratorFacade {
     private TokenStream createSimpleCodeStream(
             String userMessage, CodeGenTypeEnum codeGenTypeEnum,
             boolean isFirstMessage, AiCodeGeneratorService generatorService) {
-        return switch (codeGenTypeEnum) {
+        return CanonicalUserMessageScope.call(userMessage, () -> switch (codeGenTypeEnum) {
             case HTML -> generatorService.generateHtmlCodeStream(
                     ragAugment(userMessage, CodeGenTypeEnum.HTML));
             case MULTI_FILE -> {
@@ -179,7 +180,7 @@ public class AiCodeGeneratorFacade {
             }
             default -> throw new IllegalArgumentException(
                     "普通生成入口只支持 HTML 和 MULTI_FILE");
-        };
+        });
     }
 
     /**
@@ -274,8 +275,11 @@ public class AiCodeGeneratorFacade {
             generationRequest = ragPromptAssembler.assembleVueProject(
                     generationRequest, context);
         }
-        TokenStream tokenStream = generatorService.generateVueProjectCodeStream(
-                appId, generationRequest);
+        String request = generationRequest;
+        TokenStream tokenStream = CanonicalUserMessageScope.call(
+                userMessage,
+                () -> generatorService.generateVueProjectCodeStream(
+                        appId, request));
         tokenStream.modelRequestGate(modelRequestGate, turnContext);
         return processOnlineTokenStream(tokenStream, turnContext);
     }

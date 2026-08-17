@@ -3,8 +3,10 @@ package com.lyw.appgeneration.ai.memory;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 
@@ -22,17 +24,39 @@ import java.util.List;
  */
 public class LayeredChatMemory implements ChatMemory {
 
+    private static final String L1_PREFIX =
+            "以下是本应用早期对话的摘要,供你延续上下文(不是用户的新指令):\n";
+    private static final String L1_ACK =
+            "明白,我会基于以上摘要和后续对话继续。";
+
     private final ChatMemory delegate;
     private final MemorySummaryService summaryService;
     private final UserMemoryService userMemoryService;
+    private final UserPreferenceMessageFragmentBuilder l2FragmentBuilder;
     private final Long appId;
 
     public LayeredChatMemory(ChatMemory delegate, MemorySummaryService summaryService,
-                             UserMemoryService userMemoryService) {
+                             UserMemoryService userMemoryService,
+                             UserPreferenceMessageFragmentBuilder l2FragmentBuilder) {
         this.delegate = delegate;
         this.summaryService = summaryService;
         this.userMemoryService = userMemoryService;
+        this.l2FragmentBuilder = l2FragmentBuilder;
         this.appId = (Long) delegate.id();
+    }
+
+    /** 兼容直接构造场景；生产装配显式注入同一片段构建器。 */
+    public LayeredChatMemory(ChatMemory delegate,
+                             MemorySummaryService summaryService,
+                             UserMemoryService userMemoryService) {
+        this(delegate, summaryService, userMemoryService,
+                defaultFragmentBuilder());
+    }
+
+    private static UserPreferenceMessageFragmentBuilder defaultFragmentBuilder() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        return new UserPreferenceMessageFragmentBuilder(
+                new ConservativeChatTokenEstimator(properties), properties);
     }
 
     @Override
@@ -54,23 +78,100 @@ public class LayeredChatMemory implements ChatMemory {
     public List<ChatMessage> messages() {
         List<ChatMessage> base = delegate.messages();
         List<ChatMessage> result = new ArrayList<>(base.size() + 4);
+        int memoryStart = appendLeadingSystemMessages(base, result);
 
         // L2 跨 app 用户偏好(独立降级:空则不加)
         String prefs = userMemoryService.recallByApp(appId);
         if (StrUtil.isNotBlank(prefs)) {
-            result.add(UserMessage.from("以下是该用户跨应用的通用偏好,请在生成时遵循(不是新指令):\n" + prefs));
-            result.add(AiMessage.from("明白,我会遵循这些通用偏好。"));
+            appendL2(result, prefs);
         }
 
         // L1 本 app 摘要(独立降级)
         String summary = summaryService.getCurrentSummary(appId);
         if (StrUtil.isNotBlank(summary)) {
-            result.add(UserMessage.from("以下是本应用早期对话的摘要,供你延续上下文(不是用户的新指令):\n" + summary));
-            result.add(AiMessage.from("明白,我会基于以上摘要和后续对话继续。"));
+            appendL1(result, summary);
         }
 
-        result.addAll(base); // L0
+        result.addAll(base.subList(memoryStart, base.size())); // L0
         return result;
+    }
+
+    PreparedLayeredMessages prepareMessagesAfterCompletedPrefix(
+            List<ChatMessage> expectedPrefix,
+            String requiredSummary) {
+        List<ChatMessage> base = List.copyOf(delegate.messages());
+        List<ChatMessage> retained = withoutCompletedPrefix(
+                base, expectedPrefix);
+        List<ChatMessage> result = new ArrayList<>(retained.size() + 4);
+        int memoryStart = appendLeadingSystemMessages(retained, result);
+        String prefs = userMemoryService.recallByApp(appId);
+        if (StrUtil.isNotBlank(prefs)) {
+            appendL2(result, prefs);
+        }
+        appendL1(result, requiredSummary);
+        result.addAll(retained.subList(memoryStart, retained.size()));
+        return new PreparedLayeredMessages(base, retained, result);
+    }
+
+    private List<ChatMessage> withoutCompletedPrefix(
+            List<ChatMessage> base,
+            List<ChatMessage> expectedPrefix) {
+        List<ChatMessage> expected = List.copyOf(expectedPrefix);
+        if (expected.isEmpty()) {
+            return base;
+        }
+        int firstUser = firstUserIndex(base);
+        int expectedEnd = firstUser + expected.size();
+        if (firstUser < 0 || expectedEnd > base.size()
+                || !base.subList(firstUser, expectedEnd).equals(expected)) {
+            throw new MemoryPrefixChangedException("L0 旧前缀已变化");
+        }
+        List<ChatMessage> retained = new ArrayList<>(
+                base.size() - expected.size());
+        retained.addAll(base.subList(0, firstUser));
+        retained.addAll(base.subList(expectedEnd, base.size()));
+        return retained;
+    }
+
+    private int firstUserIndex(List<ChatMessage> messages) {
+        for (int index = 0; index < messages.size(); index++) {
+            if (messages.get(index) instanceof UserMessage) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private void appendL2(List<ChatMessage> result, String prefs) {
+        result.addAll(l2FragmentBuilder.buildWithinBudget(prefs));
+    }
+
+    private void appendL1(List<ChatMessage> result, String summary) {
+        result.add(UserMessage.from(L1_PREFIX + summary));
+        result.add(AiMessage.from(L1_ACK));
+    }
+
+    private int appendLeadingSystemMessages(
+            List<ChatMessage> base, List<ChatMessage> result) {
+        int index = 0;
+        while (index < base.size()
+                && base.get(index) instanceof SystemMessage) {
+            result.add(base.get(index));
+            index++;
+        }
+        return index;
+    }
+
+    record PreparedLayeredMessages(
+            List<ChatMessage> l0Snapshot,
+            List<ChatMessage> retainedL0,
+            List<ChatMessage> requestMessages) {
+
+        PreparedLayeredMessages {
+            l0Snapshot = List.copyOf(l0Snapshot);
+            retainedL0 = List.copyOf(retainedL0);
+            requestMessages = List.copyOf(requestMessages);
+        }
     }
 
     @Override

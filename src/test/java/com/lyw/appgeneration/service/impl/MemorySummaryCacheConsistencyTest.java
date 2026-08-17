@@ -40,6 +40,19 @@ import static org.mockito.Mockito.when;
 
 class MemorySummaryCacheConsistencyTest {
 
+    private static final String NEW_SUMMARY = """
+            # 应用目标与定位
+            新摘要
+            # 用户偏好与硬约束
+            无
+            # 已否决的方案
+            无
+            # 关键设计决策与理由
+            无
+            # 当前进度速览
+            无
+            """.strip();
+
     private AppMemorySummaryMapper summaryMapper;
     private ChatHistoryService chatHistoryService;
     private ChatModel model;
@@ -79,7 +92,7 @@ class MemorySummaryCacheConsistencyTest {
                 .thenReturn(List.of(
                         history(1L, "user", "问题"),
                         history(2L, "ai", "回复")));
-        when(model.chat(anyString())).thenReturn("新摘要");
+        when(model.chat(anyString())).thenReturn(NEW_SUMMARY);
         when(tokenEstimator.estimateText(anyString())).thenReturn(100);
 
         MemoryTokenProperties properties = new MemoryTokenProperties();
@@ -142,8 +155,8 @@ class MemorySummaryCacheConsistencyTest {
         assertEquals(MemoryCompressionResult.Status.COMPRESSED,
                 result.status());
         assertEquals(2L, database.get().getLastSummarizedId());
-        assertEquals("新摘要", database.get().getSummary());
-        assertEquals("新摘要", recalled);
+        assertEquals(NEW_SUMMARY, database.get().getSummary());
+        assertEquals(NEW_SUMMARY, recalled);
         assertNull(cache.get());
     }
 

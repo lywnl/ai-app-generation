@@ -1,39 +1,64 @@
 package com.lyw.appgeneration.service.impl;
 
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 为用户级共享记忆缓存提供进程内一致性边界。
- *
- * <p>固定条带避免按 userId 持有无界锁对象；不同用户发生条带碰撞时只会降低并发度，
- * 不会改变一致性语义。
  */
 final class UserMemoryConsistencyCoordinator {
 
-    private static final int STRIPE_COUNT = 64;
-
-    private final ReentrantLock[] stripes = new ReentrantLock[STRIPE_COUNT];
-
-    UserMemoryConsistencyCoordinator() {
-        for (int index = 0; index < stripes.length; index++) {
-            stripes[index] = new ReentrantLock();
-        }
-    }
+    private final ConcurrentHashMap<Long, LockEntry> locks =
+            new ConcurrentHashMap<>();
 
     Permit acquire(long userId) {
-        ReentrantLock lock = stripes[
-                Math.floorMod(Long.hashCode(userId), stripes.length)];
-        lock.lock();
-        return new Permit(lock);
+        LockEntry entry = locks.compute(userId, (ignored, current) -> {
+            LockEntry selected = current == null
+                    ? new LockEntry() : current;
+            selected.references++;
+            return selected;
+        });
+        entry.lock.lock();
+        return new Permit(this, userId, entry);
+    }
+
+    int registeredUserCount() {
+        return locks.size();
+    }
+
+    private void release(long userId, LockEntry entry) {
+        entry.lock.unlock();
+        locks.compute(userId, (ignored, current) -> {
+            if (current != entry) {
+                throw new IllegalStateException("L2 用户锁注册状态不一致");
+            }
+            entry.references--;
+            if (entry.references < 0) {
+                throw new IllegalStateException("L2 用户锁引用计数不能为负数");
+            }
+            return entry.references == 0 ? null : entry;
+        });
+    }
+
+    private static final class LockEntry {
+
+        private final ReentrantLock lock = new ReentrantLock();
+        private int references;
     }
 
     static final class Permit implements AutoCloseable {
 
-        private final ReentrantLock lock;
+        private final UserMemoryConsistencyCoordinator coordinator;
+        private final long userId;
+        private final LockEntry entry;
         private boolean closed;
 
-        private Permit(ReentrantLock lock) {
-            this.lock = lock;
+        private Permit(UserMemoryConsistencyCoordinator coordinator,
+                       long userId,
+                       LockEntry entry) {
+            this.coordinator = coordinator;
+            this.userId = userId;
+            this.entry = entry;
         }
 
         @Override
@@ -42,7 +67,7 @@ final class UserMemoryConsistencyCoordinator {
                 return;
             }
             closed = true;
-            lock.unlock();
+            coordinator.release(userId, entry);
         }
     }
 }

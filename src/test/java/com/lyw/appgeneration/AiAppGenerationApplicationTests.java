@@ -11,18 +11,28 @@ import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.mapper.UserMapper;
 import com.qcloud.cos.COSClient;
-import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter;
 import org.redisson.api.RedissonClient;
 
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 默认上下文冒烟测试保留生产组件扫描，但在测试层替换所有会建立外部连接的边界。
@@ -45,11 +55,11 @@ import java.util.Map;
 })
 class AiAppGenerationApplicationTests {
 
+    @Autowired
+    private RequestMappingHandlerAdapter requestMappingHandlerAdapter;
+
     @MockitoBean(name = "openAiChatModel")
     private ChatModel chatModel;
-
-    @MockitoBean(name = "redisChatMemoryStore")
-    private RedisChatMemoryStore redisChatMemoryStore;
 
     @MockitoBean(name = "redissonClient")
     private RedissonClient redissonClient;
@@ -68,6 +78,9 @@ class AiAppGenerationApplicationTests {
 
     @MockitoBean
     private StringRedisTemplate redisTemplate;
+
+    @MockitoBean
+    private PlatformTransactionManager transactionManager;
 
     @MockitoBean
     private AppMapper appMapper;
@@ -101,6 +114,25 @@ class AiAppGenerationApplicationTests {
 
     @Test
     void contextLoads() {
+    }
+
+    @Test
+    void mvc异步请求必须由虚拟线程承载() throws InterruptedException {
+        AsyncTaskExecutor executor = (AsyncTaskExecutor)
+                ReflectionTestUtils.getField(
+                        requestMappingHandlerAdapter, "taskExecutor");
+        assertNotNull(executor);
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicBoolean virtualThread = new AtomicBoolean();
+
+        executor.execute(() -> {
+            virtualThread.set(Thread.currentThread().isVirtual());
+            completed.countDown();
+        });
+
+        assertTrue(completed.await(2, TimeUnit.SECONDS));
+        assertTrue(virtualThread.get(),
+                "Spring MVC 默认执行器会为每条 SSE 占用平台线程");
     }
 
 }

@@ -57,7 +57,7 @@ class UserMemoryOutputBoundaryTest {
     private static final long APP_ID = 100L;
     private static final String CACHE_KEY = "mem:pref:v2:" + USER_ID;
     private static final Set<String> ALLOWED_NAMES = Set.of(
-            "语言偏好", "视觉风格", "技术栈倾向", "交互习惯", "其他");
+            "语言偏好", "视觉风格", "技术栈倾向", "交互习惯");
 
     private ChatHistoryService chatHistoryService;
     private AppMemoryMapper memoryMapper;
@@ -176,10 +176,10 @@ class UserMemoryOutputBoundaryTest {
         provideStableTurn();
         when(model.chat(any(String.class))).thenReturn("""
                 [
-                  {"name":"语言偏好","content":"简体中文","evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"视觉风格","content":"深色极简","evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"技术栈倾向","content":"Vue","evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"交互习惯","content":"键盘优先","evidenceType":"EXPLICIT","turnIds":[11]},
+                  {"name":"语言偏好","valueCodes":["ZH_CN"],"evidenceType":"EXPLICIT","turnIds":[11]},
+                  {"name":"视觉风格","valueCodes":["DARK","MINIMAL"],"evidenceType":"EXPLICIT","turnIds":[11]},
+                  {"name":"技术栈倾向","valueCodes":["VUE3"],"evidenceType":"EXPLICIT","turnIds":[11]},
+                  {"name":"交互习惯","valueCodes":["KEYBOARD_FIRST"],"evidenceType":"EXPLICIT","turnIds":[11]},
                   {"name":"其他","content":"减少动画","evidenceType":"EXPLICIT","turnIds":[11]},
                   {"name":"第六类别","content":"不得持久化","evidenceType":"EXPLICIT","turnIds":[11]}
                 ]
@@ -189,7 +189,7 @@ class UserMemoryOutputBoundaryTest {
 
         ArgumentCaptor<AppMemory> inserted =
                 ArgumentCaptor.forClass(AppMemory.class);
-        verify(memoryMapper, times(5)).insert(inserted.capture());
+        verify(memoryMapper, times(4)).insert(inserted.capture());
         assertEquals(ALLOWED_NAMES, inserted.getAllValues().stream()
                 .map(AppMemory::getName)
                 .collect(java.util.stream.Collectors.toSet()));
@@ -263,6 +263,32 @@ class UserMemoryOutputBoundaryTest {
         assertSuccessfulCursorAdvancedTo(12L);
         assertEquals(1, transactions.executionCount());
         verify(memoryMapper, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("雪花 turnId 带小数时不得截断后命中白名单")
+    void fractionalSnowflakeTurnIdMustNotMatchWhitelist() {
+        long userTurnId = 446_663_972_690_808_832L;
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_ID), anyLong(), anyInt())).thenReturn(List.of(
+                ChatHistory.builder()
+                        .id(userTurnId).appId(APP_ID).userId(USER_ID)
+                        .messageType("user").message("以后都使用中文")
+                        .build(),
+                ChatHistory.builder()
+                        .id(userTurnId + 1).appId(APP_ID).userId(USER_ID)
+                        .messageType("ai").message("已收到")
+                        .build()));
+        when(model.chat(any(String.class))).thenReturn("""
+                [{"name":"语言偏好","valueCodes":["ZH_CN"],
+                  "evidenceType":"EXPLICIT",
+                  "turnIds":[446663972690808832.1]}]
+                """);
+
+        service.extractNow(USER_ID, APP_ID);
+
+        verify(memoryMapper, never()).insert(any());
+        assertSuccessfulCursorAdvancedTo(userTurnId + 1);
     }
 
     private void provideStableTurn() {

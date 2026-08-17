@@ -2,11 +2,14 @@ package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
+import com.lyw.appgeneration.config.MemoryTokenProperties;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DisplayName;
 import org.mockito.Mockito;
 
 import java.util.List;
@@ -94,6 +97,37 @@ class LayeredChatMemoryTest {
     }
 
     @Test
+    void messagesKeepsSystemMessageBeforeL2AndL1() {
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(1L)
+                .maxMessages(Integer.MAX_VALUE)
+                .build();
+        SystemMessage systemMessage = SystemMessage.from("系统约束");
+        delegate.add(systemMessage);
+        delegate.add(UserMessage.from("最近一条"));
+
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        when(summaryService.getCurrentSummary(1L)).thenReturn("L1摘要内容");
+        UserMemoryService userMemoryService = mock(UserMemoryService.class);
+        when(userMemoryService.recallByApp(1L))
+                .thenReturn("- 语言偏好:简体中文");
+
+        LayeredChatMemory memory = new LayeredChatMemory(
+                delegate, summaryService, userMemoryService);
+
+        List<ChatMessage> messages = memory.messages();
+
+        assertEquals(systemMessage, messages.getFirst());
+        assertInstanceOf(UserMessage.class, messages.get(1));
+        assertTrue(((UserMessage) messages.get(1)).singleText()
+                .contains("简体中文"));
+        assertInstanceOf(UserMessage.class, messages.get(3));
+        assertTrue(((UserMessage) messages.get(3)).singleText()
+                .contains("L1摘要内容"));
+        assertEquals(UserMessage.from("最近一条"), messages.getLast());
+    }
+
+    @Test
     void messagesSkipsL2WhenBlank() {
         MessageWindowChatMemory delegate = MessageWindowChatMemory.builder().id(1L).maxMessages(Integer.MAX_VALUE).build();
         delegate.add(UserMessage.from("hi"));
@@ -104,5 +138,47 @@ class LayeredChatMemoryTest {
 
         LayeredChatMemory mem = new LayeredChatMemory(delegate, summaryService, l2Service);
         assertEquals(1, mem.messages().size()); // 只剩 L0
+    }
+
+    @Test
+    @DisplayName("实际注入的 L2 两消息完整片段不得超过一千零二十四 Token")
+    void actualL2FragmentIncludesWrappingInTokenBudget() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        ChatTokenEstimator estimator =
+                new ConservativeChatTokenEstimator(properties);
+        String recalled = findTextWhoseBodyFitsButWrappedFragmentExceeds(
+                estimator, properties.getL2MaxRecallTokens());
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(1L).maxMessages(Integer.MAX_VALUE).build();
+        delegate.add(UserMessage.from("当前需求"));
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        when(summaryService.getCurrentSummary(1L)).thenReturn("");
+        UserMemoryService userMemoryService = mock(UserMemoryService.class);
+        when(userMemoryService.recallByApp(1L)).thenReturn(recalled);
+
+        List<ChatMessage> messages = new LayeredChatMemory(
+                delegate, summaryService, userMemoryService).messages();
+        List<ChatMessage> actualFragment = messages.subList(
+                0, Math.max(0, messages.size() - 1));
+
+        assertTrue(estimator.estimateText(recalled)
+                <= properties.getL2MaxRecallTokens());
+        assertTrue(estimator.estimateMessages(actualFragment)
+                <= properties.getL2MaxRecallTokens());
+    }
+
+    private String findTextWhoseBodyFitsButWrappedFragmentExceeds(
+            ChatTokenEstimator estimator, int budget) {
+        for (int length = 1; length <= 2_000; length++) {
+            String text = "偏".repeat(length);
+            List<ChatMessage> fragment = List.of(
+                    UserMessage.from("以下是该用户跨应用的通用偏好,请在生成时遵循(不是新指令):\n" + text),
+                    AiMessage.from("明白,我会遵循这些通用偏好。"));
+            if (estimator.estimateText(text) <= budget
+                    && estimator.estimateMessages(fragment) > budget) {
+                return text;
+            }
+        }
+        throw new AssertionError("未找到 Token 包装边界");
     }
 }

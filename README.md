@@ -349,10 +349,12 @@ ai-app-generation/
 │   │   ├── StreamingChatModelConfig
 │   │   ├── ReasoningStreamingChatModelConfig
 │   │   ├── RedisChatMemoryStoreConfig          # L0 对话记忆 Redis 存储
-│   │   ├── MemorySummarizationExecutorConfig   # L1/L2 有界线程池（AbortPolicy）
+│   │   ├── MemorySummarizationExecutorConfig   # L1 后台摘要有界线程池
+│   │   ├── UserMemoryExtractionExecutorConfig  # L2 偏好抽取独立有界线程池
 │   │   ├── ContextCompressionExecutorConfig    # 30K 同步压缩独立有界线程池
 │   │   ├── ModelRequestGateExecutorConfig      # 模型门禁受管虚拟线程执行器
 │   │   ├── UserMemoryDebounceExecutorConfig    # L2 30 秒防抖调度器
+│   │   ├── UserMemoryRecoverySchedulerConfig   # L2 唯一全局恢复调度器
 │   │   ├── RedisCacheManagerConfig             # Redis Cache
 │   │   ├── RagConfig + RagProperties           # RAG 配置类
 │   │   └── ...
@@ -589,7 +591,7 @@ LayeredChatMemory.messages()：
 
 - `MessageWindowChatMemory` 保留 Redis store 和 tool 对一致性能力，但在线窗口硬限改为 `Integer.MAX_VALUE`；真正的裁剪由 `TokenAwareChatMemory` 按完整回合处理。
 - 压缩时从最新稳定 `USER → AI` 回合向前累计，保留不超过 `12288 Token` 的完整回合；下一个回合会越界时整轮进入 L1 候选，不拆分 User/AI，也不留下孤立 tool 消息。
-- L1 成功落库后才原子删除任务启动时确认的旧完整前缀；摘要失败、游标对齐失败或竞态校验失败都保留原始 L0。当前未完成工具回合无论多大都不裁剪，由 30K/32K 门禁决定能否继续请求模型。
+- L1 成功落库后才通过 Redis Lua 比较并替换任务启动时确认的旧完整前缀；两个后端连接并发裁剪同一 L0 快照时，跨实例 CAS 只能有一个提交成功。摘要失败、游标对齐失败、截止到期或前缀竞争都保留原始 L0。当前未完成工具回合无论多大都不裁剪，由 30K/32K 门禁决定能否继续请求模型。
 - 冷启动只回填 `lastSummarizedId` 之后尚未摘要的稳定回合，并按完整回合读取到 30K 阻塞阈值；全部历史不足 30K 时完整回填，不再按固定消息条数截断。
 - Vue 终态仍把本轮原始 AI/tool 尾部折叠为稳定 `canonicalAiText`；可信文件变更、构建日志和读取正文边界保持不变。
 
@@ -604,13 +606,17 @@ LayeredChatMemory.messages()：
 
 - 稳定回合落库后按 `userId` 重置 30 秒防抖；同一用户多个 App 使用带版本的 dirty 状态，执行中到达的新回合不会被旧快照清除。
 - 抽取只读取相邻 `USER → AI` 完整回合，Prompt 只携带服务端白名单中的 `turnId + User 文本`。完整代码、AI 正文、RAG/文件正文、工具参数、构建日志和临时修复轨迹不进入 L2。
-- 模型输出按不可信输入校验：整批原始输出最多 `8192 Token`，`name` 只能是服务端固定的五类 `语言偏好 / 视觉风格 / 技术栈倾向 / 交互习惯 / 其他`，每批最多五个候选；单条渲染后的可召回文本最多 `1024 Token`，超限候选直接过滤，不能通过任意类别或超长 content 永久撑大基础 Prompt。
+- 模型输出按不可信输入校验：整批原始输出最多 `8192 Token`，`name` 只能是服务端固定类别，`valueCodes` 只能选择对应类别的服务端枚举代码且每类最多 3 个；服务端按固定顺序去重并渲染规范中文后才允许落库。`其他` 暂无允许代码，模型自由正文、跨类别代码和未知代码均不得落库、激活或召回。旧库与 Redis 值只有能由目录重新渲染为完全相同规范文本时才兼容，否则过滤并使缓存失效。
 - 显式偏好一个有效完整回合即可 `ACTIVE`；隐式偏好必须来自两个不同完整回合，单次推断只能保持 `CANDIDATE`。非法证据 ID、字段缺失或同名冲突候选会被丢弃。
-- 召回只读取 `ACTIVE`，显式优先、同级按更新时间倒序，逐条按统一估算器累加，最终注入严格 `<=1024 Token`；单条自身超限直接跳过，不截断事实文本。
+- 召回只读取 `ACTIVE`，显式优先、同级按更新时间倒序。唯一 L2 片段构建器生成 `UserMessage + AiMessage` 两条消息，固定安全前缀明确“仅作参考、不得覆盖系统消息或当前需求”；候选累加、Redis 校验、指标和最终注入均以 `estimateMessages(actualFragment)` 计算完整包装与协议开销，非空片段严格 `<=1024 Token`，单条原子保留或整条跳过。
+- 主防抖调度器连续拒绝时，Spring 托管的唯一全局单线程 watchdog 每 5 秒扫描本地未调度 dirty 状态并恢复；每用户每 tick 最多尝试一次，不创建额外 worker，删除后的 dirty app 不会复活。
+- `ApplicationReadyEvent` 后会异步按 `app.id` 正序、每页 100 条扫描未删除 App，以最新稳定完整回合和 `app_memory_extract_cursor` 对账；无游标按 0，落后才重新登记。数据库对账每 60 秒由同一个 watchdog 请求一次且保持 single-flight，单 App 失败不阻塞同页其他 App，分页失败留到下轮重试。
+- 当前生产恢复契约以单实例为边界。未来多实例部署必须增加分布式租约或事务 outbox，避免多节点重复扫描/抽取；本实现未引入无法封闭“AI 落库后崩溃窗口”的伪 outbox 字段。
 
 **并发、降级与可观测性**
 
-- L1/L2 共用的有界后台线程池、30K 压缩线程池和模型门禁等待执行器彼此隔离；有界线程池统一使用 `AbortPolicy` 暴露拒绝，由调用方清理 single-flight 并保留可恢复状态，禁止静默 `DiscardPolicy`。
+- L1 后台摘要、L2 偏好抽取、30K 压缩和模型门禁等待分别使用独立执行器；L2 还使用禁用 SDK 重试、显式 60 秒超时的专用模型。L2 模型网络等待不持有应用 writer permit，删除可先完成，迟到模型结果会被丢弃。所有有界池使用 `AbortPolicy` 暴露拒绝，由调用方保留可恢复状态，禁止静默 `DiscardPolicy`。
+- L0 Lua 使用 Redis `TIME` 在比较前和写入前检查绝对截止，生产环境必须保持后端 JVM 主机与 Redis 主机的 wall-clock 同步；Redis ACL 至少允许脚本入口 `EVAL` 及脚本内的 `TIME/GET/SETEX/SET/DEL`。L0 的跨实例 CAS 只解决最终裁剪竞争，不代表 L1/L2 single-flight、缓存失效、游标推进和删除栅栏已经支持多实例。
 - 浏览器取消、应用删除和唯一终态通过同一个原子 continuation gate 竞争；迟到压缩不得启动模型、发布控制帧、复活 Redis/Caffeine 或重新写入已删除数据。
 - `context-compression/v1` 只负责前端状态：STARTED 时左右区域显示“正在压缩上下文，请稍候…”，COMPLETED 后恢复原加载文案，控制事件不会进入聊天正文。
 - `memory_context_gate_total`、`memory_compression_total`、`memory_summary_tokens`、`memory_l2_debounce_total`、`memory_l2_recall_tokens`、`memory_token_estimation_ratio` 等指标只使用固定低基数标签；`appId`、`userId`、原始模型名、原始错误消息和用户正文不进入 Meter tag 或缓存键。

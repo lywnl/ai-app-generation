@@ -172,6 +172,58 @@ class AiServiceTokenStreamTest {
     }
 
     @Test
+    void 首次门禁完成回调调度被拒绝时不得调用模型且失败只收口一次() {
+        MutableChatMemory memory = new MutableChatMemory(7L);
+        memory.add(UserMessage.from("本轮问题"));
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        StreamingChatModel model = new StreamingChatModel() {
+            @Override
+            public void doChat(
+                    ChatRequest request,
+                    dev.langchain4j.model.chat.response
+                            .StreamingChatResponseHandler handler) {
+                modelCalls.incrementAndGet();
+            }
+        };
+        TestAiService service = AiServices.builder(TestAiService.class)
+                .streamingChatModel(model)
+                .chatMemoryProvider(ignored -> memory)
+                .build();
+        ModelRequestGate gate = new ModelRequestGate() {
+            @Override
+            public java.util.concurrent.CompletionStage<Decision> prepare(
+                    Request request) {
+                return CompletableFuture.completedFuture(new Decision(
+                        Status.ALLOWED,
+                        request.latestMemory().get().messages(),
+                        10,
+                        ""));
+            }
+
+            @Override
+            public java.util.concurrent.CompletionStage<DispatchStatus> onPrepared(
+                    java.util.concurrent.CompletionStage<Decision> preparation,
+                    java.util.function.BiConsumer<Decision, Throwable> completion) {
+                return CompletableFuture.completedFuture(
+                        DispatchStatus.REJECTED);
+            }
+        };
+        TokenStream stream = service.chat(7L, "本轮问题");
+
+        stream.modelRequestGate(gate, action -> {
+                    action.run();
+                    return true;
+                })
+                .onPartialResponse(ignored -> { })
+                .onError(ignored -> errors.incrementAndGet())
+                .start();
+
+        assertEquals(0, modelCalls.get());
+        assertEquals(1, errors.get());
+    }
+
+    @Test
     void cancelBeforeStartDoesNotPrepareGatePublishContentsOrStartModel() {
         AiServiceContext context = new AiServiceContext(Object.class);
         AtomicInteger modelCalls = new AtomicInteger();

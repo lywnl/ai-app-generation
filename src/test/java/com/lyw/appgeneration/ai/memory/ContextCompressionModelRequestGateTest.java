@@ -54,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -70,6 +71,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ContextCompressionModelRequestGateTest {
+
+    private static final String VALID_SUMMARY = """
+            # 应用目标与定位
+            测试应用
+            # 用户偏好与硬约束
+            无
+            # 已否决的方案
+            无
+            # 关键设计决策与理由
+            无
+            # 当前进度速览
+            已完成早期回合
+            """.strip();
 
     @Test
     void 阻塞压缩只通过真实回合门发布固定开始和完成进度()
@@ -383,6 +397,48 @@ class ContextCompressionModelRequestGateTest {
     }
 
     @Test
+    void 冷启动跳过已摘要回合后模型请求仍必须携带严格L1()
+            throws Exception {
+        try (RealGateFixture fixture = new RealGateFixture(15_600, 12_000);
+             SimpleGenerationTurnContext turnContext =
+                     fixture.openTurn("cold-rebuild-strict-l1")) {
+            fixture.rebuildL0AfterSummaryCursor();
+            RecordingStreamingChatModel model =
+                    new RecordingStreamingChatModel();
+            RealGateAiService service = AiServices.builder(
+                            RealGateAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> fixture.memory())
+                    .build();
+            AtomicReference<Throwable> error = new AtomicReference<>();
+            TokenStream stream = service.chat(7L, "冷启动后的当前问题");
+            try {
+                stream.modelRequestGate(fixture.gate(), turnContext)
+                        .onPartialResponse(ignored -> { })
+                        .onError(error::set)
+                        .start();
+
+                assertTrue(model.awaitCalls(1));
+                assertNull(error.get());
+                ChatRequest request = model.request(0);
+                assertTrue(containsTextFragment(
+                                request.messages(), VALID_SUMMARY),
+                        "冷启动游标跳过旧 L0 后，模型请求仍必须携带严格 L1");
+                assertTrue(containsText(
+                        request.messages(), fixture.recentUser()));
+                assertTrue(containsText(
+                        request.messages(), "冷启动后的当前问题"));
+                assertFalse(containsText(
+                        request.messages(), fixture.oldUser()));
+                verify(fixture.summaryService()).getRequiredSummary(
+                        RealGateFixture.APP_ID, 2L);
+            } finally {
+                stream.cancel();
+            }
+        }
+    }
+
+    @Test
     void 真实28K首次请求异步压旧回合且模型仍使用原审核快照()
             throws Exception {
         assertRealNonBlockingInitialRequest(17_000, true);
@@ -436,8 +492,9 @@ class ContextCompressionModelRequestGateTest {
                 assertTrue(fixture.estimator().estimateRequest(
                                 fixture.memory().messages(), List.of())
                                 >= fixture.properties().getHardInputLimit());
-                assertFalse(containsText(
-                        fixture.memory().messages(), fixture.oldUser()));
+                assertTrue(containsText(
+                                fixture.memory().messages(), fixture.oldUser()),
+                        "最终预演仍超 32K 时不得在拒绝前提交 L0 裁剪");
                 assertTrue(containsText(
                         fixture.memory().messages(), fixture.recentUser()));
                 assertTrue(containsText(
@@ -588,11 +645,13 @@ class ContextCompressionModelRequestGateTest {
             assertTrue(model.awaitCalls(1));
             assertNull(error.get());
             ChatRequest request = model.request(0);
-            assertEquals(fixture.memory().messages(), request.messages());
+            assertTrue(containsTextFragment(request.messages(), VALID_SUMMARY),
+                    "模型请求必须使用协调器审核过的严格 L1 快照");
             assertFalse(containsText(request.messages(), fixture.oldUser()),
                     "真实协调器必须裁剪已摘要的旧完整回合");
             assertTrue(containsText(request.messages(), fixture.recentUser()));
             assertTrue(containsText(request.messages(), "本轮问题"));
+            verify(fixture.summaryService()).getRequiredSummary(7L, 2L);
             stream.cancel();
         }
     }
@@ -651,7 +710,10 @@ class ContextCompressionModelRequestGateTest {
                     .filter(ToolExecutionResultMessage.class::isInstance)
                     .map(ToolExecutionResultMessage.class::cast)
                     .anyMatch(result -> largeToolResult.equals(result.text())));
-            assertEquals(fixture.memory().messages(), secondRequest.messages());
+            assertTrue(containsTextFragment(
+                            secondRequest.messages(), VALID_SUMMARY),
+                    "工具续调必须复用协调器审核过的严格 L1 快照");
+            verify(fixture.summaryService()).getRequiredSummary(7L, 2L);
             stream.cancel();
         }
     }
@@ -706,12 +768,16 @@ class ContextCompressionModelRequestGateTest {
                     assertTrue(requestTokens < fixture.properties()
                             .getBlockingCompressionThreshold());
                     verify(fixture.summaryService())
-                            .triggerSummarizationAsync(7L, 2L);
+                            .triggerSummarizationAsync(
+                                    eq(7L), eq(2L),
+                                    any(BooleanSupplier.class));
                 } else {
                     assertTrue(requestTokens < fixture.properties()
                             .getAsyncCompressionThreshold());
                     verify(fixture.summaryService(), never())
-                            .triggerSummarizationAsync(any(), anyLong());
+                            .triggerSummarizationAsync(
+                                    any(), anyLong(),
+                                    any(BooleanSupplier.class));
                 }
                 verify(fixture.summaryService(), never()).compressNow(
                         any(), anyLong(), any(Duration.class));
@@ -738,6 +804,21 @@ class ContextCompressionModelRequestGateTest {
             }
             if (message instanceof AiMessage aiMessage) {
                 return expected.equals(aiMessage.text());
+            }
+            return false;
+        });
+    }
+
+    private boolean containsTextFragment(
+            List<ChatMessage> messages, String expectedFragment) {
+        return messages.stream().anyMatch(message -> {
+            if (message instanceof UserMessage userMessage
+                    && userMessage.hasSingleText()) {
+                return userMessage.singleText().contains(expectedFragment);
+            }
+            if (message instanceof AiMessage aiMessage) {
+                return aiMessage.text() != null
+                        && aiMessage.text().contains(expectedFragment);
             }
             return false;
         });
@@ -919,6 +1000,8 @@ class ContextCompressionModelRequestGateTest {
                     recentTurnTokens - recentUser.length());
             properties.setBlockingTimeout(Duration.ofSeconds(5));
             when(summaryService.getCurrentSummary(APP_ID)).thenReturn("");
+            when(summaryService.getRequiredSummary(APP_ID, 2L))
+                    .thenReturn(VALID_SUMMARY);
             when(summaryService.lastSummarizedId(APP_ID)).thenReturn(0L);
             when(userMemoryService.recallByApp(APP_ID)).thenReturn("");
             when(historyService.listRecentCompleteTurnBoundaries(APP_ID, 2))
@@ -997,6 +1080,17 @@ class ContextCompressionModelRequestGateTest {
 
         private CompressionAwareChatMemory memory() {
             return memory;
+        }
+
+        private void rebuildL0AfterSummaryCursor() {
+            List<ChatMessage> oldTurn = memory.completeTurnSnapshot()
+                    .completedTurns().getFirst().messages();
+            assertTrue(memory.removeCompletedPrefixIfMatches(oldTurn));
+            when(summaryService.lastSummarizedId(APP_ID)).thenReturn(2L);
+            when(historyService.listRecentCompleteTurnBoundaries(APP_ID, 1))
+                    .thenReturn(List.of(
+                            new ChatHistoryService.StableTurnBoundary(
+                                    3L, 4L, recentUser, recentAi)));
         }
 
         private ContextCompressionModelRequestGate gate() {

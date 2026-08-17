@@ -5,28 +5,26 @@ import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 /**
  * 为同一 memoryId 的 L0 读写提供进程内共享原子边界。
  *
- * <p>底层 Redis 单次写本身是原子的；本包装层再用条带锁串行化
+ * <p>底层 Redis 单次写本身是原子的；本包装层再用精确 memoryId 锁串行化
  * MessageWindow 的读改写、删除和比较替换，避免不同记忆实例互相覆盖。</p>
  */
 public final class AtomicChatMemoryStore implements ChatMemoryStore {
 
-    private static final int LOCK_STRIPE_COUNT = 64;
-
     private final ChatMemoryStore delegate;
-    private final ReentrantLock[] locks = new ReentrantLock[LOCK_STRIPE_COUNT];
+    private final ConcurrentHashMap<Object, LockEntry> locks =
+            new ConcurrentHashMap<>();
 
     public AtomicChatMemoryStore(ChatMemoryStore delegate) {
         this.delegate = Objects.requireNonNull(
                 delegate, "底层 ChatMemoryStore 不能为空");
-        for (int index = 0; index < locks.length; index++) {
-            locks[index] = new ReentrantLock(true);
-        }
     }
 
     @Override
@@ -75,14 +73,72 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
         });
     }
 
+    /** 在同一绝对截止内等待本地锁并执行底层单命令 CAS。 */
+    public DeadlineAwareReplaceResult replaceMessagesIfMatches(
+            Object memoryId,
+            List<ChatMessage> expected,
+            List<ChatMessage> replacement,
+            AdmissionDeadline deadline) {
+        Object key = requireMemoryId(memoryId);
+        Objects.requireNonNull(deadline, "绝对截止不能为空");
+        List<ChatMessage> expectedSnapshot = snapshot(expected);
+        List<ChatMessage> replacementSnapshot = snapshot(replacement);
+        if (!(delegate instanceof DeadlineAwareChatMemoryStore deadlineStore)) {
+            return DeadlineAwareReplaceResult.DEPENDENCY_FAILED;
+        }
+        java.time.Duration worstCaseCommitDuration;
+        try {
+            worstCaseCommitDuration =
+                    deadlineStore.worstCaseCommitDuration();
+        } catch (RuntimeException exception) {
+            return DeadlineAwareReplaceResult.DEPENDENCY_FAILED;
+        }
+        long lockWaitNanos;
+        try {
+            lockWaitNanos = deadline.lockWaitNanos(
+                    worstCaseCommitDuration);
+        } catch (RuntimeException exception) {
+            return DeadlineAwareReplaceResult.DEPENDENCY_FAILED;
+        }
+        if (lockWaitNanos <= 0L) {
+            return DeadlineAwareReplaceResult.TIMED_OUT;
+        }
+        LockEntry entry = register(key);
+        boolean acquired = false;
+        try {
+            acquired = entry.lock.tryLock(
+                    lockWaitNanos, TimeUnit.NANOSECONDS);
+            if (!acquired) {
+                return DeadlineAwareReplaceResult.TIMED_OUT;
+            }
+            if (!deadline.canStart(worstCaseCommitDuration)) {
+                return DeadlineAwareReplaceResult.TIMED_OUT;
+            }
+            return deadlineStore.replaceMessagesIfMatches(
+                    memoryId, expectedSnapshot, replacementSnapshot, deadline);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return DeadlineAwareReplaceResult.INTERRUPTED;
+        } catch (RuntimeException exception) {
+            return DeadlineAwareReplaceResult.DEPENDENCY_FAILED;
+        } finally {
+            if (acquired) {
+                entry.lock.unlock();
+            }
+            unregister(key, entry);
+        }
+    }
+
     public <T> T withMemoryLock(Object memoryId, Supplier<T> action) {
         Objects.requireNonNull(action, "原子记忆操作不能为空");
-        ReentrantLock lock = lockFor(memoryId);
-        lock.lock();
+        Object key = Objects.requireNonNull(memoryId, "memoryId 不能为空");
+        LockEntry entry = register(key);
+        entry.lock.lock();
         try {
             return action.get();
         } finally {
-            lock.unlock();
+            entry.lock.unlock();
+            unregister(key, entry);
         }
     }
 
@@ -94,11 +150,49 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
         });
     }
 
-    private ReentrantLock lockFor(Object memoryId) {
-        int hash = Objects.requireNonNull(
-                memoryId, "memoryId 不能为空").hashCode();
-        hash ^= hash >>> 16;
-        return locks[hash & (LOCK_STRIPE_COUNT - 1)];
+    int registeredMemoryCount() {
+        return locks.size();
+    }
+
+    int registeredReferenceCount(Object memoryId) {
+        LockEntry entry = locks.get(memoryId);
+        return entry == null ? 0 : entry.references;
+    }
+
+    private LockEntry register(Object memoryId) {
+        return locks.compute(memoryId, (ignored, current) -> {
+            LockEntry selected = current == null
+                    ? new LockEntry() : current;
+            selected.references++;
+            return selected;
+        });
+    }
+
+    private Object requireMemoryId(Object memoryId) {
+        Object key = Objects.requireNonNull(memoryId, "memoryId 不能为空");
+        if (key.toString().trim().isEmpty()) {
+            throw new IllegalArgumentException("memoryId 不能为空字符串");
+        }
+        return key;
+    }
+
+    private void unregister(Object memoryId, LockEntry entry) {
+        locks.compute(memoryId, (ignored, current) -> {
+            if (current != entry) {
+                throw new IllegalStateException("L0 记忆锁注册状态不一致");
+            }
+            entry.references--;
+            if (entry.references < 0) {
+                throw new IllegalStateException("L0 记忆锁引用计数不能为负数");
+            }
+            return entry.references == 0 ? null : entry;
+        });
+    }
+
+    private static final class LockEntry {
+
+        private final ReentrantLock lock = new ReentrantLock(true);
+        private volatile int references;
     }
 
     private List<ChatMessage> snapshot(List<ChatMessage> messages) {

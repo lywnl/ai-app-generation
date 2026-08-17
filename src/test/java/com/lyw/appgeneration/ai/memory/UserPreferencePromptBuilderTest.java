@@ -23,6 +23,13 @@ class UserPreferencePromptBuilderTest {
         assertTrue(prompt.contains("技术栈倾向"));
         // 结构化输出指令
         assertTrue(prompt.contains("JSON"), "应要求 JSON 数组输出");
+        assertTrue(prompt.contains("valueCodes"));
+        assertFalse(prompt.contains("\"content\""));
+        assertTrue(prompt.contains("ZH_CN"));
+        assertTrue(prompt.contains("DARK"));
+        assertTrue(prompt.contains("VUE3"));
+        assertTrue(prompt.contains("KEYBOARD_FIRST"));
+        assertTrue(prompt.contains("禁止复制用户原文"));
         assertTrue(prompt.contains("evidenceType"));
         assertTrue(prompt.contains("turnIds"));
         assertTrue(prompt.contains("EXPLICIT"));

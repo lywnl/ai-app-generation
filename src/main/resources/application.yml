@@ -14,7 +14,8 @@ spring:
     name: ai-app-generation
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3406/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    # 依赖 I/O 上限必须短于 L1 60 秒总截止，避免迟到 worker 长期占满压缩池。
+    url: jdbc:mysql://127.0.0.1:3406/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=30000
     username: root
     password: lyw666
     hikari:
@@ -29,6 +30,11 @@ spring:
       username: default
       password: lyw666
       ttl: 3600
+      connect-timeout: 3s
+      timeout: 3s
+      jedis:
+        pool:
+          max-wait: 3s
   session:
     store-type: redis
     # session 30 天过期

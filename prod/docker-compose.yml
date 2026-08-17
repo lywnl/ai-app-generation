@@ -38,7 +38,7 @@ services:
       SERVER_PORT: 9025
       SERVER_SERVLET_CONTEXT_PATH: /api
       APP_CODE_DEPLOY_BASE_URL: ${APP_CODE_DEPLOY_BASE_URL}
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=30000
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
       SPRING_DATA_REDIS_HOST: redis

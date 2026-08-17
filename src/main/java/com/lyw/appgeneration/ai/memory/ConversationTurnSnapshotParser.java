@@ -34,6 +34,7 @@ public final class ConversationTurnSnapshotParser {
             AiMessage aiMessage = (AiMessage) source.get(terminalAi);
             completedTurns.add(new CompletedTurn(
                     source.subList(cursor, terminalAi + 1),
+                    (UserMessage) boundary,
                     Objects.toString(aiMessage.text(), "")));
             cursor = terminalAi + 1;
         }
@@ -82,16 +83,24 @@ public final class ConversationTurnSnapshotParser {
 
     public record CompletedTurn(
             List<ChatMessage> messages,
+            UserMessage userMessage,
             String terminalAiText) {
 
         public CompletedTurn {
             messages = List.copyOf(Objects.requireNonNull(
                     messages, "完整回合消息不能为空"));
+            userMessage = Objects.requireNonNull(
+                    userMessage, "用户消息不能为空");
             terminalAiText = Objects.requireNonNull(
                     terminalAiText, "终态 AI 文本不能为空");
             if (messages.isEmpty()) {
                 throw new IllegalArgumentException("完整回合消息不能为空");
             }
+        }
+
+        public String userText() {
+            return userMessage.hasSingleText()
+                    ? Objects.toString(userMessage.singleText(), "") : "";
         }
     }
 }

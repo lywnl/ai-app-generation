@@ -5,7 +5,10 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.memory.UserPreferenceCandidate;
+import com.lyw.appgeneration.ai.memory.UserPreferenceValueCatalog;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -104,11 +107,20 @@ final class UserPreferenceCandidateParser {
 
     private UserPreferenceCandidate toValidatedCandidate(
             JSONObject item, Set<Long> whitelist) {
-        String name = StrUtil.trim(item.getStr("name"));
-        String content = normalizeContent(item.getStr("content"));
-        String evidenceType = item.getStr("evidenceType");
+        Object nameValue = item.get("name");
+        Object valueCodesValue = item.get("valueCodes");
+        Object evidenceTypeValue = item.get("evidenceType");
+        if (!(nameValue instanceof String nameText)
+                || !(valueCodesValue instanceof JSONArray valueCodesArray)
+                || !(evidenceTypeValue instanceof String evidenceType)) {
+            return null;
+        }
+        String name = StrUtil.trim(nameText);
+        List<String> valueCodes = toStrictStringCodes(valueCodesArray);
+        String content = UserPreferenceValueCatalog.render(name, valueCodes);
         Object turnIdsValue = item.get("turnIds");
-        if (!preferenceContract.isPreferenceWithinBudget(name, content)
+        if (content == null
+                || !preferenceContract.isPreferenceWithinBudget(name, content)
                 || !isSupportedEvidenceType(evidenceType)
                 || !(turnIdsValue instanceof JSONArray turnIdsArray)
                 || turnIdsArray.isEmpty()) {
@@ -129,13 +141,36 @@ final class UserPreferenceCandidateParser {
                 name, content, evidenceType, List.copyOf(turnIds));
     }
 
+    private List<String> toStrictStringCodes(JSONArray valueCodes) {
+        List<String> codes = new java.util.ArrayList<>(valueCodes.size());
+        for (Object value : valueCodes) {
+            if (!(value instanceof String code)) {
+                return null;
+            }
+            codes.add(code);
+        }
+        return codes;
+    }
+
     private Long toStrictLong(Object value) {
         if (!(value instanceof Number number)) {
             return null;
         }
-        long longValue = number.longValue();
-        return longValue > 0L && number.doubleValue() == (double) longValue
-                ? longValue : null;
+        try {
+            BigDecimal decimal = switch (number) {
+                case BigDecimal bigDecimal -> bigDecimal;
+                case BigInteger bigInteger -> new BigDecimal(bigInteger);
+                case Byte ignored -> BigDecimal.valueOf(number.longValue());
+                case Short ignored -> BigDecimal.valueOf(number.longValue());
+                case Integer ignored -> BigDecimal.valueOf(number.longValue());
+                case Long ignored -> BigDecimal.valueOf(number.longValue());
+                default -> new BigDecimal(number.toString());
+            };
+            long longValue = decimal.longValueExact();
+            return longValue > 0L ? longValue : null;
+        } catch (ArithmeticException | NumberFormatException exception) {
+            return null;
+        }
     }
 
     private boolean isSupportedEvidenceType(String evidenceType) {

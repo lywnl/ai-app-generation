@@ -5,10 +5,15 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 为 L0 的读取、追加和已完成前缀删除提供同一把锁。
@@ -17,6 +22,9 @@ import java.util.concurrent.locks.ReentrantLock;
  * 协调器才调用 {@link #removeCompletedPrefixIfMatches(List)}，保证先摘要、后裁剪。</p>
  */
 public class TokenAwareChatMemory implements ChatMemory {
+
+    private static final String CANONICAL_USER_NAME_PREFIX =
+            "canonical-user-sha256:";
 
     private final ChatMemory delegate;
     private final AtomicChatMemoryStore atomicStore;
@@ -44,13 +52,53 @@ public class TokenAwareChatMemory implements ChatMemory {
 
     @Override
     public void add(ChatMessage message) {
-        ChatMessage requiredMessage = Objects.requireNonNull(
-                message, "待追加消息不能为空");
+        ChatMessage requiredMessage = canonicalizeUserMessageIfScoped(
+                Objects.requireNonNull(
+                        message, "待追加消息不能为空"));
         if (requiredMessage instanceof SystemMessage systemMessage) {
             addSystemMessage(systemMessage);
             return;
         }
         withMemoryLock(() -> delegate.add(requiredMessage));
+    }
+
+    static String canonicalUserName(String canonicalText) {
+        Objects.requireNonNull(canonicalText, "用户原文不能为空");
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonicalText.getBytes(StandardCharsets.UTF_8));
+            return CANONICAL_USER_NAME_PREFIX
+                    + HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("当前 JVM 不支持 SHA-256", exception);
+        }
+    }
+
+    static boolean matchesCanonicalUserText(
+            UserMessage message, String persistedText) {
+        String name = message.name();
+        if (name == null) {
+            return message.hasSingleText()
+                    && Objects.toString(message.singleText(), "")
+                    .equals(Objects.toString(persistedText, ""));
+        }
+        return name.equals(canonicalUserName(
+                Objects.toString(persistedText, "")));
+    }
+
+    private ChatMessage canonicalizeUserMessageIfScoped(
+            ChatMessage message) {
+        if (!(message instanceof UserMessage userMessage)
+                || userMessage.name() != null) {
+            return message;
+        }
+        String canonicalText =
+                CanonicalUserMessageScope.currentCanonicalText();
+        if (canonicalText == null) {
+            return message;
+        }
+        return UserMessage.from(
+                canonicalUserName(canonicalText), userMessage.contents());
     }
 
     @Override
@@ -112,6 +160,47 @@ public class TokenAwareChatMemory implements ChatMemory {
                 Objects.requireNonNull(replacement, "新快照不能为空"));
         return withMemoryLock(() -> replaceSnapshot(
                 expectedSnapshot, replacementSnapshot));
+    }
+
+    /**
+     * 最终门禁提交专用路径；不得先进入普通无界 {@link #withMemoryLock}。
+     */
+    public DeadlineAwareReplaceResult replaceSnapshotIfMatches(
+            List<ChatMessage> expected,
+            List<ChatMessage> replacement,
+            AdmissionDeadline deadline) {
+        List<ChatMessage> expectedSnapshot = List.copyOf(
+                Objects.requireNonNull(expected, "旧快照不能为空"));
+        List<ChatMessage> replacementSnapshot = List.copyOf(
+                Objects.requireNonNull(replacement, "新快照不能为空"));
+        Objects.requireNonNull(deadline, "绝对截止不能为空");
+        if (atomicStore != null) {
+            return atomicStore.replaceMessagesIfMatches(
+                    memoryId, expectedSnapshot, replacementSnapshot, deadline);
+        }
+        boolean acquired = false;
+        try {
+            long remaining = deadline.remainingNanos();
+            if (remaining <= 0L) {
+                return DeadlineAwareReplaceResult.TIMED_OUT;
+            }
+            acquired = memoryLock.tryLock(remaining, TimeUnit.NANOSECONDS);
+            if (!acquired || deadline.remainingNanos() <= 0L) {
+                return DeadlineAwareReplaceResult.TIMED_OUT;
+            }
+            return replaceSnapshot(expectedSnapshot, replacementSnapshot)
+                    ? DeadlineAwareReplaceResult.REPLACED
+                    : DeadlineAwareReplaceResult.PREFIX_CHANGED;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return DeadlineAwareReplaceResult.INTERRUPTED;
+        } catch (RuntimeException exception) {
+            return DeadlineAwareReplaceResult.DEPENDENCY_FAILED;
+        } finally {
+            if (acquired) {
+                memoryLock.unlock();
+            }
+        }
     }
 
     private void addSystemMessage(SystemMessage systemMessage) {

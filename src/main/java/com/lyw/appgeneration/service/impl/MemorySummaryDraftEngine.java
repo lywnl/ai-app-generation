@@ -2,6 +2,8 @@ package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.MemorySummaryFormat;
+import com.lyw.appgeneration.ai.memory.MemorySummaryContract;
 import com.lyw.appgeneration.ai.memory.MemorySummaryPromptBuilder;
 import com.lyw.appgeneration.ai.memory.SummaryCompressionPromptBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
@@ -28,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
+import java.util.function.BooleanSupplier;
 
 /** 生成 L1 摘要草稿，负责分页、完整回合、动态分批和 reducer 收敛。 */
 @Slf4j
@@ -80,12 +83,24 @@ public class MemorySummaryDraftEngine {
             long summarizeThroughId,
             AppMemorySummary current,
             long deadlineNanos) {
+        return buildDraft(appId, summarizeThroughId, current,
+                deadlineNanos, () -> true);
+    }
+
+    DraftResult buildDraft(
+            Long appId,
+            long summarizeThroughId,
+            AppMemorySummary current,
+            long deadlineNanos,
+            BooleanSupplier modelStartPermit) {
+        Objects.requireNonNull(modelStartPermit, "模型启动许可不能为空");
         long persistedCursor = currentCursor(current);
-        String oldSummary = current == null
+        String oldSummary = persistedCursor == 0L
                 ? "" : StrUtil.nullToEmpty(current.getSummary());
         RollingSummaryAccumulator accumulator =
                 new RollingSummaryAccumulator(
                         appId, oldSummary, persistedCursor, deadlineNanos);
+        accumulator.modelStartPermit = modelStartPermit;
         accumulator.initialize();
         if (accumulator.hasFailed()) {
             return accumulator.finish();
@@ -170,7 +185,8 @@ public class MemorySummaryDraftEngine {
             Long appId,
             String oldSummary,
             String newMessages,
-            long deadlineNanos) {
+            long deadlineNanos,
+            BooleanSupplier modelStartPermit) {
         String prompt = MemorySummaryPromptBuilder.build(
                 oldSummary, newMessages);
         if (!isPromptWithinInputBudget(prompt)) {
@@ -179,15 +195,17 @@ public class MemorySummaryDraftEngine {
                     "摘要模型输入超过硬上限");
         }
         ModelOutput generated = callModel(
-                appId, prompt, deadlineNanos).output();
+                appId, prompt, deadlineNanos, modelStartPermit).output();
         if (generated.failureStatus() != null) {
             return generated;
         }
-        return reduceToLimit(appId, generated.summary(), deadlineNanos);
+        return reduceToLimit(appId, generated.summary(), deadlineNanos,
+                modelStartPermit);
     }
 
     private ModelOutput reduceToLimit(
-            Long appId, String sourceSummary, long deadlineNanos) {
+            Long appId, String sourceSummary, long deadlineNanos,
+            BooleanSupplier modelStartPermit) {
         String current = sourceSummary;
         int currentTokens = tokenEstimator.estimateText(current);
         int reducerRounds = 0;
@@ -207,7 +225,7 @@ public class MemorySummaryDraftEngine {
                         .withReducerRounds(reducerRounds);
             }
             ModelInvocation invocation = callModel(
-                    appId, prompt, deadlineNanos);
+                    appId, prompt, deadlineNanos, modelStartPermit);
             if (invocation.started()) {
                 reducerRounds++;
             }
@@ -232,7 +250,8 @@ public class MemorySummaryDraftEngine {
     }
 
     private ModelInvocation callModel(
-            Long appId, String prompt, long deadlineNanos) {
+            Long appId, String prompt, long deadlineNanos,
+            BooleanSupplier modelStartPermit) {
         if (isDeadlineExpired(deadlineNanos)) {
             return ModelInvocation.notStarted(ModelOutput.failure(
                     MemoryCompressionResult.Status.TIMED_OUT,
@@ -242,6 +261,9 @@ public class MemorySummaryDraftEngine {
         Future<String> modelCall;
         try {
             modelCall = modelExecutor.submit(() -> {
+                if (!modelStartPermit.getAsBoolean()) {
+                    throw new ModelStartRejectedException();
+                }
                 started.set(true);
                 return summarizationModel.chat(prompt);
             });
@@ -277,6 +299,11 @@ public class MemorySummaryDraftEngine {
                         MemoryCompressionResult.Status.MODEL_FAILED,
                         "摘要模型返回空内容"), started);
             }
+            if (!MemorySummaryFormat.isValid(output)) {
+                return ModelInvocation.completed(ModelOutput.failure(
+                        MemoryCompressionResult.Status.MODEL_FAILED,
+                        "摘要模型返回内容不符合固定五段格式"), started);
+            }
             return ModelInvocation.completed(ModelOutput.success(
                     output, tokenEstimator.estimateText(output)), started);
         } catch (TimeoutException exception) {
@@ -297,6 +324,11 @@ public class MemorySummaryDraftEngine {
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause() == null
                     ? exception : exception.getCause();
+            if (cause instanceof ModelStartRejectedException) {
+                return ModelInvocation.notStarted(ModelOutput.failure(
+                        MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
+                        "回合已终止，跳过摘要模型调用"));
+            }
             log.error("摘要模型调用失败 appId={} type={}", appId,
                     cause.getClass().getSimpleName());
             return ModelInvocation.completed(ModelOutput.failure(
@@ -315,8 +347,12 @@ public class MemorySummaryDraftEngine {
     }
 
     private long currentCursor(AppMemorySummary current) {
-        return current == null || current.getLastSummarizedId() == null
-                ? 0L : current.getLastSummarizedId();
+        if (current == null || current.getLastSummarizedId() == null) {
+            return 0L;
+        }
+        long cursor = current.getLastSummarizedId();
+        return MemorySummaryContract.isUsablePersistedState(
+                current.getSummary(), cursor, tokenEstimator) ? cursor : 0L;
     }
 
     private boolean isUserMessage(ChatHistory history) {
@@ -339,6 +375,7 @@ public class MemorySummaryDraftEngine {
         private int persistedSummaryTokens;
         private int workingTokens;
         private int reducerRounds;
+        private BooleanSupplier modelStartPermit = () -> true;
         private long summarizedThroughId;
         private boolean changed;
         private MemoryCompressionResult.Status failureStatus;
@@ -365,7 +402,8 @@ public class MemorySummaryDraftEngine {
                 return;
             }
             ModelOutput reduced = reduceToLimit(
-                    appId, workingSummary, deadlineNanos);
+                    appId, workingSummary, deadlineNanos,
+                    modelStartPermit);
             applyModelOutput(reduced);
             if (!hasFailed()) {
                 changed = true;
@@ -438,7 +476,8 @@ public class MemorySummaryDraftEngine {
                     appId,
                     workingSummary,
                     renderBatch(null),
-                    deadlineNanos);
+                    deadlineNanos,
+                    modelStartPermit);
             applyModelOutput(output);
             if (hasFailed()) {
                 return;
@@ -498,6 +537,10 @@ public class MemorySummaryDraftEngine {
         private String render() {
             return "用户:\n" + userText + "\nAI:\n" + aiText + "\n";
         }
+    }
+
+    private static final class ModelStartRejectedException
+            extends RuntimeException {
     }
 
     record DraftResult(

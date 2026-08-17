@@ -7,6 +7,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import jakarta.annotation.Resource;
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -26,6 +27,7 @@ public class MemorySummaryChatModelConfig {
 
     private String baseUrl;
 
+    @ToString.Exclude
     private String apiKey;
 
     private String modelName;

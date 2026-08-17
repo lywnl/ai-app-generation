@@ -7,6 +7,7 @@ import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
+import com.lyw.appgeneration.ai.memory.UserPreferenceMessageFragmentBuilder;
 import com.lyw.appgeneration.ai.tools.*;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.exception.BusinessException;
@@ -19,7 +20,6 @@ import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.utils.SpringContextUtil;
-import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
@@ -46,9 +46,6 @@ public class AiGeneratorServiceFactory {
     private ChatModel chatModel;
 
     @Resource
-    private RedisChatMemoryStore redisChatMemoryStore;
-
-    @Resource
     private AtomicChatMemoryStore atomicChatMemoryStore;
 
     @Resource
@@ -62,6 +59,9 @@ public class AiGeneratorServiceFactory {
 
     @Resource
     private ChatTokenEstimator chatTokenEstimator;
+
+    @Resource
+    private UserPreferenceMessageFragmentBuilder userPreferenceMessageFragmentBuilder;
 
     @Resource
     private MemoryTokenProperties memoryTokenProperties;
@@ -223,15 +223,13 @@ public class AiGeneratorServiceFactory {
                 ? VueBuildRepairMetricsCollector.MemoryResult.EMPTY
                 : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
         return new CompressionAwareChatMemory(
-                tokenAwareMemory, memorySummaryService, userMemoryService);
+                tokenAwareMemory, memorySummaryService, userMemoryService,
+                userPreferenceMessageFragmentBuilder);
     }
 
     private synchronized AtomicChatMemoryStore l0Store() {
-        if (atomicChatMemoryStore == null) {
-            atomicChatMemoryStore = new AtomicChatMemoryStore(
-                    redisChatMemoryStore);
-        }
-        return atomicChatMemoryStore;
+        return java.util.Objects.requireNonNull(
+                atomicChatMemoryStore, "原子 L0 store 尚未注入");
     }
 
     private void recordVueColdRebuild(

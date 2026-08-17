@@ -24,6 +24,7 @@ import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
+import com.lyw.appgeneration.core.handler.SimpleTextStreamHandler;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
@@ -272,16 +273,14 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             }
             boolean userCommitted = false;
             try {
-                AiCodeGeneratorService generatorService =
-                        aiCodeGeneratorFacade.prepareSimpleGenerator(
-                                appId, codeGenType);
-                boolean firstMessage = prepareSimpleTurn(
-                        appId, message, loginUser, context);
+                PreparedSimpleTurn prepared = prepareSimpleTurn(
+                        appId, message, loginUser, codeGenType, context);
                 userCommitted = true;
                 Flux<String> codeStream = Flux.defer(() ->
                         aiCodeGeneratorFacade.generateAndSaveCodeStream(
                                 message, codeGenType, appId,
-                                firstMessage, context, generatorService));
+                                prepared.firstMessage(), context,
+                                prepared.generatorService()));
                 Flux<GenerationStreamEvent> business = streamHandlerExecutor
                         .doExecute(codeStream, chatHistoryService, appId,
                                 loginUser, codeGenType, context)
@@ -315,8 +314,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
     }
 
-    private boolean prepareSimpleTurn(
+    private PreparedSimpleTurn prepareSimpleTurn(
             long appId, String message, User loginUser,
+            CodeGenTypeEnum codeGenType,
             SimpleGenerationTurnContext context) {
         AppDataLifecycleFence.WriterPermit writerPermit =
                 appDataLifecycleFence.tryAcquireWriter(appId);
@@ -330,14 +330,51 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 throw new BusinessException(
                         ErrorCode.OPERATION_ERROR, "本次生成已取消");
             }
-            boolean firstMessage = !chatHistoryService.existsByAppId(appId);
+            var lastMessage = chatHistoryService.getLastMessage(appId);
+            boolean firstMessage = lastMessage == null;
+            if (lastMessage != null && ChatHistoryMessageTypeEnum.USER
+                    .getValue().equals(lastMessage.getMessageType())) {
+                repairIncompleteSimpleTurn(
+                        appId, loginUser.getId(), codeGenType);
+            }
+            AiCodeGeneratorService generatorService =
+                    aiCodeGeneratorFacade.prepareSimpleGenerator(
+                            appId, codeGenType);
+            if (context.isCancelled()) {
+                throw new BusinessException(
+                        ErrorCode.OPERATION_ERROR, "本次生成已取消");
+            }
             boolean saved = chatHistoryService.addChatMessage(
                     appId, message, ChatHistoryMessageTypeEnum.USER.getValue(),
                     loginUser.getId());
             ThrowUtils.throwIf(!saved,
                     ErrorCode.OPERATION_ERROR, "保存用户消息失败");
-            return firstMessage;
+            return new PreparedSimpleTurn(generatorService, firstMessage);
         }
+    }
+
+    private void repairIncompleteSimpleTurn(
+            long appId, long userId, CodeGenTypeEnum codeGenType) {
+        MemoryCacheInvalidationResult invalidation = aiGeneratorServiceFactory
+                .invalidateAndClearMemory(appId, codeGenType);
+        if (invalidation == null || !invalidation.failedTargets().isEmpty()) {
+            Set<String> failures = invalidation == null
+                    ? Set.of("UNKNOWN") : invalidation.failedTargets();
+            log.error("普通生成孤立回合清理 L0 失败,appId={},type={},targets={}",
+                    appId, codeGenType, failures);
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR, "修复上一轮未完成对话失败");
+        }
+        boolean repaired = chatHistoryService.repairOrphanUserTurn(
+                appId, userId, SimpleTextStreamHandler.FAILURE_MESSAGE);
+        if (!repaired) {
+            throw new BusinessException(
+                    ErrorCode.OPERATION_ERROR, "修复上一轮未完成对话失败");
+        }
+    }
+
+    private record PreparedSimpleTurn(
+            AiCodeGeneratorService generatorService, boolean firstMessage) {
     }
 
     private void finishSimpleTurn(

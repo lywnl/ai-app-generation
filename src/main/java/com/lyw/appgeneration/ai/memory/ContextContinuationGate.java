@@ -12,8 +12,9 @@ import java.util.Objects;
  * 原子地先于终态关门；返回 {@code false} 时不得执行 action。调用方可把
  * {@code VueTurnContext.tryRunCallback} 作为实现传入。</p>
  *
- * <p>action 只承载快速的启动或结果提交线性化点，压缩模型的长时间等待必须
- * 留在票据外。</p>
+ * <p>action 通常只承载快速的启动或结果提交线性化点。唯一例外是最终 L0
+ * 原子裁剪：它会在同一个 admission 绝对截止内有界等待本地锁与 Redis，
+ * 以保证取消关门、删除 writer permit 和裁剪提交具有明确先后顺序。</p>
  *
  * <p>一次成功提交只证明本次动作先于终态获胜，不是永久通行证。任务 5 的
  * 实际模型请求与任务 6 的完成事件仍必须再次通过同一个真实回调门。</p>

@@ -24,16 +24,7 @@ public final class MemorySummaryPromptBuilder {
             只记录"从当前代码状态推导不出来"的信息(已生成的代码不要复述)。
             严格使用下面 5 个固定段落,只更新内容,不要新增段落:
 
-            # 应用目标与定位
-            (用户要做什么应用、核心定位)
-            # 用户偏好与硬约束
-            (明确偏好,以及"不要X/要Y"的纠正 —— 含否定项,最重要)
-            # 已否决的方案
-            (试过但被用户否决的,防止重复犯错)
-            # 关键设计决策与理由
-            (记理由,不记代码结果)
-            # 当前进度速览
-            (一两句,指向 vue_project_<appId> 最新代码;不复制代码)
+            %s
 
             规则:
             - 增量合并:在旧摘要基础上吸收新增对话,不要丢失旧的关键约束。
@@ -61,6 +52,7 @@ public final class MemorySummaryPromptBuilder {
         Objects.requireNonNull(newMessages, "新增对话不能为空");
         String old = StrUtil.isBlank(oldSummary) ? "(无,首次生成)" : oldSummary;
         return String.format(TEMPLATE,
+                MemorySummaryFormat.sectionTemplate(),
                 MemoryTokenProperties.L1_MAX_SUMMARY_TOKENS,
                 old,
                 newMessages);

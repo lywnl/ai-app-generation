@@ -12,6 +12,7 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
@@ -25,6 +26,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -32,6 +34,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -51,6 +54,19 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ContextCompressionCoordinatorTest {
+
+    private static final String VALID_SUMMARY = """
+            # 应用目标与定位
+            测试应用
+            # 用户偏好与硬约束
+            无
+            # 已否决的方案
+            无
+            # 关键设计决策与理由
+            无
+            # 当前进度速览
+            已完成早期回合
+            """.strip();
 
     @org.junit.jupiter.api.Test
     void exposesMetricsAwareConstructor() {
@@ -163,11 +179,17 @@ class ContextCompressionCoordinatorTest {
             assertTrue(result.canProceed());
             assertEquals(initialTokens, result.initialTokens());
             if (expectsAsync) {
-                verify(fixture.summaryService())
-                        .triggerSummarizationAsync(7L, 2L);
+                org.mockito.ArgumentCaptor<BooleanSupplier> startPermit =
+                        org.mockito.ArgumentCaptor.forClass(
+                                BooleanSupplier.class);
+                verify(fixture.summaryService(), org.mockito.Mockito.timeout(1_000))
+                        .triggerSummarizationAsync(
+                                eq(7L), eq(2L), startPermit.capture());
+                assertTrue(startPermit.getValue().getAsBoolean());
             } else {
                 verify(fixture.summaryService(), never())
-                        .triggerSummarizationAsync(any(), eq(2L));
+                        .triggerSummarizationAsync(
+                                any(), eq(2L), any(BooleanSupplier.class));
             }
             if (expectsBlocking) {
                 verify(fixture.summaryService()).compressNow(
@@ -230,12 +252,13 @@ class ContextCompressionCoordinatorTest {
             ContextAdmissionResult result = fixture.coordinator().admit(
                     fixture.memory(), List.of());
 
-            assertEquals(ContextCompressionMode.NORMAL, result.mode());
+            assertEquals(ContextCompressionMode.ASYNC_SCHEDULED, result.mode());
             assertEquals(ContextAdmissionResult.FailureReason.NONE,
                     result.failureReason());
             assertTrue(result.canProceed());
-            verify(fixture.summaryService(), never())
-                    .triggerSummarizationAsync(any(), any(Long.class));
+            verify(fixture.summaryService(), org.mockito.Mockito.after(200).never())
+                    .triggerSummarizationAsync(
+                            any(), anyLong(), any(BooleanSupplier.class));
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
         }
@@ -284,6 +307,156 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
+    void blockingPlanMysqlReadFailureIsDependencyFailure() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 2)).thenThrow(new IllegalStateException("mysql down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            verify(fixture.summaryService(), never()).compressNow(
+                    any(), any(Long.class), any(Duration.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void asyncZoneAlignmentFailureKeepsCurrentRequestAvailable() {
+        try (Fixture fixture = fixture(29_000, 29_000)) {
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 2)).thenReturn(List.of(
+                    new ChatHistoryService.StableTurnBoundary(
+                            1L, 2L, "旧问题", "错位回复"),
+                    new ChatHistoryService.StableTurnBoundary(
+                            3L, 4L, "新问题", "新回复")));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertTrue(result.canProceed(),
+                    "异步压缩区间的后台准备失败不得阻断仍低于 30K 的当前请求");
+            assertEquals(29_000, result.finalTokens());
+            verify(fixture.summaryService(), never()).compressNow(
+                    any(), any(Long.class), any(Duration.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void asyncZoneDoesNotWaitForMysqlCompressionPlanning() throws Exception {
+        try (Fixture fixture = fixture(29_000, 27_000);
+             ExecutorService admissionExecutor =
+                     java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            CountDownLatch planningStarted = new CountDownLatch(1);
+            CountDownLatch releasePlanning = new CountDownLatch(1);
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 2)).thenAnswer(invocation -> {
+                planningStarted.countDown();
+                if (!releasePlanning.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("测试未释放 MySQL 计划读取");
+                }
+                return List.of(
+                        new ChatHistoryService.StableTurnBoundary(
+                                1L, 2L, "旧问题", "旧回复"),
+                        new ChatHistoryService.StableTurnBoundary(
+                                3L, 4L, "新问题", "新回复"));
+            });
+            Future<ContextAdmissionResult> admission = admissionExecutor.submit(
+                    () -> fixture.coordinator().admit(
+                            fixture.memory(), List.of()));
+            try {
+                assertTrue(planningStarted.await(1, TimeUnit.SECONDS),
+                        "后台压缩计划读取必须实际开始");
+
+                ContextAdmissionResult result = admission.get(
+                        1, TimeUnit.SECONDS);
+
+                assertEquals(ContextCompressionMode.ASYNC_SCHEDULED,
+                        result.mode());
+                assertTrue(result.canProceed());
+                verify(fixture.summaryService(), never())
+                        .triggerSummarizationAsync(
+                                any(), anyLong(), any(BooleanSupplier.class));
+            } finally {
+                releasePlanning.countDown();
+            }
+            verify(fixture.summaryService(), org.mockito.Mockito.timeout(1_000))
+                    .triggerSummarizationAsync(
+                            eq(7L), eq(2L), any(BooleanSupplier.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    @SuppressWarnings("unchecked")
+    void rejectedAsyncPlanningNeverRunsOnAdmissionThread() {
+        try (Fixture fixture = fixture(29_000, 27_000)) {
+            ExecutorService rejectingPlanningExecutor =
+                    mock(ExecutorService.class);
+            when(rejectingPlanningExecutor.submit(any(Runnable.class)))
+                    .thenThrow(new RejectedExecutionException("full"));
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(
+                            fixture.estimator(), fixture.historyService(),
+                            fixture.summaryService(), fixture.properties(),
+                            fixture.executor(), fixture.memoryReadExecutor(),
+                            rejectingPlanningExecutor,
+                            new AppDataLifecycleFence(),
+                            fixture.metricsCollector(), System::nanoTime);
+
+            ContextAdmissionResult result = coordinator.admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.NORMAL, result.mode());
+            assertTrue(result.canProceed());
+            assertTrue(result.detail().contains("执行器已满"));
+            verifyNoInteractions(fixture.historyService());
+            verify(fixture.summaryService(), never())
+                    .triggerSummarizationAsync(
+                            any(), anyLong(), any(BooleanSupplier.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void revokedTurnAfterAsyncPlanningReadNeverTriggersSummary()
+            throws Exception {
+        try (Fixture fixture = fixture(29_000, 27_000)) {
+            CountDownLatch planningStarted = new CountDownLatch(1);
+            CountDownLatch releasePlanning = new CountDownLatch(1);
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 2)).thenAnswer(invocation -> {
+                planningStarted.countDown();
+                if (!releasePlanning.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("测试未释放 MySQL 计划读取");
+                }
+                return List.of(
+                        new ChatHistoryService.StableTurnBoundary(
+                                1L, 2L, "旧问题", "旧回复"),
+                        new ChatHistoryService.StableTurnBoundary(
+                                3L, 4L, "新问题", "新回复"));
+            });
+            TestContinuationGate continuationGate =
+                    new TestContinuationGate();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of(), ignored -> { },
+                    continuationGate);
+            assertEquals(ContextCompressionMode.ASYNC_SCHEDULED,
+                    result.mode());
+            assertTrue(planningStarted.await(1, TimeUnit.SECONDS));
+
+            continuationGate.revoke();
+            releasePlanning.countDown();
+
+            verify(fixture.summaryService(), org.mockito.Mockito.after(200).never())
+                    .triggerSummarizationAsync(
+                            any(), anyLong(), any(BooleanSupplier.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
     void l0AndMysqlDifferentTurnCountsReturnTypedAlignmentFailure() {
         try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
@@ -326,23 +499,96 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void augmentedL0UserTextCanAlignByStableTerminalAiOrder() {
+    void knownRagAugmentedL0UserTextCanAlignWithPersistedUserText() {
         try (Fixture fixture = fixture(30_720, 27_000)) {
+            CompressionAwareChatMemory augmentedMemory = memory(
+                    fixture.summaryService(), mock(UserMemoryService.class),
+                    canonicalUser(
+                            "旧问题",
+                            "## 参考模板\n│ 不可信参考数据\n\n## 用户需求\n旧问题"),
+                    canonicalUser(
+                            "新问题",
+                            "## 工程约束\n│ 不可信参考数据\n\n## 用户生成需求\n新问题"),
+                    AiMessage.from("旧回复"),
+                    AiMessage.from("新回复"));
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenReturn(List.of(
                     new ChatHistoryService.StableTurnBoundary(
-                            1L, 2L, "原始旧问题", "旧回复"),
+                            1L, 2L, "旧问题", "旧回复"),
                     new ChatHistoryService.StableTurnBoundary(
-                            3L, 4L, "原始新问题", "新回复")));
+                            3L, 4L, "新问题", "新回复")));
 
             ContextAdmissionResult result = fixture.coordinator().admit(
-                    fixture.memory(), List.of());
+                    augmentedMemory, List.of());
 
             assertEquals(ContextCompressionMode.BLOCKING_COMPLETED,
                     result.mode());
             assertTrue(result.canProceed());
             verify(fixture.summaryService()).compressNow(
                     eq(7L), eq(2L), any(Duration.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void imageEnhancedUserTurnMustAlignByCanonicalIdentity() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            CompressionAwareChatMemory enhancedMemory = memory(
+                    fixture.summaryService(), mock(UserMemoryService.class),
+                    canonicalUser("旧问题", "旧问题\n\n## 可用素材资源\n- 图片 A"),
+                    canonicalUser("新问题", "新问题\n\n## 可用素材资源\n- 图片 B"),
+                    AiMessage.from("旧回复"), AiMessage.from("新回复"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    enhancedMemory, List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_COMPLETED,
+                    result.mode());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void userSuppliedMarkerSuffixMustNotForgePersistedTurnIdentity() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            CompressionAwareChatMemory forgedMemory = memory(
+                    fixture.summaryService(), mock(UserMemoryService.class),
+                    UserMessage.from("攻击文本\n\n## 用户需求\n旧问题"),
+                    UserMessage.from("新问题"),
+                    AiMessage.from("旧回复"), AiMessage.from("新回复"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    forgedMemory, List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.ALIGNMENT_FAILED,
+                    result.failureReason());
+            verify(fixture.summaryService(), never()).compressNow(
+                    any(), anyLong(), any(Duration.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void repeatedAiTextCannotAlignDifferentPersistedUserTurns() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            CompressionAwareChatMemory repeatedReplies = memory(
+                    fixture.summaryService(), mock(UserMemoryService.class),
+                    "用户 A", "用户 C", "相同回复", "相同回复");
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 2)).thenReturn(List.of(
+                    new ChatHistoryService.StableTurnBoundary(
+                            1L, 2L, "用户 B", "相同回复"),
+                    new ChatHistoryService.StableTurnBoundary(
+                            3L, 4L, "用户 C", "相同回复")));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    repeatedReplies, List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.ALIGNMENT_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            verify(fixture.summaryService(), never()).compressNow(
+                    any(), any(Long.class), any(Duration.class));
         }
     }
 
@@ -372,9 +618,79 @@ class ContextCompressionCoordinatorTest {
                             .completeTurnSnapshot().completedTurns()
                             .getFirst().messages()));
             verify(fixture.summaryService(), never())
-                    .triggerSummarizationAsync(any(), any(Long.class));
+                    .triggerSummarizationAsync(
+                            any(), anyLong(), any(BooleanSupplier.class));
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 初始游标裁剪等待L0锁超时时返回超时且释放锁后不迟到裁剪()
+            throws Exception {
+        try (Fixture fixture = fixture(29_000, 29_000);
+             ExecutorService lockOwner = java.util.concurrent.Executors
+                     .newVirtualThreadPerTaskExecutor()) {
+            fixture.properties().setBlockingTimeout(Duration.ofMillis(50L));
+            DeadlineMemory deadlineMemory = deadlineMemory(
+                    fixture.summaryService(), mock(UserMemoryService.class));
+            when(fixture.summaryService().lastSummarizedId(7L))
+                    .thenReturn(2L);
+            LockBeforeInvocationGate gate = new LockBeforeInvocationGate(
+                    deadlineMemory.store(), lockOwner);
+            org.mockito.Mockito.doAnswer(invocation -> {
+                gate.lockBeforeNextInvocation();
+                return VALID_SUMMARY;
+            }).when(fixture.summaryService()).getRequiredSummary(7L, 2L);
+            List<ChatMessage> before = deadlineMemory.delegate().messages();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    deadlineMemory.memory(), List.of(), ignored -> { }, gate);
+
+            assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
+                    result.failureReason());
+            assertEquals(before, deadlineMemory.delegate().messages());
+            gate.releaseAndJoin();
+            assertEquals(before, deadlineMemory.delegate().messages());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void coldRebuildAfterL1CursorRequiresStrictSummaryWhenL0HasNoCoveredTurn() {
+        try (Fixture fixture = fixture(27_000, 27_000)) {
+            List<ChatMessage> coveredPrefix = fixture.memory()
+                    .completeTurnSnapshot().completedTurns().getFirst()
+                    .messages();
+            assertTrue(fixture.memory()
+                    .removeCompletedPrefixIfMatches(coveredPrefix));
+            when(fixture.summaryService().lastSummarizedId(7L))
+                    .thenReturn(2L);
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 1)).thenReturn(List.of(
+                    new ChatHistoryService.StableTurnBoundary(
+                            3L, 4L, "新问题", "新回复")));
+            when(fixture.summaryService().getCurrentSummary(7L))
+                    .thenReturn("");
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.NORMAL, result.mode());
+            assertTrue(result.canProceed());
+            assertTrue(result.requestMessages().stream()
+                    .filter(UserMessage.class::isInstance)
+                    .map(UserMessage.class::cast)
+                    .anyMatch(message -> message.hasSingleText()
+                            && message.singleText().contains(
+                            "# 应用目标与定位")));
+            assertTrue(result.requestMessages().stream()
+                    .filter(UserMessage.class::isInstance)
+                    .map(UserMessage.class::cast)
+                    .anyMatch(message -> message.hasSingleText()
+                            && "新问题".equals(message.singleText())));
+            verify(fixture.summaryService()).getRequiredSummary(7L, 2L);
+            verify(fixture.summaryService(), never()).getCurrentSummary(7L);
         }
     }
 
@@ -395,6 +711,102 @@ class ContextCompressionCoordinatorTest {
             verifyNoInteractions(fixture.historyService());
             verify(fixture.estimator(), never())
                     .estimateRequest(anyList(), anyList());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void initialAlignmentMysqlReadFailureIsDependencyFailure() {
+        try (Fixture fixture = fixture(27_000, 27_000)) {
+            when(fixture.summaryService().lastSummarizedId(7L))
+                    .thenReturn(2L);
+            when(fixture.historyService().listRecentCompleteTurnBoundaries(
+                    7L, 2)).thenThrow(new IllegalStateException("mysql down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            verify(fixture.summaryService(), never())
+                    .getRequiredSummary(anyLong(), anyLong());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void coldRequestEstimateFailureReturnsTypedDependencyFailure() {
+        try (Fixture fixture = fixture(27_000, 27_000)) {
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenThrow(new IllegalStateException("tokenizer down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void initialStrictSummaryReadFailureIsDependencyFailure() {
+        try (Fixture fixture = fixture(27_000, 27_000)) {
+            when(fixture.summaryService().lastSummarizedId(7L))
+                    .thenReturn(2L);
+            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+                    .thenThrow(new IllegalStateException("database down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void initialRequestEstimateFailureIsDependencyFailure() {
+        try (Fixture fixture = fixture(27_000, 27_000)) {
+            when(fixture.summaryService().lastSummarizedId(7L))
+                    .thenReturn(2L);
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenThrow(new IllegalStateException("tokenizer down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void initialPrefixChangeIsNotMisreportedAsSummaryReadFailure() {
+        try (Fixture fixture = fixture(27_000, 27_000)) {
+            when(fixture.summaryService().lastSummarizedId(7L))
+                    .thenReturn(2L);
+            org.mockito.Mockito.doAnswer(invocation -> {
+                List<ChatMessage> completedPrefix = fixture.memory()
+                        .completeTurnSnapshot().completedTurns().getFirst()
+                        .messages();
+                assertTrue(fixture.memory()
+                        .removeCompletedPrefixIfMatches(completedPrefix));
+                return VALID_SUMMARY;
+            }).when(fixture.summaryService()).getRequiredSummary(7L, 2L);
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.PREFIX_CHANGED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
         }
     }
 
@@ -799,6 +1211,318 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
+    void deadlineBeforeFinalPrefixCommitDoesNotTrimL0OrReturnCompletion() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            AtomicLong nanoTime = new AtomicLong();
+            ContextContinuationGate continuationGate =
+                    new DeadlineAdvancingGate(
+                            nanoTime, 7,
+                            Duration.ofSeconds(61).toNanos());
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(
+                            fixture.estimator(), fixture.historyService(),
+                            fixture.summaryService(), fixture.properties(),
+                            fixture.executor(), new AppDataLifecycleFence(),
+                            fixture.metricsCollector(),
+                            nanoTime::get);
+            List<ChatMessage> before = fixture.memory()
+                    .completeTurnSnapshot().completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList();
+
+            ContextAdmissionResult result = coordinator.admit(
+                    fixture.memory(), List.of(), ignored -> { },
+                    continuationGate);
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            assertEquals(before, fixture.memory()
+                    .completeTurnSnapshot().completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 阻塞最终裁剪等待L0锁超时时返回超时且删除不能越过writer许可()
+            throws Exception {
+        try (Fixture fixture = fixture(30_720, 27_000);
+             ExecutorService lockOwner = java.util.concurrent.Executors
+                     .newVirtualThreadPerTaskExecutor();
+             ExecutorService admissionExecutor = java.util.concurrent.Executors
+                     .newVirtualThreadPerTaskExecutor()) {
+            fixture.properties().setBlockingTimeout(Duration.ofSeconds(1L));
+            DeadlineMemory deadlineMemory = deadlineMemory(
+                    fixture.summaryService(), mock(UserMemoryService.class));
+            AppDataLifecycleFence lifecycleFence = new AppDataLifecycleFence();
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(
+                            fixture.estimator(), fixture.historyService(),
+                            fixture.summaryService(), fixture.properties(),
+                            fixture.executor(), lifecycleFence,
+                            fixture.metricsCollector());
+            LockBeforeInvocationGate gate = new LockBeforeInvocationGate(
+                    deadlineMemory.store(), lockOwner);
+            org.mockito.Mockito.doAnswer(invocation -> {
+                gate.lockBeforeNextInvocation();
+                return VALID_SUMMARY;
+            }).when(fixture.summaryService()).getRequiredSummary(7L, 2L);
+            List<ChatMessage> before = deadlineMemory.delegate().messages();
+            Future<ContextAdmissionResult> admission = admissionExecutor.submit(
+                    () -> coordinator.admit(deadlineMemory.memory(), List.of(),
+                            ignored -> { }, gate));
+            assertTrue(gate.actionEntered().await(1L, TimeUnit.SECONDS));
+            assertTrue(awaitCondition(
+                    () -> deadlineMemory.store()
+                            .registeredReferenceCount(7L) == 2,
+                    Duration.ofMillis(500L)),
+                    "最终 CAS 必须已持有 writer 许可并进入本地锁等待");
+
+            assertEquals(null, lifecycleFence.beginDelete(7L, Duration.ZERO),
+                    "最终 CAS 等待期间 writer 许可必须阻止删除越过");
+            ContextAdmissionResult result = admission.get(
+                    2L, TimeUnit.SECONDS);
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
+                    result.failureReason());
+            assertEquals(before, deadlineMemory.delegate().messages());
+            gate.releaseAndJoin();
+            assertEquals(before, deadlineMemory.delegate().messages());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void deadlineDuringFinalRequestEstimateNeverReturnsCompletedMode() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            AtomicLong nanoTime = new AtomicLong();
+            AtomicLong estimationCount = new AtomicLong();
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> {
+                        if (estimationCount.incrementAndGet() == 2L) {
+                            nanoTime.set(Duration.ofSeconds(61).toNanos());
+                            return 27_000;
+                        }
+                        return 30_720;
+                    });
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(
+                            fixture.estimator(), fixture.historyService(),
+                            fixture.summaryService(), fixture.properties(),
+                            fixture.executor(), new AppDataLifecycleFence(),
+                            fixture.metricsCollector(),
+                            nanoTime::get);
+
+            ContextAdmissionResult result = coordinator.admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            assertEquals(2, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().size());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void strictSummaryBlankNeverTrimsL0() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+                    .thenReturn(" ");
+            List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertFalse(result.canProceed());
+            assertEquals(before, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void strictSummaryInvalidFormatNeverTrimsL0() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+                    .thenReturn("不是五段式摘要");
+            List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(before, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void strictSummaryReadExceptionNeverTrimsL0() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+                    .thenThrow(new IllegalStateException("database down"));
+            List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertEquals(before, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void finalRequestEstimateExceptionIsDependencyFailureNotPrefixChange() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenReturn(30_720)
+                    .thenThrow(new IllegalStateException("tokenizer down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertEquals(2, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().size());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void concurrentAppendBetweenPreparationAndCasReturnsPrefixChanged() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            AtomicLong estimates = new AtomicLong();
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> {
+                        if (estimates.incrementAndGet() == 2L) {
+                            fixture.memory().add(UserMessage.from("并发新问题"));
+                            return 27_000;
+                        }
+                        return 30_720;
+                    });
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_FAILED, result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.PREFIX_CHANGED,
+                    result.failureReason());
+            assertEquals("并发新问题", ((UserMessage) fixture.memory()
+                    .completeTurnSnapshot().unfinishedTail().getFirst())
+                    .singleText());
+            assertEquals(2, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().size());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void deadlineCrossingDuringSuccessfulCasMustNotReturnFailureWithTrimmedL0() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            AtomicLong now = new AtomicLong();
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(
+                            fixture.estimator(), fixture.historyService(),
+                            fixture.summaryService(), fixture.properties(),
+                            fixture.executor(), new AppDataLifecycleFence(),
+                            fixture.metricsCollector(), () -> {
+                                if (fixture.memory().completeTurnSnapshot()
+                                        .completedTurns().size() == 1) {
+                                    return Duration.ofSeconds(61).toNanos();
+                                }
+                                return now.get();
+                            });
+
+            ContextAdmissionResult result = coordinator.admit(
+                    fixture.memory(), List.of());
+
+            assertEquals(ContextCompressionMode.BLOCKING_COMPLETED,
+                    result.mode());
+            assertTrue(result.canProceed());
+            assertEquals(1, fixture.memory().completeTurnSnapshot()
+                    .completedTurns().size());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void strictMemoryReadTimeoutReturnsWithoutTrimmingL0() throws Exception {
+        try (Fixture fixture = fixture(30_720, 27_000);
+             ExecutorService caller = java.util.concurrent.Executors
+                     .newVirtualThreadPerTaskExecutor()) {
+            fixture.properties().setBlockingTimeout(Duration.ofMillis(50));
+            java.util.concurrent.CountDownLatch readStarted =
+                    new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch releaseRead =
+                    new java.util.concurrent.CountDownLatch(1);
+            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+                    .thenAnswer(invocation -> {
+                        readStarted.countDown();
+                        boolean interrupted = false;
+                        while (true) {
+                            try {
+                                if (releaseRead.await(
+                                        1, TimeUnit.SECONDS)) {
+                                    break;
+                                }
+                            } catch (InterruptedException exception) {
+                                interrupted = true;
+                            }
+                        }
+                        if (interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return VALID_SUMMARY;
+                    });
+            List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
+                    .completedTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList();
+            Future<ContextAdmissionResult> admission = caller.submit(() ->
+                    fixture.coordinator().admit(fixture.memory(), List.of()));
+            assertTrue(readStarted.await(1, TimeUnit.SECONDS));
+
+            try {
+                ContextAdmissionResult result = admission.get(
+                        500, TimeUnit.MILLISECONDS);
+                assertEquals(ContextCompressionMode.BLOCKING_FAILED,
+                        result.mode());
+                assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
+                        result.failureReason());
+                assertEquals(before, fixture.memory().completeTurnSnapshot()
+                        .completedTurns().stream()
+                        .flatMap(turn -> turn.messages().stream())
+                        .toList());
+            } finally {
+                releaseRead.countDown();
+            }
+        }
+    }
+
+    @org.junit.jupiter.api.Test
     @SuppressWarnings("unchecked")
     void interruptedWaitCancelsFutureAndNeverReturnsCompletion()
             throws Exception {
@@ -884,6 +1608,8 @@ class ContextCompressionCoordinatorTest {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         ExecutorService executor = java.util.concurrent.Executors
                 .newSingleThreadExecutor();
+        ExecutorService memoryReadExecutor =
+                java.util.concurrent.Executors.newFixedThreadPool(2);
         PrometheusMeterRegistry registry = new PrometheusMeterRegistry(
                 PrometheusConfig.DEFAULT);
         CompressionAwareChatMemory memory = memory(
@@ -907,33 +1633,98 @@ class ContextCompressionCoordinatorTest {
                 .thenReturn(new MemoryCompressionResult(
                         MemoryCompressionResult.Status.COMPRESSED,
                         2L, 800, "完成"));
+        when(summaryService.getRequiredSummary(7L, 2L))
+                .thenReturn(VALID_SUMMARY);
         MemoryCompressionMetricsCollector metricsCollector =
                 new MemoryCompressionMetricsCollector(registry);
         ContextCompressionCoordinator coordinator =
                 new ContextCompressionCoordinator(
                 estimator, historyService, summaryService,
-                properties, executor, new AppDataLifecycleFence(),
+                properties, executor, memoryReadExecutor,
+                new AppDataLifecycleFence(),
                 metricsCollector);
         return new Fixture(coordinator, memory, summaryService,
                 historyService, estimator, properties, executor,
-                metricsCollector, registry);
+                memoryReadExecutor, metricsCollector, registry);
     }
 
     private CompressionAwareChatMemory memory(
             MemorySummaryService summaryService,
             UserMemoryService userMemoryService) {
+        return memory(summaryService, userMemoryService,
+                "旧问题", "新问题");
+    }
+
+    private CompressionAwareChatMemory memory(
+            MemorySummaryService summaryService,
+            UserMemoryService userMemoryService,
+            String firstUserText,
+            String secondUserText) {
+        return memory(summaryService, userMemoryService,
+                firstUserText, secondUserText, "旧回复", "新回复");
+    }
+
+    private CompressionAwareChatMemory memory(
+            MemorySummaryService summaryService,
+            UserMemoryService userMemoryService,
+            String firstUserText,
+            String secondUserText,
+            String firstAiText,
+            String secondAiText) {
         MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
                 .id(7L)
                 .maxMessages(Integer.MAX_VALUE)
                 .build();
-        delegate.add(UserMessage.from("旧问题"));
-        delegate.add(AiMessage.from("旧回复"));
-        delegate.add(UserMessage.from("新问题"));
-        delegate.add(AiMessage.from("新回复"));
+        delegate.add(UserMessage.from(firstUserText));
+        delegate.add(AiMessage.from(firstAiText));
+        delegate.add(UserMessage.from(secondUserText));
+        delegate.add(AiMessage.from(secondAiText));
         return new CompressionAwareChatMemory(
                 new TokenAwareChatMemory(delegate),
                 summaryService,
                 userMemoryService);
+    }
+
+    private CompressionAwareChatMemory memory(
+            MemorySummaryService summaryService,
+            UserMemoryService userMemoryService,
+            UserMessage firstUser,
+            UserMessage secondUser,
+            AiMessage firstAi,
+            AiMessage secondAi) {
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(7L)
+                .maxMessages(Integer.MAX_VALUE)
+                .build();
+        delegate.add(firstUser);
+        delegate.add(firstAi);
+        delegate.add(secondUser);
+        delegate.add(secondAi);
+        return new CompressionAwareChatMemory(
+                new TokenAwareChatMemory(delegate),
+                summaryService,
+                userMemoryService);
+    }
+
+    private UserMessage canonicalUser(String canonical, String enhanced) {
+        return UserMessage.from(
+                TokenAwareChatMemory.canonicalUserName(canonical), enhanced);
+    }
+
+    private DeadlineMemory deadlineMemory(
+            MemorySummaryService summaryService,
+            UserMemoryService userMemoryService) {
+        List<ChatMessage> messages = List.of(
+                UserMessage.from("旧问题"), AiMessage.from("旧回复"),
+                UserMessage.from("新问题"), AiMessage.from("新回复"));
+        InMemoryDeadlineStore delegate = new InMemoryDeadlineStore(messages);
+        AtomicChatMemoryStore store = new AtomicChatMemoryStore(delegate);
+        MessageWindowChatMemory window = MessageWindowChatMemory.builder()
+                .id(7L).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
+        return new DeadlineMemory(new CompressionAwareChatMemory(
+                new TokenAwareChatMemory(window, store),
+                summaryService, userMemoryService), store, delegate);
     }
 
     private List<String> messageTexts(List<ChatMessage> messages) {
@@ -984,6 +1775,168 @@ class ContextCompressionCoordinatorTest {
         }
     }
 
+    private static final class DeadlineAdvancingGate
+            implements ContextContinuationGate {
+
+        private final AtomicLong nanoTime;
+        private final int advanceOnInvocation;
+        private final long advancedTime;
+        private int invocations;
+
+        private DeadlineAdvancingGate(
+                AtomicLong nanoTime,
+                int advanceOnInvocation,
+                long advancedTime) {
+            this.nanoTime = nanoTime;
+            this.advanceOnInvocation = advanceOnInvocation;
+            this.advancedTime = advancedTime;
+        }
+
+        @Override
+        public synchronized boolean tryRun(Runnable action) {
+            invocations++;
+            if (invocations == advanceOnInvocation) {
+                nanoTime.set(advancedTime);
+            }
+            action.run();
+            return true;
+        }
+    }
+
+    private static final class LockBeforeInvocationGate
+            implements ContextContinuationGate {
+
+        private final AtomicChatMemoryStore store;
+        private final ExecutorService executor;
+        private final CountDownLatch actionEntered = new CountDownLatch(1);
+        private final CountDownLatch lockAcquired = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private Future<?> owner;
+        private boolean lockNextInvocation;
+
+        private LockBeforeInvocationGate(
+                AtomicChatMemoryStore store,
+                ExecutorService executor) {
+            this.store = store;
+            this.executor = executor;
+        }
+
+        @Override
+        public synchronized boolean tryRun(Runnable action) {
+            if (lockNextInvocation) {
+                lockNextInvocation = false;
+                owner = executor.submit(() -> store.withMemoryLock(7L, () -> {
+                    lockAcquired.countDown();
+                    awaitTestLatch(release, Duration.ofSeconds(2L));
+                }));
+                awaitTestLatch(lockAcquired);
+                actionEntered.countDown();
+            }
+            action.run();
+            return true;
+        }
+
+        private CountDownLatch actionEntered() {
+            return actionEntered;
+        }
+
+        private synchronized void lockBeforeNextInvocation() {
+            lockNextInvocation = true;
+        }
+
+        private void releaseAndJoin() throws Exception {
+            release.countDown();
+            if (owner != null) {
+                owner.get(1L, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static final class InMemoryDeadlineStore
+            implements ChatMemoryStore, DeadlineAwareChatMemoryStore {
+
+        private List<ChatMessage> messages;
+
+        private InMemoryDeadlineStore(List<ChatMessage> messages) {
+            this.messages = List.copyOf(messages);
+        }
+
+        @Override
+        public synchronized List<ChatMessage> getMessages(Object memoryId) {
+            return messages;
+        }
+
+        @Override
+        public synchronized void updateMessages(
+                Object memoryId, List<ChatMessage> updated) {
+            messages = List.copyOf(updated);
+        }
+
+        @Override
+        public synchronized void deleteMessages(Object memoryId) {
+            messages = List.of();
+        }
+
+        @Override
+        public Duration worstCaseCommitDuration() {
+            return Duration.ZERO;
+        }
+
+        @Override
+        public synchronized DeadlineAwareReplaceResult
+                replaceMessagesIfMatches(
+                        Object memoryId,
+                        List<ChatMessage> expected,
+                        List<ChatMessage> replacement,
+                        AdmissionDeadline deadline) {
+            if (!messages.equals(expected)) {
+                return DeadlineAwareReplaceResult.PREFIX_CHANGED;
+            }
+            messages = List.copyOf(replacement);
+            return DeadlineAwareReplaceResult.REPLACED;
+        }
+
+        private synchronized List<ChatMessage> messages() {
+            return messages;
+        }
+    }
+
+    private static void awaitTestLatch(CountDownLatch latch) {
+        awaitTestLatch(latch, Duration.ofSeconds(1L));
+    }
+
+    private static void awaitTestLatch(
+            CountDownLatch latch, Duration timeout) {
+        try {
+            if (!latch.await(timeout.toNanos(), TimeUnit.NANOSECONDS)) {
+                throw new AssertionError("等待测试闩锁超时");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("等待测试闩锁被中断", exception);
+        }
+    }
+
+    private static boolean awaitCondition(
+            BooleanSupplier condition, Duration timeout) {
+        long startedAt = System.nanoTime();
+        long timeoutNanos = timeout.toNanos();
+        while (System.nanoTime() - startedAt < timeoutNanos) {
+            if (condition.getAsBoolean()) {
+                return true;
+            }
+            java.util.concurrent.locks.LockSupport.parkNanos(
+                    Duration.ofMillis(1L).toNanos());
+        }
+        return condition.getAsBoolean();
+    }
+
+    private record DeadlineMemory(
+            CompressionAwareChatMemory memory,
+            AtomicChatMemoryStore store,
+            InMemoryDeadlineStore delegate) {
+    }
+
     private record Fixture(
             ContextCompressionCoordinator coordinator,
             CompressionAwareChatMemory memory,
@@ -992,12 +1945,14 @@ class ContextCompressionCoordinatorTest {
             ChatTokenEstimator estimator,
             MemoryTokenProperties properties,
             ExecutorService executor,
+            ExecutorService memoryReadExecutor,
             MemoryCompressionMetricsCollector metricsCollector,
             PrometheusMeterRegistry registry) implements AutoCloseable {
 
         @Override
         public void close() {
             executor.shutdownNow();
+            memoryReadExecutor.shutdownNow();
             registry.close();
         }
     }

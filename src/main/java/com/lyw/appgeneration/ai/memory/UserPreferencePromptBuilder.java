@@ -31,8 +31,15 @@ public final class UserPreferencePromptBuilder {
             name 字段只能使用以下固定类别(降低重复):
             语言偏好 / 视觉风格 / 技术栈倾向 / 交互习惯 / 其他
 
+            valueCodes 只能从对应类别选择,每类最多 3 个:
+            - 语言偏好: ZH_CN=简体中文, ZH_TW=繁体中文, EN=英文, ZH_EN=中英双语
+            - 视觉风格: DARK=深色, LIGHT=浅色, MINIMAL=极简, FLAT=扁平化
+            - 技术栈倾向: VUE3=Vue 3, REACT=React, TYPESCRIPT=TypeScript, JAVASCRIPT=JavaScript, TAILWIND_CSS=Tailwind CSS, SPRING_BOOT=Spring Boot
+            - 交互习惯: KEYBOARD_FIRST=键盘优先, MOBILE_FIRST=移动端优先, DESKTOP_FIRST=桌面端优先, SIMPLE_INTERACTION=简洁交互, REDUCED_MOTION=减少动效
+            - 其他: 暂无允许代码,不得输出该类别
+
             参考【已有偏好】决定每条是新增、更新还是无变化:
-            - 同类偏好用相同 name(便于去重更新);内容有变化则给出最新 content。
+            - 同类偏好用相同 name(便于去重更新);值有变化则给出最新 valueCodes。
             - 已有同内容偏好若从本批新 turn 获得了新证据，仍必须再次输出该候选，本批 turnIds 只填写提供新证据的白名单 ID。
             - 只有本批没有新证据才省略已有同内容偏好。
 
@@ -44,7 +51,8 @@ public final class UserPreferencePromptBuilder {
             - turnIds 必须非空，且只能使用【本批 turnId 白名单】中的不同 ID。
 
             输出格式(严格):
-            - 仅输出 JSON 数组,每个元素 {"name": "类别", "content": "具体偏好", "evidenceType": "EXPLICIT", "turnIds": [10001]}。
+            - 仅输出 JSON 数组,每个元素 {"name": "类别", "valueCodes": ["服务端代码"], "evidenceType": "EXPLICIT", "turnIds": [10001]}。
+            - 禁止复制用户原文,禁止输出 content、解释或其他字段。
             - 没有可抽取的跨应用偏好时,输出空数组 []。
             - 不要输出任何解释、Markdown 代码块标记或多余文字。
 

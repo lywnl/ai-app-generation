@@ -12,6 +12,7 @@ import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.ChatModel;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -257,6 +258,56 @@ class UserMemoryDebounceBehaviorTest {
     }
 
     @Test
+    @DisplayName("L2 模型等待期间不持写许可且删除后丢弃迟到结果")
+    void 模型调用期间删除可立即接管且迟到结果不落库() throws Exception {
+        UserMemoryServiceImpl service = newService();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "删除竞态"));
+        CountDownLatch modelEntered = new CountDownLatch(1);
+        CountDownLatch allowModelReturn = new CountDownLatch(1);
+        when(model.chat(any(String.class))).thenAnswer(invocation -> {
+            modelEntered.countDown();
+            assertTrue(allowModelReturn.await(1, TimeUnit.SECONDS));
+            return "[]";
+        });
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        AppDataLifecycleFence.DeletePermit deletion = null;
+        try (ExecutorService threads = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<?> extraction = threads.submit(worker::runAll);
+            assertTrue(modelEntered.await(1, TimeUnit.SECONDS));
+
+            deletion = lifecycleFence.beginDelete(APP_A, Duration.ZERO);
+            if (deletion != null) {
+                deletion.commitTombstone();
+                service.invalidateCaches(APP_A, USER_ID);
+            }
+            allowModelReturn.countDown();
+            extraction.get(1, TimeUnit.SECONDS);
+        } finally {
+            allowModelReturn.countDown();
+            if (deletion != null) {
+                deletion.close();
+            }
+        }
+
+        assertNotNull(deletion,
+                "外部模型调用期间不得持有应用写许可并阻塞删除接管");
+        verify(cursorMapper, never()).insert(any());
+        verify(cursorMapper, never()).update(any());
+        verify(cursorMapper, never()).update(
+                any(AppMemoryExtractCursor.class), eq(false));
+        verify(memoryMapper, never()).insert(any());
+        verify(memoryMapper, never()).update(any());
+        assertNull(scheduler.oldestTask(),
+                "删除失效后迟到模型结果不得恢复 L2 pending");
+    }
+
+    @Test
     @DisplayName("新服务先等待静默期再服从数据库剩余退避")
     void 新服务实例遵守数据库持久化退避且不忙等() {
         UserMemoryServiceImpl service = newService();
@@ -360,6 +411,59 @@ class UserMemoryDebounceBehaviorTest {
     }
 
     @Test
+    @DisplayName("失败元数据持续写库失败时本地退避仍指数增长")
+    void 失败元数据写库失败不会把本地退避重置为五秒() {
+        UserMemoryServiceImpl service = newService();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        when(cursorMapper.insert(any()))
+                .thenThrow(new IllegalStateException("数据库暂不可写"));
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "双重失败"));
+        when(model.chat(any(String.class)))
+                .thenThrow(new IllegalStateException("模型暂不可用"));
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        worker.runAll();
+        assertEquals(clock.instant().plusSeconds(5),
+                scheduler.oldestTask().startTime());
+
+        scheduler.advance(Duration.ofSeconds(5));
+        worker.runAll();
+
+        verify(model, times(2)).chat(any(String.class));
+        assertEquals(clock.instant().plusSeconds(10),
+                scheduler.oldestTask().startTime(),
+                "数据库退避事实暂时不可写时，进程内退避也不能形成五秒重试风暴");
+    }
+
+    @Test
+    @DisplayName("异常超大失败次数不得溢出并缩短退避")
+    void 失败次数达到整数上限后继续按五分钟退避() {
+        UserMemoryServiceImpl service = newService();
+        AppMemoryExtractCursor cursor = 游标(APP_A, 0L);
+        cursor.setFailCount(Integer.MAX_VALUE);
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(cursor);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "失败计数上界"));
+        when(model.chat(any(String.class)))
+                .thenThrow(new IllegalStateException("模型暂不可用"));
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        worker.runAll();
+
+        ArgumentCaptor<AppMemoryExtractCursor> failed =
+                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursorMapper).update(failed.capture());
+        assertEquals(Integer.MAX_VALUE, failed.getValue().getFailCount());
+        assertEquals(clock.instant().plus(Duration.ofMinutes(5)),
+                scheduler.oldestTask().startTime());
+    }
+
+    @Test
     @DisplayName("同一用户的两个 app 都保留并按旧游标优先处理")
     void 同用户多个应用按游标从旧到新处理() {
         UserMemoryServiceImpl service = newService();
@@ -452,6 +556,119 @@ class UserMemoryDebounceBehaviorTest {
 
         verify(model, org.mockito.Mockito.times(2))
                 .chat(any(String.class));
+    }
+
+    @Test
+    @DisplayName("后台锁外预读的旧游标不得覆盖同应用已提交的新游标")
+    void 后台进入应用锁后必须重新读取数据库游标() throws Exception {
+        UserMemoryServiceImpl service = newService();
+        AppMemoryExtractCursor original = 游标(APP_A, APP_A * 100L);
+        AtomicReference<AppMemoryExtractCursor> store =
+                new AtomicReference<>(original);
+        CountDownLatch staleCursorRead = new CountDownLatch(1);
+        CountDownLatch allowStaleCursorReturn = new CountDownLatch(1);
+        AtomicInteger cursorReads = new AtomicInteger();
+        when(cursorMapper.selectOneByQuery(any())).thenAnswer(invocation -> {
+            if (cursorReads.incrementAndGet() == 1) {
+                staleCursorRead.countDown();
+                assertTrue(allowStaleCursorReturn.await(
+                        1L, TimeUnit.SECONDS));
+                return original;
+            }
+            return store.get();
+        });
+        when(cursorMapper.update(
+                any(AppMemoryExtractCursor.class), eq(false)))
+                .thenAnswer(invocation -> {
+                    store.set(invocation.getArgument(0));
+                    return 1;
+                });
+        List<ChatHistory> history = new ArrayList<>(
+                八条完整消息(APP_A, "并发游标"));
+        history.add(ChatHistory.builder()
+                .id(APP_A * 100L + 9L)
+                .appId(APP_A).userId(USER_ID)
+                .messageType("user").message("未登记的新问题").build());
+        history.add(ChatHistory.builder()
+                .id(APP_A * 100L + 10L)
+                .appId(APP_A).userId(USER_ID)
+                .messageType("ai").message("未登记的新回复").build());
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt())).thenAnswer(invocation -> {
+            long cursor = invocation.getArgument(1);
+            return history.stream()
+                    .filter(message -> message.getId() > cursor)
+                    .toList();
+        });
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        try (ExecutorService threads = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<?> background = threads.submit(worker::runAll);
+            assertTrue(staleCursorRead.await(1L, TimeUnit.SECONDS));
+
+            service.extractNow(USER_ID, APP_A);
+            assertEquals(APP_A * 100L + 10L,
+                    store.get().getLastExtractedId());
+            allowStaleCursorReturn.countDown();
+            background.get(1L, TimeUnit.SECONDS);
+        } finally {
+            allowStaleCursorReturn.countDown();
+        }
+
+        assertEquals(APP_A * 100L + 10L,
+                store.get().getLastExtractedId(),
+                "后台旧静默期不得把已提交的新游标倒退到 10008");
+        verify(model, times(1)).chat(any(String.class));
+    }
+
+    @Test
+    @DisplayName("后台进入应用锁后必须重新尊重数据库退避")
+    void 锁外预读后新增的持久化退避阻止模型调用() throws Exception {
+        UserMemoryServiceImpl service = newService();
+        AppMemoryExtractCursor original = 游标(APP_A, APP_A * 100L);
+        AtomicReference<AppMemoryExtractCursor> store =
+                new AtomicReference<>(original);
+        CountDownLatch staleCursorRead = new CountDownLatch(1);
+        CountDownLatch allowStaleCursorReturn = new CountDownLatch(1);
+        AtomicInteger cursorReads = new AtomicInteger();
+        when(cursorMapper.selectOneByQuery(any())).thenAnswer(invocation -> {
+            if (cursorReads.incrementAndGet() == 1) {
+                staleCursorRead.countDown();
+                assertTrue(allowStaleCursorReturn.await(
+                        1L, TimeUnit.SECONDS));
+                return original;
+            }
+            return store.get();
+        });
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "退避竞态"));
+
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        try (ExecutorService threads = java.util.concurrent.Executors
+                .newVirtualThreadPerTaskExecutor()) {
+            Future<?> background = threads.submit(worker::runAll);
+            assertTrue(staleCursorRead.await(1L, TimeUnit.SECONDS));
+
+            AppMemoryExtractCursor deferred = 游标(
+                    APP_A, APP_A * 100L);
+            deferred.setFailCount(2);
+            deferred.setNextRetryTime(LocalDateTime.ofInstant(
+                    clock.instant().plusSeconds(20), clock.getZone()));
+            store.set(deferred);
+            allowStaleCursorReturn.countDown();
+            background.get(1L, TimeUnit.SECONDS);
+        } finally {
+            allowStaleCursorReturn.countDown();
+        }
+
+        verify(model, never()).chat(any(String.class));
+        assertNotNull(scheduler.oldestTask());
+        assertEquals(clock.instant().plusSeconds(20),
+                scheduler.oldestTask().startTime());
     }
 
     @Test
@@ -750,10 +967,70 @@ class UserMemoryDebounceBehaviorTest {
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(APP_A), anyLong(), anyInt()))
                 .thenReturn(八条完整消息(APP_A, "调度恢复"));
-        scheduler.rejectNextSchedule();
+        scheduler.rejectNextSchedules(2);
 
         触发(service, APP_A);
+        assertNull(scheduler.oldestTask(),
+                "连续两次拒绝后不得伪造已成功安排的任务");
         scheduler.advance(Duration.ofSeconds(10));
+        触发(service, APP_A);
+        scheduler.advance(Duration.ofSeconds(30));
+        worker.runAll();
+
+        verify(model).chat(any(String.class));
+        assertEquals(1D, debounceCounter("rejected").count());
+    }
+
+    @Test
+    @DisplayName("主调度器连续拒绝后 watchdog 无新 trigger 也能恢复")
+    void 连续调度拒绝由全局Watchdog恢复() {
+        UserMemoryServiceImpl service = newService();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "watchdog恢复"));
+        scheduler.rejectNextSchedules(2);
+
+        触发(service, APP_A);
+        assertNull(scheduler.oldestTask());
+        assertEquals(2, scheduler.scheduleAttempts());
+        scheduler.rejectNextSchedules(1);
+        service.recoverUnscheduledPending();
+        assertEquals(3, scheduler.scheduleAttempts(),
+                "watchdog 每 tick 每用户只能调用主调度器一次");
+        service.recoverUnscheduledPending();
+        scheduler.advance(Duration.ofSeconds(30));
+        worker.runAll();
+
+        verify(model, times(1)).chat(any(String.class));
+    }
+
+    @Test
+    @DisplayName("删除 dirty app 后 watchdog 不得复活任务")
+    void 删除后Watchdog不复活DirtyApp() {
+        UserMemoryServiceImpl service = newService();
+        scheduler.rejectNextSchedules(2);
+        触发(service, APP_A);
+
+        service.invalidateCaches(APP_A, USER_ID);
+        service.recoverUnscheduledPending();
+        scheduler.advance(Duration.ofMinutes(1));
+        worker.runAll();
+
+        verify(model, never()).chat(any(String.class));
+        assertNull(scheduler.oldestTask());
+    }
+
+    @Test
+    @DisplayName("调度器单次瞬态拒绝后无需新 trigger 也会恢复 dirty 状态")
+    void 调度器瞬态拒绝后自动恢复待处理版本() {
+        UserMemoryServiceImpl service = newService();
+        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
+        when(chatHistoryService.listMessagesAfterCursor(
+                eq(APP_A), anyLong(), anyInt()))
+                .thenReturn(八条完整消息(APP_A, "自动调度恢复"));
+        scheduler.rejectNextSchedule();
+
         触发(service, APP_A);
         scheduler.advance(Duration.ofSeconds(30));
         worker.runAll();
@@ -818,7 +1095,7 @@ class UserMemoryDebounceBehaviorTest {
         assertEquals(1, worker.queuedTaskCount());
         assertDoesNotThrow(worker::runAll);
         verify(lifecycleFence, times(2)).tryAcquireWriter(APP_A);
-        verify(lifecycleFence, times(2)).tryAcquireWriter(APP_B);
+        verify(lifecycleFence, times(3)).tryAcquireWriter(APP_B);
         assertEquals(1, prompts.size());
         assertTrue(prompts.getFirst().contains("正常应用"));
 
@@ -835,10 +1112,11 @@ class UserMemoryDebounceBehaviorTest {
         UserMemoryServiceImpl service = newService();
         AtomicReference<AppMemoryExtractCursor> appACursor =
                 new AtomicReference<>();
-        AtomicInteger cursorReads = new AtomicInteger();
-        when(cursorMapper.selectOneByQuery(any())).thenAnswer(invocation ->
-                cursorReads.getAndIncrement() < 7
-                        ? appACursor.get() : null);
+        when(cursorMapper.selectOneByQuery(any())).thenAnswer(invocation -> {
+            QueryWrapper query = invocation.getArgument(0);
+            return query.toSQL().contains("appId = " + APP_A)
+                    ? appACursor.get() : null;
+        });
         when(cursorMapper.insert(any())).thenAnswer(invocation -> {
             AppMemoryExtractCursor cursor = invocation.getArgument(0);
             if (cursor.getAppId() == APP_A) {
@@ -995,7 +1273,8 @@ class UserMemoryDebounceBehaviorTest {
                         .comparing(VirtualScheduledTask::startTime)
                         .thenComparingLong(VirtualScheduledTask::sequence));
         private long nextSequence;
-        private boolean rejectNext;
+        private int schedulesToReject;
+        private int scheduleAttempts;
 
         private AdvancingTaskScheduler(MutableClock clock) {
             this.clock = clock;
@@ -1004,8 +1283,9 @@ class UserMemoryDebounceBehaviorTest {
         @Override
         public ScheduledFuture<?> schedule(
                 Runnable task, Instant startTime) {
-            if (rejectNext) {
-                rejectNext = false;
+            scheduleAttempts++;
+            if (schedulesToReject > 0) {
+                schedulesToReject--;
                 throw new java.util.concurrent.RejectedExecutionException(
                         "虚拟调度器拒绝任务");
             }
@@ -1016,7 +1296,11 @@ class UserMemoryDebounceBehaviorTest {
         }
 
         private void rejectNextSchedule() {
-            rejectNext = true;
+            rejectNextSchedules(1);
+        }
+
+        private void rejectNextSchedules(int count) {
+            schedulesToReject = count;
         }
 
         private void advance(Duration duration) {
@@ -1030,6 +1314,10 @@ class UserMemoryDebounceBehaviorTest {
 
         private VirtualScheduledTask oldestTask() {
             return tasks.peek();
+        }
+
+        private int scheduleAttempts() {
+            return scheduleAttempts;
         }
     }
 

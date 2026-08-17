@@ -24,6 +24,9 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -108,6 +111,14 @@ class LayeredMemoryIntegrationTest {
                 modelExecutor,
                 tokenEstimator,
                 properties);
+        PlatformTransactionManager transactionManager = mock(
+                PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(
+                mock(TransactionStatus.class));
+        ObjectProvider<PlatformTransactionManager> transactionManagerProvider =
+                mock(ObjectProvider.class);
+        when(transactionManagerProvider.getIfAvailable())
+                .thenReturn(transactionManager);
         // 直接构造真实摘要服务，外部模型、数据库和 Redis 保持 mock。
         summaryService = new MemorySummaryServiceImpl(
                 summaryMapper,
@@ -117,7 +128,8 @@ class LayeredMemoryIntegrationTest {
                 new AppDataLifecycleFence(),
                 tokenEstimator,
                 properties,
-                new MemoryCompressionMetricsCollector(metricsRegistry));
+                new MemoryCompressionMetricsCollector(metricsRegistry),
+                transactionManagerProvider);
     }
 
     @AfterEach

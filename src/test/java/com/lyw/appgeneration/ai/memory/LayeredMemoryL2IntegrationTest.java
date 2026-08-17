@@ -88,9 +88,9 @@ class LayeredMemoryL2IntegrationTest {
         when(model.chat(anyString()))
                 .thenReturn("""
                         [
-                          {"name":"语言偏好","content":"简体中文",
+                          {"name":"语言偏好","valueCodes":["ZH_CN"],
                            "evidenceType":"EXPLICIT","turnIds":[11]},
-                          {"name":"视觉风格","content":"扁平极简",
+                          {"name":"视觉风格","valueCodes":["MINIMAL","FLAT"],
                            "evidenceType":"EXPLICIT","turnIds":[11]}
                         ]
                         """);
@@ -116,7 +116,7 @@ class LayeredMemoryL2IntegrationTest {
 
         // 首条应是 appB 召回的 L2 偏好,内容来自 appA
         assertTrue(((UserMessage) msgs.get(0)).singleText().contains("简体中文"));
-        assertTrue(((UserMessage) msgs.get(0)).singleText().contains("扁平极简"));
+        assertTrue(((UserMessage) msgs.get(0)).singleText().contains("极简、扁平化"));
         verify(ops).get("mem:pref:v2:" + user);
         verify(ops, never()).get("mem:pref:" + user);
     }

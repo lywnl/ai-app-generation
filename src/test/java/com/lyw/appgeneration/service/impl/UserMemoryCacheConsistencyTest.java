@@ -75,7 +75,7 @@ class UserMemoryCacheConsistencyTest {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         String cacheKey = "mem:pref:v2:" + USER_ID;
         String legacyKey = "mem:pref:" + USER_ID;
-        String oldRecall = "- 视觉风格:偏好浅色界面";
+        String oldRecall = "- 视觉风格:浅色";
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(cacheKey)).thenReturn(oldRecall);
@@ -94,7 +94,7 @@ class UserMemoryCacheConsistencyTest {
         when(appMapper.selectOneById(APP_B)).thenReturn(
                 App.builder().id(APP_B).userId(USER_ID).build());
         when(model.chat(anyString())).thenReturn("""
-                [{"name":"视觉风格","content":"偏好深色界面",
+                [{"name":"视觉风格","valueCodes":["DARK"],
                 "evidenceType":"EXPLICIT","turnIds":[11]}]
                 """);
         when(estimator.estimateText(anyString())).thenReturn(100);

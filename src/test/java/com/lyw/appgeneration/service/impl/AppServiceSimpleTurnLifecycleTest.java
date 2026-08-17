@@ -257,6 +257,46 @@ class AppServiceSimpleTurnLifecycleTest {
     }
 
     @Test
+    void 上一轮孤立用户必须先补稳定边界再冷重建并保存新用户() {
+        ChatHistory orphanUser = ChatHistory.builder()
+                .id(5L)
+                .appId(APP_ID)
+                .userId(USER_ID)
+                .message("上一轮未完成需求")
+                .messageType("user")
+                .build();
+        when(history.getLastMessage(APP_ID)).thenReturn(orphanUser);
+        when(history.repairOrphanUserTurn(
+                APP_ID, USER_ID,
+                com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
+                        .FAILURE_MESSAGE))
+                .thenReturn(true);
+        when(facade.generateAndSaveCodeStream(
+                any(), any(), eq(APP_ID), anyBoolean(), any(), any()))
+                .thenReturn(Flux.just("回答"));
+
+        StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
+                .expectNext(GenerationStreamEvent.content("回答"))
+                .verifyComplete();
+
+        var order = inOrder(history, aiFactory, facade);
+        order.verify(history).getLastMessage(APP_ID);
+        order.verify(aiFactory).invalidateAndClearMemory(
+                APP_ID, CodeGenTypeEnum.HTML);
+        order.verify(history).repairOrphanUserTurn(
+                APP_ID, USER_ID,
+                com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
+                        .FAILURE_MESSAGE);
+        order.verify(facade).prepareSimpleGenerator(
+                APP_ID, CodeGenTypeEnum.HTML);
+        order.verify(history).addChatMessage(
+                APP_ID, "需求", "user", USER_ID);
+        order.verify(facade).generateAndSaveCodeStream(
+                eq("需求"), eq(CodeGenTypeEnum.HTML), eq(APP_ID), eq(false),
+                any(), eq(generator));
+    }
+
+    @Test
     void 保存用户失败属于前置错误且不启动模型() {
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(false);
