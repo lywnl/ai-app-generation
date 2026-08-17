@@ -137,10 +137,6 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void 普通在线生成安装统一门禁和真实回合原子门() {
-        when(retrievalService.retrieve(
-                RAW_QUERY, CodeGenTypeEnum.HTML)).thenReturn(List.of());
-        when(promptAssembler.assemble(RAW_QUERY, List.of()))
-                .thenReturn(RAW_QUERY);
         when(generatorService.generateHtmlCodeStream(RAW_QUERY))
                 .thenReturn(tokenStream);
         var operation = new AppOperationLeaseManager().acquire(
@@ -206,21 +202,17 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void hybridNonFirstVueSkipsImagesAndStillRetrievesRawQuery() {
+    void hybridNonFirstVueSkipsImagesAndRag() {
         stubVueGenerator();
         properties.getHybrid().setEnabled(true);
-        VueRagContext context = context("vue-skeleton");
         VueTurnContext turnContext = newVueTurnContext("hybrid-non-first");
-        when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
-        when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("专用拼装");
 
         facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, false, turnContext, generatorService);
 
-        verify(retrievalService).retrieveVueProject(RAW_QUERY);
         verify(imageCollectionService, never()).enhancePrompt(any());
-        verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
-        verify(generatorService).generateVueProjectCodeStream(APP_ID, "专用拼装");
+        verifyNoInteractions(retrievalService, promptAssembler);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         turnContext.closeResources();
     }
 
@@ -566,6 +558,41 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
+    void htmlNonFirstTurnSkipsRagAndUsesRawQuery() {
+        SimpleGenerationTurnContext context =
+                newSimpleTurnContext("html-non-first");
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
+                .thenReturn(tokenStream);
+
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false,
+                context, generatorService);
+
+        verifyNoInteractions(
+                imageCollectionService, retrievalService, promptAssembler);
+        verify(generatorService).generateHtmlCodeStream(RAW_QUERY);
+        context.close();
+    }
+
+    @Test
+    void disabledRagSkipsHtmlRetrievalEvenOnFirstTurn() {
+        properties.setEnabled(false);
+        SimpleGenerationTurnContext context =
+                newSimpleTurnContext("html-rag-disabled");
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
+                .thenReturn(tokenStream);
+
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, true,
+                context, generatorService);
+
+        verifyNoInteractions(
+                imageCollectionService, retrievalService, promptAssembler);
+        verify(generatorService).generateHtmlCodeStream(RAW_QUERY);
+        context.close();
+    }
+
+    @Test
     void multiFileKeepsImageThenLegacyRetrievalOrder() {
         List<RetrievedSnippet> snippets = List.of(snippet("multi"));
         SimpleGenerationTurnContext context =
@@ -587,6 +614,43 @@ class AiCodeGeneratorFacadeTest {
         order.verify(promptAssembler).assemble(ENHANCED_QUERY, snippets);
         order.verify(generatorService).generateMultiFileCodeStream("多文件拼装");
         verify(retrievalService, never()).retrieveVueProject(any());
+        context.close();
+    }
+
+    @Test
+    void multiFileNonFirstTurnSkipsImagesAndRagAndUsesRawQuery() {
+        SimpleGenerationTurnContext context =
+                newSimpleTurnContext("multi-non-first");
+        when(generatorService.generateMultiFileCodeStream(RAW_QUERY))
+                .thenReturn(tokenStream);
+
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, false,
+                context, generatorService);
+
+        verifyNoInteractions(
+                imageCollectionService, retrievalService, promptAssembler);
+        verify(generatorService).generateMultiFileCodeStream(RAW_QUERY);
+        context.close();
+    }
+
+    @Test
+    void disabledRagKeepsFirstTurnMultiFileImageEnhancement() {
+        properties.setEnabled(false);
+        SimpleGenerationTurnContext context =
+                newSimpleTurnContext("multi-rag-disabled");
+        when(imageCollectionService.enhancePrompt(RAW_QUERY))
+                .thenReturn(ENHANCED_QUERY);
+        when(generatorService.generateMultiFileCodeStream(ENHANCED_QUERY))
+                .thenReturn(tokenStream);
+
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.MULTI_FILE, APP_ID, true,
+                context, generatorService);
+
+        verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        verifyNoInteractions(retrievalService, promptAssembler);
+        verify(generatorService).generateMultiFileCodeStream(ENHANCED_QUERY);
         context.close();
     }
 
@@ -921,10 +985,6 @@ class AiCodeGeneratorFacadeTest {
     private void stubSimpleHtmlGenerator(TokenStream stream) {
         when(serviceFactory.getAiCodeGeneratorService(
                 APP_ID, CodeGenTypeEnum.HTML)).thenReturn(generatorService);
-        when(retrievalService.retrieve(RAW_QUERY, CodeGenTypeEnum.HTML))
-                .thenReturn(List.of());
-        when(promptAssembler.assemble(RAW_QUERY, List.of()))
-                .thenReturn(RAW_QUERY);
         when(generatorService.generateHtmlCodeStream(RAW_QUERY))
                 .thenReturn(stream);
         ReflectionTestUtils.setField(

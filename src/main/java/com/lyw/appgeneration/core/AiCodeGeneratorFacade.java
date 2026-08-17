@@ -168,15 +168,22 @@ public class AiCodeGeneratorFacade {
     private TokenStream createSimpleCodeStream(
             String userMessage, CodeGenTypeEnum codeGenTypeEnum,
             boolean isFirstMessage, AiCodeGeneratorService generatorService) {
+        boolean shouldRetrieve = shouldRetrieveOnlineRag(isFirstMessage);
         return CanonicalUserMessageScope.call(userMessage, () -> switch (codeGenTypeEnum) {
-            case HTML -> generatorService.generateHtmlCodeStream(
-                    ragAugment(userMessage, CodeGenTypeEnum.HTML));
+            case HTML -> {
+                String request = shouldRetrieve
+                        ? ragAugment(userMessage, CodeGenTypeEnum.HTML)
+                        : userMessage;
+                yield generatorService.generateHtmlCodeStream(request);
+            }
             case MULTI_FILE -> {
                 String enhanced = isFirstMessage
                         ? imageCollectionService.enhancePrompt(userMessage)
                         : userMessage;
-                yield generatorService.generateMultiFileCodeStream(
-                        ragAugment(enhanced, CodeGenTypeEnum.MULTI_FILE));
+                String request = shouldRetrieve
+                        ? ragAugment(enhanced, CodeGenTypeEnum.MULTI_FILE)
+                        : enhanced;
+                yield generatorService.generateMultiFileCodeStream(request);
             }
             default -> throw new IllegalArgumentException(
                     "普通生成入口只支持 HTML 和 MULTI_FILE");
@@ -269,7 +276,7 @@ public class AiCodeGeneratorFacade {
         java.util.Objects.requireNonNull(generatorService, "Vue 生成服务不能为空");
         String generationRequest = isFirstMessage
                 ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
-        if (ragProperties.isEnabled()) {
+        if (shouldRetrieveOnlineRag(isFirstMessage)) {
             VueRagContext context = retrieveVueContext(
                     userMessage, ragProperties.getHybrid().isEnabled());
             generationRequest = ragPromptAssembler.assembleVueProject(
@@ -399,6 +406,10 @@ public class AiCodeGeneratorFacade {
     private String ragAugment(String userMessage, CodeGenTypeEnum type) {
         List<RetrievedSnippet> snippets = ragRetrievalService.retrieve(userMessage, type);
         return ragPromptAssembler.assemble(userMessage, snippets);
+    }
+
+    private boolean shouldRetrieveOnlineRag(boolean isFirstMessage) {
+        return isFirstMessage && ragProperties.isEnabled();
     }
 
     /**
