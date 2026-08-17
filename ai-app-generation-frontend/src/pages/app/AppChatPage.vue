@@ -601,7 +601,8 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.content = snapshot.content
   aiMessage.toolCalls = new Map(snapshot.toolCalls)
   aiMessage.contextCompression = snapshot.contextCompression
-  aiMessage.loading = snapshot.loading
+  const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
+  aiMessage.loading = snapshot.loading && !hasVisibleOutput
   isGenerating.value = snapshot.status === 'streaming'
 }
 

@@ -14,9 +14,12 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).not.toContain('正在构建中，请您耐心等待')
   })
 
-  it('左侧状态行贯穿整个流式回合且控制文案不进入正文组件', () => {
-    expect(pageSource).toContain('aiMessage.loading = snapshot.loading')
-    expect(pageSource).not.toContain('aiMessage.loading = !hasAnyOutput && snapshot.loading')
+  it('左侧状态行只在尚无正文和工具调用时显示', () => {
+    expect(pageSource).toContain(
+      'const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0',
+    )
+    expect(pageSource).toContain('aiMessage.loading = snapshot.loading && !hasVisibleOutput')
+    expect(pageSource).not.toContain('aiMessage.loading = snapshot.loading\n')
     expect(pageSource).toContain('snapshot.contextCompression')
     expect(pageSource).not.toContain(':content="generationStatusText"')
   })
