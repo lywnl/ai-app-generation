@@ -26,8 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -68,6 +69,12 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final long requestGeneration;
     private final ModelRequestGate modelRequestGate;
     private final ModelRequestGate.ContinuationGate continuationGate;
+    private final ToolProtocolRecoveryCoordinator recoveryCoordinator;
+    private final ToolProtocolRecoveryDetector recoveryDetector;
+    private final boolean recoveryGeneration;
+    private final GenerationAwareModelRequestOrchestrator requestOrchestrator;
+    private final Object recoveryDetectionMonitor = new Object();
+    private final StringBuilder observedResponseText = new StringBuilder();
     private final Set<String> completedToolRequestIds =
             ConcurrentHashMap.newKeySet();
 
@@ -92,7 +99,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionHandler, completeResponseHandler, errorHandler,
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, new StreamingRequestController(),
-                ToolExecutionGuard.direct(), 0L, null, null);
+                ToolExecutionGuard.direct(), 0L, null, null, null, false,
+                null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -118,7 +126,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionHandler, completeResponseHandler, errorHandler,
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController, toolExecutionGuard,
-                requestController.latestModelRequestGeneration(), null, null);
+                requestController.latestModelRequestGeneration(), null, null,
+                null, false, null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -146,7 +155,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionHandler, completeResponseHandler, errorHandler,
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController,
-                toolExecutionGuard, requestGeneration, null, null);
+                toolExecutionGuard, requestGeneration, null, null, null, false,
+                null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -170,6 +180,72 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             long requestGeneration,
             ModelRequestGate modelRequestGate,
             ModelRequestGate.ContinuationGate continuationGate) {
+        this(chatExecutor, context, memoryId, partialResponseHandler,
+                partialToolExecutionRequestHandler,
+                completeToolExecutionRequestHandler,
+                toolExecutionHandler, completeResponseHandler, errorHandler,
+                temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
+                commonGuardrailParams, methodKey, requestController,
+                toolExecutionGuard, requestGeneration, modelRequestGate,
+                continuationGate, null, false, null);
+    }
+
+    AiServiceStreamingResponseHandler(
+            ChatExecutor chatExecutor,
+            AiServiceContext context,
+            Object memoryId,
+            Consumer<String> partialResponseHandler,
+            BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler,
+            BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler,
+            Consumer<ToolExecution> toolExecutionHandler,
+            Consumer<ChatResponse> completeResponseHandler,
+            Consumer<Throwable> errorHandler,
+            ChatMemory temporaryMemory,
+            TokenUsage tokenUsage,
+            List<ToolSpecification> toolSpecifications,
+            Map<String, ToolExecutor> toolExecutors,
+            GuardrailRequestParams commonGuardrailParams,
+            Object methodKey,
+            StreamingRequestController requestController,
+            ToolExecutionGuard toolExecutionGuard,
+            long requestGeneration,
+            ModelRequestGate modelRequestGate,
+            ModelRequestGate.ContinuationGate continuationGate,
+            ToolProtocolRecoveryCoordinator recoveryCoordinator) {
+        this(chatExecutor, context, memoryId, partialResponseHandler,
+                partialToolExecutionRequestHandler,
+                completeToolExecutionRequestHandler,
+                toolExecutionHandler, completeResponseHandler, errorHandler,
+                temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
+                commonGuardrailParams, methodKey, requestController,
+                toolExecutionGuard, requestGeneration, modelRequestGate,
+                continuationGate, recoveryCoordinator, false, null);
+    }
+
+    private AiServiceStreamingResponseHandler(
+            ChatExecutor chatExecutor,
+            AiServiceContext context,
+            Object memoryId,
+            Consumer<String> partialResponseHandler,
+            BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler,
+            BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler,
+            Consumer<ToolExecution> toolExecutionHandler,
+            Consumer<ChatResponse> completeResponseHandler,
+            Consumer<Throwable> errorHandler,
+            ChatMemory temporaryMemory,
+            TokenUsage tokenUsage,
+            List<ToolSpecification> toolSpecifications,
+            Map<String, ToolExecutor> toolExecutors,
+            GuardrailRequestParams commonGuardrailParams,
+            Object methodKey,
+            StreamingRequestController requestController,
+            ToolExecutionGuard toolExecutionGuard,
+            long requestGeneration,
+            ModelRequestGate modelRequestGate,
+            ModelRequestGate.ContinuationGate continuationGate,
+            ToolProtocolRecoveryCoordinator recoveryCoordinator,
+            boolean recoveryGeneration,
+            GenerationAwareModelRequestOrchestrator requestOrchestrator) {
         this.chatExecutor = ensureNotNull(chatExecutor, "chatExecutor");
         this.context = ensureNotNull(context, "context");
         this.memoryId = ensureNotNull(memoryId, "memoryId");
@@ -198,6 +274,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         }
         this.modelRequestGate = modelRequestGate;
         this.continuationGate = continuationGate;
+        this.recoveryCoordinator = recoveryCoordinator;
+        this.recoveryDetector = recoveryCoordinator == null
+                ? null : recoveryCoordinator.newDetector();
+        this.recoveryGeneration = recoveryGeneration;
+        this.requestOrchestrator = requestOrchestrator == null
+                ? new GenerationAwareModelRequestOrchestrator(
+                        requestController, modelRequestGate, continuationGate)
+                : requestOrchestrator;
     }
 
     @Override
@@ -207,26 +291,112 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     @Override
     public void onPartialResponse(String partialResponse) {
-        try (var callback = requestController.enterCallback()) {
+        AtomicBoolean recoveryPrepared = new AtomicBoolean();
+        try (var callback = requestController.enterCallback(
+                requestGeneration)) {
             if (callback == null) {
                 return;
             }
-            if (hasOutputGuardrails) {
-                requestController.runIfOpen(() -> responseBuffer.add(partialResponse));
-            } else {
-                requestController.runIfOpen(
-                        () -> partialResponseHandler.accept(partialResponse));
-            }
+            processPartialResponse(partialResponse, recoveryPrepared);
+        }
+        if (recoveryPrepared.get()) {
+            prepareRecoveryRequest(new TokenUsage());
+        }
+    }
+
+    private void processPartialResponse(
+            String partialResponse,
+            AtomicBoolean recoveryPrepared) {
+        if (recoveryDetector == null) {
+            deliverTrustedPartial(partialResponse);
+            return;
+        }
+        ToolProtocolRecoveryDetector.Result result;
+        synchronized (recoveryDetectionMonitor) {
+            observedResponseText.append(partialResponse);
+            result = recoveryDetector.accept(partialResponse);
+        }
+        handleDetectionResult(result, recoveryPrepared);
+    }
+
+    private boolean handleDetectionResult(
+            ToolProtocolRecoveryDetector.Result result,
+            AtomicBoolean recoveryPrepared) {
+        if (result instanceof ToolProtocolRecoveryDetector.Text text) {
+            markRecoveredBeforeTrustedOutput();
+            deliverTrustedPartial(text.text());
+            return true;
+        }
+        if (!(result instanceof ToolProtocolRecoveryDetector.Duplicate duplicate)) {
+            return true;
+        }
+        deliverTrustedPartial(duplicate.text());
+        handleDuplicate(recoveryPrepared);
+        return false;
+    }
+
+    private void deliverTrustedPartial(String text) {
+        if (text.isEmpty()) {
+            return;
+        }
+        if (hasOutputGuardrails) {
+            responseBuffer.add(text);
+        } else {
+            partialResponseHandler.accept(text);
+        }
+    }
+
+    private void markRecoveredBeforeTrustedOutput() {
+        if (recoveryGeneration && recoveryCoordinator != null) {
+            recoveryCoordinator.recovered();
+        }
+    }
+
+    private void handleDuplicate(AtomicBoolean recoveryPrepared) {
+        ToolProtocolRecoveryCoordinator.DuplicateAction action =
+                recoveryCoordinator.claimDuplicate(requestGeneration);
+        if (action == ToolProtocolRecoveryCoordinator.DuplicateAction.IGNORE) {
+            return;
+        }
+        if (action == ToolProtocolRecoveryCoordinator.DuplicateAction.FAIL) {
+            failProtocolRecovery();
+            return;
+        }
+        StreamingRequestController.GenerationCancellation cancellation =
+                requestController.cancelGenerationForRecovery(
+                        requestGeneration);
+        if (cancellation != StreamingRequestController
+                .GenerationCancellation.CANCELLED) {
+            recoveryCoordinator.releaseRecoveryReservation();
+            return;
+        }
+        recoveryCoordinator.recoveryStarted();
+        recoveryPrepared.set(true);
+    }
+
+    private void failProtocolRecovery() {
+        ToolLoopTerminationProtocol.ControlledTermination termination =
+                new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol
+                                .ControlledTerminationReason.PROTOCOL_ERROR,
+                        null);
+        if (requestController.claimControlledTermination(
+                requestGeneration, termination)) {
+            recoveryCoordinator.failForProtocolViolation();
+            requestController.dispatchClaimedTermination();
         }
     }
 
     @Override
     public void onPartialToolExecutionRequest(int index, ToolExecutionRequest partialToolExecutionRequest) {
-        try (var callback = requestController.enterCallback()) {
-            if (callback != null && partialToolExecutionRequestHandler != null
-                    && requestController.isOpen()) {
-                requestController.runIfOpen(() -> partialToolExecutionRequestHandler
-                        .accept(index, partialToolExecutionRequest));
+        try (var callback = requestController.enterCallback(
+                requestGeneration)) {
+            if (callback != null) {
+                observeStructuredToolCall();
+                if (partialToolExecutionRequestHandler != null) {
+                    partialToolExecutionRequestHandler.accept(
+                            index, partialToolExecutionRequest);
+                }
             }
         }
     }
@@ -234,312 +404,464 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     @Override
     public void onCompleteToolExecutionRequest(
             int index, ToolExecutionRequest completeToolExecutionRequest) {
-        try (var callback = requestController.enterCallback()) {
-            if (callback != null && completeToolExecutionRequestHandler != null
-                    && claimCompleteToolRequest(completeToolExecutionRequest)
-                    && requestController.isOpen()) {
-                requestController.runIfOpen(() -> completeToolExecutionRequestHandler
-                        .accept(index, completeToolExecutionRequest));
+        try (var callback = requestController.enterCallback(
+                requestGeneration)) {
+            if (callback != null) {
+                observeStructuredToolCall();
+                // 供应商可能在完整响应前提前发送该事件。这里只观察结构化
+                // 工具调用，用户工具卡统一延迟到工具批次提交成功后再发布，
+                // 避免取消先赢时产生没有结果的孤立工具卡。
             }
+        }
+    }
+
+    private void observeStructuredToolCall() {
+        if (recoveryDetector == null) {
+            return;
+        }
+        ToolProtocolRecoveryDetector.Result result;
+        synchronized (recoveryDetectionMonitor) {
+            result = recoveryDetector.observeStructuredToolCall();
+        }
+        if (result instanceof ToolProtocolRecoveryDetector.Text text) {
+            markRecoveredBeforeTrustedOutput();
+            deliverTrustedPartial(text.text());
         }
     }
 
     @Override
     public void onCompleteResponse(ChatResponse completeResponse) {
-        PendingModelRequestPreparation pendingPreparation = null;
-        try (var callback = requestController.enterCallback()) {
+        AtomicBoolean recoveryPrepared = new AtomicBoolean();
+        AtomicReference<ChatResponse> continuationResponse =
+                new AtomicReference<>();
+        try (var callback = requestController.enterCallback(
+                requestGeneration)) {
             if (callback == null) {
                 return;
             }
-            pendingPreparation = processCompleteResponse(completeResponse);
+            processCompleteResponse(
+                    completeResponse,
+                    recoveryPrepared,
+                    continuationResponse);
         }
-        if (pendingPreparation != null) {
-            observePreparation(pendingPreparation);
+        if (recoveryPrepared.get()) {
+            prepareRecoveryRequest(TokenUsage.sum(
+                    tokenUsage, completeResponse.metadata().tokenUsage()));
+        } else if (continuationResponse.get() != null) {
+            submitNextModelRequest(continuationResponse.get());
         }
     }
 
-    private PendingModelRequestPreparation processCompleteResponse(
-            ChatResponse completeResponse) {
-        if (!requestController.isOpen()) {
-            return null;
+    private void processCompleteResponse(
+            ChatResponse completeResponse,
+            AtomicBoolean recoveryPrepared,
+            AtomicReference<ChatResponse> continuationResponse) {
+        if (!requestController.isCurrentGeneration(requestGeneration)) {
+            return;
         }
         AiMessage aiMessage = completeResponse.aiMessage();
         if (!aiMessage.hasToolExecutionRequests()) {
+            if (!completeRecoveryDetection(
+                    aiMessage.text(), recoveryPrepared)) {
+                return;
+            }
+            markRecoveredBeforeTrustedOutput();
             completeOrdinaryResponse(completeResponse, aiMessage);
-            return null;
+            return;
         }
-        if (!requestController.runIfOpen(() -> addToMemory(aiMessage))) {
-            return null;
+        observeStructuredToolCall();
+        List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
+        StreamingRequestController.ToolBatchTicket batchTicket =
+                requestController.prepareToolBatch(
+                        requestGeneration, requests.size());
+        if (batchTicket == null) {
+            return;
         }
-
-        if (aiMessage.hasToolExecutionRequests()) {
-            List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
-            for (int index = 0; index < requests.size(); index++) {
-                ToolExecutionRequest toolExecutionRequest = requests.get(index);
-                if (!requestController.isOpen()) {
-                    RuntimeException failure = skipRemainingBestEffort(
-                            requests,
-                            index,
-                            "受控跳过：请求已经取消",
-                            null);
-                    rethrow(failure);
-                    return null;
-                }
-                ToolExecutionRequest normalizedRequest = normalizeToolExecutionRequest(toolExecutionRequest);
-                if (normalizedRequest == null) {
-                    notifyToolExecuted(toolExecutionRequest,
-                            "受控跳过：工具参数不是合法 JSON");
-                    continue;
-                }
-                String toolName = normalizedRequest.name();
-                ToolExecutor toolExecutor = toolExecutors.get(toolName);
-                if (toolExecutor == null) {
-                    LOG.warn("Tool executor not found, skip tool call: name={}, id={}", toolName, normalizedRequest.id());
-                    notifyToolExecuted(normalizedRequest,
-                            String.format("受控跳过：工具 '%s' 未注册", toolName));
-                    continue;
-                }
-                if (!requestController.beforeToolExecution()) {
-                    RuntimeException failure = null;
-                    try {
-                        failure = skipRemainingBestEffort(
-                                requests,
-                                index,
-                                requestController.isCancelled()
-                                        ? "受控跳过：请求已经取消"
-                                        : "受控跳过：工具执行次数超过上限",
-                                null);
-                    } finally {
-                        if (!requestController.isCancelled()) {
-                            requestController.dispatchClaimedTermination();
-                        }
-                    }
-                    rethrow(failure);
-                    return null;
-                }
-                int toolRequestIndex = index;
-                if (completeToolExecutionRequestHandler != null
-                        && claimCompleteToolRequest(normalizedRequest)
-                        && !requestController.runIfOpen(() ->
-                        completeToolExecutionRequestHandler.accept(
-                                toolRequestIndex, normalizedRequest))) {
-                    return null;
-                }
-                ToolExecutionGuard.GuardedToolExecution guardedExecution;
-                try {
-                    guardedExecution = toolExecutionGuard.execute(toolName, memoryId,
-                            () -> toolExecutor.execute(normalizedRequest, memoryId));
-                } catch (RuntimeException e) {
-                    LOG.warn("Tool execution failed, skip this tool and continue: name={}, id={}",
-                            normalizedRequest.name(), normalizedRequest.id(), e);
-                    notifyToolExecuted(normalizedRequest,
-                            String.format("受控跳过：工具 '%s' 执行失败：%s",
-                                    normalizedRequest.name(), e.getMessage()));
-                    continue;
-                }
-                if (!requestController.isOpen()) {
-                    RuntimeException failure = skipRemainingBestEffort(
-                            requests,
-                            index,
-                            "受控跳过：请求已经取消",
-                            null);
-                    rethrow(failure);
-                    return null;
-                }
-                ToolLoopTerminationProtocol.ControlledTermination termination =
-                        guardedExecution.controlledTermination();
-                if (termination != null) {
-                    if (!requestController.claimControlledTermination(termination)) {
-                        if (requestController.isCancelled()) {
-                            RuntimeException failure = skipRemainingBestEffort(
-                                    requests,
-                                    index,
-                                    "受控跳过：请求已经取消",
-                                    null);
-                            rethrow(failure);
-                        }
-                        return null;
-                    }
-                    RuntimeException failure = null;
-                    try {
-                        try {
-                            notifyToolExecuted(normalizedRequest, guardedExecution.toolResult());
-                        } catch (RuntimeException exception) {
-                            failure = exception;
-                        }
-                        failure = skipRemainingBestEffort(
-                                requests,
-                                index + 1,
-                                "受控跳过：本批次已有工具触发终止",
-                                failure);
-                        if (failure == null) {
-                            try {
-                                completeClaimedTermination(termination);
-                            } catch (RuntimeException exception) {
-                                failure = exception;
-                            }
-                        }
-                    } finally {
-                        requestController.dispatchClaimedTermination();
-                    }
-                    rethrow(failure);
-                    return null;
-                }
-                if (!requestController.runIfOpen(() -> notifyToolExecuted(
-                        normalizedRequest, guardedExecution.toolResult()))) {
-                    return null;
-                }
+        ChatMemory memory;
+        try {
+            memory = getMemory();
+        } catch (RuntimeException exception) {
+            if (requestController.failPreparedToolBatch(batchTicket)) {
+                notifyError(exception);
             }
-            if (!requestController.isOpen()) {
-                return null;
-            }
-            return prepareNextModelRequest(completeResponse);
+            return;
         }
-        return null;
+        if (!requestController.tryStartToolBatchWrite(batchTicket)) {
+            return;
+        }
+        try {
+            memory.add(aiMessage);
+        } catch (RuntimeException exception) {
+            if (requestController.failPreparedToolBatch(batchTicket)) {
+                notifyError(exception);
+            }
+            return;
+        }
+        if (!requestController.commitToolBatch(batchTicket)) {
+            return;
+        }
+        executeCommittedToolBatch(
+                requests, batchTicket, completeResponse,
+                continuationResponse);
     }
 
-    private PendingModelRequestPreparation prepareNextModelRequest(
-            ChatResponse completeResponse) {
+    private void executeCommittedToolBatch(
+            List<ToolExecutionRequest> requests,
+            StreamingRequestController.ToolBatchTicket batchTicket,
+            ChatResponse completeResponse,
+            AtomicReference<ChatResponse> continuationResponse) {
+        RuntimeException failure = null;
+        String skipRemainderReason = null;
+        ToolLoopTerminationProtocol.ControlledTermination claimedTermination =
+                null;
+        boolean dispatchTermination = false;
+
+        for (int index = 0; index < requests.size(); index++) {
+            ToolExecutionRequest originalRequest = requests.get(index);
+            if (skipRemainderReason != null) {
+                ToolResultCommit commit = commitToolResult(
+                        batchTicket, index, originalRequest,
+                        skipRemainderReason, null);
+                failure = mergeFailure(failure, commit.failure());
+                if (commit.persistenceFailed()) {
+                    return;
+                }
+                continue;
+            }
+
+            ToolExecutionRequest normalizedRequest =
+                    normalizeToolExecutionRequest(originalRequest);
+            if (normalizedRequest == null) {
+                ToolResultCommit commit = commitToolResult(
+                        batchTicket, index, originalRequest,
+                        "受控跳过：工具参数不是合法 JSON", null);
+                failure = mergeFailure(failure, commit.failure());
+                if (commit.persistenceFailed()) {
+                    return;
+                }
+                continue;
+            }
+            String toolName = normalizedRequest.name();
+            ToolExecutor toolExecutor = toolExecutors.get(toolName);
+            if (toolExecutor == null) {
+                LOG.warn("Tool executor not found, skip tool call: name={}, id={}",
+                        toolName, normalizedRequest.id());
+                ToolResultCommit commit = commitToolResult(
+                        batchTicket, index, normalizedRequest,
+                        String.format("受控跳过：工具 '%s' 未注册", toolName),
+                        null);
+                failure = mergeFailure(failure, commit.failure());
+                if (commit.persistenceFailed()) {
+                    return;
+                }
+                continue;
+            }
+
+            if (completeToolExecutionRequestHandler != null
+                    && claimCompleteToolRequest(normalizedRequest)) {
+                try {
+                    completeToolExecutionRequestHandler.accept(
+                            index, normalizedRequest);
+                } catch (RuntimeException exception) {
+                    failure = mergeFailure(failure, exception);
+                    skipRemainderReason =
+                            "受控跳过：工具请求回调执行失败";
+                    ToolResultCommit commit = commitToolResult(
+                            batchTicket, index, normalizedRequest,
+                            skipRemainderReason, null);
+                    failure = mergeFailure(failure, commit.failure());
+                    if (commit.persistenceFailed()) {
+                        return;
+                    }
+                    continue;
+                }
+            }
+
+            StreamingRequestController.ToolExecutionDecision executionDecision =
+                    requestController.claimToolExecution(batchTicket, index);
+            if (executionDecision
+                    != StreamingRequestController.ToolExecutionDecision.EXECUTE) {
+                String reason = switch (executionDecision) {
+                    case CANCELLED -> "受控跳过：请求已经取消";
+                    case LOOP_LIMIT_EXCEEDED ->
+                            "受控跳过：工具执行次数超过上限";
+                    case TERMINATED ->
+                            "受控跳过：本批次已有工具触发终止";
+                    case REJECTED -> "受控跳过：工具执行认领已失效";
+                    case EXECUTE -> throw new IllegalStateException(
+                            "已执行分支不能作为跳过原因");
+                };
+                ToolLoopTerminationProtocol.ControlledTermination
+                        loopLimitTermination = executionDecision
+                        == StreamingRequestController.ToolExecutionDecision
+                        .LOOP_LIMIT_EXCEEDED
+                        ? new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol
+                                .ControlledTerminationReason.LOOP_LIMIT_EXCEEDED,
+                        null)
+                        : null;
+                ToolResultCommit commit = commitToolResult(
+                        batchTicket, index, normalizedRequest, reason,
+                        loopLimitTermination);
+                failure = mergeFailure(failure, commit.failure());
+                if (commit.persistenceFailed()) {
+                    return;
+                }
+                if (commit.decision() == StreamingRequestController
+                        .ToolResultDecision.TERMINATED) {
+                    claimedTermination = loopLimitTermination;
+                    skipRemainderReason =
+                            "受控跳过：工具执行次数超过上限";
+                    dispatchTermination = true;
+                }
+                continue;
+            }
+
+            ToolExecutionGuard.GuardedToolExecution guardedExecution;
+            try {
+                guardedExecution = toolExecutionGuard.execute(
+                        toolName, memoryId,
+                        () -> toolExecutor.execute(
+                                normalizedRequest, memoryId));
+            } catch (RuntimeException exception) {
+                LOG.warn("Tool execution failed, skip this tool and continue: name={}, id={}",
+                        normalizedRequest.name(), normalizedRequest.id(),
+                        exception);
+                ToolResultCommit commit = commitToolResult(
+                        batchTicket, index, normalizedRequest,
+                        String.format("受控跳过：工具 '%s' 执行失败：%s",
+                                normalizedRequest.name(),
+                                exception.getMessage()), null);
+                failure = mergeFailure(failure, commit.failure());
+                if (commit.persistenceFailed()) {
+                    return;
+                }
+                continue;
+            }
+
+            ToolResultCommit commit = commitToolResult(
+                    batchTicket, index, normalizedRequest,
+                    guardedExecution.toolResult(),
+                    guardedExecution.controlledTermination());
+            failure = mergeFailure(failure, commit.failure());
+            if (commit.persistenceFailed()) {
+                return;
+            }
+            if (commit.decision() == StreamingRequestController
+                    .ToolResultDecision.TERMINATED) {
+                claimedTermination = guardedExecution.controlledTermination();
+                skipRemainderReason =
+                        "受控跳过：本批次已有工具触发终止";
+                dispatchTermination = true;
+            }
+        }
+
+        boolean continueModelLoop = requestController.finishToolBatch(
+                batchTicket);
+        try {
+            if (claimedTermination != null && failure == null) {
+                completeClaimedTermination(claimedTermination);
+            }
+        } catch (RuntimeException exception) {
+            failure = mergeFailure(failure, exception);
+        } finally {
+            if (dispatchTermination) {
+                requestController.dispatchClaimedTermination();
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+        if (continueModelLoop) {
+            continuationResponse.set(completeResponse);
+        }
+    }
+
+    private ToolResultCommit commitToolResult(
+            StreamingRequestController.ToolBatchTicket batchTicket,
+            int index,
+            ToolExecutionRequest request,
+            String providedResult,
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        StreamingRequestController.ToolResultClaim claim =
+                requestController.prepareToolResult(
+                        batchTicket, index, termination);
+        StreamingRequestController.ToolResultDecision preparedDecision =
+                claim.decision();
+        if (preparedDecision == StreamingRequestController
+                .ToolResultDecision.REJECTED) {
+            return new ToolResultCommit(preparedDecision, null, false);
+        }
+        String committedResult = preparedDecision == StreamingRequestController
+                .ToolResultDecision.CANCELLED
+                ? "受控跳过：请求已经取消"
+                : providedResult;
+        try {
+            addToMemory(ToolExecutionResultMessage.from(
+                    request, committedResult));
+        } catch (RuntimeException exception) {
+            if (requestController.failPreparedToolResult(
+                    batchTicket, index, claim)) {
+                notifyError(exception);
+            }
+            return new ToolResultCommit(preparedDecision, null, true);
+        }
+        StreamingRequestController.ToolResultDecision committedDecision =
+                requestController.commitToolResult(
+                        batchTicket, index, claim);
+        if (committedDecision == StreamingRequestController
+                .ToolResultDecision.REJECTED) {
+            return new ToolResultCommit(committedDecision, null, false);
+        }
+        try {
+            notifyToolExecutedCallback(request, committedResult);
+            return new ToolResultCommit(
+                    committedDecision, null, false);
+        } catch (RuntimeException exception) {
+            return new ToolResultCommit(
+                    committedDecision, exception, false);
+        }
+    }
+
+    private RuntimeException mergeFailure(
+            RuntimeException current, RuntimeException next) {
+        if (next == null) {
+            return current;
+        }
+        if (current == null) {
+            return next;
+        }
+        if (current == next) {
+            return current;
+        }
+        current.addSuppressed(next);
+        return current;
+    }
+
+    private record ToolResultCommit(
+            StreamingRequestController.ToolResultDecision decision,
+            RuntimeException failure,
+            boolean persistenceFailed) {
+    }
+
+    private boolean completeRecoveryDetection(
+            String completeText,
+            AtomicBoolean recoveryPrepared) {
+        if (recoveryDetector == null) {
+            return true;
+        }
+        String normalizedText = completeText == null ? "" : completeText;
+        ToolProtocolRecoveryDetector.Result suffixResult;
+        ToolProtocolRecoveryDetector.Result finishResult;
+        boolean streamMismatch;
+        synchronized (recoveryDetectionMonitor) {
+            String observed = observedResponseText.toString();
+            streamMismatch = !normalizedText.startsWith(observed);
+            if (streamMismatch) {
+                suffixResult = null;
+                finishResult = null;
+            } else {
+                String suffix = normalizedText.substring(observed.length());
+                observedResponseText.append(suffix);
+                suffixResult = recoveryDetector.accept(suffix);
+                if (suffixResult instanceof ToolProtocolRecoveryDetector.Duplicate) {
+                    finishResult = null;
+                } else {
+                    finishResult = recoveryDetector.finish();
+                }
+            }
+        }
+        if (streamMismatch) {
+            failStreamConsistency();
+            return false;
+        }
+        if (!handleDetectionResult(suffixResult, recoveryPrepared)) {
+            return false;
+        }
+        if (finishResult != null
+                && !handleDetectionResult(finishResult, recoveryPrepared)) {
+            return false;
+        }
+        return requestController.isCurrentGeneration(requestGeneration);
+    }
+
+    private void failStreamConsistency() {
+        if (requestController.claimErrorCompletion(requestGeneration)) {
+            notifyError(new StreamingResponseConsistencyException());
+        }
+    }
+
+    private void prepareRecoveryRequest(TokenUsage accumulatedUsage) {
+        ModelRequestGate.Request gateRequest = modelRequestGate == null
+                ? null
+                : new ModelRequestGate.Request(
+                        memoryId,
+                        this::getMemory,
+                        toolSpecifications,
+                        continuationGate,
+                        recoveryCoordinator.transientMessages());
+        requestOrchestrator.submit(
+                GenerationAwareModelRequestOrchestrator.recovery(
+                        requestGeneration,
+                        gateRequest,
+                        () -> messagesToSend(memoryId),
+                        recoveryCoordinator::failIfRecovering,
+                        this::notifyRecoveryFailure,
+                        (messages, generation) -> startModelRequest(
+                                messages,
+                                accumulatedUsage,
+                                generation,
+                                true)));
+    }
+
+    private void notifyRecoveryFailure(Throwable failure) {
+        recoveryCoordinator.failIfRecovering();
+        notifyError(failure);
+    }
+
+    private void submitNextModelRequest(ChatResponse completeResponse) {
         TokenUsage accumulatedUsage = TokenUsage.sum(
                 tokenUsage, completeResponse.metadata().tokenUsage());
-        if (modelRequestGate == null) {
-            startNextModelRequest(
-                    messagesToSend(memoryId), accumulatedUsage, false);
-            return null;
-        }
-        CompletionStage<ModelRequestGate.Decision> preparation;
-        try {
-            preparation = modelRequestGate.prepare(new ModelRequestGate.Request(
-                    memoryId,
-                    this::getMemory,
-                    toolSpecifications,
-                    continuationGate,
-                    List.of()));
-        } catch (RuntimeException exception) {
-            return claimPreparationFailure(new IllegalStateException(
-                    "模型请求门禁准备失败", exception));
-        }
-        if (preparation == null) {
-            return claimPreparationFailure(new IllegalStateException(
-                    "模型请求门禁未返回准备结果"));
-        }
-        return PendingModelRequestPreparation.prepared(
-                preparation, accumulatedUsage);
+        ModelRequestGate.Request gateRequest = modelRequestGate == null
+                ? null
+                : new ModelRequestGate.Request(
+                        memoryId,
+                        this::getMemory,
+                        toolSpecifications,
+                        continuationGate,
+                        List.of());
+        requestOrchestrator.submit(
+                GenerationAwareModelRequestOrchestrator.continuation(
+                        requestGeneration,
+                        gateRequest,
+                        () -> messagesToSend(memoryId),
+                        this::notifyError,
+                        (messages, generation) -> startModelRequest(
+                                messages,
+                                accumulatedUsage,
+                                generation,
+                                false)));
     }
 
-    private PendingModelRequestPreparation claimPreparationFailure(
-            Throwable failure) {
-        if (!requestController.completeNormally()) {
-            return null;
-        }
-        return PendingModelRequestPreparation.failed(failure);
-    }
-
-    private void observePreparation(
-            PendingModelRequestPreparation pendingPreparation) {
-        if (pendingPreparation.claimedFailure() != null) {
-            notifyError(pendingPreparation.claimedFailure());
-            return;
-        }
-        CompletionStage<ModelRequestGate.DispatchStatus> dispatch;
-        try {
-            dispatch = modelRequestGate.onPrepared(
-                    pendingPreparation.preparation(),
-                    (decision, failure) -> finishNextPreparation(
-                            decision,
-                            failure,
-                            pendingPreparation.accumulatedUsage()));
-        } catch (RuntimeException exception) {
-            deliverError(new IllegalStateException(
-                    "模型请求门禁完成回调注册失败", exception));
-            return;
-        }
-        if (dispatch == null) {
-            deliverError(new IllegalStateException(
-                    "模型请求门禁未返回完成回调调度结果"));
-            return;
-        }
-        dispatch.whenComplete(this::finishPreparationDispatch);
-    }
-
-    private void finishPreparationDispatch(
-            ModelRequestGate.DispatchStatus status,
-            Throwable failure) {
-        if (failure != null) {
-            deliverError(new IllegalStateException(
-                    "模型请求门禁完成回调执行失败", failure));
-            return;
-        }
-        if (status != ModelRequestGate.DispatchStatus.DISPATCHED) {
-            deliverError(new IllegalStateException(
-                    "模型请求门禁完成回调调度失败"));
-        }
-    }
-
-    private void finishNextPreparation(
-            ModelRequestGate.Decision decision,
-            Throwable failure,
-            TokenUsage accumulatedUsage) {
-        if (failure != null) {
-            deliverError(new IllegalStateException(
-                    "模型请求门禁执行失败", failure));
-            return;
-        }
-        if (decision == null) {
-            deliverError(new IllegalStateException(
-                    "模型请求门禁返回空决策"));
-            return;
-        }
-        switch (decision.status()) {
-            case ALLOWED -> startAllowedNextRequest(
-                    decision.messages(), accumulatedUsage);
-            case CANCELLED -> requestController.cancel();
-            case COMPRESSION_FAILED, HARD_LIMIT_REJECTED ->
-                    deliverError(new ModelRequestGateException(
-                            ModelRequestGateException.Stage.CONTINUATION,
-                            decision.status(), decision.safeMessage()));
-        }
-    }
-
-    private void startAllowedNextRequest(
-            List<ChatMessage> preparedMessages,
-            TokenUsage accumulatedUsage) {
-        boolean accepted;
-        try {
-            accepted = continuationGate.tryRun(() -> {
-                try (var callback = requestController.enterCallback()) {
-                    if (callback != null) {
-                        startNextModelRequest(
-                                preparedMessages, accumulatedUsage, true);
-                    }
-                }
-            });
-        } catch (RuntimeException exception) {
-            deliverError(exception);
-            return;
-        }
-        if (!accepted) {
-            requestController.cancel();
-        }
-    }
-
-    private void startNextModelRequest(
+    private Runnable startModelRequest(
             List<ChatMessage> requestMessages,
             TokenUsage accumulatedUsage,
-            boolean verifyGeneration) {
-        boolean requestAccepted = verifyGeneration
-                ? requestController.beforeModelRequest(requestGeneration)
-                : requestController.beforeModelRequest();
-        if (!requestAccepted) {
-            requestController.dispatchClaimedTermination();
-            return;
-        }
+            long nextGeneration,
+            boolean recoveryGeneration) {
         ChatRequest chatRequest = ChatRequest.builder()
                 .messages(requestMessages)
                 .toolSpecifications(toolSpecifications)
                 .build();
-        long nextGeneration = requestController.latestModelRequestGeneration();
-        var handler = new AiServiceStreamingResponseHandler(
+        AiServiceStreamingResponseHandler child = childHandler(
+                accumulatedUsage, nextGeneration, recoveryGeneration);
+        return () -> context.streamingChatModel.chat(chatRequest, child);
+    }
+
+    private AiServiceStreamingResponseHandler childHandler(
+            TokenUsage accumulatedUsage,
+            long nextGeneration,
+            boolean recoveryGeneration) {
+        return new AiServiceStreamingResponseHandler(
                 chatExecutor,
                 context,
                 memoryId,
@@ -559,19 +881,15 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionGuard,
                 nextGeneration,
                 modelRequestGate,
-                continuationGate);
-
-        try {
-            requestController.startModelRequestIfOpen(
-                    () -> context.streamingChatModel.chat(chatRequest, handler));
-        } catch (RuntimeException exception) {
-            handler.onError(exception);
-        }
+                continuationGate,
+                recoveryCoordinator,
+                recoveryGeneration,
+                requestOrchestrator);
     }
 
     private void completeOrdinaryResponse(
             ChatResponse completeResponse, AiMessage aiMessage) {
-        if (!requestController.claimNormalCompletion()) {
+        if (!requestController.claimNormalCompletion(requestGeneration)) {
             return;
         }
         try {
@@ -632,34 +950,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         }
     }
 
-    private RuntimeException skipRemainingBestEffort(
-            List<ToolExecutionRequest> requests,
-            int startIndex,
-            String reason,
-            RuntimeException firstFailure) {
-        RuntimeException failure = firstFailure;
-        for (int index = startIndex; index < requests.size(); index++) {
-            try {
-                notifyToolExecuted(requests.get(index), reason);
-            } catch (RuntimeException exception) {
-                if (failure == null) {
-                    failure = exception;
-                } else {
-                    failure.addSuppressed(exception);
-                }
-            }
-        }
-        return failure;
-    }
-
-    private void rethrow(RuntimeException failure) {
-        if (failure != null) {
-            throw failure;
-        }
-    }
-
-    private void notifyToolExecuted(ToolExecutionRequest request, String result) {
-        addToMemory(ToolExecutionResultMessage.from(request, result));
+    private void notifyToolExecutedCallback(
+            ToolExecutionRequest request, String result) {
         if (toolExecutionHandler != null) {
             toolExecutionHandler.accept(ToolExecution.builder()
                     .request(request)
@@ -686,16 +978,17 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     @Override
     public void onError(Throwable error) {
-        try (var callback = requestController.enterCallback()) {
+        try (var callback = requestController.enterCallback(
+                requestGeneration)) {
             if (callback == null) {
                 return;
             }
-            deliverError(error);
-        }
-    }
-
-    private void deliverError(Throwable error) {
-        if (requestController.completeNormally()) {
+            if (!requestController.claimErrorCompletion(requestGeneration)) {
+                return;
+            }
+            if (recoveryGeneration && recoveryCoordinator != null) {
+                recoveryCoordinator.failIfRecovering();
+            }
             notifyError(error);
         }
     }
@@ -740,26 +1033,4 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         return requestId == null || completedToolRequestIds.add(requestId);
     }
 
-    private record PendingModelRequestPreparation(
-            CompletionStage<ModelRequestGate.Decision> preparation,
-            TokenUsage accumulatedUsage,
-            Throwable claimedFailure) {
-
-        private static PendingModelRequestPreparation prepared(
-                CompletionStage<ModelRequestGate.Decision> preparation,
-                TokenUsage accumulatedUsage) {
-            return new PendingModelRequestPreparation(
-                    Objects.requireNonNull(preparation),
-                    Objects.requireNonNull(accumulatedUsage),
-                    null);
-        }
-
-        private static PendingModelRequestPreparation failed(
-                Throwable claimedFailure) {
-            return new PendingModelRequestPreparation(
-                    null,
-                    null,
-                    Objects.requireNonNull(claimedFailure));
-        }
-    }
 }

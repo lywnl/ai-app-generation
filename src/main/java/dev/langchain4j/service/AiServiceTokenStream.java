@@ -19,7 +19,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionStage;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -54,6 +55,8 @@ public class AiServiceTokenStream implements TokenStream {
     private ToolExecutionGuard toolExecutionGuard = ToolExecutionGuard.direct();
     private ModelRequestGate modelRequestGate;
     private ModelRequestGate.ContinuationGate continuationGate;
+    private ToolProtocolRecoveryCoordinator recoveryCoordinator;
+    private GenerationAwareModelRequestOrchestrator requestOrchestrator;
 
     private int onPartialResponseInvoked;
     private int onCompleteResponseInvoked;
@@ -156,6 +159,27 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream toolProtocolRecoveryPolicy(
+            ToolProtocolRecoveryPolicy policy) {
+        ToolProtocolRecoveryPolicy checkedPolicy = ensureNotNull(
+                policy, "toolProtocolRecoveryPolicy");
+        Set<String> specificationNames = toolSpecifications.stream()
+                .map(ToolSpecification::name)
+                .collect(Collectors.toUnmodifiableSet());
+        if (!checkedPolicy.registeredToolNames().equals(specificationNames)) {
+            throw new IllegalArgumentException(
+                    "恢复策略声明的工具名必须与当前工具规格完全一致");
+        }
+        if (!toolExecutors.keySet().equals(specificationNames)) {
+            throw new IllegalArgumentException(
+                    "当前工具执行器必须与当前工具规格完全一致");
+        }
+        this.recoveryCoordinator = new ToolProtocolRecoveryCoordinator(
+                checkedPolicy, specificationNames);
+        return this;
+    }
+
+    @Override
     public TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         requestController.onControlledTermination(handler);
@@ -177,126 +201,32 @@ public class AiServiceTokenStream implements TokenStream {
         }
 
         ChatMemory temporaryMemory = initTemporaryMemory(context, messages);
-        if (modelRequestGate == null) {
-            startInitialModelRequest(messages, temporaryMemory, false);
-            return;
-        }
-        prepareInitialModelRequest(temporaryMemory);
+        requestOrchestrator = new GenerationAwareModelRequestOrchestrator(
+                requestController, modelRequestGate, continuationGate);
+        ModelRequestGate.Request gateRequest = modelRequestGate == null
+                ? null
+                : new ModelRequestGate.Request(
+                        memoryId,
+                        () -> activeMemory(temporaryMemory),
+                        toolSpecifications,
+                        continuationGate,
+                        List.of());
+        requestOrchestrator.submit(
+                GenerationAwareModelRequestOrchestrator.initial(
+                        gateRequest,
+                        () -> messages,
+                        this::notifyGateFailure,
+                        (preparedMessages, generation) ->
+                                prepareInitialModelRequest(
+                                        preparedMessages,
+                                        temporaryMemory,
+                                        generation)));
     }
 
-    private void prepareInitialModelRequest(ChatMemory temporaryMemory) {
-        CompletionStage<ModelRequestGate.Decision> preparation;
-        try {
-            preparation = modelRequestGate.prepare(new ModelRequestGate.Request(
-                    memoryId,
-                    () -> activeMemory(temporaryMemory),
-                    toolSpecifications,
-                    continuationGate,
-                    List.of()));
-        } catch (RuntimeException exception) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁准备失败", exception));
-            return;
-        }
-        if (preparation == null) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁未返回准备结果"));
-            return;
-        }
-        observeInitialPreparation(preparation, temporaryMemory);
-    }
-
-    private void observeInitialPreparation(
-            CompletionStage<ModelRequestGate.Decision> preparation,
-            ChatMemory temporaryMemory) {
-        CompletionStage<ModelRequestGate.DispatchStatus> dispatch;
-        try {
-            dispatch = modelRequestGate.onPrepared(
-                    preparation,
-                    (decision, failure) -> finishInitialPreparation(
-                            decision, failure, temporaryMemory));
-        } catch (RuntimeException exception) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁完成回调注册失败", exception));
-            return;
-        }
-        if (dispatch == null) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁未返回完成回调调度结果"));
-            return;
-        }
-        dispatch.whenComplete(this::finishInitialDispatch);
-    }
-
-    private void finishInitialDispatch(
-            ModelRequestGate.DispatchStatus status,
-            Throwable failure) {
-        if (failure != null) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁完成回调执行失败", failure));
-            return;
-        }
-        if (status != ModelRequestGate.DispatchStatus.DISPATCHED) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁完成回调调度失败"));
-        }
-    }
-
-    private void finishInitialPreparation(
-            ModelRequestGate.Decision decision,
-            Throwable failure,
-            ChatMemory temporaryMemory) {
-        if (failure != null) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁执行失败", failure));
-            return;
-        }
-        if (decision == null) {
-            deliverGateFailure(new IllegalStateException(
-                    "模型请求门禁返回空决策"));
-            return;
-        }
-        switch (decision.status()) {
-            case ALLOWED -> startAllowedInitialRequest(
-                    decision.messages(), temporaryMemory);
-            case CANCELLED -> requestController.cancel();
-            case COMPRESSION_FAILED, HARD_LIMIT_REJECTED ->
-                    deliverGateFailure(new ModelRequestGateException(
-                            ModelRequestGateException.Stage.INITIAL,
-                            decision.status(), decision.safeMessage()));
-        }
-    }
-
-    private void startAllowedInitialRequest(
-            List<ChatMessage> preparedMessages,
-            ChatMemory temporaryMemory) {
-        boolean accepted;
-        try {
-            accepted = continuationGate.tryRun(() -> {
-                try (var callback = requestController.enterCallback()) {
-                    if (callback != null) {
-                        startInitialModelRequest(
-                                preparedMessages, temporaryMemory, true);
-                    }
-                }
-            });
-        } catch (RuntimeException exception) {
-            deliverGateFailure(exception);
-            return;
-        }
-        if (!accepted) {
-            requestController.cancel();
-        }
-    }
-
-    private void startInitialModelRequest(
+    private Runnable prepareInitialModelRequest(
             List<ChatMessage> requestMessages,
             ChatMemory temporaryMemory,
-            boolean verifyGeneration) {
-        if (!requestController.isOpen()) {
-            return;
-        }
-
+            long requestGeneration) {
         ChatRequest chatRequest = ChatRequest.builder()
                 .messages(requestMessages)
                 .toolSpecifications(toolSpecifications)
@@ -307,14 +237,6 @@ public class AiServiceTokenStream implements TokenStream {
                 .chatRequest(chatRequest)
                 .build();
 
-        boolean requestAccepted = verifyGeneration
-                ? requestController.beforeModelRequest(0L)
-                : requestController.beforeModelRequest();
-        if (!requestAccepted) {
-            requestController.dispatchClaimedTermination();
-            return;
-        }
-        long requestGeneration = requestController.latestModelRequestGeneration();
         var handler = new AiServiceStreamingResponseHandler(
                 chatExecutor,
                 context,
@@ -335,20 +257,13 @@ public class AiServiceTokenStream implements TokenStream {
                 toolExecutionGuard,
                 requestGeneration,
                 modelRequestGate,
-                continuationGate);
+                continuationGate,
+                recoveryCoordinator);
 
-        if (contentsHandler != null && retrievedContents != null
-                && !requestController.runIfOpen(
-                () -> contentsHandler.accept(retrievedContents))) {
-            return;
+        if (contentsHandler != null && retrievedContents != null) {
+            contentsHandler.accept(retrievedContents);
         }
-
-        try {
-            requestController.startModelRequestIfOpen(
-                    () -> context.streamingChatModel.chat(chatRequest, handler));
-        } catch (RuntimeException exception) {
-            handler.onError(exception);
-        }
+        return () -> context.streamingChatModel.chat(chatRequest, handler);
     }
 
     private ChatMemory activeMemory(ChatMemory temporaryMemory) {
@@ -357,10 +272,7 @@ public class AiServiceTokenStream implements TokenStream {
                 : temporaryMemory;
     }
 
-    private void deliverGateFailure(Throwable failure) {
-        if (!requestController.completeNormally()) {
-            return;
-        }
+    private void notifyGateFailure(Throwable failure) {
         if (errorHandler == null) {
             LOG.warn("Ignored error", failure);
             return;

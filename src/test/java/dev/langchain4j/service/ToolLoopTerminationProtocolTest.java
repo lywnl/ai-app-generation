@@ -14,6 +14,7 @@ import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerm
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -226,18 +227,24 @@ class ToolLoopTerminationProtocolTest {
     @Test
     void blockingModelStartDoesNotBlockCancellation() throws Exception {
         StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
         java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         try {
-            var starting = executor.submit(() -> controller.startModelRequestIfOpen(() -> {
+            var starting = executor.submit(() -> {
+                if (!controller.isCurrentGeneration(generation)) {
+                    return false;
+                }
                 entered.countDown();
                 try {
                     release.await();
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                 }
-            }));
+                return true;
+            });
             assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
 
             var cancelling = executor.submit(controller::cancel);
@@ -253,35 +260,203 @@ class ToolLoopTerminationProtocolTest {
     }
 
     @Test
-    void ordinaryCommitIsLinearizedBeforeCancellation() throws Exception {
+    void 工具批次提交先赢后外部动作阻塞时取消不得等待controller锁()
+            throws Exception {
         StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+        assertTrue(controller.tryStartToolBatchWrite(batch));
+        assertTrue(controller.commitToolBatch(batch));
         java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         try {
-            var committing = executor.submit(() -> controller.runIfOpen(() -> {
+            var committing = executor.submit(() -> {
                 entered.countDown();
                 try {
                     release.await();
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                 }
-            }));
+                assertEquals(StreamingRequestController.ToolExecutionDecision
+                                .CANCELLED,
+                        controller.claimToolExecution(batch, 0));
+                StreamingRequestController.ToolResultClaim claim =
+                        controller.prepareToolResult(batch, 0, null);
+                return controller.commitToolResult(batch, 0, claim);
+            });
             assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
 
             var cancelling = executor.submit(controller::cancel);
 
-            assertThrows(java.util.concurrent.TimeoutException.class,
-                    () -> cancelling.get(100, java.util.concurrent.TimeUnit.MILLISECONDS),
-                    "取消不能越过已经进入提交门的 memory/SSE 动作");
-            release.countDown();
-            assertTrue(committing.get(1, java.util.concurrent.TimeUnit.SECONDS));
-            cancelling.get(1, java.util.concurrent.TimeUnit.SECONDS);
+            cancelling.get(200, java.util.concurrent.TimeUnit.MILLISECONDS);
             assertTrue(controller.isCancelled());
+            release.countDown();
+            assertEquals(StreamingRequestController.ToolResultDecision
+                            .CANCELLED,
+                    committing.get(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertFalse(controller.finishToolBatch(batch));
         } finally {
             release.countDown();
             executor.close();
         }
+    }
+
+    @Test
+    void 取消先赢时工具批次提交必须失败() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+
+        controller.cancel();
+
+        assertNull(controller.prepareToolBatch(generation, 1));
+    }
+
+    @Test
+    void 未取得写入许可的工具批次不得提交且取消必须回滚票据() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+
+        assertFalse(controller.commitToolBatch(batch));
+        controller.cancel();
+
+        assertFalse(controller.tryStartToolBatchWrite(batch));
+        assertFalse(controller.failPreparedToolBatch(batch));
+        assertEquals(StreamingRequestController.ToolExecutionDecision.REJECTED,
+                controller.claimToolExecution(batch, 0));
+    }
+
+    @Test
+    void 工具请求写入启动先赢后取消仍必须提交并闭合取消结果() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+        assertTrue(controller.tryStartToolBatchWrite(batch));
+
+        controller.cancel();
+
+        assertTrue(controller.commitToolBatch(batch));
+        assertEquals(StreamingRequestController.ToolExecutionDecision.CANCELLED,
+                controller.claimToolExecution(batch, 0));
+        StreamingRequestController.ToolResultClaim result =
+                controller.prepareToolResult(batch, 0, null);
+        assertEquals(StreamingRequestController.ToolResultDecision.CANCELLED,
+                result.decision());
+        assertEquals(StreamingRequestController.ToolResultDecision.CANCELLED,
+                controller.commitToolResult(batch, 0, result));
+        assertFalse(controller.finishToolBatch(batch));
+    }
+
+    @Test
+    void 工具请求写入启动后失败必须唯一回滚批次并收口普通错误() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+        assertTrue(controller.tryStartToolBatchWrite(batch));
+
+        assertTrue(controller.failPreparedToolBatch(batch));
+        assertFalse(controller.failPreparedToolBatch(batch));
+        assertFalse(controller.isOpen());
+        assertNull(controller.controlledTermination());
+    }
+
+    @Test
+    void 写入启动后取消先于写入失败不得覆盖取消终态() {
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger terminations = new AtomicInteger();
+        controller.onControlledTermination(ignored ->
+                terminations.incrementAndGet());
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+        assertTrue(controller.tryStartToolBatchWrite(batch));
+
+        controller.cancel();
+
+        assertFalse(controller.failPreparedToolBatch(batch));
+        assertTrue(controller.isCancelled());
+        assertEquals(CANCELLED, controller.controlledTermination().reason());
+        assertEquals(1, terminations.get());
+    }
+
+    @Test
+    void 恢复撤销必须释放未启动写入的旧工具批次() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertNotNull(controller.prepareToolBatch(sourceGeneration, 1));
+
+        assertEquals(StreamingRequestController.GenerationCancellation.CANCELLED,
+                controller.cancelGenerationForRecovery(sourceGeneration));
+        assertTrue(controller.beforeModelRequest(sourceGeneration));
+        long recoveryGeneration = controller.latestModelRequestGeneration();
+
+        assertNotNull(controller.prepareToolBatch(recoveryGeneration, 1),
+                "旧 PREPARED 票据不得阻塞恢复代的新工具批次");
+    }
+
+    @Test
+    void 工具结果提交先赢后取消必须保留真实结果决定() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+        assertTrue(controller.tryStartToolBatchWrite(batch));
+        assertTrue(controller.commitToolBatch(batch));
+        assertEquals(StreamingRequestController.ToolExecutionDecision.EXECUTE,
+                controller.claimToolExecution(batch, 0));
+
+        StreamingRequestController.ToolResultClaim claim =
+                controller.prepareToolResult(batch, 0, null);
+        StreamingRequestController.ToolResultDecision result =
+                controller.commitToolResult(batch, 0, claim);
+        controller.cancel();
+
+        assertEquals(StreamingRequestController.ToolResultDecision.PROVIDED,
+                result);
+        assertFalse(controller.finishToolBatch(batch));
+    }
+
+    @Test
+    void 工具结果预留先赢后取消必须保留预留的真实结果决定() {
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long generation = controller.latestModelRequestGeneration();
+        StreamingRequestController.ToolBatchTicket batch =
+                controller.prepareToolBatch(generation, 1);
+        assertNotNull(batch);
+        assertTrue(controller.tryStartToolBatchWrite(batch));
+        assertTrue(controller.commitToolBatch(batch));
+        assertEquals(StreamingRequestController.ToolExecutionDecision.EXECUTE,
+                controller.claimToolExecution(batch, 0));
+
+        StreamingRequestController.ToolResultClaim claim =
+                controller.prepareToolResult(batch, 0, null);
+        controller.cancel();
+        StreamingRequestController.ToolResultDecision result =
+                controller.commitToolResult(batch, 0, claim);
+
+        assertEquals(StreamingRequestController.ToolResultDecision.PROVIDED,
+                result);
+        assertFalse(controller.finishToolBatch(batch));
     }
 
     @Test

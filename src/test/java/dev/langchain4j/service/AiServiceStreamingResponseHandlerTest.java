@@ -23,6 +23,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -30,6 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AiServiceStreamingResponseHandlerTest {
+
+    private static final long SHORT_CANCEL_TIMEOUT_MILLIS = 250L;
 
     private static final String BUILD_SUCCESS = """
             {"protocol":"vue-build-tool/v1","invocationStatus":"COMPLETED",
@@ -60,6 +66,511 @@ class AiServiceStreamingResponseHandlerTest {
             "message":"工具内容超过本轮资源上限",
             "failureReason":"RESOURCE_LIMIT_EXCEEDED","content":null}
             """;
+
+    @Test
+    void partial用户回调阻塞时全局取消不得等待controller锁()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        CountDownLatch cancellationReturned = new CountDownLatch(1);
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context,
+                MessageWindowChatMemory.withMaxMessages(10),
+                ignored -> {
+                    handlerEntered.countDown();
+                    awaitLatch(releaseHandler, "等待释放 partial 用户回调超时");
+                },
+                response -> { },
+                error -> fail("不应触发错误回调", error),
+                controller);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> partial = executor.submit(
+                    () -> handler.onPartialResponse("阻塞正文"));
+            Future<?> cancellation = null;
+            boolean returnedQuickly;
+            try {
+                assertTrue(handlerEntered.await(2, TimeUnit.SECONDS),
+                        "partial 用户回调必须先进入阻塞点");
+                cancellation = executor.submit(() -> {
+                    controller.cancel();
+                    cancellationReturned.countDown();
+                });
+                returnedQuickly = cancellationReturned.await(
+                        SHORT_CANCEL_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            } finally {
+                releaseHandler.countDown();
+            }
+            partial.get(2, TimeUnit.SECONDS);
+            if (cancellation != null) {
+                cancellation.get(2, TimeUnit.SECONDS);
+            }
+
+            assertTrue(returnedQuickly,
+                    "cancel() 不得等待阻塞的 partial 用户回调");
+            assertTrue(controller.isCancelled());
+        }
+    }
+
+    @Test
+    void 取消先赢时partial回调不得获得提交许可() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger partials = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context,
+                MessageWindowChatMemory.withMaxMessages(10),
+                ignored -> partials.incrementAndGet(),
+                response -> { }, error -> fail("取消后不应报错", error),
+                controller);
+
+        controller.cancel();
+        handler.onPartialResponse("迟到正文");
+
+        assertEquals(0, partials.get());
+    }
+
+    @Test
+    void partial票据先赢后取消不得撤销已认领的用户回调()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger partials = new AtomicInteger();
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        AiServiceStreamingResponseHandler blockingHandler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10),
+                ignored -> {
+                    callbackEntered.countDown();
+                    awaitLatch(releaseCallback, "等待释放已认领 partial 超时");
+                    partials.incrementAndGet();
+                }, response -> { }, error -> fail("不应报错", error),
+                controller);
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> callback = threads.submit(() ->
+                    blockingHandler.onPartialResponse("已认领正文"));
+            assertTrue(callbackEntered.await(2, TimeUnit.SECONDS));
+            controller.cancel();
+            releaseCallback.countDown();
+            callback.get(2, TimeUnit.SECONDS);
+        } finally {
+            releaseCallback.countDown();
+        }
+
+        assertEquals(1, partials.get());
+    }
+
+    @Test
+    void executor认领先赢后取消必须立即返回并以取消结果闭合工具请求()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        RecordingChatMemory memory = new RecordingChatMemory(events);
+        CountDownLatch toolEntered = new CountDownLatch(1);
+        CountDownLatch releaseTool = new CountDownLatch(1);
+        CountDownLatch cancellationReturned = new CountDownLatch(1);
+        AiServiceStreamingResponseHandler handler = newHandler(
+                context,
+                Map.of("writeFile", (request, memoryId) -> {
+                    toolEntered.countDown();
+                    awaitLatch(releaseTool, "等待释放工具执行超时");
+                    return "工具结果";
+                }),
+                memory,
+                events,
+                controller,
+                ToolExecutionGuard.direct());
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> completion = executor.submit(() ->
+                    handler.onCompleteResponse(responseWithTools(
+                            tool("blocked-tool", "writeFile"))));
+            Future<?> cancellation = null;
+            boolean returnedQuickly;
+            try {
+                assertTrue(toolEntered.await(2, TimeUnit.SECONDS),
+                        "工具 executor 必须先进入阻塞点");
+                cancellation = executor.submit(() -> {
+                    controller.cancel();
+                    cancellationReturned.countDown();
+                });
+                returnedQuickly = cancellationReturned.await(
+                        SHORT_CANCEL_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            } finally {
+                releaseTool.countDown();
+            }
+            completion.get(2, TimeUnit.SECONDS);
+            if (cancellation != null) {
+                cancellation.get(2, TimeUnit.SECONDS);
+            }
+
+            assertTrue(returnedQuickly,
+                    "cancel() 不得等待阻塞的工具 executor");
+            assertTrue(controller.isCancelled());
+            assertEquals(2, memory.messages().size(),
+                    "已提交的 AI 工具请求必须由明确取消结果闭合");
+            ToolExecutionResultMessage cancellationResult =
+                    (ToolExecutionResultMessage) memory.messages().get(1);
+            assertTrue(cancellationResult.text().contains("请求已经取消"));
+            assertFalse(cancellationResult.text().contains("工具结果"));
+            assertEquals(List.of(
+                    "memory:add-tool-result:blocked-tool",
+                    "callback:on-tool-executed:writeFile"), events);
+            assertEquals(0, model.chatInvocations,
+                    "取消后的工具完成不得启动后继模型");
+        }
+    }
+
+    @Test
+    void 工具请求提交先赢但取消先于executor认领时必须跳过执行并闭合结果()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        List<ChatMessage> messages = new ArrayList<>();
+        ChatMemory cancellingMemory = new ChatMemory() {
+            @Override
+            public Object id() {
+                return "cancelling-memory";
+            }
+
+            @Override
+            public void add(ChatMessage message) {
+                messages.add(message);
+                if (message instanceof AiMessage aiMessage
+                        && aiMessage.hasToolExecutionRequests()) {
+                    controller.cancel();
+                }
+            }
+
+            @Override
+            public List<ChatMessage> messages() {
+                return List.copyOf(messages);
+            }
+
+            @Override
+            public void clear() {
+                messages.clear();
+            }
+        };
+        AtomicInteger executorCalls = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler = newHandler(
+                context,
+                Map.of("writeFile", (request, memoryId) -> {
+                    executorCalls.incrementAndGet();
+                    return "不应执行";
+                }),
+                cancellingMemory,
+                new ArrayList<>(),
+                controller,
+                ToolExecutionGuard.direct());
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("cancel-before-executor", "writeFile")));
+
+        assertEquals(0, executorCalls.get());
+        assertEquals(2, messages.size(),
+                "memory 提交先赢后即使取消，也必须补齐工具结果");
+        ToolExecutionResultMessage cancellation =
+                (ToolExecutionResultMessage) messages.get(1);
+        assertTrue(cancellation.text().contains("请求已经取消"));
+    }
+
+    @Test
+    void 取消先于工具请求写入确认时不得执行executor且必须闭合已写请求()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        List<ChatMessage> messages = new ArrayList<>();
+        ChatMemory cancellingMemory = new ChatMemory() {
+            @Override
+            public Object id() {
+                return "cancel-before-batch-confirm";
+            }
+
+            @Override
+            public void add(ChatMessage message) {
+                messages.add(message);
+                if (message instanceof AiMessage aiMessage
+                        && aiMessage.hasToolExecutionRequests()) {
+                    controller.cancel();
+                }
+            }
+
+            @Override
+            public List<ChatMessage> messages() {
+                return List.copyOf(messages);
+            }
+
+            @Override
+            public void clear() {
+                messages.clear();
+            }
+        };
+        AtomicInteger executorCalls = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler = newHandler(
+                context,
+                Map.of("writeFile", (request, memoryId) -> {
+                    executorCalls.incrementAndGet();
+                    return "不应执行";
+                }), cancellingMemory, new ArrayList<>(), controller,
+                ToolExecutionGuard.direct());
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("cancel-before-confirm", "writeFile")));
+
+        assertEquals(0, executorCalls.get());
+        assertEquals(2, messages.size(),
+                "请求消息已写入后即使取消先于 controller 确认，也必须补取消结果");
+        ToolExecutionResultMessage cancellation =
+                assertInstanceOf(ToolExecutionResultMessage.class,
+                        messages.get(1));
+        assertTrue(cancellation.text().contains("请求已经取消"));
+    }
+
+    @Test
+    void 工具批次预留后写入启动前取消先赢不得产生memory副作用()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        CountDownLatch memoryLookupStarted = new CountDownLatch(1);
+        CountDownLatch allowWriteStart = new CountDownLatch(1);
+        List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        RecordingChatMemory memory = new RecordingChatMemory(events);
+        java.lang.reflect.Field chatMemoryServiceField =
+                AiServiceContext.class.getDeclaredField("chatMemoryService");
+        chatMemoryServiceField.setAccessible(true);
+        Object blockingChatMemoryService = org.mockito.Mockito.mock(
+                chatMemoryServiceField.getType(), invocation -> {
+                    if (!invocation.getMethod().getName()
+                            .equals("getOrCreateChatMemory")) {
+                        return org.mockito.Mockito.RETURNS_DEFAULTS
+                                .answer(invocation);
+                    }
+                    memoryLookupStarted.countDown();
+                    awaitLatch(allowWriteStart,
+                            "等待释放工具请求写入启动点超时");
+                    return memory;
+                });
+        chatMemoryServiceField.set(context, blockingChatMemoryService);
+        AtomicInteger executorCalls = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler = newHandler(
+                context,
+                Map.of("writeFile", (request, memoryId) -> {
+                    executorCalls.incrementAndGet();
+                    return "不应执行";
+                }),
+                memory,
+                events,
+                controller,
+                ToolExecutionGuard.direct());
+
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> completion = threads.submit(() ->
+                    handler.onCompleteResponse(responseWithTools(
+                            tool("cancel-before-write-start", "writeFile"))));
+            try {
+                assertTrue(memoryLookupStarted.await(2, TimeUnit.SECONDS),
+                        "T1 必须已完成批次预留并进入 memory 获取");
+                controller.cancel();
+                assertTrue(controller.isCancelled(),
+                        "T2 的 cancel 必须在释放 T1 前完成返回");
+            } finally {
+                allowWriteStart.countDown();
+            }
+            completion.get(2, TimeUnit.SECONDS);
+        } finally {
+            allowWriteStart.countDown();
+        }
+
+        assertTrue(memory.messages().isEmpty(),
+                "取消先赢后不得开始写入 tool_calls 或配对结果");
+        assertEquals(0, executorCalls.get());
+        assertEquals(0, model.chatInvocations,
+                "取消先赢后不得启动后继模型");
+    }
+
+    @Test
+    void 多工具批次首个executor途中取消必须闭合全部请求且只执行首个()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        RecordingChatMemory memory = new RecordingChatMemory(events);
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        AtomicInteger executorCalls = new AtomicInteger();
+        ToolExecutor executor = (request, memoryId) -> {
+            executorCalls.incrementAndGet();
+            if (request.id().equals("first")) {
+                firstEntered.countDown();
+                awaitLatch(releaseFirst, "等待释放首个工具超时");
+            }
+            return "真实结果:" + request.id();
+        };
+        AiServiceStreamingResponseHandler handler = newHandler(
+                context,
+                Map.of("writeFile", executor,
+                        "readFile", executor,
+                        "deleteFile", executor),
+                memory, events, controller, ToolExecutionGuard.direct());
+
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> completion = threads.submit(() ->
+                    handler.onCompleteResponse(responseWithTools(
+                            tool("first", "writeFile"),
+                            tool("second", "readFile"),
+                            tool("third", "deleteFile"))));
+            assertTrue(firstEntered.await(2, TimeUnit.SECONDS));
+            controller.cancel();
+            releaseFirst.countDown();
+            completion.get(2, TimeUnit.SECONDS);
+        } finally {
+            releaseFirst.countDown();
+        }
+
+        assertEquals(1, executorCalls.get());
+        assertEquals(4, memory.messages().size(),
+                "一个工具请求消息必须由三个工具结果完整闭合");
+        assertEquals(List.of("first", "second", "third"),
+                memory.messages().subList(1, 4).stream()
+                        .map(ToolExecutionResultMessage.class::cast)
+                        .map(ToolExecutionResultMessage::id)
+                        .toList());
+        assertTrue(memory.messages().subList(1, 4).stream()
+                .map(ToolExecutionResultMessage.class::cast)
+                .allMatch(result -> result.text().contains("请求已经取消")));
+        assertEquals(0, model.chatInvocations);
+    }
+
+    @Test
+    void provider提前完整工具事件后取消不得产生孤立工具卡() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        AtomicInteger completeToolCallbacks = new AtomicInteger();
+        AtomicInteger executorCalls = new AtomicInteger();
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(10);
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partial -> { },
+                        (index, request) -> { },
+                        (index, request) ->
+                                completeToolCallbacks.incrementAndGet(),
+                        execution -> { }, response -> { },
+                        error -> fail("取消后不应报普通错误", error),
+                        memory, new TokenUsage(), List.of(),
+                        Map.of("writeFile", (request, memoryId) -> {
+                            executorCalls.incrementAndGet();
+                            return "不应执行";
+                        }), null, "method-1", controller,
+                        ToolExecutionGuard.direct());
+        ToolExecutionRequest request = tool("provider", "writeFile");
+
+        handler.onCompleteToolExecutionRequest(0, request);
+        controller.cancel();
+        handler.onCompleteResponse(responseWithTools(request));
+
+        assertEquals(0, completeToolCallbacks.get());
+        assertEquals(0, executorCalls.get());
+        assertTrue(memory.messages().isEmpty());
+    }
+
+    @Test
+    void 门禁prepare阻塞时取消不得等待controller锁()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        CountDownLatch gateEntered = new CountDownLatch(1);
+        CountDownLatch releaseGate = new CountDownLatch(1);
+        CountDownLatch cancellationReturned = new CountDownLatch(1);
+        ModelRequestGate gate = request -> {
+            gateEntered.countDown();
+            awaitLatch(releaseGate, "等待释放门禁 prepare 超时");
+            return CompletableFuture.completedFuture(
+                    allowed(request.latestMemory().get().messages()));
+        };
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context,
+                MessageWindowChatMemory.withMaxMessages(10),
+                controller,
+                gate,
+                action -> {
+                    action.run();
+                    return true;
+                },
+                error -> fail("取消后不应触发普通错误", error));
+
+        assertGateBlockDoesNotDelayCancellation(
+                handler, controller, gateEntered, releaseGate,
+                cancellationReturned);
+        assertEquals(0, model.chatInvocations,
+                "取消后门禁 prepare 结果不得启动后继模型");
+    }
+
+    @Test
+    void 门禁onPrepared阻塞并同步回调时取消不得等待controller锁()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        CountDownLatch gateEntered = new CountDownLatch(1);
+        CountDownLatch releaseGate = new CountDownLatch(1);
+        CountDownLatch cancellationReturned = new CountDownLatch(1);
+        ModelRequestGate gate = new ModelRequestGate() {
+            @Override
+            public java.util.concurrent.CompletionStage<Decision> prepare(
+                    Request request) {
+                return CompletableFuture.completedFuture(
+                        allowed(request.latestMemory().get().messages()));
+            }
+
+            @Override
+            public java.util.concurrent.CompletionStage<DispatchStatus> onPrepared(
+                    java.util.concurrent.CompletionStage<Decision> preparation,
+                    java.util.function.BiConsumer<Decision, Throwable> completion) {
+                gateEntered.countDown();
+                awaitLatch(releaseGate, "等待释放门禁 onPrepared 超时");
+                preparation.whenComplete(completion);
+                return CompletableFuture.completedFuture(
+                        DispatchStatus.DISPATCHED);
+            }
+        };
+        AiServiceStreamingResponseHandler handler = gatedHandler(
+                context,
+                MessageWindowChatMemory.withMaxMessages(10),
+                controller,
+                gate,
+                action -> {
+                    action.run();
+                    return true;
+                },
+                error -> fail("取消后不应触发普通错误", error));
+
+        assertGateBlockDoesNotDelayCancellation(
+                handler, controller, gateEntered, releaseGate,
+                cancellationReturned);
+        assertEquals(0, model.chatInvocations,
+                "取消后同步门禁回调不得启动后继模型");
+    }
 
     @Test
     void 工具续调用必须等待门禁完成且等待期间释放当前模型回调票据()
@@ -800,6 +1311,47 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void 旧代SDK六类迟到入口必须全部丢弃且不改变记忆或终态() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        long oldGeneration = controller.latestModelRequestGeneration();
+        assertTrue(controller.beforeModelRequest(oldGeneration));
+        AtomicInteger handleCancellations = new AtomicInteger();
+        AtomicInteger userCallbacks = new AtomicInteger();
+        RecordingChatMemory memory = new RecordingChatMemory(
+                new ArrayList<>());
+        AiServiceStreamingResponseHandler oldHandler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        ignored -> userCallbacks.incrementAndGet(),
+                        (index, request) -> userCallbacks.incrementAndGet(),
+                        (index, request) -> userCallbacks.incrementAndGet(),
+                        ignored -> userCallbacks.incrementAndGet(),
+                        ignored -> userCallbacks.incrementAndGet(),
+                        ignored -> userCallbacks.incrementAndGet(),
+                        memory, new TokenUsage(), List.of(),
+                        Map.of("writeFile", (request, memoryId) -> "不应执行"),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct(), oldGeneration);
+        ToolExecutionRequest lateTool = tool("late", "writeFile");
+
+        oldHandler.onRequestHandle(handleCancellations::incrementAndGet);
+        oldHandler.onPartialResponse("旧代正文");
+        oldHandler.onPartialToolExecutionRequest(0, lateTool);
+        oldHandler.onCompleteToolExecutionRequest(0, lateTool);
+        oldHandler.onCompleteResponse(responseWithTools(lateTool));
+        oldHandler.onError(new IllegalStateException("旧代错误"));
+
+        assertEquals(1, handleCancellations.get());
+        assertEquals(0, userCallbacks.get());
+        assertTrue(memory.messages().isEmpty());
+        assertTrue(controller.isOpen());
+        assertNull(controller.controlledTermination());
+    }
+
+    @Test
     void cancellationDuringGuardDropsLateToolResultAndReleasesCallback() throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
         context.streamingChatModel = new CapturingStreamingChatModel();
@@ -816,7 +1368,8 @@ class AiServiceStreamingResponseHandlerTest {
 
         handler.onCompleteResponse(responseWithTools(tool("write", "writeFile")));
 
-        assertEquals(2, memory.messages().size(), "AI 工具请求必须由取消结果配对闭合");
+        assertEquals(2, memory.messages().size(),
+                "AI 工具请求必须由取消结果配对闭合");
         ToolExecutionResultMessage cancellation =
                 (ToolExecutionResultMessage) memory.messages().get(1);
         assertTrue(cancellation.text().contains("请求已经取消"));
@@ -844,6 +1397,232 @@ class AiServiceStreamingResponseHandlerTest {
         handler.onCompleteToolExecutionRequest(0, tool("complete", "writeFile"));
 
         assertEquals(0, callbacks.get());
+    }
+
+    @Test
+    void 工具请求消息写入失败必须回滚批次并唯一报告错误() throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        IllegalStateException persistenceFailure =
+                new IllegalStateException("工具请求 memory 写入失败");
+        List<ChatMessage> messages = new ArrayList<>();
+        ChatMemory failingMemory = new ChatMemory() {
+            @Override
+            public Object id() {
+                return "failing-tool-request";
+            }
+
+            @Override
+            public void add(ChatMessage message) {
+                if (message instanceof AiMessage aiMessage
+                        && aiMessage.hasToolExecutionRequests()) {
+                    throw persistenceFailure;
+                }
+                messages.add(message);
+            }
+
+            @Override
+            public List<ChatMessage> messages() {
+                return List.copyOf(messages);
+            }
+
+            @Override
+            public void clear() {
+                messages.clear();
+            }
+        };
+        AtomicInteger executorCalls = new AtomicInteger();
+        AtomicInteger toolRequestCallbacks = new AtomicInteger();
+        AtomicInteger toolResultCallbacks = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        AtomicReference<Throwable> observedError = new AtomicReference<>();
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partial -> { }, (index, request) -> { },
+                        (index, request) ->
+                                toolRequestCallbacks.incrementAndGet(),
+                        execution -> toolResultCallbacks.incrementAndGet(),
+                        response -> fail("工具请求写入失败后不得普通完成"),
+                        error -> {
+                            observedError.set(error);
+                            errors.incrementAndGet();
+                        }, failingMemory, new TokenUsage(), List.of(),
+                        Map.of("writeFile", (request, memoryId) -> {
+                            executorCalls.incrementAndGet();
+                            return "不应执行";
+                        }), null, "method-1", controller,
+                        ToolExecutionGuard.direct());
+
+        assertDoesNotThrow(() -> handler.onCompleteResponse(
+                responseWithTools(tool("write", "writeFile"))));
+        handler.onError(new IllegalStateException("迟到错误"));
+
+        assertSame(persistenceFailure, observedError.get());
+        assertEquals(1, errors.get());
+        assertEquals(0, executorCalls.get());
+        assertEquals(0, toolRequestCallbacks.get());
+        assertEquals(0, toolResultCallbacks.get());
+        assertEquals(0, model.chatInvocations);
+        assertTrue(messages.isEmpty());
+        assertFalse(controller.isOpen());
+        assertNull(controller.controlledTermination());
+        assertNull(org.springframework.test.util.ReflectionTestUtils.getField(
+                controller, "activeToolBatch"),
+                "失败的 PREPARED 批次必须回滚，不能泄漏活动票据");
+    }
+
+    @Test
+    void 工具结果消息写入失败必须停止后续执行并唯一报告错误() throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller = new StreamingRequestController();
+        IllegalStateException persistenceFailure =
+                new IllegalStateException("工具结果 memory 写入失败");
+        List<ChatMessage> messages = new ArrayList<>();
+        ChatMemory failingMemory = new ChatMemory() {
+            @Override
+            public Object id() {
+                return "failing-tool-result";
+            }
+
+            @Override
+            public void add(ChatMessage message) {
+                if (message instanceof ToolExecutionResultMessage) {
+                    throw persistenceFailure;
+                }
+                messages.add(message);
+            }
+
+            @Override
+            public List<ChatMessage> messages() {
+                return List.copyOf(messages);
+            }
+
+            @Override
+            public void clear() {
+                messages.clear();
+            }
+        };
+        AtomicInteger executorCalls = new AtomicInteger();
+        AtomicInteger toolResultCallbacks = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        AtomicReference<Throwable> observedError = new AtomicReference<>();
+        ToolExecutor executor = (request, memoryId) -> {
+            executorCalls.incrementAndGet();
+            return "真实结果:" + request.id();
+        };
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partial -> { }, (index, request) -> { },
+                        (index, request) -> { },
+                        execution -> toolResultCallbacks.incrementAndGet(),
+                        response -> fail("工具结果写入失败后不得普通完成"),
+                        error -> {
+                            observedError.set(error);
+                            errors.incrementAndGet();
+                        }, failingMemory, new TokenUsage(), List.of(),
+                        Map.of("writeFile", executor, "readFile", executor),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct());
+
+        assertDoesNotThrow(() -> handler.onCompleteResponse(
+                responseWithTools(
+                        tool("first", "writeFile"),
+                        tool("second", "readFile"))));
+        handler.onError(new IllegalStateException("迟到错误"));
+
+        assertSame(persistenceFailure, observedError.get());
+        assertEquals(1, errors.get());
+        assertEquals(1, executorCalls.get(),
+                "首个结果无法持久化后不得继续制造第二个外部副作用");
+        assertEquals(0, toolResultCallbacks.get(),
+                "结果未持久化前不得通知用户结果回调");
+        assertEquals(0, model.chatInvocations);
+        assertEquals(1, messages.size(),
+                "通用 ChatMemory 无事务回滚能力，测试只允许保留已成功写入的请求消息");
+        assertTrue(messages.getFirst() instanceof AiMessage);
+        assertFalse(controller.isOpen());
+        assertNull(controller.controlledTermination());
+        assertNull(org.springframework.test.util.ReflectionTestUtils.getField(
+                controller, "activeToolBatch"),
+                "结果持久化失败必须回滚活动批次，不能伪装已提交");
+    }
+
+    @Test
+    void 受控终止工具结果写入失败不得发布原终态() throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        IllegalStateException persistenceFailure =
+                new IllegalStateException("终止结果 memory 写入失败");
+        List<ChatMessage> messages = new ArrayList<>();
+        ChatMemory failingMemory = new ChatMemory() {
+            @Override
+            public Object id() {
+                return "failing-terminal-result";
+            }
+
+            @Override
+            public void add(ChatMessage message) {
+                if (message instanceof ToolExecutionResultMessage) {
+                    throw persistenceFailure;
+                }
+                messages.add(message);
+            }
+
+            @Override
+            public List<ChatMessage> messages() {
+                return List.copyOf(messages);
+            }
+
+            @Override
+            public void clear() {
+                messages.clear();
+            }
+        };
+        AtomicInteger terminations = new AtomicInteger();
+        AtomicInteger finalPartials = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        AtomicReference<Throwable> observedError = new AtomicReference<>();
+        controller.onControlledTermination(ignored ->
+                terminations.incrementAndGet());
+        ToolExecutionGuard terminalGuard = (toolName, memoryId, action) ->
+                new ToolExecutionGuard.GuardedToolExecution(
+                        action.get(),
+                        new ToolLoopTerminationProtocol.ControlledTermination(
+                                ToolLoopTerminationProtocol
+                                        .ControlledTerminationReason.BUILD_SUCCEEDED,
+                                "项目已生成并构建成功。"));
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partial -> finalPartials.incrementAndGet(),
+                        (index, request) -> { }, (index, request) -> { },
+                        execution -> { }, response -> fail("不得普通完成"),
+                        error -> {
+                            observedError.set(error);
+                            errors.incrementAndGet();
+                        }, failingMemory, new TokenUsage(), List.of(),
+                        Map.of("buildProject", (request, memoryId) ->
+                                BUILD_SUCCESS), null, "method-1", controller,
+                        terminalGuard);
+
+        assertDoesNotThrow(() -> handler.onCompleteResponse(
+                responseWithTools(tool("build", "buildProject"))));
+
+        assertSame(persistenceFailure, observedError.get());
+        assertEquals(1, errors.get());
+        assertEquals(0, terminations.get(),
+                "终止结果未持久化时不得发布 BUILD_SUCCEEDED");
+        assertEquals(0, finalPartials.get(),
+                "终止结果未持久化时不得下发终态正文");
+        assertNull(controller.controlledTermination());
+        assertEquals(1, messages.size());
     }
 
     @Test
@@ -988,6 +1767,53 @@ class AiServiceStreamingResponseHandlerTest {
 
         assertEquals(1, completed.get());
         assertEquals(0, errors.get());
+    }
+
+    private void assertGateBlockDoesNotDelayCancellation(
+            AiServiceStreamingResponseHandler handler,
+            StreamingRequestController controller,
+            CountDownLatch gateEntered,
+            CountDownLatch releaseGate,
+            CountDownLatch cancellationReturned) throws Exception {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> completion = executor.submit(() ->
+                    handler.onCompleteResponse(responseWithTools(
+                            tool("blocked-gate-tool", "writeFile"))));
+            Future<?> cancellation = null;
+            boolean returnedQuickly;
+            try {
+                assertTrue(gateEntered.await(2, TimeUnit.SECONDS),
+                        "模型请求门禁必须先进入阻塞点");
+                cancellation = executor.submit(() -> {
+                    controller.cancel();
+                    cancellationReturned.countDown();
+                });
+                returnedQuickly = cancellationReturned.await(
+                        SHORT_CANCEL_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            } finally {
+                releaseGate.countDown();
+            }
+            completion.get(2, TimeUnit.SECONDS);
+            if (cancellation != null) {
+                cancellation.get(2, TimeUnit.SECONDS);
+            }
+
+            assertTrue(returnedQuickly,
+                    "cancel() 不得等待阻塞的模型请求门禁");
+            assertTrue(controller.isCancelled());
+        }
+    }
+
+    private static void awaitLatch(
+            CountDownLatch latch, String timeoutMessage) {
+        try {
+            if (!latch.await(2, TimeUnit.SECONDS)) {
+                fail(timeoutMessage);
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            fail(timeoutMessage, exception);
+        }
     }
 
     private void assertBuildResultModelCalls(String result, int expectedCalls) throws Exception {

@@ -32,6 +32,12 @@ public interface TokenStream {
         return this;
     }
 
+    /** 为当前流显式启用一次工具协议自校正。 */
+    default TokenStream toolProtocolRecoveryPolicy(
+            ToolProtocolRecoveryPolicy policy) {
+        return this;
+    }
+
     default TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         return this;

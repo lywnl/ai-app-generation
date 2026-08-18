@@ -421,33 +421,33 @@ record Request(
 立即返回正确的结构化工具调用或最终答复。
 ```
 
-- [ ] **步骤 6.1：先写完整恢复状态机红测**
+- [x] ✅ **步骤 6.1：先写完整恢复状态机红测**
 
   覆盖：首次重复块→撤销旧 generation→门禁→第二次模型请求；纠正代首个真实结构化 tool call 标记恢复；纠正代再次重复→`PROTOCOL_ERROR`；模型请求总数严格为 2；旧代晚到 partial/tool/complete/error 不改内存、不回调；门禁拒绝只失败一次；临时纠正指令和伪正文不入 memory；恢复响应 usage 正常累计。
 
-- [ ] **步骤 6.2：运行红测并保存证据**
+- [x] ✅ **步骤 6.2：运行红测并保存证据**
 
   ```bash
   bash mvnw -Dtest='AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest,StreamingRequestControllerRecoveryTest,ToolProtocolRecoveryDetectorTest' test \
     2>&1 | tee .codex/verification/task-6-red.log
   ```
 
-- [ ] **步骤 6.3：实现共享协调器和每代检测器**
+- [x] ✅ **步骤 6.3：实现共享协调器和每代检测器**
 
   一个 TokenStream 共享一个 `ToolProtocolRecoveryCoordinator`；每个 generation 创建独立 detector。正常流不改变；仅显式安装 policy 时启用。
 
-- [ ] **步骤 6.4：实现一次纠正与二次受控终止**
+- [x] ✅ **步骤 6.4：实现一次纠正与二次受控终止**
 
   退出旧 SDK callback ticket 后再提交异步门禁，禁止在模型回调线程内递归发请求。首次退化发 `STARTED`；真实结构化工具开始发一次 `RECOVERED`；门禁/调度/模型启动失败或二次退化发一次 `FAILED`，二次退化调用受控 `PROTOCOL_ERROR`，绝不 prepare 第三次请求。
 
-- [ ] **步骤 6.5：运行绿测与聚合协议测试**
+- [x] ✅ **步骤 6.5：运行绿测与聚合协议测试**
 
   ```bash
   bash mvnw -Dtest='AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest,StreamingRequestControllerRecoveryTest,ToolProtocolRecoveryDetectorTest,ToolLoopTerminationProtocolTest' test
   git diff --check
   ```
 
-- [ ] **步骤 6.6：独立审查、修复、勾选并中文提交**
+- [x] ✅ **步骤 6.6：独立审查、修复、勾选并中文提交**
 
   提交信息：`修复：自动校正伪工具调用并在二次失败时熔断`
 
