@@ -42,7 +42,7 @@
 | 后端全量、前端全量/type-check/build | 不适用 | 全量套件 | 后端最终新鲜验证 1555/0/0/7；7 个 skip 均为显式外部门禁。前端 7 文件 163/163，type-check、build 通过 | 通过 |
 | 跨层与 generation 重复回归 | 不适用 | 后端聚合 283 项、前端聚合 119 项 | `task-10-cross-layer-regression.log`、`task-10-cross-layer-frontend.log`、`task-10-generation-concurrency-10x.log` | 通过 |
 | Chrome 四个受控场景、真实压缩前后多轮及最终定向回归 | 不适用 | 前端状态机测试为辅助 | `tool-protocol-recovery-chrome-e2e.md`、原 9 张截图/脱敏指标；另补 checkpoint 与 `STARTED→RECOVERED→FAILED` 两张 Chrome 截图 | 通过 |
-| 不 push、不合并 master；提交信息全中文 | Git 操作约束 | `git status/log` | 最终提交后核对本地分支与上游状态 | 待最终提交 |
+| 不 push、不合并 master；提交信息全中文 | Git 操作约束 | `git status/log` | 核心收尾提交 `af5d07d` 为全中文；计划收尾使用全中文提交；分支和 worktree 保留，未 push、未合并 | 通过 |
 
 ## 完成判定映射
 

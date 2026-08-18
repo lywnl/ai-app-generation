@@ -657,7 +657,7 @@ toolProtocolRecovery: ToolProtocolRecoveryState
 
   对本计划每个显式要求建立“要求→代码/测试/运行证据”矩阵；证据不足不得勾选。确认 Git 工作树仅剩用户原有 `.codex/` 未跟踪材料，无遗漏生产修改。
 
-- [ ] **步骤 10.9：完成最终中文 Git 提交**
+- [x] ✅ **步骤 10.9：完成最终中文 Git 提交**
 
   显式暂存最终修复、测试和本计划；提交信息参考历史全中文格式，例如：
 
@@ -665,7 +665,7 @@ toolProtocolRecovery: ToolProtocolRecoveryState
   git commit -m "修复：收口记忆投影与工具协议恢复链路"
   ```
 
-- [ ] **步骤 10.10：输出交付结果**
+- [x] ✅ **步骤 10.10：输出交付结果**
 
   汇报：所有提交哈希、关键文件具体改动、后端/前端测试数字、迁移与探针结果、Chrome 四场景证据路径、未解决风险。未经允许不得 push 或合并 master。
 
@@ -685,4 +685,4 @@ toolProtocolRecovery: ToolProtocolRecoveryState
 - [x] ✅ 临时纠正指令经过 28K/30K/32K 门禁且不进入任何持久记忆。
 - [x] ✅ 前端严格校验可信恢复 SSE，提示优先级和真实输出后的隐藏行为正确。
 - [x] ✅ 后端全量、前端全量/type-check/build、生产探针、Chrome 四个确定性场景与真实后端多轮压缩后 E2E 均有新鲜通过证据。
-- [ ] 每个完成步骤已标 `✅`，每个阶段已完成全中文 Git 提交，且未 push。
+- [x] ✅ 每个完成步骤已标 `✅`，每个阶段已完成全中文 Git 提交，且未 push。
