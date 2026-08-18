@@ -476,33 +476,33 @@ record Request(
 - `RECOVERED`：`工具调用已校正，继续生成…`
 - `FAILED`：`工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。`
 
-- [ ] **步骤 7.1：先写可信事件与 Vue 接线红测**
+- [x] ✅ **步骤 7.1：先写可信事件与 Vue 接线红测**
 
   断言只有 Vue 在线流安装恢复策略；事件是 sealed 受信类型，不经过普通 content；SSE event 名、protocol、phase、固定文案精确；终态后迟到恢复事件丢弃；二次失败仍只由现有 Finalizer 产生一个 `PROTOCOL_ERROR`；done 唯一。
 
-- [ ] **步骤 7.2：运行红测并保存证据**
+- [x] ✅ **步骤 7.2：运行红测并保存证据**
 
   ```bash
   bash mvnw -Dtest='AiCodeGeneratorFacadeTest,VueTurnContextTest,TurnProgressChannelTest,JsonMessageStreamHandlerTest,AppControllerSseTest' test \
     2>&1 | tee .codex/verification/task-7-red.log
   ```
 
-- [ ] **步骤 7.3：实现受信控制面与 Vue-only 安装**
+- [x] ✅ **步骤 7.3：实现受信控制面与 Vue-only 安装**
 
   恢复事件通过回合 progress channel 与业务流合并，不进入 `JsonMessageStreamHandler` 的展示/记忆累积。Facade 从当前工具 executor 集合获得注册工具名，避免维护第二份白名单。
 
-- [ ] **步骤 7.4：增加 Prompt 辅助约束**
+- [x] ✅ **步骤 7.4：增加 Prompt 辅助约束**
 
   在 Vue system prompt 明确：普通正文中的工具名称、参数或执行结果不会被执行，需要操作工程文件时必须使用原生结构化工具调用。Prompt 只作辅助，不代替检测、隔离与熔断。
 
-- [ ] **步骤 7.5：运行绿测与终态竞争回归**
+- [x] ✅ **步骤 7.5：运行绿测与终态竞争回归**
 
   ```bash
   bash mvnw -Dtest='AiCodeGeneratorFacadeTest,VueTurnContextTest,TurnProgressChannelTest,JsonMessageStreamHandlerTest,VueTurnFinalizerTest,VueTurnCancellationCoordinatorTest,AppServiceImplVueTurnTest,AppControllerSseTest,VueProjectSystemPromptTest' test
   git diff --check
   ```
 
-- [ ] **步骤 7.6：独立审查、修复、勾选并中文提交**
+- [x] ✅ **步骤 7.6：独立审查、修复、勾选并中文提交**
 
   提交信息：`新增：向前端发布可信工具协议恢复状态`
 

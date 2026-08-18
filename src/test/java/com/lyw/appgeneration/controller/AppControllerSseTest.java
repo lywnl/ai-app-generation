@@ -2,6 +2,7 @@ package com.lyw.appgeneration.controller;
 
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
@@ -217,6 +218,59 @@ class AppControllerSseTest {
         assertEquals(1, events.stream()
                 .filter(event -> "done".equals(event.event())).count());
         assertEquals("done", events.getLast().event());
+    }
+
+    @Test
+    void toolProtocolRecoveryUsesExactTrustedSseContractAndKeepsOneDone() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(
+                        GenerationStreamEvent.toolProtocolRecovery(
+                                ToolProtocolRecoveryMessage.started()),
+                        GenerationStreamEvent.toolProtocolRecovery(
+                                ToolProtocolRecoveryMessage.recovered()),
+                        GenerationStreamEvent.content("正文")));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals("tool-protocol-recovery", events.get(0).event());
+        assertEquals("tool-protocol-recovery", events.get(1).event());
+        assertEquals(null, events.get(2).event());
+        assertEquals("done", events.get(3).event());
+        assertRecoveryEvent(events.get(0), "STARTED",
+                "正在校正工具调用，请稍候…");
+        assertRecoveryEvent(events.get(1), "RECOVERED",
+                "工具调用已校正，继续生成…");
+        assertEquals(1, events.stream()
+                .filter(event -> "done".equals(event.event())).count());
+    }
+
+    @Test
+    void recoveryFailedThenProtocolOutcomeStillHasOneOutcomeAndOneDone() {
+        VueTurnOutcome outcome = new VueTurnOutcome(
+                VueBuildPhase.GENERATING,
+                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                "工具协议异常", "可信协议异常投影", false,
+                "工具调用格式异常，请重新发送请求。");
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(
+                        GenerationStreamEvent.toolProtocolRecovery(
+                                ToolProtocolRecoveryMessage.started()),
+                        GenerationStreamEvent.toolProtocolRecovery(
+                                ToolProtocolRecoveryMessage.failed()),
+                        GenerationStreamEvent.turnOutcome(outcome)));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(1, events.stream()
+                .filter(event -> "turn-outcome".equals(event.event())).count());
+        assertEquals(1, events.stream()
+                .filter(event -> "done".equals(event.event())).count());
+        assertEquals(List.of("STARTED", "FAILED"), events.stream()
+                .filter(event -> "tool-protocol-recovery".equals(event.event()))
+                .map(event -> JSONUtil.parseObj(event.data()).getStr("phase"))
+                .toList());
     }
 
     @Test
@@ -554,6 +608,16 @@ class AppControllerSseTest {
         assertEquals(phase, data.getStr("phase"));
         assertEquals(message, data.getStr("message"));
         assertEquals(3, data.size(), "控制帧只能暴露受信协议字段");
+    }
+
+    private void assertRecoveryEvent(
+            ServerSentEvent<String> event, String phase, String message) {
+        assertEquals("tool-protocol-recovery", event.event());
+        var data = JSONUtil.parseObj(event.data());
+        assertEquals("tool-protocol-recovery/v1", data.getStr("protocol"));
+        assertEquals(phase, data.getStr("phase"));
+        assertEquals(message, data.getStr("message"));
+        assertEquals(3, data.size(), "恢复控制帧只能暴露受信协议字段");
     }
 
     private AppChatGenerateRequest requestBody() {

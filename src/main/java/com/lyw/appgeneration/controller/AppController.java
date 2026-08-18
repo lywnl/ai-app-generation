@@ -225,6 +225,18 @@ public class AppController {
                     .data(JSONUtil.toJsonStr(data))
                     .build();
         }
+        if (event instanceof GenerationStreamEvent.ToolProtocolRecovery
+                recoveryEvent) {
+            var recovery = recoveryEvent.message();
+            Map<String, Object> data = Map.of(
+                    "protocol", recovery.protocol(),
+                    "phase", recovery.phase().name(),
+                    "message", recovery.message());
+            return ServerSentEvent.<String>builder()
+                    .event("tool-protocol-recovery")
+                    .data(JSONUtil.toJsonStr(data))
+                    .build();
+        }
         if (event instanceof GenerationStreamEvent.TurnOutcome turnEvent) {
             var outcome = turnEvent.message();
             Map<String, Object> data = Map.of(

@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
@@ -9,7 +10,7 @@ import java.util.Objects;
 /** 将单个生成回合的受信进度事件合并进业务流。 */
 public final class TurnProgressChannel {
 
-    private final Sinks.Many<GenerationStreamEvent.ContextCompression> sink =
+    private final Sinks.Many<GenerationStreamEvent> sink =
             Sinks.many().unicast().onBackpressureBuffer();
     private boolean closed;
 
@@ -18,8 +19,16 @@ public final class TurnProgressChannel {
         if (closed) {
             return false;
         }
-        Sinks.EmitResult result = sink.tryEmitNext(
-                GenerationStreamEvent.contextCompression(message));
+        return publishEvent(GenerationStreamEvent.contextCompression(message));
+    }
+
+    synchronized boolean publish(ToolProtocolRecoveryMessage message) {
+        Objects.requireNonNull(message, "工具协议恢复进度不能为空");
+        return publishEvent(GenerationStreamEvent.toolProtocolRecovery(message));
+    }
+
+    private boolean publishEvent(GenerationStreamEvent event) {
+        Sinks.EmitResult result = sink.tryEmitNext(event);
         if (result.isSuccess()) {
             return true;
         }
@@ -35,8 +44,7 @@ public final class TurnProgressChannel {
             Flux<GenerationStreamEvent> business) {
         Objects.requireNonNull(business, "生成业务流不能为空");
         return Flux.defer(() -> {
-            Flux<GenerationStreamEvent> progress = sink.asFlux()
-                    .map(event -> event);
+            Flux<GenerationStreamEvent> progress = sink.asFlux();
             Flux<GenerationStreamEvent> guardedBusiness = Flux.defer(
                             () -> business)
                     .doFinally(ignored -> close());

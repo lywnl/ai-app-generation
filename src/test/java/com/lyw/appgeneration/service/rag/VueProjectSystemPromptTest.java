@@ -83,6 +83,15 @@ class VueProjectSystemPromptTest {
         assertTrue(prompt.contains("禁止并行调用工具"));
     }
 
+    @Test
+    void onlinePromptRequiresNativeStructuredToolCalls() throws IOException {
+        String prompt = readPrompt(PROMPT_RESOURCE);
+
+        assertTrue(prompt.contains("普通正文中的工具名称、参数或执行结果不会被系统执行"));
+        assertTrue(prompt.contains("必须使用系统提供的原生结构化工具调用"));
+        assertTrue(prompt.contains("不要在普通正文中模拟工具调用"));
+    }
+
     private String readPrompt() throws IOException {
         return readPrompt(PROMPT_RESOURCE);
     }

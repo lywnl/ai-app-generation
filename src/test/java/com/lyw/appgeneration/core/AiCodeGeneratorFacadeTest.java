@@ -12,6 +12,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
@@ -25,6 +26,7 @@ import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
+import dev.langchain4j.service.ToolProtocolRecoveryPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,6 +40,7 @@ import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -175,6 +178,69 @@ class AiCodeGeneratorFacadeTest {
                 RAW_QUERY, APP_ID, false, context, generatorService);
 
         verify(tokenStream).modelRequestGate(modelRequestGate, context);
+        var policyCaptor = org.mockito.ArgumentCaptor.forClass(
+                ToolProtocolRecoveryPolicy.class);
+        verify(tokenStream).toolProtocolRecoveryPolicy(policyCaptor.capture());
+        assertEquals(Set.of(
+                        "writeFile", "readFile", "modifyFile", "deleteFile",
+                        "readDir", "buildProject"),
+                policyCaptor.getValue().registeredToolNames());
+        context.closeResources();
+    }
+
+    @Test
+    void 普通在线生成不得安装Vue工具协议恢复策略() {
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
+                .thenReturn(tokenStream);
+        var context = newSimpleTurnContext("simple-no-tool-recovery");
+
+        facade.generateAndSaveCodeStream(
+                RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false,
+                context, generatorService);
+
+        verify(tokenStream, never()).toolProtocolRecoveryPolicy(any());
+        context.close();
+    }
+
+    @Test
+    void Vue恢复策略阶段必须进入受信进度通道且终态后迟到事件被丢弃() {
+        properties.setEnabled(false);
+        CapturingRecoveryTokenStream stream =
+                new CapturingRecoveryTokenStream();
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(stream);
+        VueTurnContext context = newVueTurnContext("trusted-recovery-progress");
+        Flux<GenerationStreamEvent> merged = context.mergeProgress(
+                facade.generateVueProjectStream(
+                                RAW_QUERY, APP_ID, false, context,
+                                generatorService)
+                        .thenMany(Flux.just(
+                                GenerationStreamEvent.content("正文"))));
+
+        stream.beforeStart = () -> {
+            stream.publish(ToolProtocolRecoveryPolicy.Phase.STARTED);
+            stream.publish(ToolProtocolRecoveryPolicy.Phase.RECOVERED);
+        };
+
+        StepVerifier.create(merged)
+                .assertNext(event -> assertEquals(
+                        com.lyw.appgeneration.ai.model.message
+                                .ToolProtocolRecoveryMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.ToolProtocolRecovery) event)
+                                .message().phase()))
+                .assertNext(event -> assertEquals(
+                        com.lyw.appgeneration.ai.model.message
+                                .ToolProtocolRecoveryMessage.Phase.RECOVERED,
+                        ((GenerationStreamEvent.ToolProtocolRecovery) event)
+                                .message().phase()))
+                .expectNext(GenerationStreamEvent.content("正文"))
+                .verifyComplete();
+
+        assertTrue(context.tryStartFinalization(
+                VueTurnContext.TerminalTrigger.COMPLETED));
+        stream.publish(ToolProtocolRecoveryPolicy.Phase.FAILED);
+        assertEquals(3, stream.publishedPhases.get(),
+                "策略监听器可收到迟到阶段，但回合通道必须负责丢弃");
         context.closeResources();
     }
 
@@ -1594,6 +1660,68 @@ class AiCodeGeneratorFacadeTest {
             CONTROLLED,
             LOOP_LIMIT,
             NONE
+        }
+    }
+
+    private static final class CapturingRecoveryTokenStream
+            implements TokenStream {
+
+        private Consumer<ToolProtocolRecoveryPolicy.Phase> recoveryListener;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeHandler;
+        private Runnable beforeStart = () -> { };
+        private final AtomicInteger publishedPhases = new AtomicInteger();
+
+        @Override
+        public TokenStream toolProtocolRecoveryPolicy(
+                ToolProtocolRecoveryPolicy policy) {
+            recoveryListener = phase -> {
+                publishedPhases.incrementAndGet();
+                try {
+                    var method = ToolProtocolRecoveryPolicy.class
+                            .getDeclaredMethod("publish",
+                                    ToolProtocolRecoveryPolicy.Phase.class);
+                    method.setAccessible(true);
+                    method.invoke(policy, phase);
+                } catch (ReflectiveOperationException exception) {
+                    throw new IllegalStateException(exception);
+                }
+            };
+            return this;
+        }
+
+        private void publish(ToolProtocolRecoveryPolicy.Phase phase) {
+            recoveryListener.accept(phase);
+        }
+
+        @Override public TokenStream onPartialResponse(Consumer<String> handler) { return this; }
+        @Override public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer, dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer, dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
+            return this;
+        }
+        @Override public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) { return this; }
+        @Override public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) { return this; }
+        @Override public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse> handler) {
+            completeHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onError(Consumer<Throwable> handler) { return this; }
+        @Override public TokenStream ignoreErrors() { return this; }
+
+        @Override
+        public void start() {
+            beforeStart.run();
+            completeHandler.accept(dev.langchain4j.model.chat.response
+                    .ChatResponse.builder()
+                    .aiMessage(dev.langchain4j.data.message.AiMessage.from(""))
+                    .build());
         }
     }
 

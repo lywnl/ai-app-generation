@@ -54,11 +54,14 @@ class TurnOutcomeMessageTest {
                 .collect(java.util.stream.Collectors.toSet());
 
         assertEquals(java.util.Set.of(
-                "Content", "TurnOutcome", "ContextCompression"), nestedTypes);
+                "Content", "TurnOutcome", "ContextCompression",
+                "ToolProtocolRecovery"), nestedTypes);
         assertNotNull(GenerationStreamEvent.class.getMethod(
                 "turnOutcome", VueTurnOutcome.class));
         assertNotNull(GenerationStreamEvent.class.getMethod(
                 "contextCompression", ContextCompressionMessage.class));
+        assertNotNull(GenerationStreamEvent.class.getMethod(
+                "toolProtocolRecovery", ToolProtocolRecoveryMessage.class));
     }
 
     @Test
@@ -78,5 +81,28 @@ class TurnOutcomeMessageTest {
                         ContextCompressionMessage.PROTOCOL,
                         ContextCompressionMessage.Phase.STARTED,
                         "内部异常详情"));
+    }
+
+    @Test
+    void toolProtocolRecoveryMessageMustExposeOnlyFixedTrustedContract() {
+        assertEquals("tool-protocol-recovery/v1",
+                ToolProtocolRecoveryMessage.started().protocol());
+        assertEquals("正在校正工具调用，请稍候…",
+                ToolProtocolRecoveryMessage.started().message());
+        assertEquals("工具调用已校正，继续生成…",
+                ToolProtocolRecoveryMessage.recovered().message());
+        assertEquals("工具调用格式异常，系统自动校正后仍未恢复。"
+                        + "本轮没有执行相关工具，请重新发送请求。",
+                ToolProtocolRecoveryMessage.failed().message());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ToolProtocolRecoveryMessage(
+                        "tool-protocol-recovery/v2",
+                        ToolProtocolRecoveryMessage.Phase.STARTED,
+                        "正在校正工具调用，请稍候…"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ToolProtocolRecoveryMessage(
+                        ToolProtocolRecoveryMessage.PROTOCOL,
+                        ToolProtocolRecoveryMessage.Phase.FAILED,
+                        "泄露内部异常"));
     }
 }

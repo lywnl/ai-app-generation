@@ -37,6 +37,7 @@ import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
+import dev.langchain4j.service.ToolProtocolRecoveryPolicy;
 import dev.langchain4j.service.tool.ToolExecution;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -288,7 +289,24 @@ public class AiCodeGeneratorFacade {
                 () -> generatorService.generateVueProjectCodeStream(
                         appId, request));
         tokenStream.modelRequestGate(modelRequestGate, turnContext);
+        tokenStream.toolProtocolRecoveryPolicy(new ToolProtocolRecoveryPolicy(
+                Set.copyOf(VueToolNames.ONLINE),
+                phase -> turnContext.tryRunCallback(() ->
+                        turnContext.publishToolProtocolRecovery(
+                                recoveryMessage(phase)))));
         return processOnlineTokenStream(tokenStream, turnContext);
+    }
+
+    private com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage
+            recoveryMessage(ToolProtocolRecoveryPolicy.Phase phase) {
+        return switch (phase) {
+            case STARTED -> com.lyw.appgeneration.ai.model.message
+                    .ToolProtocolRecoveryMessage.started();
+            case RECOVERED -> com.lyw.appgeneration.ai.model.message
+                    .ToolProtocolRecoveryMessage.recovered();
+            case FAILED -> com.lyw.appgeneration.ai.model.message
+                    .ToolProtocolRecoveryMessage.failed();
+        };
     }
 
     /**

@@ -101,6 +101,36 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
+    void 恢复控制事件不经过Json正文处理也不进入展示或记忆投影() {
+        VueTurnContext context = context(
+                "trusted-progress-isolated", VueBuildPhase.GENERATING);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertFalse(requested.displayAiText().contains("正在校正工具调用"));
+            assertFalse(requested.memoryAiText().contains("正在校正工具调用"));
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        Flux<GenerationStreamEvent> business = handler.handle(
+                Flux.just("{\"type\":\"ai_response\",\"data\":\"正文\"}"),
+                context);
+        Flux<GenerationStreamEvent> merged = context.mergeProgress(
+                Flux.defer(() -> {
+                    context.publishToolProtocolRecovery(
+                            com.lyw.appgeneration.ai.model.message
+                                    .ToolProtocolRecoveryMessage.started());
+                    return business;
+                }));
+
+        List<GenerationStreamEvent> events = merged.collectList().block();
+
+        assertTrue(events.getFirst()
+                instanceof GenerationStreamEvent.ToolProtocolRecovery);
+        assertEquals("正文", contentText(events.get(1)));
+        assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                outcomeOf(events.getLast()).outcome());
+    }
+
+    @Test
     void successfulOutcomeThroughSseFanOutDoesNotDropLeaseErrors() {
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         String turnId = "turn-success-sse-fan-out";

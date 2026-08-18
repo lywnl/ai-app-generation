@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
@@ -68,6 +69,23 @@ class VueTurnContextTest {
                     VueTurnContext.TerminalTrigger.COMPLETED));
             context.tryRun(() -> context.publishContextCompression(
                     ContextCompressionMessage.completed()));
+            return Flux.just(GenerationStreamEvent.content("终态正文"));
+        });
+
+        StepVerifier.create(context.mergeProgress(business))
+                .expectNext(GenerationStreamEvent.content("终态正文"))
+                .verifyComplete();
+        context.closeResources();
+    }
+
+    @Test
+    void Vue终态后必须静默丢弃迟到工具协议恢复事件() {
+        VueTurnContext context = context("terminal-before-tool-recovery");
+        Flux<GenerationStreamEvent> business = Flux.defer(() -> {
+            assertTrue(context.tryStartFinalization(
+                    VueTurnContext.TerminalTrigger.COMPLETED));
+            context.publishToolProtocolRecovery(
+                    ToolProtocolRecoveryMessage.failed());
             return Flux.just(GenerationStreamEvent.content("终态正文"));
         });
 

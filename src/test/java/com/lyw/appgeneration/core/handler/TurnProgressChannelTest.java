@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
@@ -49,6 +50,28 @@ class TurnProgressChannelTest {
                 .verify();
 
         assertFalse(channel.publish(ContextCompressionMessage.completed()));
+    }
+
+    @Test
+    void 恢复事件必须作为受信控制事件合流而非普通正文() {
+        TurnProgressChannel channel = new TurnProgressChannel();
+        Flux<GenerationStreamEvent> business = Flux.defer(() -> {
+            assertTrue(channel.publish(ToolProtocolRecoveryMessage.started()));
+            assertTrue(channel.publish(ToolProtocolRecoveryMessage.recovered()));
+            return Flux.just(GenerationStreamEvent.content("正文"));
+        });
+
+        StepVerifier.create(channel.mergeWith(business))
+                .assertNext(event -> assertEquals(
+                        ToolProtocolRecoveryMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.ToolProtocolRecovery) event)
+                                .message().phase()))
+                .assertNext(event -> assertEquals(
+                        ToolProtocolRecoveryMessage.Phase.RECOVERED,
+                        ((GenerationStreamEvent.ToolProtocolRecovery) event)
+                                .message().phase()))
+                .expectNext(GenerationStreamEvent.content("正文"))
+                .verifyComplete();
     }
 
     @Test

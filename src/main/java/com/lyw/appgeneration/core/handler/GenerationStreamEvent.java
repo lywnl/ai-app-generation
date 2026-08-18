@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
+import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 
 import java.util.Objects;
 
@@ -27,6 +28,13 @@ public sealed interface GenerationStreamEvent {
         }
     }
 
+    record ToolProtocolRecovery(ToolProtocolRecoveryMessage message)
+            implements GenerationStreamEvent {
+        public ToolProtocolRecovery {
+            Objects.requireNonNull(message, "工具协议恢复控制消息不能为空");
+        }
+    }
+
     static Content content(String text) {
         return new Content(text);
     }
@@ -39,5 +47,10 @@ public sealed interface GenerationStreamEvent {
     static ContextCompression contextCompression(
             ContextCompressionMessage message) {
         return new ContextCompression(message);
+    }
+
+    static ToolProtocolRecovery toolProtocolRecovery(
+            ToolProtocolRecoveryMessage message) {
+        return new ToolProtocolRecovery(message);
     }
 }
