@@ -69,7 +69,9 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     public boolean requestCancellation(
             VueTurnContext context, Supplier<String> canonicalPrefix) {
         return requestCancellation(context, canonicalPrefix,
-                () -> VueTurnFinalizer.CANCELLED_MESSAGE);
+                () -> VueTurnMemoryProjection.project(
+                        java.util.List.of(),
+                        VueTurnOutcome.TurnOutcomeType.CANCELLED));
     }
 
     public boolean requestCancellation(
@@ -84,7 +86,9 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     public Optional<Mono<VueTurnFinalizer.FinalizationResult>> requestTimeout(
             VueTurnContext context, Supplier<String> canonicalPrefix) {
         return requestTimeout(context, canonicalPrefix,
-                () -> JsonMessageStreamHandler.TIMEOUT_MESSAGE);
+                () -> VueTurnMemoryProjection.project(
+                        java.util.List.of(),
+                        VueTurnOutcome.TurnOutcomeType.TIMED_OUT));
     }
 
     public Optional<Mono<VueTurnFinalizer.FinalizationResult>> requestTimeout(
@@ -245,7 +249,9 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                     VueTurnContext.DeleteTakeoverRequest request,
                     Supplier<String> canonicalPrefix) {
         return requestDeleteTakeover(context, request, canonicalPrefix,
-                () -> VueTurnFinalizer.CANCELLED_MESSAGE);
+                () -> VueTurnMemoryProjection.project(
+                        java.util.List.of(),
+                        VueTurnOutcome.TurnOutcomeType.CANCELLED));
     }
 
     public Optional<Mono<VueTurnFinalizer.FinalizationResult>>

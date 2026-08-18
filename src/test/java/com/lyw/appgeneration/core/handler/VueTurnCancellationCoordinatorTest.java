@@ -18,6 +18,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -71,6 +72,9 @@ class VueTurnCancellationCoordinatorTest {
             VueTurnOutcome outcome = invocation.getArgument(1);
             assertEquals(VueTurnOutcome.TurnOutcomeType.CANCELLED, outcome.outcome());
             assertEquals("已生成部分\n\n本次生成已取消。", outcome.displayAiText());
+            assertEquals(VueTurnMemoryProjection.project(
+                            List.of(), VueTurnOutcome.TurnOutcomeType.CANCELLED),
+                    outcome.memoryAiText());
             finalized.countDown();
             context.closeResources();
             return new VueTurnFinalizer.FinalizationResult(outcome, true);

@@ -70,7 +70,8 @@ public class FileModifyTool extends BaseTool {
                 reservation.commit();
             }
             return result(FileToolResult.applied(
-                    getToolName(), relativeFilePath, true, "文件修改成功"));
+                    getToolName(), projectPathResolver.stateKey(appId, path),
+                    true, "文件修改成功"));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
             return FileToolProtocolSupport.rejected(
                     getToolName(), relativeFilePath, exception);

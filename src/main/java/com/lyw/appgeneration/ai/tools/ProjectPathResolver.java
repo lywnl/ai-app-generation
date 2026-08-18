@@ -45,7 +45,17 @@ final class ProjectPathResolver {
         Path candidate = resolveRelativePath(projectRoot, relativePath, false);
         Path realProjectRoot = createAndResolveProjectRoot(projectRoot);
         validateExistingParents(candidate, projectRoot, realProjectRoot);
-        return new ResolvedProjectPath(candidate, projectRoot.relativize(candidate).toString());
+        return new ResolvedProjectPath(
+                candidate, normalizedRelativePath(projectRoot, candidate));
+    }
+
+    String stateKey(Long appId, Path path) throws UnsafeProjectPathException {
+        Path root = projectRoot(appId);
+        Path normalized = path.toAbsolutePath().normalize();
+        if (!normalized.startsWith(root) || normalized.equals(root)) {
+            throw new UnsafeProjectPathException("文件路径必须位于项目根目录内");
+        }
+        return normalizedRelativePath(root, normalized);
     }
 
     void forEachSafeDirectoryEntry(
@@ -126,6 +136,7 @@ final class ProjectPathResolver {
         if (allowEmpty && relativePath.isBlank()) {
             return projectRoot;
         }
+        rejectAmbiguousPathText(relativePath);
         try {
             Path path = Path.of(relativePath);
             if (path.isAbsolute()) {
@@ -141,6 +152,18 @@ final class ProjectPathResolver {
             throw exception;
         } catch (RuntimeException exception) {
             throw unsafe("相对路径格式无效", exception);
+        }
+    }
+
+    private void rejectAmbiguousPathText(String relativePath)
+            throws UnsafeProjectPathException {
+        boolean controlCharacter = relativePath.codePoints().anyMatch(codePoint ->
+                codePoint <= 0x1F || codePoint >= 0x7F && codePoint <= 0x9F
+                        || codePoint == 0x2028 || codePoint == 0x2029);
+        if (controlCharacter || relativePath.indexOf('\\') >= 0
+                || relativePath.contains("//") || relativePath.endsWith("/")
+                || ".".equals(relativePath)) {
+            throw new UnsafeProjectPathException("相对路径包含歧义或控制字符");
         }
     }
 

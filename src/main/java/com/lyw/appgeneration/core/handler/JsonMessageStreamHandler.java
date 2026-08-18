@@ -320,13 +320,12 @@ public final class JsonMessageStreamHandler {
             case TOOL_EXECUTED -> {
                 ToolExecutedMessage executed = JSONUtil.toBean(
                         chunk, ToolExecutedMessage.class);
+                observeTrustedFact(executed, facts);
                 JSONObject arguments = JSONUtil.parseObj(executed.getArguments());
                 BaseTool tool = toolManager.getTool(executed.getName());
                 String markdown = tool.generateToolExecutedResult(
                         arguments, executed.getResult());
                 String output = String.format("\n\n%s\n\n", markdown);
-                VueToolExecutionFact.parse(
-                        executed.getName(), executed.getResult()).ifPresent(facts::add);
                 FileToolBudgetGuard.AppendDecision decision = display.append(output);
                 recordResourceLimit(context, decision);
                 yield decision.resourceLimitExceeded()
@@ -338,6 +337,12 @@ public final class JsonMessageStreamHandler {
             case TOOL_ARGUMENT, TOOL_ARGUMENT_DELTA -> Flux.just(chunk);
             case TURN_OUTCOME -> Flux.empty();
         };
+    }
+
+    private void observeTrustedFact(
+            ToolExecutedMessage executed, List<VueToolExecutionFact> facts) {
+        VueToolExecutionFact.parse(executed.getName(), executed.getResult())
+                .ifPresent(facts::add);
     }
 
     private Flux<String> resourceLimitAfter(String acceptedPrefix) {

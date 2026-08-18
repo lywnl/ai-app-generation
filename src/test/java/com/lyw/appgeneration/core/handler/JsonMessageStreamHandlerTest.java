@@ -316,6 +316,66 @@ class JsonMessageStreamHandlerTest {
         assertFalse(expectedMemory.contains("diff"));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"null-arguments", "malformed-arguments", "missing-tool"})
+    void 工具展示失败时MySQL和L0仍保留先观察到的真实事实(String failureMode) {
+        VueTurnContext context = context(
+                "turn-observe-before-display-" + failureMode,
+                VueBuildPhase.GENERATING);
+        BaseTool writeTool = mock(BaseTool.class);
+        String writeResult = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"writeFile\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":true,"
+                + "\"message\":\"已写入\",\"failureReason\":null,"
+                + "\"content\":null}";
+        String arguments = switch (failureMode) {
+            case "null-arguments" -> null;
+            case "malformed-arguments" -> "{";
+            case "missing-tool" -> "{}";
+            default -> throw new IllegalArgumentException(failureMode);
+        };
+        if ("null-arguments".equals(failureMode)) {
+            when(toolManager.getTool("writeFile")).thenReturn(writeTool);
+            when(writeTool.generateToolExecutedResult(
+                    any(JSONObject.class), eq(writeResult)))
+                    .thenThrow(new IllegalStateException("展示渲染失败"));
+        }
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(history.addAiMessageAndReturn(
+                anyLong(), any(), any(), any(), anyLong()))
+                .thenReturn(ChatHistory.builder().id(902L).build());
+        when(collapser.collapseLastTurn(anyLong(), any()))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(
+                        ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of()));
+        VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
+                history, collapser, mock(MemorySummaryService.class),
+                mock(UserMemoryService.class), mock(AiGeneratorServiceFactory.class),
+                new AppDataLifecycleFence(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()),
+                new FileToolBudgetGuard());
+        JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
+                toolManager, realFinalizer, cancellationCoordinator);
+        String expectedMemory = """
+                Vue 项目回合结果：系统错误
+                实际执行工具：writeFile
+                实际变更文件：src/App.vue
+                真实构建次数：0""";
+        String executed = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "write-display-failure")
+                .set("name", "writeFile")
+                .set("arguments", arguments)
+                .set("result", writeResult));
+
+        realHandler.handle(Flux.just(executed), context).collectList().block();
+
+        verify(history).addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE,
+                expectedMemory, ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
+        verify(collapser).collapseLastTurn(APP_ID, expectedMemory);
+    }
+
     @Test
     void buildToolRequestReachesRealtimeClientBeforeDisplayText() {
         VueTurnContext context = context(

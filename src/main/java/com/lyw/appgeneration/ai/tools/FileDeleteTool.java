@@ -56,9 +56,10 @@ public class FileDeleteTool extends BaseTool {
                 return result(FileToolResult.rejected(
                         getToolName(), relativeFilePath, "不允许删除项目关键文件"));
             }
+            String stateKey = projectPathResolver.stateKey(appId, path);
             Files.delete(path);
             return result(FileToolResult.applied(
-                    getToolName(), relativeFilePath, true, "文件删除成功"));
+                    getToolName(), stateKey, true, "文件删除成功"));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
             return FileToolProtocolSupport.rejected(
                     getToolName(), relativeFilePath, exception);

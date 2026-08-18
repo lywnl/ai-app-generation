@@ -33,7 +33,8 @@ public final class VueTurnMemoryProjection {
             }
             toolNames.add(fact.toolName());
             if (fact.changedRelativePath() != null) {
-                changedPaths.add(fact.changedRelativePath());
+                changedPaths.add(requireSingleLinePath(
+                        fact.changedRelativePath()));
             }
             if (fact.buildAttempt() != null) {
                 buildAttempts = Math.max(buildAttempts, fact.buildAttempt());
@@ -70,5 +71,18 @@ public final class VueTurnMemoryProjection {
 
     private static String joinOrNone(Set<String> values) {
         return values.isEmpty() ? "无" : String.join("、", values);
+    }
+
+    private static String requireSingleLinePath(String path) {
+        boolean unsafe = path.isBlank() || ".".equals(path)
+                || path.indexOf('\\') >= 0 || path.contains("//")
+                || path.endsWith("/")
+                || path.codePoints().anyMatch(codePoint ->
+                codePoint <= 0x1F || codePoint >= 0x7F && codePoint <= 0x9F
+                        || codePoint == 0x2028 || codePoint == 0x2029);
+        if (unsafe) {
+            throw new IllegalArgumentException("变更文件路径不满足单行规范");
+        }
+        return path;
     }
 }

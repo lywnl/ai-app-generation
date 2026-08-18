@@ -2,8 +2,9 @@ package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONConfig;
-import cn.hutool.json.JSONNull;
 import cn.hutool.json.JSONUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.builder.VueBuildFailureKind;
 
@@ -43,12 +44,10 @@ final class BuildProjectProtocolSupport {
     }
 
     static BuildProjectToolResult parse(String rawResult) {
-        StrictToolJsonSupport.requireObject(rawResult);
-        JSONObject json = JSONUtil.parseObj(
-                rawResult, JSONConfig.create()
-                        .setCheckDuplicate(true)
-                        .setIgnoreNullValue(false));
-        if (!PROTOCOL_FIELDS.equals(json.keySet())) {
+        ObjectNode json = StrictToolJsonSupport.parseObject(rawResult);
+        if (!PROTOCOL_FIELDS.equals(json.properties().stream()
+                .map(java.util.Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toSet()))) {
             throw new IllegalArgumentException("构建工具协议字段不完整或包含未知字段");
         }
         return new BuildProjectToolResult(
@@ -72,45 +71,45 @@ final class BuildProjectProtocolSupport {
                 nullableString(json, "finalResponse"));
     }
 
-    private static String requiredString(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (value instanceof String text) {
-            return text;
+    private static String requiredString(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value != null && value.isTextual()) {
+            return value.textValue();
         }
         throw new IllegalArgumentException("构建工具协议字段必须是字符串: " + field);
     }
 
-    private static String nullableString(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (value == null || value == JSONNull.NULL) {
+    private static String nullableString(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value == null || value.isNull()) {
             return null;
         }
-        if (value instanceof String text) {
-            return text;
+        if (value.isTextual()) {
+            return value.textValue();
         }
         throw new IllegalArgumentException("构建工具协议字段必须是字符串或 null: " + field);
     }
 
-    private static boolean requiredBoolean(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (value instanceof Boolean bool) {
-            return bool;
+    private static boolean requiredBoolean(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value != null && value.isBoolean()) {
+            return value.booleanValue();
         }
         throw new IllegalArgumentException("构建工具协议字段必须是布尔值: " + field);
     }
 
-    private static Boolean nullableBoolean(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (value == null || value == JSONNull.NULL) {
+    private static Boolean nullableBoolean(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value == null || value.isNull()) {
             return null;
         }
-        if (value instanceof Boolean bool) {
-            return bool;
+        if (value.isBoolean()) {
+            return value.booleanValue();
         }
         throw new IllegalArgumentException("构建工具协议字段必须是布尔值或 null: " + field);
     }
 
-    private static int requiredInteger(JSONObject json, String field) {
+    private static int requiredInteger(ObjectNode json, String field) {
         Integer value = nullableInteger(json, field);
         if (value == null) {
             throw new IllegalArgumentException("构建工具协议字段不能为空: " + field);
@@ -118,16 +117,13 @@ final class BuildProjectProtocolSupport {
         return value;
     }
 
-    private static Integer nullableInteger(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (value == null || value == JSONNull.NULL) {
+    private static Integer nullableInteger(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value == null || value.isNull()) {
             return null;
         }
-        if (value instanceof Number number
-                && number.longValue() == number.doubleValue()
-                && number.longValue() >= Integer.MIN_VALUE
-                && number.longValue() <= Integer.MAX_VALUE) {
-            return number.intValue();
+        if (value.isIntegralNumber() && value.canConvertToInt()) {
+            return value.intValue();
         }
         throw new IllegalArgumentException("构建工具协议字段必须是整数或 null: " + field);
     }

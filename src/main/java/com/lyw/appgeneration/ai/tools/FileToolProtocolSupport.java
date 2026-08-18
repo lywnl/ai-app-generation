@@ -4,6 +4,8 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONConfig;
 import cn.hutool.json.JSONNull;
 import cn.hutool.json.JSONUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.nio.file.Path;
 import java.util.Objects;
@@ -70,9 +72,11 @@ final class FileToolProtocolSupport {
         if (!operation.equals(result.operation())) {
             throw new IllegalArgumentException("工具结果操作名不匹配");
         }
-        String normalizedPath = normalizePath(result.relativePath());
-        if (result.changed()
-                && (normalizedPath == null || normalizedPath.isBlank())) {
+        if (!result.changed()) {
+            return result;
+        }
+        String normalizedPath = normalizeChangedPath(result.relativePath());
+        if (normalizedPath == null || normalizedPath.isBlank()) {
             throw new IllegalArgumentException("变更工具结果必须包含相对路径");
         }
         return new FileToolResult(
@@ -84,19 +88,14 @@ final class FileToolProtocolSupport {
     private static FileToolResult parseStrict(
             String rawResult, String operation, String relativePath) {
         FileToolResult result = parseTrustedResult(rawResult, operation);
-        if (!Objects.equals(normalizePath(relativePath),
-                normalizePath(result.relativePath()))) {
+        if (!pathsMatch(relativePath, result)) {
             throw new IllegalArgumentException("工具结果路径不匹配");
         }
         return result;
     }
 
     private static FileToolResult decodeStrict(String rawResult) {
-        StrictToolJsonSupport.requireObject(rawResult);
-        JSONObject json = JSONUtil.parseObj(
-                rawResult, JSONConfig.create()
-                        .setCheckDuplicate(true)
-                        .setIgnoreNullValue(false));
+        ObjectNode json = StrictToolJsonSupport.parseObject(rawResult);
         validateFields(json);
         return new FileToolResult(
                 requiredString(json, "protocol"),
@@ -112,67 +111,69 @@ final class FileToolProtocolSupport {
 
     static boolean isAppliedMutation(String rawResult, String operation) {
         try {
-            StrictToolJsonSupport.requireObject(rawResult);
-            JSONObject json = JSONUtil.parseObj(
-                    rawResult, JSONConfig.create()
-                            .setCheckDuplicate(true)
-                            .setIgnoreNullValue(false));
-            validateFields(json);
-            FileToolResult result = new FileToolResult(
-                    requiredString(json, "protocol"),
-                    requiredString(json, "operation"),
-                    FileToolResult.FileToolStatus.valueOf(
-                            requiredString(json, "status")),
-                    nullableString(json, "relativePath"),
-                    requiredBoolean(json, "changed"),
-                    requiredString(json, "message"),
-                    nullableString(json, "failureReason"),
-                    nullableString(json, "content"));
-            return operation.equals(result.operation())
-                    && result.status() == FileToolResult.FileToolStatus.APPLIED
+            FileToolResult result = parseTrustedResult(rawResult, operation);
+            return result.status() == FileToolResult.FileToolStatus.APPLIED
                     && result.changed();
         } catch (RuntimeException exception) {
             return false;
         }
     }
 
-    private static void validateFields(JSONObject json) {
-        if (!PROTOCOL_FIELDS.equals(json.keySet())) {
+    private static void validateFields(ObjectNode json) {
+        Set<String> fields = json.properties().stream()
+                .map(java.util.Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!PROTOCOL_FIELDS.equals(fields)) {
             throw new IllegalArgumentException("文件工具协议字段不完整或包含未知字段");
         }
     }
 
-    private static String requiredString(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (!(value instanceof String text)) {
+    private static String requiredString(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value == null || !value.isTextual()) {
             throw new IllegalArgumentException("文件工具协议字段必须是字符串: " + field);
         }
-        return text;
+        return value.textValue();
     }
 
-    private static String nullableString(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (value == null || value == JSONNull.NULL) {
+    private static String nullableString(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value == null || value.isNull()) {
             return null;
         }
-        if (value instanceof String text) {
-            return text;
+        if (value.isTextual()) {
+            return value.textValue();
         }
         throw new IllegalArgumentException("文件工具协议字段必须是字符串或 null: " + field);
     }
 
-    private static boolean requiredBoolean(JSONObject json, String field) {
-        Object value = json.get(field);
-        if (!(value instanceof Boolean bool)) {
+    private static boolean requiredBoolean(ObjectNode json, String field) {
+        JsonNode value = json.get(field);
+        if (value == null || !value.isBoolean()) {
             throw new IllegalArgumentException("文件工具协议字段必须是布尔值: " + field);
         }
-        return bool;
+        return value.booleanValue();
     }
 
-    private static String normalizePath(String relativePath) {
+    private static boolean pathsMatch(String expected, FileToolResult result) {
+        if (Objects.equals(expected, result.relativePath())) {
+            return true;
+        }
+        try {
+            return Objects.equals(
+                    normalizeChangedPath(expected), result.changed()
+                            ? result.relativePath()
+                            : normalizeChangedPath(result.relativePath()));
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
+    }
+
+    private static String normalizeChangedPath(String relativePath) {
         if (relativePath == null) {
             return null;
         }
+        requireSafePathText(relativePath);
         Path path = Path.of(relativePath);
         if (path.isAbsolute()) {
             throw new IllegalArgumentException("工具结果路径不能是绝对路径");
@@ -181,7 +182,21 @@ final class FileToolProtocolSupport {
         if (normalized.startsWith("..")) {
             throw new IllegalArgumentException("工具结果路径不能越出项目根目录");
         }
-        return normalized.toString();
+        String normalizedText = normalized.toString().replace('\\', '/');
+        if (normalizedText.isBlank() || ".".equals(normalizedText)) {
+            throw new IllegalArgumentException("工具结果路径不能为空或项目根目录");
+        }
+        return normalizedText;
+    }
+
+    private static void requireSafePathText(String relativePath) {
+        if (relativePath.indexOf('\\') >= 0
+                || relativePath.contains("//") || relativePath.endsWith("/")
+                || relativePath.codePoints().anyMatch(codePoint ->
+                codePoint <= 0x1F || codePoint >= 0x7F && codePoint <= 0x9F
+                        || codePoint == 0x2028 || codePoint == 0x2029)) {
+            throw new IllegalArgumentException("工具结果路径包含歧义或控制字符");
+        }
     }
 
     static String stableSummary(BaseTool tool, FileToolResult result) {
