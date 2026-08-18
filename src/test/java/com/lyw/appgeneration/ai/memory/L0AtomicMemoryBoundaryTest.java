@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService.HistoryLoadStatus;
 import com.lyw.appgeneration.service.impl.ChatHistoryServiceImpl;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -332,13 +333,17 @@ class L0AtomicMemoryBoundaryTest {
     }
 
     private static ChatHistory history(long id, String message, String type) {
-        return ChatHistory.builder()
+        ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
                 .id(id)
                 .appId(APP_ID)
                 .userId(7L)
                 .message(message)
-                .messageType(type)
-                .build();
+                .messageType(type);
+        if ("ai".equals(type)) {
+            builder.memoryMessage(message)
+                    .memoryOutcome(ChatMemoryOutcome.SUCCEEDED);
+        }
+        return builder.build();
     }
 
     private static class StatefulStore implements ChatMemoryStore {

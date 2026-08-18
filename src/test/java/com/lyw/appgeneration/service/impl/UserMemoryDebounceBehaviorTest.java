@@ -9,6 +9,7 @@ import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -130,6 +131,8 @@ class UserMemoryDebounceBehaviorTest {
                     return ChatHistory.builder().id(appId * 100L + 8L)
                             .appId(appId).userId(USER_ID)
                             .messageType("ai").message("最新稳定回复")
+                            .memoryMessage("最新稳定回复")
+                            .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
                             .build();
                 });
     }
@@ -592,7 +595,9 @@ class UserMemoryDebounceBehaviorTest {
         history.add(ChatHistory.builder()
                 .id(APP_A * 100L + 10L)
                 .appId(APP_A).userId(USER_ID)
-                .messageType("ai").message("未登记的新回复").build());
+                .messageType("ai").message("未登记的新回复")
+                .memoryMessage("未登记的新回复")
+                .memoryOutcome(ChatMemoryOutcome.SUCCEEDED).build());
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(APP_A), anyLong(), anyInt())).thenAnswer(invocation -> {
             long cursor = invocation.getArgument(1);
@@ -805,13 +810,19 @@ class UserMemoryDebounceBehaviorTest {
                                 .message("旧静默期证据").build(),
                         ChatHistory.builder().id(2L).appId(APP_A)
                                 .userId(USER_ID).messageType("ai")
-                                .message("旧回合回复").build(),
+                                .message("旧回合回复")
+                                .memoryMessage("旧回合回复")
+                                .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
+                                .build(),
                         ChatHistory.builder().id(3L).appId(APP_A)
                                 .userId(USER_ID).messageType("user")
                                 .message("新静默期证据").build(),
                         ChatHistory.builder().id(4L).appId(APP_A)
                                 .userId(USER_ID).messageType("ai")
-                                .message("新回合回复").build()));
+                                .message("新回合回复")
+                                .memoryMessage("新回合回复")
+                                .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
+                                .build()));
         AtomicReference<String> prompt = new AtomicReference<>();
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             prompt.set(invocation.getArgument(0));
@@ -839,13 +850,19 @@ class UserMemoryDebounceBehaviorTest {
                                 .message("旧静默期证据").build(),
                         ChatHistory.builder().id(2L).appId(APP_A)
                                 .userId(USER_ID).messageType("ai")
-                                .message("旧回合回复").build(),
+                                .message("旧回合回复")
+                                .memoryMessage("旧回合回复")
+                                .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
+                                .build(),
                         ChatHistory.builder().id(3L).appId(APP_A)
                                 .userId(USER_ID).messageType("user")
                                 .message("已提交但尚未登记的新证据").build(),
                         ChatHistory.builder().id(4L).appId(APP_A)
                                 .userId(USER_ID).messageType("ai")
-                                .message("新回合回复").build()));
+                                .message("新回合回复")
+                                .memoryMessage("新回合回复")
+                                .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
+                                .build()));
         AtomicReference<String> prompt = new AtomicReference<>();
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             prompt.set(invocation.getArgument(0));
@@ -875,7 +892,10 @@ class UserMemoryDebounceBehaviorTest {
                                 .message("游标后的新用户证据").build(),
                         ChatHistory.builder().id(12L).appId(APP_A)
                                 .userId(USER_ID).messageType("ai")
-                                .message("游标后的新回复").build()));
+                                .message("游标后的新回复")
+                                .memoryMessage("游标后的新回复")
+                                .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
+                                .build()));
 
         service.triggerPreferenceExtractionAsync(USER_ID, APP_A, 2L);
         scheduler.advance(Duration.ofSeconds(30));
@@ -1223,13 +1243,18 @@ class UserMemoryDebounceBehaviorTest {
         List<ChatHistory> messages = new ArrayList<>();
         for (long id = 1L; id <= 8L; id++) {
             boolean user = id % 2L == 1L;
-            messages.add(ChatHistory.builder()
+            ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
                     .id(appId * 100L + id)
                     .appId(appId)
                     .userId(USER_ID)
                     .messageType(user ? "user" : "ai")
-                    .message(marker + (user ? "用户" : "回复") + id)
-                    .build());
+                    .message(marker + (user ? "用户" : "回复") + id);
+            if (!user) {
+                String projection = marker + "回复" + id;
+                builder.memoryMessage(projection)
+                        .memoryOutcome(ChatMemoryOutcome.SUCCEEDED);
+            }
+            messages.add(builder.build());
         }
         return List.copyOf(messages);
     }

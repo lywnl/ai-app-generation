@@ -67,6 +67,8 @@ export type ContextCompressionState = 'idle' | 'compressing'
 
 export type ToolProtocolRecoveryState = 'idle' | 'recovering'
 
+type ToolProtocolRecoveryPhase = 'idle' | 'recovering' | 'recovered' | 'failed'
+
 export type GenerationOutcome =
   | 'pending'
   | 'succeeded'
@@ -141,6 +143,8 @@ interface SessionState {
   semanticEventSeen: boolean
   awaitingDone: boolean
   doneSeen: boolean
+  toolProtocolRecoveryPhase: ToolProtocolRecoveryPhase
+  trustedContentCheckpoint: string
 }
 
 type JsonRecord = Record<string, unknown>
@@ -205,6 +209,8 @@ function getOrCreateSession(appId: string): SessionState {
     semanticEventSeen: false,
     awaitingDone: false,
     doneSeen: false,
+    toolProtocolRecoveryPhase: 'idle',
+    trustedContentCheckpoint: '',
   }
   sessions.set(appId, created)
   return created
@@ -491,6 +497,7 @@ function handleToolExecuted(appId: string, requestId: number, payload: JsonRecor
     }
   }
   view.status = 'done'
+  session.trustedContentCheckpoint = session.snapshot.content + session.buffer
   emit(appId, 'delta', requestId)
 }
 
@@ -593,8 +600,6 @@ const TOOL_PROTOCOL_RECOVERY_MESSAGES = {
   FAILED: '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
 } as const
 
-type ToolProtocolRecoveryPhase = keyof typeof TOOL_PROTOCOL_RECOVERY_MESSAGES
-
 function handleToolProtocolRecovery(appId: string, requestId: number, data: string): void {
   const session = getActiveSession(appId, requestId)
   if (!session || session.snapshot.status !== 'streaming') {
@@ -613,12 +618,13 @@ function handleToolProtocolRecovery(appId: string, requestId: number, data: stri
     payloadFields[1] === 'phase' &&
     payloadFields[2] === 'protocol'
   const expectedMessage = validPhase
-    ? TOOL_PROTOCOL_RECOVERY_MESSAGES[phase as ToolProtocolRecoveryPhase]
+    ? TOOL_PROTOCOL_RECOVERY_MESSAGES[phase as keyof typeof TOOL_PROTOCOL_RECOVERY_MESSAGES]
     : undefined
+  const currentPhase = session.toolProtocolRecoveryPhase
   const validTransition =
-    phase === 'STARTED'
-      ? session.snapshot.toolProtocolRecovery === 'idle'
-      : validPhase && session.snapshot.toolProtocolRecovery === 'recovering'
+    (phase === 'STARTED' && currentPhase === 'idle') ||
+    (phase === 'RECOVERED' && currentPhase === 'recovering') ||
+    (phase === 'FAILED' && (currentPhase === 'recovering' || currentPhase === 'recovered'))
   if (
     !exactFields ||
     payload.protocol !== 'tool-protocol-recovery/v1' ||
@@ -635,10 +641,15 @@ function handleToolProtocolRecovery(appId: string, requestId: number, data: stri
       session.flushTimer = undefined
     }
     session.buffer = ''
-    session.snapshot.content = ''
+    session.snapshot.content = session.trustedContentCheckpoint
     session.snapshot.toolProtocolRecovery = 'recovering'
+    session.toolProtocolRecoveryPhase = 'recovering'
+  } else if (phase === 'RECOVERED') {
+    session.snapshot.toolProtocolRecovery = 'idle'
+    session.toolProtocolRecoveryPhase = 'recovered'
   } else {
     session.snapshot.toolProtocolRecovery = 'idle'
+    session.toolProtocolRecoveryPhase = 'failed'
   }
   emit(appId, 'delta', requestId)
 }
@@ -941,6 +952,8 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.semanticEventSeen = false
   session.awaitingDone = false
   session.doneSeen = false
+  session.toolProtocolRecoveryPhase = 'idle'
+  session.trustedContentCheckpoint = ''
   session.snapshot = {
     appId,
     content: '',

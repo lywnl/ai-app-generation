@@ -11,6 +11,7 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -278,6 +279,8 @@ class UserMemoryOutputBoundaryTest {
                 ChatHistory.builder()
                         .id(userTurnId + 1).appId(APP_ID).userId(USER_ID)
                         .messageType("ai").message("已收到")
+                        .memoryMessage("已收到")
+                        .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
                         .build()));
         when(model.chat(any(String.class))).thenReturn("""
                 [{"name":"语言偏好","valueCodes":["ZH_CN"],
@@ -301,6 +304,8 @@ class UserMemoryOutputBoundaryTest {
                 ChatHistory.builder()
                         .id(12L).appId(APP_ID).userId(USER_ID)
                         .messageType("ai").message("已收到")
+                        .memoryMessage("已收到")
+                        .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
                         .build()));
     }
 

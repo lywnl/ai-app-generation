@@ -283,6 +283,63 @@ describe('generationSession Vue SSE 状态机', () => {
     expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
   })
 
+  it('后续 generation 退化时只回滚该代正文并保留此前可信正文', async () => {
+    const snapshot = await runSession([
+      'data: {"d":"此前可信正文"}\n\n',
+      messageEvent({
+        type: 'tool_request',
+        id: 'trusted-tool',
+        name: 'readFile',
+        arguments: '{"relativeFilePath":"src/App.vue"}',
+      }),
+      messageEvent({
+        type: 'tool_executed',
+        id: 'trusted-tool',
+        name: 'readFile',
+        result: JSON.stringify({
+          protocol: 'file-tool/v1',
+          operation: 'readFile',
+          status: 'SUCCESS',
+          relativePath: 'src/App.vue',
+          changed: false,
+          message: '读取成功',
+          failureReason: null,
+          content: '不应展示的源码',
+        }),
+      }),
+      'data: {"d":"退化代临时正文"}\n\n',
+      toolProtocolRecoveryEvent('STARTED'),
+      toolProtocolRecoveryEvent('FAILED'),
+      outcomeEvent('PROTOCOL_ERROR'),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({
+      content: '此前可信正文',
+      outcome: 'protocol_error',
+      toolProtocolRecovery: 'idle',
+    })
+    expect(snapshot?.content).not.toContain('退化代临时正文')
+    expect(snapshot?.toolCalls.has('trusted-tool')).toBe(true)
+  })
+
+  it('允许后端 STARTED 到 RECOVERED 后再次 FAILED 的合法恢复序列', async () => {
+    const snapshot = await runSession([
+      toolProtocolRecoveryEvent('STARTED'),
+      toolProtocolRecoveryEvent('RECOVERED'),
+      toolProtocolRecoveryEvent('FAILED'),
+      outcomeEvent('PROTOCOL_ERROR'),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({
+      status: 'done',
+      outcome: 'protocol_error',
+      errorMessage: '回合结果：PROTOCOL_ERROR',
+      toolProtocolRecovery: 'idle',
+    })
+  })
+
   it.each(['RECOVERED', 'FAILED'] as const)(
     '%s 只允许从 recovering 合法回到 idle',
     async (phase) => {

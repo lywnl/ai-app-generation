@@ -6,6 +6,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
@@ -177,12 +178,16 @@ class MemorySummaryCacheConsistencyTest {
     }
 
     private ChatHistory history(long id, String type, String text) {
-        return ChatHistory.builder()
+        ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
                 .id(id)
                 .appId(1L)
                 .userId(7L)
                 .messageType(type)
-                .message(text)
-                .build();
+                .message(text);
+        if ("ai".equals(type)) {
+            builder.memoryMessage(text)
+                    .memoryOutcome(ChatMemoryOutcome.SUCCEEDED);
+        }
+        return builder.build();
     }
 }

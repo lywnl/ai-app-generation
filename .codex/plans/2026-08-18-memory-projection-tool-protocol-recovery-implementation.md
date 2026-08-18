@@ -28,7 +28,7 @@
 10. L2 偏好证据仍只来自用户原话；AI 行只用于闭合回合，并通过 `memoryOutcome` 排除 `PROTOCOL_ERROR`、`LEGACY_UNVERIFIED` 及缺失投影的回合，同时可靠推进扫描游标。
 11. 工具协议检测只启用于 Vue 在线生成；HTML、MULTI_FILE 与离线评测不启用。
 12. 同一 generation 同时满足“尚未观察到结构化 tool call、注册工具名、完整严格 JSON、连续两个规范化指纹完全相同的伪工具块”才判定退化；不得使用宽松模糊匹配。
-13. 第一次退化只撤销当前 generation，自动纠正一次；纠正 generation 再次退化直接 `PROTOCOL_ERROR`，不得创建第三个模型请求。
+13. 第一次退化只撤销当前 generation，整个用户回合最多新增一次协议纠正请求；纠正 generation 或其真实工具结果后的正常 continuation 再次退化时直接 `PROTOCOL_ERROR`，不得新增第二次纠正请求。正常工具执行后的 continuation 不计为协议纠正请求。
 14. 临时纠正指令参与 28K/30K/32K 门禁和输入 Token 估算，但不得进入 ChatMemory、MySQL、L0、L1、L2；恢复后真实结构化工具调用与工具结果仍按正常工具循环进入操作性记忆。
 15. 旧 generation 的正文、工具分片、完整响应、错误、完成回调和迟到 handle 必须全部按 generation 身份丢弃；底层不支持物理取消时以语义隔离保证正确性，不虚构精确供应商用量。
 16. 新增受信 SSE：`event: tool-protocol-recovery`，协议固定 `tool-protocol-recovery/v1`，阶段固定 `STARTED | RECOVERED | FAILED`，文案必须使用后端固定安全文案。
@@ -423,7 +423,7 @@ record Request(
 
 - [x] ✅ **步骤 6.1：先写完整恢复状态机红测**
 
-  覆盖：首次重复块→撤销旧 generation→门禁→第二次模型请求；纠正代首个真实结构化 tool call 标记恢复；纠正代再次重复→`PROTOCOL_ERROR`；模型请求总数严格为 2；旧代晚到 partial/tool/complete/error 不改内存、不回调；门禁拒绝只失败一次；临时纠正指令和伪正文不入 memory；恢复响应 usage 正常累计。
+  覆盖：首次重复块→撤销旧 generation→门禁→唯一一次纠正请求；纠正代首个真实结构化 tool call 标记恢复；纠正代再次重复→`PROTOCOL_ERROR`；没有真实工具 continuation 时模型请求总数严格为 2；真实工具执行后允许正常 continuation，但后续退化不得新增第二次纠正请求；旧代晚到 partial/tool/complete/error 不改内存、不回调；门禁拒绝只失败一次；临时纠正指令和伪正文不入 memory；恢复响应 usage 正常累计。
 
 - [x] ✅ **步骤 6.2：运行红测并保存证据**
 
@@ -438,7 +438,7 @@ record Request(
 
 - [x] ✅ **步骤 6.4：实现一次纠正与二次受控终止**
 
-  退出旧 SDK callback ticket 后再提交异步门禁，禁止在模型回调线程内递归发请求。首次退化发 `STARTED`；真实结构化工具开始发一次 `RECOVERED`；门禁/调度/模型启动失败或二次退化发一次 `FAILED`，二次退化调用受控 `PROTOCOL_ERROR`，绝不 prepare 第三次请求。
+  退出旧 SDK callback ticket 后再提交异步门禁，禁止在模型回调线程内递归发请求。首次退化发 `STARTED`；真实结构化工具开始发一次 `RECOVERED`；门禁/调度/模型启动失败或二次退化发一次 `FAILED`，二次退化调用受控 `PROTOCOL_ERROR`，绝不 prepare 第二次协议纠正请求。真实工具结果后的正常 continuation 不属于协议纠正请求。
 
 - [x] ✅ **步骤 6.5：运行绿测与聚合协议测试**
 
@@ -571,27 +571,27 @@ toolProtocolRecovery: ToolProtocolRecoveryState
 - 使用现有：`.codex/ExactMemoryToolCallProbe.java`
 - 使用现有：`.codex/run-tool-protocol-probe.mjs`
 
-- [ ] **步骤 9.1：只读核对四个现有容器与本地后端依赖**
+- [x] ✅ **步骤 9.1：只读核对四个现有容器与本地后端依赖**
 
   必须继续复用 `ai-app-generation-dev-nginx`、`ai-codegen-e2e-mysql`、`ai-codegen-rag-eval-redis`、`ai-codegen-rag-eval-pg`；不新建第五个容器，不执行 compose down/up，不清空卷。
 
-- [ ] **步骤 9.2：备份并迁移本地 MySQL**
+- [x] ✅ **步骤 9.2：备份并迁移本地 MySQL**
 
   先保存 `chat_history` 列定义、总行数、AI/用户行数、目标故障行和 outcome 分布；创建带时间戳的独立备份表且禁止覆盖已有表；执行幂等迁移两次，第二次不得改变数据；核对 `message` 的哈希与迁移前一致。
 
-- [ ] **步骤 9.3：验证定向历史结果和 L2 排除规则**
+- [x] ✅ **步骤 9.3：验证定向历史结果和 L2 排除规则**
 
   检查已知消息 `447109043745288192` 为 `PROTOCOL_ERROR` 且投影不含伪工具正文；旧 Vue 为 `LEGACY_UNVERIFIED`；旧简单模式为 `LEGACY_IMPORTED`；用户行投影为空。不得全量清空 L2。
 
-- [ ] **步骤 9.4：验证 Redis 版本前缀隔离**
+- [x] ✅ **步骤 9.4：验证 Redis 版本前缀隔离**
 
   写入旧无前缀污染样本后，新代码读取必须为空；写入新 `chat-memory:l0:v2:` key 后正常读取；只删除本探针显式 key，不做 `KEYS *` 或通配删除。
 
-- [ ] **步骤 9.5：运行生产适配层精确探针**
+- [x] ✅ **步骤 9.5：运行生产适配层精确探针**
 
   至少验证 10 次“L1 + 新投影 L0”的结构化工具调用成功率，不记录原始敏感会话，只记录结构化调用计数、伪工具计数、长度和 SHA-256；目标为 `10/10` 结构化工具调用、`0/10` 伪工具循环。
 
-- [ ] **步骤 9.6：审查证据、勾选并提交必要脚本/契约修改**
+- [x] ✅ **步骤 9.6：审查证据、勾选并提交必要脚本/契约修改**
 
   若本任务未修改生产或测试文件，不为日志单独制造空提交；只更新计划勾选，并在下一提交中显式包含计划文件。
 
@@ -605,7 +605,7 @@ toolProtocolRecovery: ToolProtocolRecoveryState
 - 创建：`.codex/e2e/evidence/tool-protocol-recovery-chrome-e2e.md`
 - 更新：`.codex/plans/2026-08-18-memory-projection-tool-protocol-recovery-implementation.md`
 
-- [ ] **步骤 10.1：运行后端全量测试**
+- [x] ✅ **步骤 10.1：运行后端全量测试**
 
   ```bash
   export JAVA_HOME="$PWD/.codex/runtime/jdk-25.0.4+7/Contents/Home"
@@ -615,7 +615,7 @@ toolProtocolRecovery: ToolProtocolRecoveryState
 
   验收：0 failures、0 errors；跳过项必须逐项确认与本改造无关。
 
-- [ ] **步骤 10.2：运行前端全量测试、类型检查与生产构建**
+- [x] ✅ **步骤 10.2：运行前端全量测试、类型检查与生产构建**
 
   ```bash
   cd ai-app-generation-frontend
@@ -624,15 +624,15 @@ toolProtocolRecovery: ToolProtocolRecoveryState
   npm run build
   ```
 
-- [ ] **步骤 10.3：运行跨层聚合回归**
+- [x] ✅ **步骤 10.3：运行跨层聚合回归**
 
   覆盖记忆投影、L0/L1/L2、Token 门禁、检测器、generation 竞态、唯一终态、受信 SSE 和前端状态机；并重复 generation 并发测试 10 次。
 
-- [ ] **步骤 10.4：启动当前 worktree 前后端并保持四容器不变**
+- [x] ✅ **步骤 10.4：启动当前 worktree 前后端并保持四容器不变**
 
   后端使用工作区 Java 25；前端使用独立 Vite 端口。记录 PID、端口、健康检查和日志路径，结束时只停止本次宿主进程。
 
-- [ ] **步骤 10.5：使用 Chrome 完成四个确定性 E2E 场景**
+- [x] ✅ **步骤 10.5：使用 Chrome 完成四个确定性 E2E 场景**
 
   必须通过 Chrome 实际操作页面并保存截图/DOM/console 证据：
 
@@ -641,15 +641,19 @@ toolProtocolRecovery: ToolProtocolRecoveryState
   3. 恢复失败：第二次退化后无第三次请求，显示固定友好错误，终态为 `protocol_error`，不刷新预览；
   4. 优先级：压缩与校正重叠时先显示压缩，压缩完成后显示校正，真实输出后两者都隐藏。
 
-- [ ] **步骤 10.6：补充真实后端 Chrome 集成验证**
+  以上四个受控场景之外，还必须使用真实后端连续完成多轮工程对话，覆盖压缩前、触发压缩、压缩后三个阶段；压缩后继续要求模型读取文件、修改文件并执行构建，核对普通正文中无伪工具调用、无重复工具块、无旧工具轨迹回流，且 L0/L1/MySQL 投影与后续模型上下文均不含被隔离的伪工具正文。
+
+- [x] ✅ **步骤 10.6：补充真实后端 Chrome 集成验证**
 
   使用专用测试 appId 验证浏览器收到后端真实 `tool-protocol-recovery` SSE 或正常结构化工具链；真实模型不可稳定触发的失败分支由受控 SSE E2E 证明，不以随机模型行为替代确定性验收。
 
-- [ ] **步骤 10.7：执行最终全分支代码审查并修复 Critical/Important**
+  真实多轮验收必须记录每轮终态、结构化工具事件数、普通正文伪工具标记数、压缩事件、压缩前后 Token 统计和脱敏后的记忆投影检查结果；不得用单轮正常响应推断压缩后的记忆链路正确。
+
+- [x] ✅ **步骤 10.7：执行最终全分支代码审查并修复 Critical/Important**
 
   审查范围从本分支起点 `f166046` 到最终 HEAD，重点检查：字段迁移兼容、AI 展示文本回退、L2 证据边界、generation 竞态、第三次请求、临时 Prompt 泄漏、控制事件伪造、前端 buffer 复活、终态重复与敏感日志。
 
-- [ ] **步骤 10.8：逐条完成计划审计并全部勾选**
+- [x] ✅ **步骤 10.8：逐条完成计划审计并全部勾选**
 
   对本计划每个显式要求建立“要求→代码/测试/运行证据”矩阵；证据不足不得勾选。确认 Git 工作树仅剩用户原有 `.codex/` 未跟踪材料，无遗漏生产修改。
 
@@ -671,14 +675,14 @@ toolProtocolRecovery: ToolProtocolRecoveryState
 
 只有同时满足以下条件才能宣布完成：
 
-- [ ] `message` 与 `memoryMessage` 已在数据库、实体、写入 API 和所有读取入口中完成语义隔离。
-- [ ] Vue 新回合投影完全来自真实结构化工具事实；协议异常正文未进入 MySQL/L0/L1/L2。
-- [ ] L2 继续只使用用户原话，并可靠排除不可信 AI 回合。
-- [ ] 旧 AI 投影为空时所有路径均无展示文本回退。
-- [ ] Redis 旧污染 key 已由版本前缀隔离。
-- [ ] 首次伪工具退化只自动纠正一次，二次退化严格无第三次模型请求。
-- [ ] 所有旧 generation 迟到回调均无法污染新 generation。
-- [ ] 临时纠正指令经过 28K/30K/32K 门禁且不进入任何持久记忆。
-- [ ] 前端严格校验可信恢复 SSE，提示优先级和真实输出后的隐藏行为正确。
-- [ ] 后端全量、前端全量/type-check/build、生产探针与 Chrome E2E 均有新鲜通过证据。
+- [x] ✅ `message` 与 `memoryMessage` 已在数据库、实体、写入 API 和所有读取入口中完成语义隔离。
+- [x] ✅ Vue 新回合投影完全来自真实结构化工具事实；协议异常正文未进入 MySQL/L0/L1/L2。
+- [x] ✅ L2 继续只使用用户原话，并可靠排除不可信 AI 回合。
+- [x] ✅ 旧 AI 投影为空时所有路径均无展示文本回退。
+- [x] ✅ Redis 旧污染 key 已由版本前缀隔离。
+- [x] ✅ 首次伪工具退化只自动纠正一次；纠正代或其正常工具 continuation 再次退化时严格不新增第二次协议纠正请求。
+- [x] ✅ 所有旧 generation 迟到回调均无法污染新 generation。
+- [x] ✅ 临时纠正指令经过 28K/30K/32K 门禁且不进入任何持久记忆。
+- [x] ✅ 前端严格校验可信恢复 SSE，提示优先级和真实输出后的隐藏行为正确。
+- [x] ✅ 后端全量、前端全量/type-check/build、生产探针、Chrome 四个确定性场景与真实后端多轮压缩后 E2E 均有新鲜通过证据。
 - [ ] 每个完成步骤已标 `✅`，每个阶段已完成全中文 Git 提交，且未 push。
