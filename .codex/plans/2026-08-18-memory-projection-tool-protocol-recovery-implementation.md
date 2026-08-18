@@ -307,22 +307,22 @@ public record VueTurnOutcome(
 
 规范指纹为 `toolName + "\n" + canonicalJson`；JSON 对象键递归排序、数组顺序与值类型保持不变。
 
-- [ ] **步骤 4.1：先写检测器红测**
+- [x] ✅ **步骤 4.1：先写检测器红测**
 
   覆盖任意 chunk 切分、嵌套 JSON、字符串转义、字段顺序等价、未知工具、残缺 JSON、两个不同块、中间正常正文、真实结构化工具先到、首个候选暂存和被打断后原样释放。
 
-- [ ] **步骤 4.2：运行红测并保存证据**
+- [x] ✅ **步骤 4.2：运行红测并保存证据**
 
   ```bash
   bash mvnw -Dtest='ToolProtocolRecoveryDetectorTest' test \
     2>&1 | tee .codex/verification/task-4-red.log
   ```
 
-- [ ] **步骤 4.3：实现最小字符状态机**
+- [x] ✅ **步骤 4.3：实现最小字符状态机**
 
   检测器只负责解析、规范化与候选缓冲，不依赖模型、ChatMemory、SSE 或 Vue。第一个候选不得提前下发；打断时释放；第二个完全相同块触发 `Duplicate` 并丢弃两个伪块。
 
-- [ ] **步骤 4.4：运行绿测、审查、勾选并中文提交**
+- [x] ✅ **步骤 4.4：运行绿测、审查、勾选并中文提交**
 
   ```bash
   bash mvnw -Dtest='ToolProtocolRecoveryDetectorTest' test
