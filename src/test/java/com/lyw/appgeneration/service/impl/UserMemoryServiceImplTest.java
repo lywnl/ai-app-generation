@@ -16,6 +16,7 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -290,7 +291,10 @@ class UserMemoryServiceImplTest {
                                 .message("应用乙仍偏好冷色").build(),
                         ChatHistory.builder().id(1802L).appId(appB)
                                 .userId(USER_ID).messageType("ai")
-                                .message("已调整").build()));
+                                .message("已调整")
+                                .memoryMessage("已调整")
+                                .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED)
+                                .build()));
         AtomicReference<AppMemory> stored = new AtomicReference<>();
         when(memoryMapper.selectOneByQuery(any()))
                 .thenAnswer(invocation -> stored.get());
@@ -488,7 +492,10 @@ class UserMemoryServiceImplTest {
                                 .message("最近更喜欢深色页面").build(),
                         ChatHistory.builder().id(62L).appId(APP_B)
                                 .userId(USER_ID).messageType("ai")
-                                .message("已调整").build()));
+                                .message("已调整")
+                                .memoryMessage("已调整")
+                                .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED)
+                                .build()));
         when(memoryMapper.selectOneByQuery(any())).thenReturn(
                 偏好("视觉风格", "浅色",
                         "EXPLICIT", "ACTIVE", 5, 55L));
@@ -1413,9 +1420,14 @@ class UserMemoryServiceImplTest {
     }
 
     private ChatHistory 消息(long id, String type, String text) {
-        return ChatHistory.builder()
+        ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
                 .id(id).appId(APP_ID).userId(USER_ID)
-                .messageType(type).message(text).build();
+                .messageType(type).message(text);
+        if ("ai".equals(type)) {
+            builder.memoryMessage(text)
+                    .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED);
+        }
+        return builder.build();
     }
 
     private String 用户证据(long turnId, String userText) {

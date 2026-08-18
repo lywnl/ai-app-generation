@@ -3,6 +3,7 @@ package com.lyw.appgeneration.service.impl;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.ChatHistoryMemoryResolver;
 import com.lyw.appgeneration.ai.memory.UserPreferenceCandidate;
 import com.lyw.appgeneration.ai.memory.UserPreferenceMessageFragmentBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
@@ -118,6 +119,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                                  AppDataLifecycleFence lifecycleFence,
                                  ChatTokenEstimator tokenEstimator,
                                  MemoryTokenProperties tokenProperties,
+                                 ChatHistoryMemoryResolver memoryResolver,
                                  ObjectProvider<PlatformTransactionManager>
                                          transactionManagerProvider,
                                  MemoryCompressionMetricsCollector
@@ -126,7 +128,8 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 extractionModel, executor, debounceScheduler, redisTemplate,
                 lifecycleFence, tokenEstimator, tokenProperties,
                 resolveTransactionOperations(transactionManagerProvider),
-                metricsCollector);
+                metricsCollector, memoryResolver,
+                Clock.systemDefaultZone());
     }
 
     public UserMemoryServiceImpl(ChatHistoryService chatHistoryService,
@@ -147,7 +150,8 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 extractionModel, executor, debounceScheduler, redisTemplate,
                 lifecycleFence,
                 tokenEstimator, tokenProperties, transactionOperations,
-                metricsCollector, Clock.systemDefaultZone());
+                metricsCollector, new ChatHistoryMemoryResolver(),
+                Clock.systemDefaultZone());
     }
 
     private static TransactionOperations resolveTransactionOperations(
@@ -172,6 +176,28 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                           TransactionOperations transactionOperations,
                           MemoryCompressionMetricsCollector metricsCollector,
                           Clock clock) {
+        this(chatHistoryService, appMemoryMapper, cursorMapper, appMapper,
+                extractionModel, executor, debounceScheduler, redisTemplate,
+                lifecycleFence, tokenEstimator, tokenProperties,
+                transactionOperations, metricsCollector,
+                new ChatHistoryMemoryResolver(), clock);
+    }
+
+    UserMemoryServiceImpl(ChatHistoryService chatHistoryService,
+                          AppMemoryMapper appMemoryMapper,
+                          AppMemoryExtractCursorMapper cursorMapper,
+                          AppMapper appMapper,
+                          ChatModel extractionModel,
+                          ExecutorService executor,
+                          TaskScheduler debounceScheduler,
+                          StringRedisTemplate redisTemplate,
+                          AppDataLifecycleFence lifecycleFence,
+                          ChatTokenEstimator tokenEstimator,
+                          MemoryTokenProperties tokenProperties,
+                          TransactionOperations transactionOperations,
+                          MemoryCompressionMetricsCollector metricsCollector,
+                          ChatHistoryMemoryResolver memoryResolver,
+                          Clock clock) {
         this.chatHistoryService = Objects.requireNonNull(
                 chatHistoryService, "对话历史服务不能为空");
         this.appMemoryMapper = Objects.requireNonNull(
@@ -193,7 +219,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         this.tokenProperties = Objects.requireNonNull(
                 tokenProperties, "Token 配置不能为空");
         this.preferenceBatchBuilder = new UserPreferenceBatchBuilder(
-                this.tokenEstimator, this.tokenProperties);
+                this.tokenEstimator, this.tokenProperties, memoryResolver);
         this.preferenceContract = new UserPreferenceContract(
                 this.tokenEstimator, this.tokenProperties);
         this.preferenceCandidateParser = new UserPreferenceCandidateParser(

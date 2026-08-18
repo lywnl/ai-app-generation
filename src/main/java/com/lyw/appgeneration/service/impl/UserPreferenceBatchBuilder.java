@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.ChatHistoryMemoryResolver;
 import com.lyw.appgeneration.ai.memory.UserPreferencePromptBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.model.entity.ChatHistory;
@@ -15,13 +16,24 @@ final class UserPreferenceBatchBuilder {
 
     private final ChatTokenEstimator tokenEstimator;
     private final MemoryTokenProperties tokenProperties;
+    private final ChatHistoryMemoryResolver memoryResolver;
 
     UserPreferenceBatchBuilder(ChatTokenEstimator tokenEstimator,
                                MemoryTokenProperties tokenProperties) {
+        this(tokenEstimator, tokenProperties,
+                new ChatHistoryMemoryResolver());
+    }
+
+    UserPreferenceBatchBuilder(
+            ChatTokenEstimator tokenEstimator,
+            MemoryTokenProperties tokenProperties,
+            ChatHistoryMemoryResolver memoryResolver) {
         this.tokenEstimator = Objects.requireNonNull(
                 tokenEstimator, "Token 估算器不能为空");
         this.tokenProperties = Objects.requireNonNull(
                 tokenProperties, "Token 配置不能为空");
+        this.memoryResolver = Objects.requireNonNull(
+                memoryResolver, "聊天记忆投影解析器不能为空");
     }
 
     Session start(long lastId, String existingPreferences) {
@@ -85,6 +97,12 @@ final class UserPreferenceBatchBuilder {
                     invalidUserSequence = false;
                     continue;
                 }
+                if (!memoryResolver.isEligibleForLongTermPreference(row)) {
+                    pendingUser = null;
+                    invalidUserSequence = false;
+                    completedThroughId = rowId;
+                    continue;
+                }
                 if (invalidUserSequence) {
                     invalidUserSequence = false;
                     continue;
@@ -94,7 +112,10 @@ final class UserPreferenceBatchBuilder {
                 }
                 StableTurn turn = new StableTurn(
                         requireHistoryId(pendingUser), rowId,
-                        Objects.toString(pendingUser.getMessage(), ""));
+                        memoryResolver.resolveModelText(pendingUser)
+                                .orElseThrow(() ->
+                                        new IllegalStateException(
+                                                "L2 用户证据文本无效")));
                 pendingUser = null;
                 TurnDecision decision = addTurn(turn);
                 if (decision == TurnDecision.BATCH_FULL) {

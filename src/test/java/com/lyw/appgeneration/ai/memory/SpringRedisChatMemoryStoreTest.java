@@ -12,6 +12,7 @@ import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.ReturnType;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
 import java.util.List;
@@ -23,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 class SpringRedisChatMemoryStoreTest {
 
@@ -180,6 +182,48 @@ class SpringRedisChatMemoryStoreTest {
                 redisValue.get()));
     }
 
+    @Test
+    void 所有操作只使用V2命名空间且绝不读取旧裸键() {
+        StringRedisTemplate template = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(template.opsForValue()).thenReturn(values);
+        when(values.get("chat-memory:l0:v2:7")).thenReturn(null);
+        when(template.execute(any(RedisCallback.class))).thenReturn(0L);
+        SpringRedisChatMemoryStore store = store(template);
+
+        store.getMessages(7L);
+        store.updateMessages(7L, EXPECTED);
+        store.deleteMessages(7L);
+        store.replaceMessagesIfMatches(
+                7L, EXPECTED, REPLACEMENT, deadlineAt(2_000L));
+
+        verify(values).get("chat-memory:l0:v2:7");
+        verify(values).set("chat-memory:l0:v2:7",
+                ChatMessageSerializer.messagesToJson(EXPECTED),
+                Duration.ofSeconds(3_600L));
+        verify(template).delete("chat-memory:l0:v2:7");
+        verify(values, org.mockito.Mockito.never()).get("7");
+        verify(template, org.mockito.Mockito.never()).delete("7");
+    }
+
+    @Test
+    void 无Ttl更新同样只写V2键() {
+        StringRedisTemplate template = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(template.opsForValue()).thenReturn(values);
+        SpringRedisChatMemoryStore store = new SpringRedisChatMemoryStore(
+                template, 0L, Duration.ZERO, Duration.ZERO, Duration.ZERO);
+
+        store.updateMessages(7L, EXPECTED);
+
+        verify(values).set("chat-memory:l0:v2:7",
+                ChatMessageSerializer.messagesToJson(EXPECTED));
+        verify(values, org.mockito.Mockito.never()).set("7",
+                ChatMessageSerializer.messagesToJson(EXPECTED));
+    }
+
     private StringRedisTemplate semanticTemplate(
             AtomicReference<String> redisValue,
             AtomicLong redisTimeMillis,
@@ -204,6 +248,8 @@ class SpringRedisChatMemoryStoreTest {
                     .map(bytes -> new String(bytes,
                             java.nio.charset.StandardCharsets.UTF_8))
                     .toArray(String[]::new);
+            assertEquals("chat-memory:l0:v2:7", arguments[0],
+                    "Lua KEYS[1] 必须与普通读写使用同一 V2 key");
             assertTrue(script.contains("redis.call('TIME')"));
             int compareIndex = script.indexOf("current ~= ARGV[1]");
             int initialDeadlineCheckIndex = script.indexOf(

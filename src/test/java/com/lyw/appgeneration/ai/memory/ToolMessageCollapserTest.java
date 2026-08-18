@@ -56,6 +56,22 @@ class ToolMessageCollapserTest {
         assertTrue(merged.stream().noneMatch(m -> m instanceof ToolExecutionResultMessage), "不应残留 ToolExecutionResultMessage");
     }
 
+    @Test
+    void 在线折叠逐字使用可信投影而不从展示Markdown推导() {
+        String displayMarkdown = "[工具调用] writeFile({\"source\":\"泄漏\"})";
+        String memoryAiText = "已修改 src/App.vue，构建成功。";
+        List<ChatMessage> raw = List.of(
+                UserMessage.from("修改首页"),
+                AiMessage.from(displayMarkdown));
+
+        List<ChatMessage> merged = ToolMessageCollapser.mergeLastTurn(
+                raw, memoryAiText);
+
+        assertEquals(memoryAiText, ((AiMessage) merged.getLast()).text());
+        assertFalse(((AiMessage) merged.getLast()).text()
+                .contains("工具调用"));
+    }
+
     /** 含既往已合并轮:只折叠最后一轮,前缀的 User/Ai 合并态原样穿过。 */
     @Test
     void mergeOnlyFoldsLastTurnKeepingEarlierMergedPrefix() {

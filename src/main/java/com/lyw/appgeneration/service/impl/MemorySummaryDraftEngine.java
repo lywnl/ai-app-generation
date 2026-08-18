@@ -2,6 +2,7 @@ package com.lyw.appgeneration.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.ChatHistoryMemoryResolver;
 import com.lyw.appgeneration.ai.memory.MemorySummaryFormat;
 import com.lyw.appgeneration.ai.memory.MemorySummaryContract;
 import com.lyw.appgeneration.ai.memory.MemorySummaryPromptBuilder;
@@ -44,6 +45,7 @@ public class MemorySummaryDraftEngine {
     private final ExecutorService modelExecutor;
     private final ChatTokenEstimator tokenEstimator;
     private final MemoryTokenProperties properties;
+    private final ChatHistoryMemoryResolver memoryResolver;
     private final LongSupplier nanoTime;
 
     @Autowired
@@ -52,9 +54,21 @@ public class MemorySummaryDraftEngine {
             @Qualifier("memorySummaryChatModel") ChatModel summarizationModel,
             @Qualifier("memorySummaryModelExecutor") ExecutorService modelExecutor,
             ChatTokenEstimator tokenEstimator,
+            MemoryTokenProperties properties,
+            ChatHistoryMemoryResolver memoryResolver) {
+        this(chatHistoryService, summarizationModel, modelExecutor,
+                tokenEstimator, properties, memoryResolver, System::nanoTime);
+    }
+
+    public MemorySummaryDraftEngine(
+            ChatHistoryService chatHistoryService,
+            ChatModel summarizationModel,
+            ExecutorService modelExecutor,
+            ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties) {
         this(chatHistoryService, summarizationModel, modelExecutor,
-                tokenEstimator, properties, System::nanoTime);
+                tokenEstimator, properties, new ChatHistoryMemoryResolver(),
+                System::nanoTime);
     }
 
     MemorySummaryDraftEngine(
@@ -63,6 +77,19 @@ public class MemorySummaryDraftEngine {
             ExecutorService modelExecutor,
             ChatTokenEstimator tokenEstimator,
             MemoryTokenProperties properties,
+            LongSupplier nanoTime) {
+        this(chatHistoryService, summarizationModel, modelExecutor,
+                tokenEstimator, properties, new ChatHistoryMemoryResolver(),
+                nanoTime);
+    }
+
+    MemorySummaryDraftEngine(
+            ChatHistoryService chatHistoryService,
+            ChatModel summarizationModel,
+            ExecutorService modelExecutor,
+            ChatTokenEstimator tokenEstimator,
+            MemoryTokenProperties properties,
+            ChatHistoryMemoryResolver memoryResolver,
             LongSupplier nanoTime) {
         this.chatHistoryService = Objects.requireNonNull(
                 chatHistoryService, "对话历史服务不能为空");
@@ -74,6 +101,8 @@ public class MemorySummaryDraftEngine {
                 tokenEstimator, "Token 估算器不能为空");
         this.properties = Objects.requireNonNull(
                 properties, "Token 配置不能为空");
+        this.memoryResolver = Objects.requireNonNull(
+                memoryResolver, "聊天记忆投影解析器不能为空");
         this.nanoTime = Objects.requireNonNull(
                 nanoTime, "单调时钟不能为空");
     }
@@ -122,6 +151,7 @@ public class MemorySummaryDraftEngine {
             RollingSummaryAccumulator accumulator) {
         long scanCursor = persistedCursor;
         ChatHistory pendingUser = null;
+        boolean invalidUserSequence = false;
         boolean boundaryReached = false;
         while (scanCursor < summarizeThroughId && !boundaryReached) {
             if (isDeadlineExpired(deadlineNanos)) {
@@ -149,15 +179,36 @@ public class MemorySummaryDraftEngine {
                 }
                 scanCursor = rowId;
                 if (isUserMessage(row)) {
-                    pendingUser = row;
-                } else if (isAiMessage(row) && pendingUser != null) {
-                    accumulator.accept(new SummaryTurn(pendingUser, row));
+                    if (pendingUser != null || invalidUserSequence) {
+                        pendingUser = null;
+                        invalidUserSequence = true;
+                    } else {
+                        pendingUser = row;
+                    }
+                } else if (isAiMessage(row)) {
+                    String aiText = memoryResolver.resolveModelText(row)
+                            .orElse(null);
+                    if (invalidUserSequence || pendingUser == null
+                            || aiText == null) {
+                        pendingUser = null;
+                        invalidUserSequence = false;
+                        continue;
+                    }
+                    String userText = memoryResolver
+                            .resolveModelText(pendingUser)
+                            .orElse(null);
+                    if (userText != null) {
+                        accumulator.accept(new SummaryTurn(
+                                pendingUser.getId(), rowId,
+                                userText, aiText));
+                    }
                     pendingUser = null;
                     if (accumulator.hasFailed()) {
                         break;
                     }
                 } else {
                     pendingUser = null;
+                    invalidUserSequence = false;
                 }
             }
             if (accumulator.hasFailed() || boundaryReached
@@ -525,10 +576,7 @@ public class MemorySummaryDraftEngine {
             String userText,
             String aiText) {
 
-        private SummaryTurn(ChatHistory user, ChatHistory ai) {
-            this(user.getId(), ai.getId(),
-                    StrUtil.nullToEmpty(user.getMessage()),
-                    StrUtil.nullToEmpty(ai.getMessage()));
+        private SummaryTurn {
             if (turnId <= 0L || completedThroughId <= turnId) {
                 throw new IllegalArgumentException("完整回合 ID 边界无效");
             }

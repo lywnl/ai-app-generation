@@ -185,6 +185,29 @@ class ChatHistoryServiceImplLoadTest {
     }
 
     @Test
+    void 旧历史加载只使用AI可信投影且丢弃投影缺失回合() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(List.of(
+                projectedAi(4L, "[工具调用] writeFile({伪参数})",
+                        "已修改 src/App.vue，构建成功。",
+                        ChatMemoryOutcome.SUCCEEDED),
+                message(3L, "保留需求", "user"),
+                incompleteAi(2L, "不得进入模型的展示源码"),
+                message(1L, "必须整体丢弃的需求", "user")))
+                .when(service).list(any(QueryWrapper.class));
+        var memory = MessageWindowChatMemory.withMaxMessages(20);
+
+        var result = service.loadChatHistoryToMemory(7L, memory, 4);
+
+        assertEquals(HistoryLoadStatus.LOADED, result.status());
+        assertEquals(List.of("保留需求", "已修改 src/App.vue，构建成功。"),
+                messageTexts(memory.messages()));
+        assertFalse(messageTexts(memory.messages()).stream()
+                .anyMatch(text -> text.contains("工具调用")
+                        || text.contains("展示源码")));
+    }
+
+    @Test
     void loadsNewestCompleteTurnsUntilThresholdWithoutSplittingOlderTurn() {
         ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
         doReturn(List.of(
@@ -234,6 +257,34 @@ class ChatHistoryServiceImplLoadTest {
     }
 
     @Test
+    void 冷重建与Token估算只接收AI可信投影() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(List.of(
+                projectedAi(4L, "[工具调用] modifyFile({\"source\":\"泄漏\"})",
+                        "已修改按钮颜色。", ChatMemoryOutcome.SUCCEEDED),
+                message(3L, "把按钮改成蓝色", "user"),
+                incompleteAi(2L, "无投影展示文本"),
+                message(1L, "不得悬空的用户消息", "user")))
+                .when(service).list(any(QueryWrapper.class));
+        ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
+        when(estimator.estimateMessages(anyList())).thenReturn(100);
+        var memory = MessageWindowChatMemory.withMaxMessages(
+                Integer.MAX_VALUE);
+
+        var result = service.loadRecentCompleteTurnsToMemory(
+                7L, memory, 30_720, estimator);
+
+        assertEquals(HistoryLoadStatus.LOADED, result.status());
+        assertEquals(List.of("把按钮改成蓝色", "已修改按钮颜色。"),
+                messageTexts(memory.messages()));
+        ArgumentCaptor<List<ChatMessage>> estimated = ArgumentCaptor.forClass(
+                List.class);
+        verify(estimator).estimateMessages(estimated.capture());
+        assertEquals(List.of("把按钮改成蓝色", "已修改按钮颜色。"),
+                messageTexts(estimated.getValue()));
+    }
+
+    @Test
     void listsNewestStableTurnBoundariesInChronologicalOrder() {
         ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
         doReturn(List.of(
@@ -255,6 +306,30 @@ class ChatHistoryServiceImplLoadTest {
         assertEquals("中回复", boundaries.getFirst().aiText());
         assertEquals(5L, boundaries.getLast().turnId());
         assertEquals(6L, boundaries.getLast().completedThroughId());
+    }
+
+    @Test
+    void 稳定边界排除投影缺失回合并返回AI可信投影() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(List.of(
+                projectedAi(6L, "[工具调用] readFile({伪参数})",
+                        "构建成功。", ChatMemoryOutcome.PROTOCOL_ERROR),
+                message(5L, "保留失败事实", "user"),
+                incompleteAi(4L, "无投影展示文本"),
+                message(3L, "丢弃这轮", "user"),
+                projectedAi(2L, "展示源码和 diff", "已完成首页。",
+                        ChatMemoryOutcome.SUCCEEDED),
+                message(1L, "创建首页", "user")))
+                .when(service).list(any(QueryWrapper.class));
+
+        var boundaries = service.listRecentCompleteTurnBoundaries(7L, 3);
+
+        assertEquals(2, boundaries.size());
+        assertEquals(List.of("已完成首页。", "构建成功。"),
+                boundaries.stream()
+                        .map(com.lyw.appgeneration.service.ChatHistoryService
+                                .StableTurnBoundary::aiText)
+                        .toList());
     }
 
     @Test
@@ -346,8 +421,30 @@ class ChatHistoryServiceImplLoadTest {
     }
 
     private ChatHistory message(long id, String text, String type) {
+        ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
+                .id(id).appId(7L).userId(9L)
+                .message(text).messageType(type);
+        if ("ai".equals(type)) {
+            builder.memoryMessage(text)
+                    .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED);
+        }
+        return builder.build();
+    }
+
+    private ChatHistory projectedAi(
+            long id,
+            String displayText,
+            String memoryText,
+            ChatMemoryOutcome outcome) {
         return ChatHistory.builder().id(id).appId(7L).userId(9L)
-                .message(text).messageType(type).build();
+                .message(displayText).messageType("ai")
+                .memoryMessage(memoryText).memoryOutcome(outcome)
+                .build();
+    }
+
+    private ChatHistory incompleteAi(long id, String displayText) {
+        return ChatHistory.builder().id(id).appId(7L).userId(9L)
+                .message(displayText).messageType("ai").build();
     }
 
     @SuppressWarnings("unchecked")

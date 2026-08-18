@@ -19,6 +19,8 @@ import java.util.Objects;
 public final class SpringRedisChatMemoryStore
         implements ChatMemoryStore, DeadlineAwareChatMemoryStore {
 
+    private static final String REDIS_KEY_PREFIX = "chat-memory:l0:v2:";
+
     static final String COMPARE_AND_REPLACE_SCRIPT = """
             local function deadline_expired()
                 local server_time = redis.call('TIME')
@@ -166,7 +168,7 @@ public final class SpringRedisChatMemoryStore
         if (key.trim().isEmpty()) {
             throw new IllegalArgumentException("memoryId 不能为空字符串");
         }
-        return key;
+        return REDIS_KEY_PREFIX + key;
     }
 
     private byte[] utf8(String value) {

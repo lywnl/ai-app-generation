@@ -7,6 +7,7 @@ import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import dev.langchain4j.model.chat.ChatModel;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
@@ -108,6 +110,55 @@ class MemorySummaryDraftEngineTest {
             assertEquals(2L, result.summarizedThroughId());
             assertEquals(SUMMARY, result.summary());
             verify(chatHistoryService).listMessagesAfterCursor(1L, 0L, 100);
+        } finally {
+            modelExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("L1 Prompt 和 Token 估算只读取 AI 可信投影")
+    void 摘要输入只包含完整回合的可信投影() {
+        ChatHistoryService chatHistoryService = mock(ChatHistoryService.class);
+        ChatModel model = mock(ChatModel.class);
+        ChatTokenEstimator tokenEstimator = mock(ChatTokenEstimator.class);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "不得悬空的用户消息"),
+                        incompleteAi(2L, "无投影展示源码"),
+                        message(3L, "user", "把按钮改成蓝色"),
+                        projectedAi(4L,
+                                "[工具调用] modifyFile({伪参数和 diff})",
+                                "已修改按钮颜色。",
+                                ChatMemoryOutcome.SUCCEEDED)));
+        when(model.chat(anyString())).thenReturn(SUMMARY);
+        when(tokenEstimator.estimateText(anyString())).thenAnswer(invocation ->
+                invocation.<String>getArgument(0).isEmpty() ? 0 : 100);
+        ExecutorService modelExecutor = Executors.newSingleThreadExecutor();
+        try {
+            MemorySummaryDraftEngine engine = new MemorySummaryDraftEngine(
+                    chatHistoryService, model, modelExecutor,
+                    tokenEstimator, new MemoryTokenProperties());
+
+            MemorySummaryDraftEngine.DraftResult result = engine.buildDraft(
+                    1L, 4L, null, Long.MAX_VALUE);
+
+            assertNull(result.failureStatus());
+            assertEquals(4L, result.summarizedThroughId());
+            ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+            verify(model).chat(prompt.capture());
+            assertTrue(prompt.getValue().contains("把按钮改成蓝色"));
+            assertTrue(prompt.getValue().contains("已修改按钮颜色。"));
+            assertFalse(prompt.getValue().contains("工具调用"));
+            assertFalse(prompt.getValue().contains("伪参数和 diff"));
+            assertFalse(prompt.getValue().contains("无投影展示源码"));
+            assertFalse(prompt.getValue().contains("不得悬空的用户消息"));
+            assertTrue(org.mockito.Mockito.mockingDetails(tokenEstimator)
+                    .getInvocations().stream()
+                    .filter(invocation -> "estimateText".equals(
+                            invocation.getMethod().getName()))
+                    .map(invocation -> (String) invocation.getArgument(0))
+                    .noneMatch(text -> text.contains("工具调用")
+                            || text.contains("无投影展示源码")));
         } finally {
             modelExecutor.shutdownNow();
         }
@@ -346,10 +397,36 @@ class MemorySummaryDraftEngineTest {
     }
 
     private static ChatHistory message(long id, String type, String text) {
-        return ChatHistory.builder()
+        ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
                 .id(id)
                 .messageType(type)
-                .message(text)
+                .message(text);
+        if ("ai".equals(type)) {
+            builder.memoryMessage(text)
+                    .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED);
+        }
+        return builder.build();
+    }
+
+    private static ChatHistory projectedAi(
+            long id,
+            String displayText,
+            String memoryText,
+            ChatMemoryOutcome outcome) {
+        return ChatHistory.builder()
+                .id(id)
+                .messageType("ai")
+                .message(displayText)
+                .memoryMessage(memoryText)
+                .memoryOutcome(outcome)
+                .build();
+    }
+
+    private static ChatHistory incompleteAi(long id, String displayText) {
+        return ChatHistory.builder()
+                .id(id)
+                .messageType("ai")
+                .message(displayText)
                 .build();
     }
 

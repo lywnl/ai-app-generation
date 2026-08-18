@@ -260,33 +260,33 @@ public record VueTurnOutcome(
 - 修改：`src/test/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStoreTest.java`
 - 修改：`src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java`
 
-- [ ] **步骤 3.1：先写所有记忆入口的污染回归红测**
+- [x] ✅ **步骤 3.1：先写所有记忆入口的污染回归红测**
 
   使用 `message` 含伪工具 Markdown、`memoryMessage` 为安全投影的同一 AI 行，断言 L0 折叠、冷启动、L1 prompt、稳定回合边界、Token 估算只看到投影。断言 L2 prompt 只含用户原话，协议异常/旧 Vue 不可信回合不作为证据但扫描游标推进。
 
-- [ ] **步骤 3.2：运行红测并保存证据**
+- [x] ✅ **步骤 3.2：运行红测并保存证据**
 
   ```bash
   bash mvnw -Dtest='ToolMessageCollapserTest,ChatHistoryServiceImplLoadTest,MemorySummaryDraftEngineTest,UserPreferenceBatchBuilderTest,SpringRedisChatMemoryStoreTest,ContextCompressionCoordinatorTest' test \
     2>&1 | tee .codex/verification/task-3-red.log
   ```
 
-- [ ] **步骤 3.3：统一使用 `ChatHistoryMemoryResolver`**
+- [x] ✅ **步骤 3.3：统一使用 `ChatHistoryMemoryResolver`**
 
   用户读取 `message`；AI 读取 `memoryMessage`。禁止任何调用点在 AI 投影为空时回退展示文本。现有摘要上限、12K 最近消息目标和 28K/30K/32K 门禁不变。
 
-- [ ] **步骤 3.4：版本化 Redis L0 key**
+- [x] ✅ **步骤 3.4：版本化 Redis L0 key**
 
   `SpringRedisChatMemoryStore.redisKey(memoryId)` 改为固定前缀 `chat-memory:l0:v2:` 加 memoryId；所有 get/update/delete/CAS 使用同一个方法。旧无前缀 key 不读取、不扫描、不批量删除，按现有 TTL 自然过期。
 
-- [ ] **步骤 3.5：运行绿测与分层记忆集成测试**
+- [x] ✅ **步骤 3.5：运行绿测与分层记忆集成测试**
 
   ```bash
   bash mvnw -Dtest='ToolMessageCollapserTest,ChatHistoryServiceImplLoadTest,MemorySummaryDraftEngineTest,UserPreferenceBatchBuilderTest,UserMemoryServiceImplTest,SpringRedisChatMemoryStoreTest,ContextCompressionCoordinatorTest,LayeredMemoryIntegrationTest,LayeredMemoryL2IntegrationTest' test
   git diff --check
   ```
 
-- [ ] **步骤 3.6：独立审查、修复、勾选并中文提交**
+- [x] ✅ **步骤 3.6：独立审查、修复、勾选并中文提交**
 
   提交信息：`修复：统一分层记忆读取可信投影`
 

@@ -8,6 +8,7 @@ import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -82,7 +83,10 @@ class LayeredMemoryL2IntegrationTest {
         appAHistory.add(ChatHistory.builder().id(11L).messageType("user")
                 .message("以后所有应用都用简体中文、扁平极简").build());
         appAHistory.add(ChatHistory.builder().id(12L).messageType("ai")
-                .message("已完成").build());
+                .message("已完成")
+                .memoryMessage("已完成")
+                .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED)
+                .build());
         when(chatHistory.listMessagesAfterCursor(eq(appA), eq(0L), anyInt())).thenReturn(appAHistory);
         when(cursorMapper.insert(any())).thenReturn(1);
         when(model.chat(anyString()))

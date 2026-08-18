@@ -3,6 +3,7 @@ package com.lyw.appgeneration.service.impl;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.ai.memory.ChatHistoryMemoryResolver;
 import com.lyw.appgeneration.ai.memory.ConversationTurn;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.constants.UserConstant;
@@ -27,6 +28,7 @@ import dev.langchain4j.memory.ChatMemory;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -47,6 +49,18 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     private static final int COMPLETE_TURN_LOAD_BATCH_SIZE = 100;
     private static final String ORPHAN_TURN_MEMORY_MESSAGE =
             "上一轮因系统异常未完成，未改变项目文件或构建状态。";
+
+    private final ChatHistoryMemoryResolver memoryResolver;
+
+    public ChatHistoryServiceImpl() {
+        this(new ChatHistoryMemoryResolver());
+    }
+
+    @Autowired
+    public ChatHistoryServiceImpl(ChatHistoryMemoryResolver memoryResolver) {
+        this.memoryResolver = Objects.requireNonNull(
+                memoryResolver, "聊天记忆投影解析器不能为空");
+    }
 
     @Resource
     @Lazy
@@ -228,17 +242,12 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             // DAO 返回集合不保证可变，复制后反转为稳定时间正序。
             history = new java.util.ArrayList<>(history);
             CollUtil.reverse(history);
-            //按照时间顺序添加到激励中
-            int loadCount = 0;
-            //先清理历史缓存 防止重复加载
+            List<ChatMessage> messages = completeMessagesInOrder(history);
             chatMemory.clear();
-            for (ChatHistory chatHistory : history) {
-                if (ChatHistoryMessageTypeEnum.USER.getValue().equals(chatHistory.getMessageType())) {
-                    chatMemory.add(UserMessage.from(chatHistory.getMessage()));
-                } else if (ChatHistoryMessageTypeEnum.AI.getValue().equals(chatHistory.getMessageType())) {
-                    chatMemory.add(AiMessage.from(chatHistory.getMessage()));
-                }
-                loadCount++;
+            chatMemory.add(messages);
+            int loadCount = messages.size();
+            if (loadCount == 0) {
+                return HistoryLoadResult.empty();
             }
             log.info("成功加载 {} 条对话历史到内存中，应用ID：{}", loadCount, appId);
             return HistoryLoadResult.loaded(loadCount);
@@ -247,6 +256,44 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             return HistoryLoadResult.failed();
         }
 
+    }
+
+    private List<ChatMessage> completeMessagesInOrder(
+            List<ChatHistory> historyRows) {
+        List<ChatMessage> messages = new ArrayList<>();
+        ChatHistory pendingUser = null;
+        boolean invalidUserSequence = false;
+        for (ChatHistory history : historyRows) {
+            if (isUserMessage(history)) {
+                if (pendingUser != null || invalidUserSequence) {
+                    pendingUser = null;
+                    invalidUserSequence = true;
+                } else {
+                    pendingUser = history;
+                }
+                continue;
+            }
+            if (!isAiMessage(history)) {
+                pendingUser = null;
+                invalidUserSequence = false;
+                continue;
+            }
+            String aiText = memoryResolver.resolveModelText(history)
+                    .orElse(null);
+            if (invalidUserSequence || pendingUser == null || aiText == null) {
+                pendingUser = null;
+                invalidUserSequence = false;
+                continue;
+            }
+            String userText = memoryResolver.resolveModelText(pendingUser)
+                    .orElse(null);
+            pendingUser = null;
+            if (userText != null) {
+                messages.add(UserMessage.from(userText));
+                messages.add(AiMessage.from(aiText));
+            }
+        }
+        return List.copyOf(messages);
     }
 
     @Override
@@ -317,7 +364,8 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             long oldestId = requireDescendingBatchCursor(batch, beforeId);
             for (ChatHistory history : batch) {
                 if (isAiMessage(history)) {
-                    pendingAi = history;
+                    pendingAi = memoryResolver.resolveModelText(history)
+                            .isPresent() ? history : null;
                 } else if (isUserMessage(history) && pendingAi != null) {
                     ConversationTurn turn = toConversationTurn(
                             history, pendingAi, estimator);
@@ -373,8 +421,12 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             throw new IllegalStateException("完整回合 ID 顺序无效");
         }
         List<ChatMessage> messages = List.of(
-                UserMessage.from(user.getMessage()),
-                AiMessage.from(ai.getMessage()));
+                UserMessage.from(memoryResolver.resolveModelText(user)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "完整回合用户文本无效"))),
+                AiMessage.from(memoryResolver.resolveModelText(ai)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "完整回合 AI 投影无效"))));
         int tokens = estimator.estimateMessages(messages);
         if (tokens <= 0) {
             throw new IllegalStateException("完整回合 Token 估算无效");
@@ -438,7 +490,8 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             long oldestId = requireDescendingBatchCursor(batch, beforeId);
             for (ChatHistory history : batch) {
                 if (isAiMessage(history)) {
-                    pendingAi = history;
+                    pendingAi = memoryResolver.resolveModelText(history)
+                            .isPresent() ? history : null;
                 } else if (isUserMessage(history) && pendingAi != null) {
                     newestFirst.add(toStableTurnBoundary(
                             history, pendingAi));
@@ -467,8 +520,12 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
         }
         return new StableTurnBoundary(
                 user.getId(), ai.getId(),
-                Objects.toString(user.getMessage(), ""),
-                Objects.toString(ai.getMessage(), ""));
+                memoryResolver.resolveModelText(user).orElseThrow(
+                        () -> new IllegalStateException(
+                                "稳定回合用户文本无效")),
+                memoryResolver.resolveModelText(ai).orElseThrow(
+                        () -> new IllegalStateException(
+                                "稳定回合 AI 投影无效")));
     }
 
     private record CompleteTurnLoad(

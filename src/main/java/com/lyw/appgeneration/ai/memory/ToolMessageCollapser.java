@@ -31,21 +31,22 @@ public class ToolMessageCollapser {
 
     /**
      * 把一轮 AI 工具调用折叠为恒 1 条 {@link AiMessage}:定位最后一条 {@link UserMessage},砍掉其后的全部
-     * 原始工具消息,贴上 1 条复用 MySQL 同款合并文本的 {@code AiMessage}。<b>与原始工具次数 N 无关</b>。
+     * 原始工具消息,贴上 1 条调用方提供的可信记忆投影 {@code AiMessage}。<b>与原始工具次数 N 无关</b>。
      *
      * <p>降级(best-effort,均原样返回新副本,不抛异常):
      * <ul>
-     *   <li>{@code mergedAiText} 空白:不折叠 —— 否则会折成 {@code [..., User]} 丢掉 AI 轮,使窗口以
+     *   <li>{@code memoryAiText} 空白:不折叠 —— 否则会折成 {@code [..., User]} 丢掉 AI 轮,使窗口以
      *       {@code UserMessage} 结尾,下一轮再追加 User → 连续同角色被 API 拒绝;</li>
      *   <li>无 {@link UserMessage}:无法定界,不折叠。</li>
      * </ul>
-     * 幂等:对 {@code [..., User, Ai(merged)]} 再跑一次结果不变。System 前缀(若 {@code raw[0]} 为系统消息)被保留。
+     * 幂等:对 {@code [..., User, Ai(memoryProjection)]} 再跑一次结果不变。System 前缀被保留。
      */
-    static List<ChatMessage> mergeLastTurn(List<ChatMessage> raw, String mergedAiText) {
+    static List<ChatMessage> mergeLastTurn(
+            List<ChatMessage> raw, String memoryAiText) {
         if (raw == null) {
             return new ArrayList<>();
         }
-        if (StrUtil.isBlank(mergedAiText)) {
+        if (StrUtil.isBlank(memoryAiText)) {
             return new ArrayList<>(raw);
         }
         int lastUser = -1;
@@ -60,7 +61,7 @@ public class ToolMessageCollapser {
         }
         // 前缀:System? + 既往已合并轮(User/Ai) + 本轮 User;其后原始工具消息全部丢弃,替换为 1 条
         List<ChatMessage> result = new ArrayList<>(raw.subList(0, lastUser + 1));
-        result.add(AiMessage.from(mergedAiText));
+        result.add(AiMessage.from(memoryAiText));
         return result;
     }
 
@@ -71,7 +72,7 @@ public class ToolMessageCollapser {
      *
      * @return 结构化折叠结果；调用方可区分空窗口、无 User 边界、非法文本和存储失败
      */
-    public CollapseResult collapseLastTurn(long appId, String mergedAiText) {
+    public CollapseResult collapseLastTurn(long appId, String memoryAiText) {
         try {
             return store.withMemoryLock(appId, () -> {
                 List<ChatMessage> raw = store.getMessages(appId);
@@ -79,7 +80,7 @@ public class ToolMessageCollapser {
                     return new CollapseResult(
                             CollapseStatus.NO_MESSAGES, List.of());
                 }
-                if (StrUtil.isBlank(mergedAiText)) {
+                if (StrUtil.isBlank(memoryAiText)) {
                     return new CollapseResult(
                             CollapseStatus.INVALID_TEXT, raw);
                 }
@@ -90,7 +91,7 @@ public class ToolMessageCollapser {
                             CollapseStatus.NO_USER_BOUNDARY, raw);
                 }
                 List<ChatMessage> merged = mergeLastTurn(
-                        raw, mergedAiText);
+                        raw, memoryAiText);
                 if (!store.replaceMessagesIfMatches(appId, raw, merged)) {
                     return new CollapseResult(
                             CollapseStatus.STORE_FAILED, raw);

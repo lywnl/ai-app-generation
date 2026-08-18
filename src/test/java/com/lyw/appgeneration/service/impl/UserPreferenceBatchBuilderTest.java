@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.memory.ConservativeChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.UserPreferencePromptBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -125,10 +126,121 @@ class UserPreferenceBatchBuilderTest {
                 result.skippedTurns());
     }
 
+    @Test
+    void 不合格AI跨页时清空待配用户并推进完成边界() {
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+
+        UserPreferenceBatchBuilder.PageResult firstPage = session.acceptPage(
+                List.of(消息(51L, "user", "不能跨页错配的偏好")), false);
+        UserPreferenceBatchBuilder.PageResult secondPage = session.acceptPage(
+                List.of(ai消息(52L, "协议异常展示", "安全失败投影",
+                        ChatMemoryOutcome.PROTOCOL_ERROR)), true);
+
+        assertFalse(firstPage.finished());
+        assertTrue(secondPage.finished());
+        assertTrue(secondPage.batch().turnIds().isEmpty());
+        assertEquals(52L, secondPage.batch().completedThroughId());
+        assertFalse(secondPage.batch().prompt().contains("不能跨页错配的偏好"));
+    }
+
+    @Test
+    void 合格回合前后夹不合格AI仍提交证据并推进到不合格边界() {
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+
+        UserPreferenceBatchBuilder.PageResult result = session.acceptPage(
+                List.of(
+                        消息(61L, "user", "始终使用深色主题"),
+                        ai消息(62L, "展示一", "已应用深色主题",
+                                ChatMemoryOutcome.SUCCEEDED),
+                        消息(63L, "user", "不得作为偏好的异常需求"),
+                        ai消息(64L, "协议异常展示", "安全失败投影",
+                                ChatMemoryOutcome.PROTOCOL_ERROR)),
+                true);
+
+        assertEquals(List.of(61L), result.batch().turnIds());
+        assertEquals(64L, result.batch().completedThroughId());
+        assertTrue(result.batch().prompt().contains("始终使用深色主题"));
+        assertFalse(result.batch().prompt().contains("异常需求"));
+        assertFalse(result.batch().prompt().contains("已应用深色主题"));
+        assertFalse(result.batch().prompt().contains("安全失败投影"));
+    }
+
+    @Test
+    void 连续不合格AI序列不会卡死且后续合格回合仍可提取() {
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+
+        UserPreferenceBatchBuilder.PageResult result = session.acceptPage(
+                List.of(
+                        消息(71L, "user", "第一条无效证据"),
+                        ai消息(72L, "旧 Vue 展示", "保守投影",
+                                ChatMemoryOutcome.LEGACY_UNVERIFIED),
+                        ai消息(73L, "空结果展示", "看似安全投影", null),
+                        消息(74L, "user", "所有页面使用圆角卡片"),
+                        ai消息(75L, "展示二", "已使用圆角卡片",
+                                ChatMemoryOutcome.SUCCEEDED)),
+                true);
+
+        assertEquals(List.of(74L), result.batch().turnIds());
+        assertEquals(75L, result.batch().completedThroughId());
+        assertFalse(result.batch().prompt().contains("第一条无效证据"));
+        assertTrue(result.batch().prompt().contains("所有页面使用圆角卡片"));
+    }
+
+    @Test
+    void 不合格边界后批次满不得越过未提交合格回合() {
+        String firstUser = "甲".repeat(120);
+        String pendingUser = "乙".repeat(120);
+        int oneTurnTokens = tokenEstimator.estimateText(
+                UserPreferencePromptBuilder.build(
+                        "", 用户证据(81L, firstUser), List.of(81L)));
+        properties.setAsyncCompressionThreshold(oneTurnTokens);
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+
+        UserPreferenceBatchBuilder.PageResult result = session.acceptPage(
+                List.of(
+                        消息(81L, "user", firstUser),
+                        ai消息(82L, "展示一", "第一轮完成",
+                                ChatMemoryOutcome.SUCCEEDED),
+                        消息(83L, "user", "协议异常用户证据"),
+                        ai消息(84L, "协议异常展示", "安全失败投影",
+                                ChatMemoryOutcome.PROTOCOL_ERROR),
+                        消息(85L, "user", pendingUser),
+                        ai消息(86L, "展示二", "第二轮完成",
+                                ChatMemoryOutcome.SUCCEEDED)),
+                true);
+
+        assertEquals(List.of(81L), result.batch().turnIds());
+        assertEquals(84L, result.batch().completedThroughId(),
+                "可以越过不合格 AI，但不能越过未提交的下一合格回合");
+        assertTrue(result.batch().hasMore());
+        assertFalse(result.batch().prompt().contains(pendingUser));
+    }
+
     private ChatHistory 消息(long id, String type, String text) {
+        ChatHistory.ChatHistoryBuilder builder = ChatHistory.builder()
+                .id(id).appId(100L).userId(7L)
+                .messageType(type).message(text);
+        if ("ai".equals(type)) {
+            builder.memoryMessage(text)
+                    .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED);
+        }
+        return builder.build();
+    }
+
+    private ChatHistory ai消息(
+            long id,
+            String displayText,
+            String memoryText,
+            ChatMemoryOutcome outcome) {
         return ChatHistory.builder()
                 .id(id).appId(100L).userId(7L)
-                .messageType(type).message(text).build();
+                .messageType("ai").message(displayText)
+                .memoryMessage(memoryText).memoryOutcome(outcome)
+                .build();
     }
 
     private String 用户证据(long turnId, String userText) {

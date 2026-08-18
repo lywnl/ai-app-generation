@@ -69,6 +69,20 @@ class ContextCompressionCoordinatorTest {
             """.strip();
 
     @org.junit.jupiter.api.Test
+    void 固定分层Token门禁保持不变() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+
+        assertEquals(12_288, properties.getL0RetainedTokens());
+        assertEquals(3_072, properties.getL1MaxSummaryTokens());
+        assertEquals(1_024, properties.getL2MaxRecallTokens());
+        assertEquals(28_672, properties.getAsyncCompressionThreshold());
+        assertEquals(30_720, properties.getBlockingCompressionThreshold());
+        assertEquals(32_768, properties.getHardInputLimit());
+        assertEquals(8_192, properties.getMaxOutputTokens());
+        assertEquals(1.15D, properties.getEstimationSafetyFactor());
+    }
+
+    @org.junit.jupiter.api.Test
     void exposesMetricsAwareConstructor() {
         assertDoesNotThrow(() -> ContextCompressionCoordinator.class
                 .getConstructor(
