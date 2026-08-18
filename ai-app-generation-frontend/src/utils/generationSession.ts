@@ -65,6 +65,8 @@ export type GenerationStatus = 'streaming' | 'done' | 'error'
 
 export type ContextCompressionState = 'idle' | 'compressing'
 
+export type ToolProtocolRecoveryState = 'idle' | 'recovering'
+
 export type GenerationOutcome =
   | 'pending'
   | 'succeeded'
@@ -81,6 +83,7 @@ export interface GenerationSessionSnapshot {
   status: GenerationStatus
   outcome: GenerationOutcome
   contextCompression: ContextCompressionState
+  toolProtocolRecovery: ToolProtocolRecoveryState
   errorMessage?: string
   toolCalls: Map<string, ToolCallView>
 }
@@ -89,6 +92,28 @@ export function shouldRefreshGenerationPreview(
   snapshot: Pick<GenerationSessionSnapshot, 'status' | 'outcome'>,
 ): boolean {
   return snapshot.status === 'done' && snapshot.outcome === 'succeeded'
+}
+
+export function getGenerationStatusText(
+  contextCompression: ContextCompressionState,
+  toolProtocolRecovery: ToolProtocolRecoveryState,
+  fallback: string,
+): string {
+  if (contextCompression === 'compressing') {
+    return '正在压缩上下文，请稍候…'
+  }
+  if (toolProtocolRecovery === 'recovering') {
+    return '正在校正工具调用，请稍候…'
+  }
+  return fallback
+}
+
+export function shouldShowGenerationStatus(
+  loading: boolean,
+  contextCompression: ContextCompressionState,
+  hasVisibleOutput: boolean,
+): boolean {
+  return loading && (contextCompression === 'compressing' || !hasVisibleOutput)
 }
 
 export interface StartGenerationSessionOptions {
@@ -143,6 +168,7 @@ function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
     status: 'done',
     outcome: 'pending',
     contextCompression: 'idle',
+    toolProtocolRecovery: 'idle',
     toolCalls: new Map(),
   }
 }
@@ -226,6 +252,14 @@ function flushBuffer(appId: string, requestId: number): void {
   emit(appId, 'delta', requestId)
 }
 
+function hideToolProtocolRecovery(session: SessionState): boolean {
+  if (session.snapshot.toolProtocolRecovery === 'idle') {
+    return false
+  }
+  session.snapshot.toolProtocolRecovery = 'idle'
+  return true
+}
+
 function queueDelta(appId: string, requestId: number, chunk: string): void {
   if (!chunk) {
     return
@@ -235,9 +269,13 @@ function queueDelta(appId: string, requestId: number, chunk: string): void {
     return
   }
   if (session.renderMode === 'direct') {
+    hideToolProtocolRecovery(session)
     session.snapshot.content += chunk
     emit(appId, 'delta', requestId)
     return
+  }
+  if (hideToolProtocolRecovery(session)) {
+    emit(appId, 'delta', requestId)
   }
   session.buffer += chunk
   if (!session.flushTimer) {
@@ -268,6 +306,7 @@ function finishSession(
   session.snapshot.loading = false
   session.snapshot.status = nextStatus
   session.snapshot.contextCompression = 'idle'
+  session.snapshot.toolProtocolRecovery = 'idle'
   session.snapshot.errorMessage = errorMessage
   session.snapshot.outcome = outcome
   stopSessionStream(session)
@@ -290,6 +329,7 @@ function markDone(appId: string, requestId: number): void {
   }
   session.snapshot.loading = false
   session.snapshot.contextCompression = 'idle'
+  session.snapshot.toolProtocolRecovery = 'idle'
   if (session.snapshot.status === 'streaming') {
     session.snapshot.status = 'done'
     if (!session.expectVueTurnOutcome && session.snapshot.outcome === 'pending') {
@@ -390,6 +430,7 @@ function handleToolRequest(appId: string, requestId: number, payload: JsonRecord
   const id = toStringValue(payload.id) || ''
   const name = toStringValue(payload.name)
   const view = ensureToolCall(session, id, name)
+  hideToolProtocolRecovery(session)
   view.status = 'streaming'
   mergeToolArguments(view, parseArgumentObject(payload.arguments))
   emit(appId, 'delta', requestId)
@@ -405,6 +446,7 @@ function handleToolArgument(appId: string, requestId: number, payload: JsonRecor
   const key = toStringValue(payload.key)
   const value = toStringValue(payload.value)
   const view = ensureToolCall(session, id, name)
+  hideToolProtocolRecovery(session)
   view.status = 'streaming'
   if (key && value !== undefined && isVisibleToolArgument(view.name, key)) {
     view.args[key] = value
@@ -422,6 +464,7 @@ function handleToolArgumentDelta(appId: string, requestId: number, payload: Json
   const key = toStringValue(payload.key)
   const delta = toStringValue(payload.delta) || ''
   const view = ensureToolCall(session, id, name)
+  hideToolProtocolRecovery(session)
   view.status = 'streaming'
   if (key && isVisibleToolArgument(view.name, key)) {
     const oldValue = typeof view.args[key] === 'string' ? (view.args[key] as string) : ''
@@ -438,6 +481,7 @@ function handleToolExecuted(appId: string, requestId: number, payload: JsonRecor
   const id = toStringValue(payload.id) || ''
   const name = toStringValue(payload.name)
   const view = ensureToolCall(session, id, name)
+  hideToolProtocolRecovery(session)
   mergeToolArguments(view, parseArgumentObject(payload.arguments))
   const result = sanitizeToolResult(view.name, toStringValue(payload.result))
   if (result !== undefined) {
@@ -542,6 +586,62 @@ const CONTEXT_COMPRESSION_MESSAGES = {
   STARTED: '正在压缩上下文，请稍候…',
   COMPLETED: '上下文压缩完成，继续生成…',
 } as const
+
+const TOOL_PROTOCOL_RECOVERY_MESSAGES = {
+  STARTED: '正在校正工具调用，请稍候…',
+  RECOVERED: '工具调用已校正，继续生成…',
+  FAILED: '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
+} as const
+
+type ToolProtocolRecoveryPhase = keyof typeof TOOL_PROTOCOL_RECOVERY_MESSAGES
+
+function handleToolProtocolRecovery(appId: string, requestId: number, data: string): void {
+  const session = getActiveSession(appId, requestId)
+  if (!session || session.snapshot.status !== 'streaming') {
+    return
+  }
+  const payload = tryParseJson(data)
+  const phase = payload?.phase
+  const validPhase =
+    phase === 'STARTED' || phase === 'RECOVERED' || phase === 'FAILED'
+  const payloadFields = payload ? Object.keys(payload).sort() : []
+  const exactFields =
+    payload !== undefined &&
+    !Array.isArray(payload) &&
+    payloadFields.length === 3 &&
+    payloadFields[0] === 'message' &&
+    payloadFields[1] === 'phase' &&
+    payloadFields[2] === 'protocol'
+  const expectedMessage = validPhase
+    ? TOOL_PROTOCOL_RECOVERY_MESSAGES[phase as ToolProtocolRecoveryPhase]
+    : undefined
+  const validTransition =
+    phase === 'STARTED'
+      ? session.snapshot.toolProtocolRecovery === 'idle'
+      : validPhase && session.snapshot.toolProtocolRecovery === 'recovering'
+  if (
+    !exactFields ||
+    payload.protocol !== 'tool-protocol-recovery/v1' ||
+    !validPhase ||
+    payload.message !== expectedMessage ||
+    !validTransition
+  ) {
+    markProtocolError(appId, requestId, '工具调用恢复协议不合法')
+    return
+  }
+  if (phase === 'STARTED') {
+    if (session.flushTimer) {
+      clearTimeout(session.flushTimer)
+      session.flushTimer = undefined
+    }
+    session.buffer = ''
+    session.snapshot.content = ''
+    session.snapshot.toolProtocolRecovery = 'recovering'
+  } else {
+    session.snapshot.toolProtocolRecovery = 'idle'
+  }
+  emit(appId, 'delta', requestId)
+}
 
 function handleContextCompression(appId: string, requestId: number, data: string): void {
   const session = getActiveSession(appId, requestId)
@@ -661,6 +761,10 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
   }
   if (eventName === 'context-compression') {
     handleContextCompression(appId, requestId, data)
+    return
+  }
+  if (eventName === 'tool-protocol-recovery') {
+    handleToolProtocolRecovery(appId, requestId, data)
     return
   }
   if (eventName === 'turn-outcome') {
@@ -844,6 +948,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
     status: 'streaming',
     outcome: 'pending',
     contextCompression: 'idle',
+    toolProtocolRecovery: 'idle',
     toolCalls: new Map(),
   }
   emit(appId, 'delta', requestId)

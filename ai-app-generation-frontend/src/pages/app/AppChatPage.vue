@@ -165,10 +165,13 @@
                   aria-live="polite"
                 >
                   <a-spin size="small" />
-                  <span v-if="message.contextCompression === 'compressing'">
-                    正在压缩上下文，请稍候…
-                  </span>
-                  <span v-else>AI 正在思考...</span>
+                  <span>{{
+                    getGenerationStatusText(
+                      message.contextCompression || 'idle',
+                      message.toolProtocolRecovery || 'idle',
+                      'AI 正在思考...',
+                    )
+                  }}</span>
                 </div>
               </div>
             </div>
@@ -291,8 +294,13 @@
           </div>
           <div v-else-if="isGenerating" class="preview-loading" role="status" aria-live="polite">
             <a-spin size="large" />
-            <p v-if="contextCompression === 'compressing'">正在压缩上下文，请稍候…</p>
-            <p v-else>正在生成网站...</p>
+            <p>{{
+              getGenerationStatusText(
+                contextCompression,
+                toolProtocolRecovery,
+                '正在生成网站...',
+              )
+            }}</p>
           </div>
           <iframe
             v-else
@@ -341,6 +349,7 @@ import {
   type GenerationSessionSnapshot,
   type GenerationOutcome,
   type ContextCompressionState,
+  type ToolProtocolRecoveryState,
   startGenerationSession,
   subscribeGenerationSession,
   getGenerationSessionSnapshot,
@@ -348,6 +357,8 @@ import {
   getBuildProjectDisplayState,
   getBuildProjectVisualState,
   shouldRefreshGenerationPreview,
+  getGenerationStatusText,
+  shouldShowGenerationStatus,
 } from '@/utils/generationSession'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -411,6 +422,7 @@ interface Message {
   content: string
   loading?: boolean
   contextCompression?: ContextCompressionState
+  toolProtocolRecovery?: ToolProtocolRecoveryState
   createTime?: string
   /** tool call id → 当前调用参数视图;保持插入顺序用 Map */
   toolCalls?: Map<string, ToolCallView>
@@ -424,6 +436,7 @@ const activeSessionAppId = ref<string | null>(null)
 const sessionMessageIndex = ref<number | null>(null)
 const detachSession = ref<null | (() => void)>(null)
 const contextCompression = ref<ContextCompressionState>('idle')
+const toolProtocolRecovery = ref<ToolProtocolRecoveryState>('idle')
 
 // 外层消息容器智能吸底状态:用户上滑取消吸底,滑回接近底部(距底 ≤ 32px)恢复吸底。
 // 阈值 32 不是宽容,是流式场景下 scrollHeight 持续增长的兜底 —— 1px 在抖动中不可达。
@@ -593,6 +606,7 @@ const fetchAppInfo = async () => {
 
 const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   contextCompression.value = snapshot.contextCompression
+  toolProtocolRecovery.value = snapshot.toolProtocolRecovery
   const idx = sessionMessageIndex.value
   if (idx === null || !messages.value[idx]) {
     return
@@ -601,8 +615,13 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.content = snapshot.content
   aiMessage.toolCalls = new Map(snapshot.toolCalls)
   aiMessage.contextCompression = snapshot.contextCompression
+  aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery
   const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
-  aiMessage.loading = snapshot.loading && !hasVisibleOutput
+  aiMessage.loading = shouldShowGenerationStatus(
+    snapshot.loading,
+    snapshot.contextCompression,
+    hasVisibleOutput,
+  )
   isGenerating.value = snapshot.status === 'streaming'
 }
 

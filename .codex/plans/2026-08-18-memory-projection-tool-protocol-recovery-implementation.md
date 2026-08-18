@@ -525,11 +525,11 @@ export type ToolProtocolRecoveryState = 'idle' | 'recovering'
 toolProtocolRecovery: ToolProtocolRecoveryState
 ```
 
-- [ ] **步骤 8.1：先写前端状态机红测**
+- [x] ✅ **步骤 8.1：先写前端状态机红测**
 
   覆盖正常无恢复、STARTED 清 direct 正文、STARTED 清 throttled buffer、RECOVERED、FAILED、真实正文/严格结构化工具开始后隐藏提示、压缩与恢复重叠优先级、重复/乱序/伪造/错误协议事件拒绝、控制文案不进入聊天正文。
 
-- [ ] **步骤 8.2：运行红测并保存证据**
+- [x] ✅ **步骤 8.2：运行红测并保存证据**
 
   ```bash
   cd ai-app-generation-frontend
@@ -537,15 +537,15 @@ toolProtocolRecovery: ToolProtocolRecoveryState
     2>&1 | tee ../.codex/verification/task-8-red.log
   ```
 
-- [ ] **步骤 8.3：实现严格 SSE 状态转移与缓冲清理**
+- [x] ✅ **步骤 8.3：实现严格 SSE 状态转移与缓冲清理**
 
   STARTED 必须同时取消 throttle timer、清空私有 buffer、清除当前 generation 已展示的临时正文；不得删除已有受信结构化工具卡。`finishSession` 不能重新 flush 被隔离文本。错误格式事件继续按 `protocol_error` 失败关闭。
 
-- [ ] **步骤 8.4：实现单一提示派生逻辑**
+- [x] ✅ **步骤 8.4：实现单一提示派生逻辑**
 
   左右两处 UI 共用同一优先级：压缩文案优先，其次校正文案，最后普通思考/生成文案；保持“真实正文或工具卡出现后隐藏加载提示”的既有行为。
 
-- [ ] **步骤 8.5：运行前端绿测、类型检查和构建**
+- [x] ✅ **步骤 8.5：运行前端绿测、类型检查和构建**
 
   ```bash
   npm test -- --run
@@ -554,7 +554,7 @@ toolProtocolRecovery: ToolProtocolRecoveryState
   git diff --check
   ```
 
-- [ ] **步骤 8.6：独立审查、修复、勾选并中文提交**
+- [x] ✅ **步骤 8.6：独立审查、修复、勾选并中文提交**
 
   提交信息：`新增：展示工具调用自动校正状态`
 

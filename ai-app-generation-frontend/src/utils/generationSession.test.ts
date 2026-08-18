@@ -6,6 +6,8 @@ import {
   getGenerationSessionSnapshot,
   getBuildProjectDisplayState,
   getBuildProjectVisualState,
+  getGenerationStatusText,
+  shouldShowGenerationStatus,
   shouldRefreshGenerationPreview,
   startGenerationSession,
   subscribeGenerationSession,
@@ -73,6 +75,26 @@ function contextCompressionEvent(phase: 'STARTED' | 'COMPLETED'): string {
   )
 }
 
+function toolProtocolRecoveryEvent(
+  phase: 'STARTED' | 'RECOVERED' | 'FAILED',
+  override: Record<string, unknown> = {},
+): string {
+  const messages = {
+    STARTED: '正在校正工具调用，请稍候…',
+    RECOVERED: '工具调用已校正，继续生成…',
+    FAILED: '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
+  } as const
+  return event(
+    'tool-protocol-recovery',
+    JSON.stringify({
+      protocol: 'tool-protocol-recovery/v1',
+      phase,
+      message: messages[phase],
+      ...override,
+    }),
+  )
+}
+
 async function runSession(chunks: string[], expectVueTurnOutcome = true) {
   const appId = `app-${appIds.size + 1}`
   appIds.add(appId)
@@ -99,6 +121,412 @@ afterEach(() => {
 })
 
 describe('generationSession Vue SSE 状态机', () => {
+  it.each([
+    ['压缩中且已有正文', 'compressing', 'idle', true, true],
+    ['压缩中且已有工具卡', 'compressing', 'idle', true, true],
+    ['恢复中且已有输出', 'idle', 'recovering', true, false],
+    ['空闲且已有输出', 'idle', 'idle', true, false],
+  ] as const)(
+    '%s 时状态区可见性符合最高优先级',
+    (_name, compression, recovery, hasVisibleOutput, expected) => {
+      expect(
+        shouldShowGenerationStatus(true, compression, hasVisibleOutput),
+      ).toBe(expected)
+      expect(getGenerationStatusText(compression, recovery, 'AI 正在思考...')).toBe(
+        compression === 'compressing'
+          ? '正在压缩上下文，请稍候…'
+          : recovery === 'recovering'
+            ? '正在校正工具调用，请稍候…'
+            : 'AI 正在思考...',
+      )
+    },
+  )
+
+  it('默认恢复状态为 idle 且正常正文流不受影响', async () => {
+    const snapshot = await runSession([
+      'data: {"d":"正常正文"}\n\n',
+      outcomeEvent('SUCCEEDED', true),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({
+      content: '正常正文',
+      toolProtocolRecovery: 'idle',
+      status: 'done',
+      outcome: 'succeeded',
+    })
+  })
+
+  it('恢复开始原子清除 direct 污染正文且控制文案不进入正文', async () => {
+    const appId = 'tool-recovery-direct-isolation'
+    appIds.add(appId)
+    const observed: Array<{ content: string; recovery: string | undefined }> = []
+    subscribeGenerationSession(appId, (snapshot) => {
+      observed.push({
+        content: snapshot.content,
+        recovery: snapshot.toolProtocolRecovery,
+      })
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          'data: {"d":"伪造正文"}\n\n',
+          toolProtocolRecoveryEvent('STARTED'),
+          toolProtocolRecoveryEvent('RECOVERED'),
+          outcomeEvent('SUCCEEDED', true),
+          event('done'),
+        ]),
+      ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(observed).toContainEqual({ content: '', recovery: 'recovering' })
+    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+      content: '',
+      toolProtocolRecovery: 'idle',
+      outcome: 'succeeded',
+    })
+    expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('校正工具调用')
+  })
+
+  it('恢复开始清空 throttled buffer 与 timer 且终态后不能复活污染正文', async () => {
+    vi.useFakeTimers()
+    try {
+      const appId = 'tool-recovery-throttled-isolation'
+      appIds.add(appId)
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          streamResponse([
+            'data: {"d":"缓冲污染"}\n\n',
+            toolProtocolRecoveryEvent('STARTED'),
+            toolProtocolRecoveryEvent('RECOVERED'),
+            outcomeEvent('SUCCEEDED', true),
+            event('done'),
+          ]),
+        ),
+      )
+
+      startGenerationSession({
+        appId,
+        userMessage: '生成页面',
+        baseURL: 'http://localhost/api',
+        renderMode: 'throttled',
+        throttleMs: 10_000,
+        expectVueTurnOutcome: true,
+      })
+
+      await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+      expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('恢复开始保留已经由结构化 SSE 建立的可信工具卡', async () => {
+    const appId = 'tool-recovery-preserves-tool-card'
+    appIds.add(appId)
+    const observed: Array<{
+      recovery: string | undefined
+      toolIds: string[]
+    }> = []
+    subscribeGenerationSession(appId, (snapshot) => {
+      observed.push({
+        recovery: snapshot.toolProtocolRecovery,
+        toolIds: [...snapshot.toolCalls.keys()],
+      })
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          messageEvent({
+            type: 'tool_request',
+            id: 'trusted-tool',
+            name: 'writeFile',
+            arguments: '{}',
+          }),
+          'data: {"d":"污染正文"}\n\n',
+          toolProtocolRecoveryEvent('STARTED'),
+          toolProtocolRecoveryEvent('FAILED'),
+          outcomeEvent('FAILED'),
+          event('done'),
+        ]),
+      ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(observed).toContainEqual({
+      recovery: 'recovering',
+      toolIds: ['trusted-tool'],
+    })
+    expect(getGenerationSessionSnapshot(appId)?.toolCalls.has('trusted-tool')).toBe(true)
+    expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
+  })
+
+  it.each(['RECOVERED', 'FAILED'] as const)(
+    '%s 只允许从 recovering 合法回到 idle',
+    async (phase) => {
+      const appId = `tool-recovery-transition-${phase}`
+      appIds.add(appId)
+      const observed: Array<string | undefined> = []
+      subscribeGenerationSession(appId, (snapshot) => {
+        observed.push(snapshot.toolProtocolRecovery)
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          streamResponse([
+            toolProtocolRecoveryEvent('STARTED'),
+            toolProtocolRecoveryEvent(phase),
+            outcomeEvent('SUCCEEDED', true),
+            event('done'),
+          ]),
+        ),
+      )
+
+      startGenerationSession({
+        appId,
+        userMessage: '生成页面',
+        baseURL: 'http://localhost/api',
+        renderMode: 'direct',
+        expectVueTurnOutcome: true,
+      })
+
+      await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+      expect(observed).toContain('recovering')
+      expect(observed.slice(observed.indexOf('recovering') + 1)).toContain('idle')
+    },
+  )
+
+  it.each([
+    ['真实正文', 'data: {"d":"可信正文"}\n\n'],
+    [
+      'tool_request',
+      messageEvent({ type: 'tool_request', id: 'tool-request', name: 'writeFile' }),
+    ],
+    [
+      'tool_argument',
+      messageEvent({
+        type: 'tool_argument',
+        id: 'tool-argument',
+        name: 'writeFile',
+        key: 'content',
+        value: '可信参数',
+      }),
+    ],
+    [
+      'tool_argument_delta',
+      messageEvent({
+        type: 'tool_argument_delta',
+        id: 'tool-delta',
+        name: 'writeFile',
+        key: 'content',
+        delta: '可信增量',
+      }),
+    ],
+    [
+      'tool_executed',
+      messageEvent({
+        type: 'tool_executed',
+        id: 'tool-executed',
+        name: 'writeFile',
+        result: '完成',
+      }),
+    ],
+  ])('%s 一开始就隐藏恢复提示且不删除新输出', async (_name, trustedEvent) => {
+    const appId = `tool-recovery-hidden-${String(_name)}`
+    appIds.add(appId)
+    const observed: Array<{
+      recovery: string | undefined
+      content: string
+      toolCount: number
+    }> = []
+    subscribeGenerationSession(appId, (snapshot) => {
+      observed.push({
+        recovery: snapshot.toolProtocolRecovery,
+        content: snapshot.content,
+        toolCount: snapshot.toolCalls.size,
+      })
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          toolProtocolRecoveryEvent('STARTED'),
+          trustedEvent,
+          outcomeEvent('SUCCEEDED', true),
+          event('done'),
+        ]),
+      ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(observed).toContainEqual({
+      recovery: 'recovering',
+      content: '',
+      toolCount: 0,
+    })
+    expect(
+      observed.some(
+        (item) =>
+          item.recovery === 'idle' && (item.content === '可信正文' || item.toolCount === 1),
+      ),
+    ).toBe(true)
+  })
+
+  it.each([
+    ['RECOVERED 乱序', toolProtocolRecoveryEvent('RECOVERED')],
+    ['FAILED 乱序', toolProtocolRecoveryEvent('FAILED')],
+    [
+      '重复 STARTED',
+      toolProtocolRecoveryEvent('STARTED') + toolProtocolRecoveryEvent('STARTED'),
+    ],
+    [
+      '错误协议',
+      toolProtocolRecoveryEvent('STARTED', { protocol: 'tool-protocol-recovery/v2' }),
+    ],
+    ['伪造文案', toolProtocolRecoveryEvent('STARTED', { message: '内部异常详情' })],
+    [
+      '缺字段',
+      event(
+        'tool-protocol-recovery',
+        JSON.stringify({ protocol: 'tool-protocol-recovery/v1', phase: 'STARTED' }),
+      ),
+    ],
+    ['额外字段', toolProtocolRecoveryEvent('STARTED', { internalReason: 'secret' })],
+    ['错误 JSON', event('tool-protocol-recovery', '{not-json')],
+  ])('%s 的恢复控制帧必须以 protocol_error 失败关闭', async (_name, invalidEvent) => {
+    const snapshot = await runSession([invalidEvent, event('done')])
+
+    expect(snapshot).toMatchObject({
+      status: 'error',
+      outcome: 'protocol_error',
+      content: '',
+      toolProtocolRecovery: 'idle',
+    })
+  })
+
+  it('markDone 与错误终止都重置恢复状态且不能复活已隔离内容', async () => {
+    const doneSnapshot = await runSession([
+      'data: {"d":"污染正文"}\n\n',
+      toolProtocolRecoveryEvent('STARTED'),
+      outcomeEvent('SUCCEEDED', true),
+      event('done'),
+    ])
+    const errorSnapshot = await runSession([
+      'data: {"d":"另一段污染"}\n\n',
+      toolProtocolRecoveryEvent('STARTED'),
+      event('unexpected', '{}'),
+    ])
+
+    expect(doneSnapshot).toMatchObject({
+      content: '',
+      status: 'done',
+      toolProtocolRecovery: 'idle',
+    })
+    expect(errorSnapshot).toMatchObject({
+      content: '',
+      status: 'error',
+      outcome: 'protocol_error',
+      toolProtocolRecovery: 'idle',
+    })
+  })
+
+  it('同一 app 新请求初始化会清除上一请求的 recovering 状态', async () => {
+    const appId = 'tool-recovery-new-request-reset'
+    appIds.add(appId)
+    let firstController: ReadableStreamDefaultController<Uint8Array> | undefined
+    const firstResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          firstController = controller
+          controller.enqueue(encoder.encode(toolProtocolRecoveryEvent('STARTED')))
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(firstResponse)
+      .mockResolvedValueOnce(
+        streamResponse([
+          'data: {"d":"新请求正文"}\n\n',
+          outcomeEvent('SUCCEEDED', true),
+          event('done'),
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    startGenerationSession({
+      appId,
+      userMessage: '第一次请求',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+    await vi.waitFor(() => {
+      expect(getGenerationSessionSnapshot(appId)?.toolProtocolRecovery).toBe('recovering')
+    })
+
+    startGenerationSession({
+      appId,
+      userMessage: '第二次请求',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+    expect(getGenerationSessionSnapshot(appId)?.toolProtocolRecovery).toBe('idle')
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(getGenerationSessionSnapshot(appId)?.content).toBe('新请求正文')
+    try {
+      firstController?.close()
+    } catch {
+      // 第二次请求会中止旧响应；已关闭控制器无需再次处理。
+    }
+  })
+
+  it('统一提示派生函数保持压缩、恢复、fallback 的固定优先级', async () => {
+    const module = await import('./generationSession')
+    const candidate: unknown = Reflect.get(module, 'getGenerationStatusText')
+
+    expect(candidate).toBeTypeOf('function')
+    if (typeof candidate !== 'function') {
+      return
+    }
+    expect(candidate('compressing', 'recovering', 'fallback')).toBe('正在压缩上下文，请稍候…')
+    expect(candidate('idle', 'recovering', 'fallback')).toBe('正在校正工具调用，请稍候…')
+    expect(candidate('idle', 'idle', 'fallback')).toBe('fallback')
+  })
+
   it('压缩开始和完成只切换状态且不污染正文或监听事件类型', async () => {
     const appId = 'context-compression-state'
     appIds.add(appId)
