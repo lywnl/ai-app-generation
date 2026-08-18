@@ -9,6 +9,7 @@ DELIMITER $$
 CREATE PROCEDURE migrate_chat_history_memory_projection()
 BEGIN
     DECLARE v_column_count INT DEFAULT 0;
+    DECLARE v_partial_ai_rows BIGINT DEFAULT 0;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -67,6 +68,16 @@ BEGIN
     END IF;
 
     START TRANSACTION;
+
+    SELECT COUNT(*) INTO v_partial_ai_rows
+    FROM chat_history
+    WHERE messageType = 'ai'
+      AND ((memoryMessage IS NULL AND memoryOutcome IS NOT NULL)
+          OR (memoryMessage IS NOT NULL AND memoryOutcome IS NULL));
+    IF v_partial_ai_rows <> 0 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'AI 记忆投影存在半状态，请先受控修复';
+    END IF;
 
     UPDATE chat_history
     SET memoryMessage = NULL,

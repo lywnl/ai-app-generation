@@ -191,6 +191,7 @@ class MemorySchemaMigrationContractTest {
                                 + "[^;]*memoryoutcome\\s+is\\s+null\\s*;")
                         .matcher(development).find(),
                 "已知故障行只能在双投影字段均为空时回填");
+        assertAiPartialProjectionGuardPrecedesBackfill(development);
         assertFalse(Pattern.compile(
                         "(?is)\\bset\\s+(?:[a-z_][a-z0-9_]*\\.)?message\\s*=")
                         .matcher(development).find(),
@@ -199,6 +200,58 @@ class MemorySchemaMigrationContractTest {
                         + "(?:table\\s+)?[^;]*backup")
                         .matcher(development).find(),
                 "迁移不得创建或覆盖备份表");
+    }
+
+    private void assertAiPartialProjectionGuardPrecedesBackfill(
+            String migration) {
+        String normalized = normalize(migration);
+        String xorCondition = "messagetype = 'ai' and ((memorymessage is null "
+                + "and memoryoutcome is not null) or (memorymessage is not null "
+                + "and memoryoutcome is null))";
+        Matcher guard = Pattern.compile(
+                        "select count\\(\\*\\) into v_partial_ai_rows "
+                                + "from chat_history where "
+                                + Pattern.quote(xorCondition)
+                                + "; if v_partial_ai_rows <> 0 then "
+                                + "signal sqlstate '45000' set message_text = "
+                                + "'ai 记忆投影存在半状态，请先受控修复'; end if;")
+                .matcher(normalized);
+        assertTrue(guard.find(),
+                "迁移必须用完整 XOR guard 阻断 AI 投影半状态");
+        assertTrue(Pattern.compile(
+                        "declare exit handler for sqlexception begin "
+                                + "rollback; resignal; end;")
+                        .matcher(normalized).find(),
+                "XOR SIGNAL 必须由异常 handler 回滚并重新抛出");
+
+        int userCleanupPosition = normalized.indexOf(
+                "update chat_history set memorymessage = null");
+        int knownFailureBackfillPosition = normalized.indexOf(
+                "update chat_history set memorymessage = "
+                        + "'本轮发生工具协议异常");
+        int vueBackfillPosition = normalized.indexOf(
+                "update chat_history as h join app as a");
+        assertTrue(guard.end() < userCleanupPosition
+                        && guard.end() < knownFailureBackfillPosition
+                        && guard.end() < vueBackfillPosition,
+                "XOR 验收必须发生在用户清理和 AI 回填之前");
+        assertAiBackfillUsesDoubleNullGate(normalized,
+                "a.codegentype = 'vue_project'", "旧 Vue");
+        assertAiBackfillUsesDoubleNullGate(normalized,
+                "a.codegentype in ('html', 'multi_file')", "旧简单模式");
+    }
+
+    private void assertAiBackfillUsesDoubleNullGate(
+            String normalizedMigration, String branchCondition,
+            String branchName) {
+        Matcher update = Pattern.compile(
+                        "update chat_history as h join app as a[^;]*"
+                                + Pattern.quote(branchCondition)
+                                + "[^;]*h.memorymessage is null "
+                                + "and h.memoryoutcome is null;")
+                .matcher(normalizedMigration);
+        assertTrue(update.find(),
+                branchName + " AI 回填必须保持双 NULL 幂等门");
     }
 
     private void assertColumn(Class<?> entityType, String fieldName)
