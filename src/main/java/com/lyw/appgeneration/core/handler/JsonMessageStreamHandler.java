@@ -10,6 +10,7 @@ import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+import com.lyw.appgeneration.ai.tools.VueToolExecutionFact;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
@@ -24,6 +25,7 @@ import reactor.core.scheduler.Schedulers;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 维护 Vue 正文/工具事件顺序，并把所有信号汇合为唯一稳定终态。 */
@@ -76,14 +78,15 @@ public final class JsonMessageStreamHandler {
     public Flux<GenerationStreamEvent> handle(
             Flux<String> originFlux, VueTurnContext context) {
         return Flux.defer(() -> {
-            FileToolBudgetGuard.CanonicalAccumulator canonical =
+            FileToolBudgetGuard.CanonicalAccumulator display =
                     context.budgetSession().newCanonicalAccumulator(
                             TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
+            List<VueToolExecutionFact> facts = new CopyOnWriteArrayList<>();
             AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
-                                    chunk, canonical, seenToolIds, context))
+                                    chunk, display, facts, seenToolIds, context))
                     .filter(StrUtil::isNotEmpty)
                     .map(GenerationStreamEvent::content);
             AtomicBoolean deadlineReached = new AtomicBoolean();
@@ -103,9 +106,9 @@ public final class JsonMessageStreamHandler {
                             return Flux.empty();
                         }
                         return deadlineReached.get()
-                                ? finalizeTimeout(context, canonical.content())
+                                ? finalizeTimeout(context, display.content(), facts)
                                 : finalizeSignal(
-                                        context, canonical.content(), null);
+                                        context, display.content(), facts, null);
                     }));
             Flux<GenerationStreamEvent> guardedNormalFlow = normalFlow
                     .onErrorResume(error -> {
@@ -121,12 +124,15 @@ public final class JsonMessageStreamHandler {
                                     ? Flux.empty() : Flux.error(error);
                         }
                         return finalizeSignal(
-                                context, canonical.content(), error);
+                                context, display.content(), facts, error);
                     });
             Flux<GenerationStreamEvent> deleteFlow = deleteTakeover
                     .flatMapMany(request -> cancellationCoordinator
                             .requestDeleteTakeover(
-                                    context, request, canonical::content)
+                                    context, request, display::content,
+                                    () -> VueTurnMemoryProjection.project(
+                                            List.copyOf(facts),
+                                            VueTurnOutcome.TurnOutcomeType.CANCELLED))
                             .<Flux<GenerationStreamEvent>>map(finalization ->
                                     finalization.map(result ->
                                             (GenerationStreamEvent)
@@ -142,16 +148,24 @@ public final class JsonMessageStreamHandler {
                     .doOnCancel(() -> {
                         if (!terminalDelivered.get()) {
                             cancellationCoordinator.requestCancellation(
-                                    context, canonical::content);
+                                    context, display::content,
+                                    () -> VueTurnMemoryProjection.project(
+                                            List.copyOf(facts),
+                                            VueTurnOutcome.TurnOutcomeType.CANCELLED));
                         }
                     });
         });
     }
 
     private Flux<GenerationStreamEvent> finalizeTimeout(
-            VueTurnContext context, String canonicalPrefix) {
+            VueTurnContext context,
+            String displayPrefix,
+            List<VueToolExecutionFact> facts) {
         return cancellationCoordinator.requestTimeout(
-                        context, () -> canonicalPrefix)
+                        context, () -> displayPrefix,
+                        () -> VueTurnMemoryProjection.project(
+                                List.copyOf(facts),
+                                VueTurnOutcome.TurnOutcomeType.TIMED_OUT))
                 .map(result -> result.<GenerationStreamEvent>map(finalized ->
                         GenerationStreamEvent.turnOutcome(
                                 finalized.outcome())).flux())
@@ -159,14 +173,18 @@ public final class JsonMessageStreamHandler {
     }
 
     private Flux<GenerationStreamEvent> finalizeSignal(
-            VueTurnContext context, String canonicalPrefix, Throwable error) {
+            VueTurnContext context,
+            String displayPrefix,
+            List<VueToolExecutionFact> facts,
+            Throwable error) {
         VueTurnContext.TerminalTrigger trigger = error == null
                 ? VueTurnContext.TerminalTrigger.COMPLETED
                 : VueTurnContext.TerminalTrigger.FAILED;
         if (!context.tryStartFinalization(trigger)) {
             return Flux.empty();
         }
-        VueTurnOutcome requested = resolveOutcome(context, canonicalPrefix, error);
+        VueTurnOutcome requested = resolveOutcome(
+                context, displayPrefix, facts, error);
         VueTurnFinalizer.FinalizationResult result =
                 finalizer.finalizeOnce(context, requested);
         GenerationStreamEvent event = GenerationStreamEvent.turnOutcome(
@@ -175,60 +193,69 @@ public final class JsonMessageStreamHandler {
     }
 
     private VueTurnOutcome resolveOutcome(
-            VueTurnContext context, String prefix, Throwable error) {
+            VueTurnContext context,
+            String prefix,
+            List<VueToolExecutionFact> facts,
+            Throwable error) {
         ControlledTerminationReason reason = context.controlledTermination()
                 .map(termination -> termination.reason()).orElse(null);
         VueBuildPhase phase = context.phase();
         if (reason == ControlledTerminationReason.BUILD_SUCCEEDED
                 && phase == VueBuildPhase.SUCCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
-                    prefix, SUCCESS_MESSAGE, true);
+                    prefix, facts, SUCCESS_MESSAGE, true);
         }
         if (reason == ControlledTerminationReason.BUILD_FAILED
                 && phase == VueBuildPhase.FAILED) {
             if (context.timedOut()) {
                 return outcome(phase, VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
                         stripTrustedTerminal(prefix, BUILD_FAILED_MESSAGE),
-                        TIMEOUT_MESSAGE, false);
+                        facts, TIMEOUT_MESSAGE, false);
             }
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.FAILED,
-                    prefix, BUILD_FAILED_MESSAGE, false);
+                    prefix, facts, BUILD_FAILED_MESSAGE, false);
         }
         if (reason == ControlledTerminationReason.LOOP_LIMIT_EXCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix),
-                    LOOP_LIMIT_MESSAGE, false);
+                    facts, LOOP_LIMIT_MESSAGE, false);
         }
         if (reason == ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix),
-                    RESOURCE_LIMIT_MESSAGE, false);
+                    facts, RESOURCE_LIMIT_MESSAGE, false);
         }
         if (reason == ControlledTerminationReason.CANCELLED
                 || phase == VueBuildPhase.CANCELLED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.CANCELLED,
                     stripUntrustedControlledTerminal(prefix),
-                    CANCELLED_MESSAGE, false);
+                    facts, CANCELLED_MESSAGE, false);
         }
         if (reason == ControlledTerminationReason.PROTOCOL_ERROR
                 || reason == ControlledTerminationReason.EVALUATION_COMPLETED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                     stripUntrustedControlledTerminal(prefix),
-                    SCOPE_PROTOCOL_MESSAGE, false);
+                    facts, SCOPE_PROTOCOL_MESSAGE, false);
         }
         if (error != null) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
-                    prefix, SYSTEM_ERROR_MESSAGE, false);
+                    prefix, facts, SYSTEM_ERROR_MESSAGE, false);
         }
         return outcome(phase, VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                prefix, PROTOCOL_MESSAGE, false);
+                prefix, facts, PROTOCOL_MESSAGE, false);
     }
 
     private VueTurnOutcome outcome(
             VueBuildPhase phase, VueTurnOutcome.TurnOutcomeType type,
-            String prefix, String message, boolean refresh) {
+            String prefix,
+            List<VueToolExecutionFact> facts,
+            String message,
+            boolean refresh) {
         return new VueTurnOutcome(
-                phase, type, appendTerminalText(prefix, message), refresh, message);
+                phase, type,
+                appendTerminalText(prefix, message),
+                VueTurnMemoryProjection.project(facts, type),
+                refresh, message);
     }
 
     static String appendTerminalText(String prefix, String terminalText) {
@@ -257,7 +284,9 @@ public final class JsonMessageStreamHandler {
     }
 
     private Flux<String> handleJsonMessageChunk(
-            String chunk, FileToolBudgetGuard.CanonicalAccumulator canonical,
+            String chunk,
+            FileToolBudgetGuard.CanonicalAccumulator display,
+            List<VueToolExecutionFact> facts,
             Set<String> seenToolIds, VueTurnContext context) {
         StreamMessage streamMessage = JSONUtil.toBean(chunk, StreamMessage.class);
         StreamMessageTypeEnum type = StreamMessageTypeEnum.getEnumByValue(
@@ -269,7 +298,7 @@ public final class JsonMessageStreamHandler {
         return switch (type) {
             case AI_RESPONSE -> {
                 String data = JSONUtil.toBean(chunk, AiResponseMessage.class).getData();
-                FileToolBudgetGuard.AppendDecision decision = canonical.append(data);
+                FileToolBudgetGuard.AppendDecision decision = display.append(data);
                 recordResourceLimit(context, decision);
                 yield decision.resourceLimitExceeded()
                         ? resourceLimitAfter(decision.acceptedPrefix())
@@ -296,7 +325,9 @@ public final class JsonMessageStreamHandler {
                 String markdown = tool.generateToolExecutedResult(
                         arguments, executed.getResult());
                 String output = String.format("\n\n%s\n\n", markdown);
-                FileToolBudgetGuard.AppendDecision decision = canonical.append(output);
+                VueToolExecutionFact.parse(
+                        executed.getName(), executed.getResult()).ifPresent(facts::add);
+                FileToolBudgetGuard.AppendDecision decision = display.append(output);
                 recordResourceLimit(context, decision);
                 yield decision.resourceLimitExceeded()
                         ? Flux.just(realtimeToolExecutedChunk(chunk, executed))

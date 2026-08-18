@@ -21,6 +21,7 @@ import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
 import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
@@ -562,7 +563,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 // 终态赢家，不能再把协议内部取消误判为浏览器断连。
                 if (context.terminalWinner().isEmpty()) {
                     vueTurnCancellationCoordinator.requestCancellation(
-                            context, () -> "");
+                            context, () -> "",
+                            () -> VueTurnMemoryProjection.project(
+                                    List.of(),
+                                    VueTurnOutcome.TurnOutcomeType.CANCELLED));
                 }
             }
         }
@@ -601,6 +605,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                             context.phase(),
                             VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                             VueTurnFinalizer.SYSTEM_ERROR_MESSAGE,
+                            VueTurnMemoryProjection.project(
+                                    List.of(),
+                                    VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR),
                             false, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
             return Flux.just(GenerationStreamEvent.turnOutcome(
                     result.outcome()));

@@ -4,14 +4,24 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
+import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.manger.ToolManager;
+import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
+import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.UserMemoryService;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -74,7 +85,7 @@ class JsonMessageStreamHandlerTest {
             assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                     requested.outcome());
             assertEquals("正文\n\n项目尚未通过真实构建，请重新生成。",
-                    requested.canonicalAiText());
+                    requested.displayAiText());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
@@ -168,10 +179,10 @@ class JsonMessageStreamHandlerTest {
             VueTurnOutcome requested = invocation.getArgument(1);
             assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     requested.outcome());
-            assertTrue(requested.canonicalAiText().endsWith(
+            assertTrue(requested.displayAiText().endsWith(
                     JsonMessageStreamHandler.RESOURCE_LIMIT_MESSAGE));
             assertTrue(FileToolBudgetGuard.codePointCount(
-                    requested.canonicalAiText()) <= 64);
+                    requested.displayAiText()) <= 64);
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
@@ -202,10 +213,10 @@ class JsonMessageStreamHandlerTest {
                 .thenReturn("第 1 次构建失败，正在修复");
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
-            assertFalse(requested.canonicalAiText().contains("secretLog"));
+            assertFalse(requested.displayAiText().contains("secretLog"));
             assertEquals("\n\n第 1 次构建失败，正在修复\n\n\n\n"
                             + "项目尚未通过真实构建，请重新生成。",
-                    requested.canonicalAiText());
+                    requested.displayAiText());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
         String event = "{\"type\":\"tool_executed\",\"id\":\"tool-1\","
@@ -221,6 +232,88 @@ class JsonMessageStreamHandlerTest {
                 contentText(output.get(1)));
         verify(tool).generateToolExecutedResult(any(JSONObject.class),
                 eq("{\"success\":false,\"secretLog\":\"raw\"}"));
+    }
+
+    @Test
+    void 展示正文工具卡与受信记忆投影必须独立累积() {
+        VueTurnContext context = context("turn-memory-projection",
+                VueBuildPhase.SUCCEEDED);
+        context.recordControlledTermination(new ToolLoopTerminationProtocol
+                .ControlledTermination(ToolLoopTerminationProtocol
+                .ControlledTerminationReason.BUILD_SUCCEEDED,
+                JsonMessageStreamHandler.SUCCESS_MESSAGE));
+        BaseTool writeTool = mock(BaseTool.class);
+        BaseTool buildTool = mock(BaseTool.class);
+        when(toolManager.getTool("writeFile")).thenReturn(writeTool);
+        when(toolManager.getTool("buildProject")).thenReturn(buildTool);
+        String writeResult = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"writeFile\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":true,"
+                + "\"message\":\"已写入\",\"failureReason\":null,"
+                + "\"content\":null}";
+        String buildResult = "{\"protocol\":\"vue-build-tool/v1\","
+                + "\"invocationStatus\":\"COMPLETED\",\"success\":true,"
+                + "\"attempt\":1,\"maxAttempts\":3,\"stage\":\"SUCCESS\","
+                + "\"failureKind\":null,\"timedOut\":false,"
+                + "\"repairable\":false,\"reflectionRequired\":false,"
+                + "\"nextAction\":\"STOP\",\"message\":\"构建成功\","
+                + "\"errorSummary\":null,\"terminateToolLoop\":true,"
+                + "\"finalResponse\":\"项目已生成并构建成功。\"}";
+        when(writeTool.generateToolExecutedResult(
+                any(JSONObject.class), eq(writeResult)))
+                .thenReturn("[工具调用] 写入文件 src/App.vue\n```diff\n-secret\n```");
+        when(buildTool.generateToolExecutedResult(
+                any(JSONObject.class), eq(buildResult)))
+                .thenReturn("[工具调用] 构建项目（成功）");
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(history.addAiMessageAndReturn(
+                anyLong(), any(), any(), any(), anyLong()))
+                .thenReturn(ChatHistory.builder().id(901L).build());
+        when(collapser.collapseLastTurn(anyLong(), any()))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(
+                        ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of()));
+        VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
+                history, collapser, mock(MemorySummaryService.class),
+                mock(UserMemoryService.class), mock(AiGeneratorServiceFactory.class),
+                new AppDataLifecycleFence(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()),
+                new FileToolBudgetGuard());
+        JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
+                toolManager, realFinalizer, cancellationCoordinator);
+        String expectedMemory = """
+                Vue 项目回合结果：成功
+                实际执行工具：writeFile、buildProject
+                实际变更文件：src/App.vue
+                真实构建次数：1""";
+        String writeExecuted = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "write-1")
+                .set("name", "writeFile")
+                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\","
+                        + "\"content\":\"secret\"}")
+                .set("result", writeResult));
+        String buildExecuted = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "build-1")
+                .set("name", "buildProject")
+                .set("arguments", "{}")
+                .set("result", buildResult));
+
+        realHandler.handle(Flux.just(
+                "{\"type\":\"ai_response\",\"data\":\"模型声称已经完成\"}",
+                writeExecuted, buildExecuted), context).collectList().block();
+
+        verify(history).addAiMessageAndReturn(
+                eq(APP_ID),
+                org.mockito.ArgumentMatchers.argThat(display ->
+                        display.contains("模型声称已经完成")
+                                && display.contains("[工具调用]")
+                                && display.contains("diff")),
+                eq(expectedMemory), eq(ChatMemoryOutcome.SUCCEEDED), eq(USER_ID));
+        verify(collapser).collapseLastTurn(APP_ID, expectedMemory);
+        assertFalse(expectedMemory.contains("模型声称已经完成"));
+        assertFalse(expectedMemory.contains("diff"));
     }
 
     @Test
@@ -270,7 +363,7 @@ class JsonMessageStreamHandlerTest {
                 .thenReturn("[工具调用] 读取文件 src/App.vue（已应用）");
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
-            assertFalse(requested.canonicalAiText().contains("绝密读取正文"));
+            assertFalse(requested.displayAiText().contains("绝密读取正文"));
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
         String event = JSONUtil.toJsonStr(new JSONObject()
@@ -306,7 +399,7 @@ class JsonMessageStreamHandlerTest {
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
             assertEquals(JsonMessageStreamHandler.LOOP_LIMIT_MESSAGE,
-                    requested.canonicalAiText());
+                    requested.displayAiText());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
@@ -337,7 +430,7 @@ class JsonMessageStreamHandlerTest {
             assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
                     requested.outcome());
             assertEquals(JsonMessageStreamHandler.TIMEOUT_MESSAGE,
-                    requested.canonicalAiText());
+                    requested.displayAiText());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
@@ -361,7 +454,7 @@ class JsonMessageStreamHandlerTest {
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
             assertEquals(JsonMessageStreamHandler.SCOPE_PROTOCOL_MESSAGE,
-                    requested.canonicalAiText());
+                    requested.displayAiText());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
@@ -390,10 +483,11 @@ class JsonMessageStreamHandlerTest {
                 VueBuildPhase.GENERATING,
                 VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
                 JsonMessageStreamHandler.TIMEOUT_MESSAGE,
+                "可信超时投影",
                 false, JsonMessageStreamHandler.TIMEOUT_MESSAGE);
         var finalization = new VueTurnFinalizer.FinalizationResult(
                 timedOut, true);
-        when(cancellationCoordinator.requestTimeout(eq(context), any()))
+        when(cancellationCoordinator.requestTimeout(eq(context), any(), any()))
                 .thenReturn(Optional.of(Mono.just(finalization)));
         JsonMessageStreamHandler timedHandler = new JsonMessageStreamHandler(
                 toolManager, finalizer, cancellationCoordinator, scheduler);
@@ -414,7 +508,7 @@ class JsonMessageStreamHandlerTest {
                             outcome.outcome());
                 })
                 .verifyComplete();
-        verify(cancellationCoordinator).requestTimeout(eq(context), any());
+        verify(cancellationCoordinator).requestTimeout(eq(context), any(), any());
     }
 
     @Test
@@ -530,7 +624,7 @@ class JsonMessageStreamHandlerTest {
         context.commitUser(() -> true);
         assertTrue(context.tryStartFinalization(
                 VueTurnContext.TerminalTrigger.TIMED_OUT));
-        when(cancellationCoordinator.requestTimeout(eq(context), any()))
+        when(cancellationCoordinator.requestTimeout(eq(context), any(), any()))
                 .thenReturn(Optional.of(Mono.error(
                         new IllegalStateException("超时收尾失败"))));
         JsonMessageStreamHandler timedHandler = new JsonMessageStreamHandler(
@@ -780,7 +874,14 @@ class JsonMessageStreamHandlerTest {
     }
 
     private static VueTurnOutcome outcomeOf(GenerationStreamEvent event) {
-        return new VueTurnOutcome(((GenerationStreamEvent.TurnOutcome) event).message().getPhase(), ((GenerationStreamEvent.TurnOutcome) event).message().getOutcome(), ((GenerationStreamEvent.TurnOutcome) event).message().getMessage(), ((GenerationStreamEvent.TurnOutcome) event).message().isShouldRefreshPreview(), ((GenerationStreamEvent.TurnOutcome) event).message().getMessage());
+        return new VueTurnOutcome(
+                ((GenerationStreamEvent.TurnOutcome) event).message().getPhase(),
+                ((GenerationStreamEvent.TurnOutcome) event).message().getOutcome(),
+                ((GenerationStreamEvent.TurnOutcome) event).message().getMessage(),
+                "测试控制消息不承载记忆投影",
+                ((GenerationStreamEvent.TurnOutcome) event).message()
+                        .isShouldRefreshPreview(),
+                ((GenerationStreamEvent.TurnOutcome) event).message().getMessage());
     }
 
     private record DeleteTakeoverFixture(

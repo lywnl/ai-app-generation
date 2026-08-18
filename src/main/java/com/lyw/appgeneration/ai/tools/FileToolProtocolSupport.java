@@ -64,14 +64,41 @@ final class FileToolProtocolSupport {
         }
     }
 
+    static FileToolResult parseTrustedResult(
+            String rawResult, String operation) {
+        FileToolResult result = decodeStrict(rawResult);
+        if (!operation.equals(result.operation())) {
+            throw new IllegalArgumentException("工具结果操作名不匹配");
+        }
+        String normalizedPath = normalizePath(result.relativePath());
+        if (result.changed()
+                && (normalizedPath == null || normalizedPath.isBlank())) {
+            throw new IllegalArgumentException("变更工具结果必须包含相对路径");
+        }
+        return new FileToolResult(
+                result.protocol(), result.operation(), result.status(),
+                normalizedPath, result.changed(),
+                result.message(), result.failureReason(), result.content());
+    }
+
     private static FileToolResult parseStrict(
             String rawResult, String operation, String relativePath) {
+        FileToolResult result = parseTrustedResult(rawResult, operation);
+        if (!Objects.equals(normalizePath(relativePath),
+                normalizePath(result.relativePath()))) {
+            throw new IllegalArgumentException("工具结果路径不匹配");
+        }
+        return result;
+    }
+
+    private static FileToolResult decodeStrict(String rawResult) {
+        StrictToolJsonSupport.requireObject(rawResult);
         JSONObject json = JSONUtil.parseObj(
                 rawResult, JSONConfig.create()
                         .setCheckDuplicate(true)
                         .setIgnoreNullValue(false));
         validateFields(json);
-        FileToolResult result = new FileToolResult(
+        return new FileToolResult(
                 requiredString(json, "protocol"),
                 requiredString(json, "operation"),
                 FileToolResult.FileToolStatus.valueOf(
@@ -81,17 +108,11 @@ final class FileToolProtocolSupport {
                 requiredString(json, "message"),
                 nullableString(json, "failureReason"),
                 nullableString(json, "content"));
-        if (!FileToolResult.PROTOCOL.equals(result.protocol())
-                || !operation.equals(result.operation())
-                || !Objects.equals(normalizePath(relativePath),
-                normalizePath(result.relativePath()))) {
-            throw new IllegalArgumentException("工具结果协议、操作名或路径不匹配");
-        }
-        return result;
     }
 
     static boolean isAppliedMutation(String rawResult, String operation) {
         try {
+            StrictToolJsonSupport.requireObject(rawResult);
             JSONObject json = JSONUtil.parseObj(
                     rawResult, JSONConfig.create()
                             .setCheckDuplicate(true)

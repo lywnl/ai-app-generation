@@ -2,7 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
-import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
@@ -60,7 +60,8 @@ public class SimpleTextStreamHandler {
             AppDataLifecycleFence lifecycleFence,
             SimpleGenerationTurnContext context) {
         PersistenceResult result = persistStableMessage(
-                message, true, chatHistoryService, appId, loginUser,
+                message, message, ChatMemoryOutcome.SUCCEEDED,
+                true, chatHistoryService, appId, loginUser,
                 memorySummaryService, userMemoryService,
                 lifecycleFence, context);
         if (result == PersistenceResult.FAILED) {
@@ -77,7 +78,9 @@ public class SimpleTextStreamHandler {
             SimpleGenerationTurnContext context) {
         try {
             PersistenceResult result = persistStableMessage(
-                    FAILURE_MESSAGE, false, chatHistoryService, appId,
+                    FAILURE_MESSAGE, FAILURE_MESSAGE,
+                    ChatMemoryOutcome.SYSTEM_ERROR,
+                    false, chatHistoryService, appId,
                     loginUser, memorySummaryService, userMemoryService,
                     lifecycleFence, context);
             if (result == PersistenceResult.FAILED) {
@@ -89,7 +92,10 @@ public class SimpleTextStreamHandler {
     }
 
     private PersistenceResult persistStableMessage(
-            String message, boolean triggerMemory,
+            String displayMessage,
+            String memoryMessage,
+            ChatMemoryOutcome memoryOutcome,
+            boolean triggerMemory,
             ChatHistoryService chatHistoryService, long appId, User loginUser,
             MemorySummaryService memorySummaryService,
             UserMemoryService userMemoryService,
@@ -108,8 +114,8 @@ public class SimpleTextStreamHandler {
             if (context.isCancelled()) {
                 return PersistenceResult.SKIPPED;
             }
-            ChatHistory saved = chatHistoryService.addChatMessageAndReturn(
-                    appId, message, ChatHistoryMessageTypeEnum.AI.getValue(),
+            ChatHistory saved = chatHistoryService.addAiMessageAndReturn(
+                    appId, displayMessage, memoryMessage, memoryOutcome,
                     loginUser.getId());
             if (saved == null) {
                 return PersistenceResult.FAILED;

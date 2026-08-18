@@ -212,33 +212,33 @@ public record VueTurnOutcome(
         String clientMessage) {}
 ```
 
-- [ ] **步骤 2.1：先写确定性投影红测**
+- [x] ✅ **步骤 2.1：先写确定性投影红测**
 
   覆盖真实 `file-tool/v1` 与 `vue-build-tool/v1` 事件：只记录实际执行工具名、真实变更文件、真实构建次数与终态；读文件正文、参数 JSON、代码 diff、模型声明均不出现。`PROTOCOL_ERROR` 使用固定失败投影。Simple 成功 `memoryMessage=message`，失败使用固定安全投影。
 
-- [ ] **步骤 2.2：运行红测并保存证据**
+- [x] ✅ **步骤 2.2：运行红测并保存证据**
 
   ```bash
   bash mvnw -Dtest='VueTurnMemoryProjectionTest,JsonMessageStreamHandlerTest,VueTurnFinalizerTest,SimpleTextStreamHandlerTest' test \
     2>&1 | tee .codex/verification/task-2-red.log
   ```
 
-- [ ] **步骤 2.3：实现真实事件事实解析与投影构造**
+- [x] ✅ **步骤 2.3：实现真实事件事实解析与投影构造**
 
   `VueToolExecutionFact` 严格解析现有受信工具结果协议；变更文件使用去重且保持首次出现顺序的相对路径。`VueTurnMemoryProjection` 只接收解析后的事实和终态，不接收任意模型自由文本。
 
-- [ ] **步骤 2.4：分离展示累积与记忆事实累积**
+- [x] ✅ **步骤 2.4：分离展示累积与记忆事实累积**
 
   `JsonMessageStreamHandler` 继续把正文/工具卡写入 `displayAiText`，同时独立积累结构化事实；`VueTurnFinalizer` 使用 `addAiMessageAndReturn(displayAiText,memoryAiText,outcome)`，L0 折叠改传 `memoryAiText`。
 
-- [ ] **步骤 2.5：运行相关绿测与回归测试**
+- [x] ✅ **步骤 2.5：运行相关绿测与回归测试**
 
   ```bash
   bash mvnw -Dtest='VueTurnMemoryProjectionTest,JsonMessageStreamHandlerTest,VueTurnFinalizerTest,SimpleTextStreamHandlerTest,AppServiceImplVueTurnTest,AppServiceSimpleTurnLifecycleTest' test
   git diff --check
   ```
 
-- [ ] **步骤 2.6：独立审查、修复、勾选并中文提交**
+- [x] ✅ **步骤 2.6：独立审查、修复、勾选并中文提交**
 
   提交信息：`重构：按真实工具事件生成可信回合记忆`
 

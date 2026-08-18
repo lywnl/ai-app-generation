@@ -17,12 +17,14 @@ import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
 import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
@@ -230,11 +232,13 @@ class AppServiceImplVueTurnTest {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
-        when(history.addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID))
+        when(history.addAiMessageAndReturn(
+                eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
+                eq(cancelledMemoryProjection()),
+                eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
         when(collapser.collapseLastTurn(
-                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE))
+                eq(APP_ID), eq(cancelledMemoryProjection())))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
                         List.of()));
@@ -289,13 +293,17 @@ class AppServiceImplVueTurnTest {
                             APP_ID,
                             AppOperationLeaseManager.AppOperationType.GENERATE,
                             "before-cancel-finalized"));
-            verify(history, never()).addChatMessageAndReturn(
-                    APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID);
+            verify(history, never()).addAiMessageAndReturn(
+                    eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
+                    eq(cancelledMemoryProjection()),
+                    eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
             releaseHandler.complete(null);
 
             cancellationCall.get(2, TimeUnit.SECONDS);
-            verify(history, times(1)).addChatMessageAndReturn(
-                    APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID);
+            verify(history, times(1)).addAiMessageAndReturn(
+                    eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
+                    eq(cancelledMemoryProjection()),
+                    eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
             verify(facade, never()).generateVueProjectStream(
                     anyString(), anyLong(), anyBoolean(), any(), any());
             assertEquals(0, modelStarts.get());
@@ -362,7 +370,7 @@ class AppServiceImplVueTurnTest {
             VueTurnOutcome outcome = new VueTurnOutcome(
                     com.lyw.appgeneration.core.builder.VueBuildPhase.SUCCEEDED,
                     VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
-                    "项目已生成并构建成功。", true,
+                    "项目已生成并构建成功。", "可信记忆投影", true,
                     "项目已生成并构建成功。");
             return Flux.defer(() -> {
                 assertTrue(context.tryStartFinalization(
@@ -529,8 +537,8 @@ class AppServiceImplVueTurnTest {
                 anyString(), anyLong(), anyBoolean(), any(), any());
         verify(history, never()).addChatMessage(
                 APP_ID, "新需求", "user", USER_ID);
-        verify(history, never()).addChatMessageAndReturn(
-                eq(APP_ID), anyString(), eq("ai"), eq(USER_ID));
+        verify(history, never()).addAiMessageAndReturn(
+                eq(APP_ID), anyString(), anyString(), any(), eq(USER_ID));
         verify(finalizer, never()).finalizeOnce(any(), any());
         operationManager.acquire(APP_ID,
                 AppOperationLeaseManager.AppOperationType.GENERATE,
@@ -598,11 +606,13 @@ class AppServiceImplVueTurnTest {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
-        when(history.addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID))
+        when(history.addAiMessageAndReturn(
+                eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
+                eq(systemErrorMemoryProjection()),
+                eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
         when(collapser.collapseLastTurn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE))
+                eq(APP_ID), eq(systemErrorMemoryProjection())))
                 .thenReturn(collapsed());
         when(facade.generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
@@ -619,10 +629,12 @@ class AppServiceImplVueTurnTest {
                     outcome.message().getOutcome());
         }
 
-        verify(history, times(1)).addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID);
+        verify(history, times(1)).addAiMessageAndReturn(
+                eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
+                eq(systemErrorMemoryProjection()),
+                eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
         verify(collapser, times(1)).collapseLastTurn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE);
+                eq(APP_ID), eq(systemErrorMemoryProjection()));
         operationManager.acquire(APP_ID,
                 AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-system-error-finalization").close();
@@ -631,11 +643,13 @@ class AppServiceImplVueTurnTest {
     @Test
     void 删除参与者注册边界关闭后不得留下孤立用户消息() throws Exception {
         ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
-        when(history.addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID))
+        when(history.addAiMessageAndReturn(
+                eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
+                eq(systemErrorMemoryProjection()),
+                eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
         when(collapser.collapseLastTurn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE))
+                eq(APP_ID), eq(systemErrorMemoryProjection())))
                 .thenReturn(collapsed());
         String turnId = "turn-registration-closed";
         var operation = operationManager.acquire(
@@ -666,10 +680,12 @@ class AppServiceImplVueTurnTest {
 
         verify(facade, never()).generateVueProjectStream(
                 anyString(), anyLong(), anyBoolean(), any(), any());
-        verify(history, times(1)).addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, "ai", USER_ID);
+        verify(history, times(1)).addAiMessageAndReturn(
+                eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
+                eq(systemErrorMemoryProjection()),
+                eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
         verify(collapser, times(1)).collapseLastTurn(
-                APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE);
+                eq(APP_ID), eq(systemErrorMemoryProjection()));
         operationManager.acquire(APP_ID,
                 AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-registration-failure").close();
@@ -734,9 +750,10 @@ class AppServiceImplVueTurnTest {
                         events.getFirst();
                 assertEquals(VueTurnOutcome.TurnOutcomeType.CANCELLED,
                         outcome.message().getOutcome());
-                verify(history, times(1)).addChatMessageAndReturn(
-                        APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE,
-                        "ai", USER_ID);
+                verify(history, times(1)).addAiMessageAndReturn(
+                        eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
+                        eq(cancelledMemoryProjection()),
+                        eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
                 verify(facade, never()).generateVueProjectStream(
                         anyString(), anyLong(), anyBoolean(), any(), any());
                 assertEquals(0, modelSubscriptions.get());
@@ -967,13 +984,25 @@ class AppServiceImplVueTurnTest {
 
     private ToolMessageCollapser stableCancellationCollapser() {
         ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
-        when(history.addChatMessageAndReturn(
-                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE, "ai", USER_ID))
+        when(history.addAiMessageAndReturn(
+                eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
+                eq(cancelledMemoryProjection()),
+                eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
         when(collapser.collapseLastTurn(
-                APP_ID, VueTurnFinalizer.CANCELLED_MESSAGE))
+                eq(APP_ID), eq(cancelledMemoryProjection())))
                 .thenReturn(collapsed());
         return collapser;
+    }
+
+    private String cancelledMemoryProjection() {
+        return VueTurnMemoryProjection.project(
+                List.of(), VueTurnOutcome.TurnOutcomeType.CANCELLED);
+    }
+
+    private String systemErrorMemoryProjection() {
+        return VueTurnMemoryProjection.project(
+                List.of(), VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR);
     }
 
     private AtomicInteger stubNeverEndingVueModel() {

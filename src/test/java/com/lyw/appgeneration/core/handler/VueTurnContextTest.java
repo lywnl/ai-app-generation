@@ -593,7 +593,8 @@ class VueTurnContextTest {
         VueTurnOutcome outcome = new VueTurnOutcome(
                 com.lyw.appgeneration.core.builder.VueBuildPhase.SUCCEEDED,
                 VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
-                "项目已生成并构建成功。", true, "项目已生成并构建成功。");
+                "项目已生成并构建成功。", "可信记忆投影",
+                true, "项目已生成并构建成功。");
         return new VueTurnFinalizer.FinalizationResult(outcome, true);
     }
 

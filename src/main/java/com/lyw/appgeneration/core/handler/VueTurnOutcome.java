@@ -8,14 +8,16 @@ import java.util.Objects;
 public record VueTurnOutcome(
         VueBuildPhase phase,
         TurnOutcomeType outcome,
-        String canonicalAiText,
+        String displayAiText,
+        String memoryAiText,
         boolean shouldRefreshPreview,
         String clientMessage) {
 
     public VueTurnOutcome {
         Objects.requireNonNull(phase, "phase 不能为空");
         Objects.requireNonNull(outcome, "outcome 不能为空");
-        canonicalAiText = requireText(canonicalAiText, "canonicalAiText");
+        displayAiText = requireText(displayAiText, "displayAiText");
+        memoryAiText = requireText(memoryAiText, "memoryAiText");
         clientMessage = requireText(clientMessage, "clientMessage");
         if (shouldRefreshPreview && outcome != TurnOutcomeType.SUCCEEDED) {
             throw new IllegalArgumentException("只有成功终态可以刷新预览");

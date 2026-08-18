@@ -30,6 +30,7 @@ class TurnOutcomeMessageTest {
                 VueBuildPhase.SUCCEEDED,
                 VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
                 "不应进入控制消息",
+                "可信记忆投影",
                 true,
                 "项目已生成并构建成功。"));
         String json = JSONUtil.toJsonStr(message);

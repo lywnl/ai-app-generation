@@ -68,15 +68,31 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
 
     public boolean requestCancellation(
             VueTurnContext context, Supplier<String> canonicalPrefix) {
-        return request(context, canonicalPrefix,
+        return requestCancellation(context, canonicalPrefix,
+                () -> VueTurnFinalizer.CANCELLED_MESSAGE);
+    }
+
+    public boolean requestCancellation(
+            VueTurnContext context,
+            Supplier<String> displayPrefix,
+            Supplier<String> memoryText) {
+        return request(context, displayPrefix, memoryText,
                 VueTurnOutcome.TurnOutcomeType.CANCELLED, null);
     }
 
     /** 绝对截止时间专用入口；只有赢得终态 CAS 才返回可等待的最终结果。 */
     public Optional<Mono<VueTurnFinalizer.FinalizationResult>> requestTimeout(
             VueTurnContext context, Supplier<String> canonicalPrefix) {
+        return requestTimeout(context, canonicalPrefix,
+                () -> JsonMessageStreamHandler.TIMEOUT_MESSAGE);
+    }
+
+    public Optional<Mono<VueTurnFinalizer.FinalizationResult>> requestTimeout(
+            VueTurnContext context,
+            Supplier<String> displayPrefix,
+            Supplier<String> memoryText) {
         Sinks.One<VueTurnFinalizer.FinalizationResult> result = Sinks.one();
-        boolean claimed = request(context, canonicalPrefix,
+        boolean claimed = request(context, displayPrefix, memoryText,
                 VueTurnOutcome.TurnOutcomeType.TIMED_OUT, result);
         return claimed ? Optional.of(result.asMono()) : Optional.empty();
     }
@@ -228,9 +244,20 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                     VueTurnContext context,
                     VueTurnContext.DeleteTakeoverRequest request,
                     Supplier<String> canonicalPrefix) {
+        return requestDeleteTakeover(context, request, canonicalPrefix,
+                () -> VueTurnFinalizer.CANCELLED_MESSAGE);
+    }
+
+    public Optional<Mono<VueTurnFinalizer.FinalizationResult>>
+            requestDeleteTakeover(
+                    VueTurnContext context,
+                    VueTurnContext.DeleteTakeoverRequest request,
+                    Supplier<String> displayPrefix,
+                    Supplier<String> memoryText) {
         Objects.requireNonNull(context, "context 不能为空");
         Objects.requireNonNull(request, "删除接管请求不能为空");
-        Objects.requireNonNull(canonicalPrefix, "canonicalPrefix 不能为空");
+        Objects.requireNonNull(displayPrefix, "displayPrefix 不能为空");
+        Objects.requireNonNull(memoryText, "memoryText 不能为空");
         if (!context.isUserCommitted()) {
             throw new IllegalStateException("删除接管只接受已提交 Vue 回合");
         }
@@ -243,7 +270,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 VueBuildRepairMetricsCollector.CancellationResult.REQUESTED);
         Sinks.One<VueTurnFinalizer.FinalizationResult> result = Sinks.one();
         PendingCancellation cancellation = new PendingCancellation(
-                context, canonicalPrefix,
+                context, displayPrefix, memoryText,
                 VueTurnOutcome.TurnOutcomeType.CANCELLED,
                 trigger, result);
         pending.put(context.turnId(), cancellation);
@@ -273,7 +300,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 throw new IllegalStateException("删除接管未在截止时间内达到静默");
             }
             VueTurnFinalizer.FinalizationResult result = finalizeOutcome(
-                    context, cancellation.canonicalPrefix(),
+                    context, cancellation.displayPrefix(),
+                    cancellation.memoryText(),
                     VueTurnOutcome.TurnOutcomeType.CANCELLED,
                     VueTurnFinalizer.CANCELLED_MESSAGE);
             pending.remove(context.turnId(), cancellation);
@@ -289,11 +317,14 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     }
 
     private boolean request(
-            VueTurnContext context, Supplier<String> canonicalPrefix,
+            VueTurnContext context,
+            Supplier<String> displayPrefix,
+            Supplier<String> memoryText,
             VueTurnOutcome.TurnOutcomeType outcomeType,
             Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
         Objects.requireNonNull(context, "context 不能为空");
-        Objects.requireNonNull(canonicalPrefix, "canonicalPrefix 不能为空");
+        Objects.requireNonNull(displayPrefix, "displayPrefix 不能为空");
+        Objects.requireNonNull(memoryText, "memoryText 不能为空");
         if (!context.isUserCommitted()) {
             throw new IllegalStateException("取消协调器只接受已提交 Vue 回合");
         }
@@ -312,7 +343,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 throw failure;
             }
             PendingCancellation cancellation = registerCancellation(
-                    context, canonicalPrefix, outcomeType, result);
+                    context, displayPrefix, memoryText, outcomeType, result);
             failCancellation(cancellation, failure);
             throw failure;
         }
@@ -320,7 +351,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             return false;
         }
         PendingCancellation cancellation = registerCancellation(
-                context, canonicalPrefix, outcomeType, result);
+                context, displayPrefix, memoryText, outcomeType, result);
         try {
             executor.execute(() -> finalizeCancellation(cancellation));
         } catch (RejectedExecutionException exception) {
@@ -357,7 +388,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
 
     private PendingCancellation registerCancellation(
             VueTurnContext context,
-            Supplier<String> canonicalPrefix,
+            Supplier<String> displayPrefix,
+            Supplier<String> memoryText,
             VueTurnOutcome.TurnOutcomeType outcomeType,
             Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
         VueBuildRepairMetricsCollector.CancellationTrigger metricTrigger =
@@ -366,7 +398,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 VueBuildRepairMetricsCollector.CancellationResult.REQUESTED);
         PendingCancellation cancellation =
                 new PendingCancellation(
-                        context, canonicalPrefix, outcomeType,
+                        context, displayPrefix, memoryText, outcomeType,
                         metricTrigger, result);
         pending.put(context.turnId(), cancellation);
         return cancellation;
@@ -508,7 +540,8 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 ? JsonMessageStreamHandler.TIMEOUT_MESSAGE
                 : VueTurnFinalizer.CANCELLED_MESSAGE;
         VueTurnFinalizer.FinalizationResult finalized = finalizeOutcome(
-                context, cancellation.canonicalPrefix(),
+                context, cancellation.displayPrefix(),
+                cancellation.memoryText(),
                 cancellation.outcomeType(), message);
         pending.remove(context.turnId(), cancellation);
         if (cancellation.result() != null) {
@@ -520,13 +553,15 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
 
     private VueTurnFinalizer.FinalizationResult finalizeOutcome(
             VueTurnContext context,
-            Supplier<String> canonicalPrefix,
+            Supplier<String> displayPrefix,
+            Supplier<String> memoryText,
             VueTurnOutcome.TurnOutcomeType outcomeType,
             String message) {
-        String canonical = JsonMessageStreamHandler.appendTerminalText(
-                canonicalPrefix.get(), message);
+        String displayText = JsonMessageStreamHandler.appendTerminalText(
+                displayPrefix.get(), message);
         return finalizer.finalizeOnce(context, new VueTurnOutcome(
-                context.phase(), outcomeType, canonical, false, message));
+                context.phase(), outcomeType, displayText,
+                memoryText.get(), false, message));
     }
 
     private VueBuildRepairMetricsCollector.CancellationTrigger cancellationTrigger(
@@ -559,19 +594,23 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
     }
 
     private record PendingCancellation(
-            VueTurnContext context, Supplier<String> canonicalPrefix,
+            VueTurnContext context,
+            Supplier<String> displayPrefix,
+            Supplier<String> memoryText,
             VueTurnOutcome.TurnOutcomeType outcomeType,
             VueBuildRepairMetricsCollector.CancellationTrigger metricTrigger,
             Sinks.One<VueTurnFinalizer.FinalizationResult> result,
             AtomicBoolean drainScheduled) {
 
         private PendingCancellation(
-                VueTurnContext context, Supplier<String> canonicalPrefix,
+                VueTurnContext context,
+                Supplier<String> displayPrefix,
+                Supplier<String> memoryText,
                 VueTurnOutcome.TurnOutcomeType outcomeType,
                 VueBuildRepairMetricsCollector.CancellationTrigger metricTrigger,
                 Sinks.One<VueTurnFinalizer.FinalizationResult> result) {
-            this(context, canonicalPrefix, outcomeType, metricTrigger, result,
-                    new AtomicBoolean());
+            this(context, displayPrefix, memoryText, outcomeType,
+                    metricTrigger, result, new AtomicBoolean());
         }
 
         private boolean claimDrain() {

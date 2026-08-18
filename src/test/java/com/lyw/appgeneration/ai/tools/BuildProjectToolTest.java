@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONConfig;
 import cn.hutool.json.JSONNull;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.core.builder.BuildErrorSanitizer;
@@ -61,11 +62,15 @@ class BuildProjectToolTest {
         String fixture = Files.readString(Path.of(
                 "ai-app-generation-frontend/src/test-fixtures/"
                         + "vue-build-tool-v1-cases.json"), StandardCharsets.UTF_8);
-        for (Object item : JSONUtil.parseArray(fixture)) {
+        for (Object item : JSONUtil.parseArray(
+                fixture, JSONConfig.create().setIgnoreNullValue(false))) {
             JSONObject entry = JSONUtil.parseObj(item);
             BuildProjectToolResult expected = goldenFactory(entry.getStr("name"));
+            JSONObject raw = new JSONObject(
+                    entry.getJSONObject("raw"),
+                    JSONConfig.create().setIgnoreNullValue(false));
             BuildProjectToolResult actual = BuildProjectProtocolSupport.parse(
-                    JSONUtil.toJsonStr(entry.getJSONObject("raw")));
+                    JSONUtil.toJsonStr(raw));
 
             assertEquals(expected, actual, entry.getStr("name"));
         }

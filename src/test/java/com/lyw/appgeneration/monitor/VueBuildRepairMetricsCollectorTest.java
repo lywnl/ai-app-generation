@@ -109,7 +109,7 @@ class VueBuildRepairMetricsCollectorTest {
         VueTurnOutcome outcome = new VueTurnOutcome(
                 VueBuildPhase.REPAIRING,
                 VueTurnOutcome.TurnOutcomeType.CANCELLED,
-                "已取消", false, "已取消");
+                "已取消", "可信取消投影", false, "已取消");
 
         collector.recordTurnOutcome(outcome);
 
@@ -129,7 +129,7 @@ class VueBuildRepairMetricsCollectorTest {
         collector.recordTurnOutcome(new VueTurnOutcome(
                 VueBuildPhase.FINAL_DIAGNOSIS,
                 VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                "协议异常", false, "协议异常"));
+                "协议异常", "可信协议异常投影", false, "协议异常"));
         collector.recordCancellation(
                 VueBuildRepairMetricsCollector.CancellationTrigger.ABSOLUTE_DEADLINE,
                 VueBuildRepairMetricsCollector.CancellationResult.TIMED_OUT);

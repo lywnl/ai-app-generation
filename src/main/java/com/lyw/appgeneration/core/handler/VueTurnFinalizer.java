@@ -6,7 +6,6 @@ import com.lyw.appgeneration.ai.tools.BuildProjectToolResult;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.model.entity.ChatHistory;
-import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -168,11 +167,13 @@ public class VueTurnFinalizer implements InitializingBean {
             VueTurnContext context, VueTurnOutcome requestedOutcome) {
         FileToolBudgetGuard.CanonicalAccumulator check =
                 context.budgetSession().newCanonicalAccumulator();
-        if (check.append(requestedOutcome.canonicalAiText()).accepted()) {
+        if (check.append(requestedOutcome.displayAiText()).accepted()) {
             return requestedOutcome;
         }
         return new VueTurnOutcome(
                 context.phase(), SYSTEM_ERROR, RESOURCE_LIMIT_MESSAGE,
+                VueTurnMemoryProjection.project(
+                        List.of(), SYSTEM_ERROR),
                 false, RESOURCE_LIMIT_MESSAGE);
     }
 
@@ -201,9 +202,12 @@ public class VueTurnFinalizer implements InitializingBean {
             VueTurnContext context, VueTurnOutcome requestedOutcome) {
         ChatHistory saved;
         try {
-            saved = chatHistoryService.addChatMessageAndReturn(
-                    context.appId(), requestedOutcome.canonicalAiText(),
-                    ChatHistoryMessageTypeEnum.AI.getValue(), context.userId());
+            saved = chatHistoryService.addAiMessageAndReturn(
+                    context.appId(), requestedOutcome.displayAiText(),
+                    requestedOutcome.memoryAiText(),
+                    VueTurnMemoryProjection.memoryOutcome(
+                            requestedOutcome.outcome()),
+                    context.userId());
         } catch (RuntimeException exception) {
             log.error("Vue 回合 AI 消息保存异常,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
@@ -219,7 +223,7 @@ public class VueTurnFinalizer implements InitializingBean {
 
         ToolMessageCollapser.CollapseResult collapse =
                 toolMessageCollapser.collapseLastTurn(
-                        context.appId(), requestedOutcome.canonicalAiText());
+                        context.appId(), requestedOutcome.memoryAiText());
         recordCollapse(collapse.status());
         if (collapse.status() != COLLAPSED) {
             log.warn("Vue 回合 L0 未稳定同步,appId={},turnId={},stage={}",
@@ -291,7 +295,9 @@ public class VueTurnFinalizer implements InitializingBean {
 
     private VueTurnOutcome systemError(VueTurnContext context) {
         return new VueTurnOutcome(context.phase(), SYSTEM_ERROR,
-                SYSTEM_ERROR_MESSAGE, false, SYSTEM_ERROR_MESSAGE);
+                SYSTEM_ERROR_MESSAGE,
+                VueTurnMemoryProjection.project(List.of(), SYSTEM_ERROR),
+                false, SYSTEM_ERROR_MESSAGE);
     }
 
     public record FinalizationResult(VueTurnOutcome outcome, boolean persisted) {

@@ -16,6 +16,7 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
@@ -109,8 +110,9 @@ class AppServiceSimpleTurnLifecycleTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(history).addChatMessageAndReturn(
-                APP_ID, "回答", "ai", USER_ID);
+        verify(history).addAiMessageAndReturn(
+                APP_ID, "回答", "回答",
+                ChatMemoryOutcome.SUCCEEDED, USER_ID);
         verify(aiFactory, never()).invalidateAndClearMemory(
                 APP_ID, CodeGenTypeEnum.HTML);
     }
@@ -157,12 +159,16 @@ class AppServiceSimpleTurnLifecycleTest {
         ReflectionTestUtils.setField(service, "appDataLifecycleFence", fence);
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
-        when(history.addChatMessageAndReturn(
-                APP_ID, "回答", "ai", USER_ID))
+        when(history.addAiMessageAndReturn(
+                APP_ID, "回答", "回答",
+                ChatMemoryOutcome.SUCCEEDED, USER_ID))
                 .thenReturn(savedAiMessage("回答", AI_MESSAGE_ID));
-        when(history.addChatMessageAndReturn(
+        when(history.addAiMessageAndReturn(
                 APP_ID, com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
-                        .FAILURE_MESSAGE, "ai", USER_ID))
+                        .FAILURE_MESSAGE,
+                com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
+                        .FAILURE_MESSAGE,
+                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID))
                 .thenReturn(savedAiMessage(
                         com.lyw.appgeneration.core.handler.SimpleTextStreamHandler
                                 .FAILURE_MESSAGE,

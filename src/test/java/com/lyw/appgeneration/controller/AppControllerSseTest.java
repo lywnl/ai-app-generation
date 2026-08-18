@@ -172,7 +172,7 @@ class AppControllerSseTest {
         VueTurnOutcome outcome = new VueTurnOutcome(
                 VueBuildPhase.SUCCEEDED,
                 VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
-                "正文\n\n项目已生成并构建成功。", true,
+                "正文\n\n项目已生成并构建成功。", "可信记忆投影", true,
                 "项目已生成并构建成功。");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(
@@ -224,7 +224,7 @@ class AppControllerSseTest {
         VueTurnOutcome outcome = new VueTurnOutcome(
                 VueBuildPhase.SUCCEEDED,
                 VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
-                "正文", true, "项目已生成并构建成功。");
+                "正文", "可信记忆投影", true, "项目已生成并构建成功。");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(
                         GenerationStreamEvent.contextCompression(
@@ -393,7 +393,7 @@ class AppControllerSseTest {
         VueTurnOutcome outcome = new VueTurnOutcome(
                 VueBuildPhase.FINAL_DIAGNOSIS,
                 VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                "协议异常", false, "协议异常");
+                "协议异常", "可信协议异常投影", false, "协议异常");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(GenerationStreamEvent.turnOutcome(outcome)));
 
@@ -410,7 +410,7 @@ class AppControllerSseTest {
         VueTurnOutcome outcome = new VueTurnOutcome(
                 VueBuildPhase.GENERATING,
                 VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
-                "系统异常", false, "系统异常");
+                "系统异常", "可信系统异常投影", false, "系统异常");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(GenerationStreamEvent.turnOutcome(outcome)));
 

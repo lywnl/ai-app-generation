@@ -10,6 +10,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
@@ -69,7 +70,7 @@ class VueTurnCancellationCoordinatorTest {
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome outcome = invocation.getArgument(1);
             assertEquals(VueTurnOutcome.TurnOutcomeType.CANCELLED, outcome.outcome());
-            assertEquals("已生成部分\n\n本次生成已取消。", outcome.canonicalAiText());
+            assertEquals("已生成部分\n\n本次生成已取消。", outcome.displayAiText());
             finalized.countDown();
             context.closeResources();
             return new VueTurnFinalizer.FinalizationResult(outcome, true);
@@ -806,8 +807,9 @@ class VueTurnCancellationCoordinatorTest {
         AssertionError finalizerFailure =
                 new AssertionError("chat history fatal failure");
         doThrow(finalizerFailure).when(history)
-                .addChatMessageAndReturn(
-                        anyLong(), anyString(), eq("ai"), anyLong());
+                .addAiMessageAndReturn(
+                        anyLong(), anyString(), anyString(),
+                        any(ChatMemoryOutcome.class), anyLong());
         when(collapser.collapseLastTurn(anyLong(), anyString()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
