@@ -360,26 +360,26 @@ record Request(
         List<ChatMessage> transientMessages) {}
 ```
 
-- [ ] **步骤 5.1：先写 generation 竞争红测**
+- [x] ✅ **步骤 5.1：先写 generation 竞争红测**
 
   断言撤销当前代后整轮仍 `ACTIVE`；旧代所有回调和迟到 handle 失效；新代能启动；全局取消/超时与恢复竞争只有一个赢家；模型请求计数包含恢复请求。
 
-- [ ] **步骤 5.2：先写临时消息门禁红测**
+- [x] ✅ **步骤 5.2：先写临时消息门禁红测**
 
   断言临时 `SystemMessage` 在 28672/30720/32768 边界参与完整请求估算；压缩后仍位于 `Decision.messages` 尾部；真实 ChatMemory 不包含该消息；硬拒绝不调用模型。
 
-- [ ] **步骤 5.3：运行红测并保存证据**
+- [x] ✅ **步骤 5.3：运行红测并保存证据**
 
   ```bash
   bash mvnw -Dtest='StreamingRequestControllerRecoveryTest,ContextCompressionModelRequestGateTest,ContextCompressionCoordinatorTest,ConservativeChatTokenEstimatorTest' test \
     2>&1 | tee .codex/verification/task-5-red.log
   ```
 
-- [ ] **步骤 5.4：实现锁内线性化和门禁临时尾部**
+- [x] ✅ **步骤 5.4：实现锁内线性化和门禁临时尾部**
 
   generation 撤销只记录 revoked generation、摘除当前 handle 并在锁外尽力取消；不得设置整轮 `CANCELLED`。压缩规划只裁剪真实 memory，捕获快照、压缩后复检和最终 Decision 均统一追加 `transientMessages` 再估算。
 
-- [ ] **步骤 5.5：运行绿测与并发重复测试**
+- [x] ✅ **步骤 5.5：运行绿测与并发重复测试**
 
   ```bash
   bash mvnw -Dtest='StreamingRequestControllerRecoveryTest,ContextCompressionModelRequestGateTest,ContextCompressionCoordinatorTest,ConservativeChatTokenEstimatorTest,ToolLoopTerminationProtocolTest' test
@@ -387,7 +387,7 @@ record Request(
   git diff --check
   ```
 
-- [ ] **步骤 5.6：独立审查、修复、勾选并中文提交**
+- [x] ✅ **步骤 5.6：独立审查、修复、勾选并中文提交**
 
   提交信息：`重构：支持模型请求代次隔离与临时门禁消息`
 

@@ -27,6 +27,7 @@ public final class StreamingRequestController {
     private int activeCallbacks;
     private HandleSlot latestHandle;
     private long latestModelRequestGeneration;
+    private long cancelledGeneration = -1L;
     private long latestHandleGeneration = -1;
     private ControlledTermination termination;
     private Consumer<ControlledTermination> terminationHandler;
@@ -90,7 +91,8 @@ public final class StreamingRequestController {
         boolean cancelImmediately;
         synchronized (this) {
             cancelImmediately = state != State.ACTIVE
-                    || requestGeneration < latestModelRequestGeneration;
+                    || requestGeneration != latestModelRequestGeneration
+                    || requestGeneration == cancelledGeneration;
             if (!cancelImmediately && state == State.ACTIVE
                     && requestGeneration >= latestHandleGeneration) {
                 latestHandle = slot;
@@ -233,6 +235,16 @@ public final class StreamingRequestController {
         }
     }
 
+    public CallbackTicket enterCallback(long requestGeneration) {
+        synchronized (this) {
+            if (!isCurrentGenerationActive(requestGeneration)) {
+                return null;
+            }
+            activeCallbacks++;
+            return new CallbackTicket(this);
+        }
+    }
+
     public void onControlledTermination(Consumer<ControlledTermination> handler) {
         Objects.requireNonNull(handler, "受控终止回调不能为空");
         ControlledTermination pending;
@@ -262,6 +274,54 @@ public final class StreamingRequestController {
             action.run();
             return true;
         }
+    }
+
+    public boolean runIfCurrentGeneration(
+            long requestGeneration, Runnable action) {
+        Objects.requireNonNull(action, "代次受控动作不能为空");
+        synchronized (this) {
+            if (!isCurrentGenerationActive(requestGeneration)) {
+                return false;
+            }
+            action.run();
+            return true;
+        }
+    }
+
+    public GenerationCancellation cancelGenerationForRecovery(
+            long expectedGeneration) {
+        HandleSlot handle;
+        synchronized (this) {
+            if (!isCurrentGenerationActive(expectedGeneration)) {
+                return GenerationCancellation.REJECTED;
+            }
+            cancelledGeneration = expectedGeneration;
+            handle = latestHandleGeneration == expectedGeneration
+                    ? latestHandle : null;
+            if (handle != null) {
+                latestHandle = null;
+                latestHandleGeneration = -1L;
+            }
+        }
+        if (handle != null) {
+            cancelHandleBestEffort(handle);
+        }
+        return GenerationCancellation.CANCELLED;
+    }
+
+    private void cancelHandleBestEffort(HandleSlot handle) {
+        try {
+            handle.cancel();
+        } catch (RuntimeException exception) {
+            LOG.warn("Streaming request handle cancellation failed: type={}",
+                    exception.getClass().getSimpleName());
+        }
+    }
+
+    private boolean isCurrentGenerationActive(long requestGeneration) {
+        return state == State.ACTIVE
+                && requestGeneration == latestModelRequestGeneration
+                && requestGeneration != cancelledGeneration;
     }
 
     /**
@@ -373,6 +433,11 @@ public final class StreamingRequestController {
                 owner.leaveCallback();
             }
         }
+    }
+
+    public enum GenerationCancellation {
+        CANCELLED,
+        REJECTED
     }
 
     private static final class HandleSlot {

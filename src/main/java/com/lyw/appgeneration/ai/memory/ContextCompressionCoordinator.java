@@ -166,7 +166,7 @@ public class ContextCompressionCoordinator {
     public ContextAdmissionResult admit(
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools) {
-        return admit(memory, tools, ignored -> { },
+        return admit(memory, tools, List.of(), ignored -> { },
                 ContextContinuationGate.alwaysOpen());
     }
 
@@ -174,7 +174,7 @@ public class ContextCompressionCoordinator {
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
             Consumer<ContextAdmissionResult> transitionListener) {
-        return admit(memory, tools, transitionListener,
+        return admit(memory, tools, List.of(), transitionListener,
                 ContextContinuationGate.alwaysOpen());
     }
 
@@ -189,12 +189,23 @@ public class ContextCompressionCoordinator {
             List<ToolSpecification> tools,
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate) {
+        return admit(memory, tools, List.of(), transitionListener,
+                continuationGate);
+    }
+
+    public ContextAdmissionResult admit(
+            CompressionAwareChatMemory memory,
+            List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
+            Consumer<ContextAdmissionResult> transitionListener,
+            ContextContinuationGate continuationGate) {
         AdmissionDeadline deadline = AdmissionDeadline.start(
                 properties.getBlockingTimeout(), nanoTime,
                 System::currentTimeMillis,
                 nanos -> TimeUnit.NANOSECONDS.sleep(nanos));
         ContextAdmissionResult result = admitInternal(
-                memory, tools, transitionListener, continuationGate,
+                memory, tools, transientMessages, transitionListener,
+                continuationGate,
                 deadline);
         metricsCollector.recordContextGate(
                 result.mode(), result.failureReason());
@@ -204,6 +215,7 @@ public class ContextCompressionCoordinator {
     private ContextAdmissionResult admitInternal(
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate,
             AdmissionDeadline deadline) {
@@ -212,6 +224,8 @@ public class ContextCompressionCoordinator {
         Objects.requireNonNull(continuationGate, "回合原子提交门不能为空");
         List<ToolSpecification> stableTools = List.copyOf(
                 tools == null ? List.of() : tools);
+        List<ChatMessage> stableTransientMessages = List.copyOf(
+                transientMessages == null ? List.of() : transientMessages);
         long appId = requireAppId(memory.id());
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
@@ -228,6 +242,7 @@ public class ContextCompressionCoordinator {
             initialPreparation = readWithinDeadline(
                     () -> prepareInitialRequest(
                             appId, memory, stableTools,
+                            stableTransientMessages,
                             continuationGate), deadline);
         } catch (DependencyReadTimeoutException exception) {
             return failure(ContextCompressionMode.BLOCKING_FAILED,
@@ -247,7 +262,7 @@ public class ContextCompressionCoordinator {
         }
         if (initialPreparation.failureReason() != FailureReason.NONE) {
             return failure(ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    initialPreparation.request(), initialPreparation.request(),
                     0L, initialPreparation.failureReason(),
                     initialPreparation.detail());
         }
@@ -298,7 +313,8 @@ public class ContextCompressionCoordinator {
                     plan.failureReason(), plan.detail());
         }
         return blockAndRecheck(
-                appId, memory, stableTools, initialRequest, plan,
+                appId, memory, stableTools, stableTransientMessages,
+                initialRequest, plan,
                 transitionListener, continuationGate, deadline);
     }
 
@@ -353,6 +369,7 @@ public class ContextCompressionCoordinator {
             long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
             RequestSnapshot initialRequest,
             CompressionPlan plan,
             Consumer<ContextAdmissionResult> transitionListener,
@@ -455,7 +472,8 @@ public class ContextCompressionCoordinator {
         try {
             prepared = readWithinDeadline(
                     () -> prepareBlockingRequest(
-                            appId, memory, tools, initialRequest,
+                            appId, memory, tools, transientMessages,
+                            initialRequest,
                             plan, deadline), deadline);
         } catch (DependencyReadTimeoutException exception) {
             return blockingFailure(initialRequest,
@@ -519,28 +537,31 @@ public class ContextCompressionCoordinator {
             long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
             ContextContinuationGate continuationGate) {
         long lastSummarizedId;
         try {
             lastSummarizedId = summaryService.lastSummarizedId(appId);
         } catch (RuntimeException exception) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     FailureReason.CURSOR_READ_FAILED,
                     "读取 L1 摘要游标失败，appId=" + appId
                             + "，type="
                             + exception.getClass().getSimpleName());
         }
         if (!tryCommitContinuation(continuationGate)) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     FailureReason.TURN_TERMINATED,
                     "回合已取消或终态已被占用，appId=" + appId);
         }
         if (lastSummarizedId <= 0L) {
             try {
                 return InitialRequestPreparation.success(
-                        null, captureRequestSnapshot(memory, tools));
+                        null, captureRequestSnapshot(
+                                memory, tools, transientMessages));
             } catch (RuntimeException exception) {
                 return InitialRequestPreparation.failed(
+                        EMPTY_REQUEST_SNAPSHOT,
                         FailureReason.DEPENDENCY_FAILED,
                         "读取初始请求快照失败，type="
                                 + exception.getClass().getSimpleName());
@@ -548,7 +569,7 @@ public class ContextCompressionCoordinator {
         }
         Alignment alignment = readAlignment(appId, memory);
         if (!alignment.aligned()) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     alignment.failureReason(), alignment.detail());
         }
         int coveredTurns = 0;
@@ -568,13 +589,13 @@ public class ContextCompressionCoordinator {
             summary = summaryService.getRequiredSummary(
                     appId, lastSummarizedId);
         } catch (RuntimeException exception) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     FailureReason.DEPENDENCY_FAILED,
                     "读取可靠 L1 失败，type="
                             + exception.getClass().getSimpleName());
         }
         if (!isStrictSummary(summary)) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     FailureReason.SUMMARY_READ_FAILED,
                     "L1 摘要不符合严格召回契约");
         }
@@ -582,17 +603,15 @@ public class ContextCompressionCoordinator {
             LayeredChatMemory.PreparedLayeredMessages prepared =
                     memory.prepareAfterCompletedPrefix(
                             expectedPrefix, summary);
-            RequestSnapshot request = new RequestSnapshot(
-                    prepared.requestMessages(),
-                    tokenEstimator.estimateRequest(
-                            prepared.requestMessages(), tools));
+            RequestSnapshot request = requestSnapshot(
+                    prepared.requestMessages(), tools, transientMessages);
             return InitialRequestPreparation.success(prepared, request);
         } catch (MemoryPrefixChangedException exception) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     FailureReason.PREFIX_CHANGED,
                     "无法构造包含可靠 L1 的初始请求");
         } catch (RuntimeException exception) {
-            return InitialRequestPreparation.failed(
+            return InitialRequestPreparation.failed(EMPTY_REQUEST_SNAPSHOT,
                     FailureReason.DEPENDENCY_FAILED,
                     "读取初始分层记忆失败，type="
                             + exception.getClass().getSimpleName());
@@ -607,7 +626,7 @@ public class ContextCompressionCoordinator {
             InitialRequestPreparation preparation) {
         if (deadline.remainingNanos() <= 0L) {
             return failure(ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    preparation.request(), preparation.request(),
                     0L, FailureReason.TIMED_OUT,
                     "提交初始上下文前截止时间已到");
         }
@@ -623,7 +642,7 @@ public class ContextCompressionCoordinator {
             if (deadline.remainingNanos() <= 0L) {
                 failure.set(failure(
                         ContextCompressionMode.ADMISSION_FAILED,
-                        EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                        preparation.request(), preparation.request(),
                         0L, FailureReason.TIMED_OUT,
                         "提交初始上下文前截止时间已到"));
                 return;
@@ -647,7 +666,7 @@ public class ContextCompressionCoordinator {
                 tryAcquireLifecycleWriter(appId);
         if (writerPermit == null) {
             return failure(ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    preparation.request(), preparation.request(),
                     0L,
                     FailureReason.DELETE_REJECTED,
                     "应用删除流程已接管，appId=" + appId);
@@ -655,7 +674,7 @@ public class ContextCompressionCoordinator {
         try (writerPermit) {
             DeadlineAwareReplaceResult result = memory.applyPreparedPrefix(
                     preparation.messages(), deadline);
-            return initialReplaceFailure(result);
+            return initialReplaceFailure(result, preparation.request());
         }
     }
 
@@ -663,6 +682,7 @@ public class ContextCompressionCoordinator {
             long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
             RequestSnapshot initialRequest,
             CompressionPlan plan,
             AdmissionDeadline deadline) {
@@ -684,10 +704,8 @@ public class ContextCompressionCoordinator {
             LayeredChatMemory.PreparedLayeredMessages prepared =
                     memory.prepareAfterCompletedPrefix(
                             plan.expectedPrefix(), summary);
-            RequestSnapshot finalRequest = new RequestSnapshot(
-                    prepared.requestMessages(),
-                    tokenEstimator.estimateRequest(
-                            prepared.requestMessages(), tools));
+            RequestSnapshot finalRequest = requestSnapshot(
+                    prepared.requestMessages(), tools, transientMessages);
             metricsCollector.recordEstimatedTokens(
                     MemoryCompressionMetricsCollector.EstimationStage.AFTER,
                     finalRequest.estimatedTokens());
@@ -783,27 +801,28 @@ public class ContextCompressionCoordinator {
     }
 
     private ContextAdmissionResult initialReplaceFailure(
-            DeadlineAwareReplaceResult result) {
+            DeadlineAwareReplaceResult result,
+            RequestSnapshot request) {
         return switch (result) {
             case REPLACED -> null;
             case PREFIX_CHANGED -> failure(
                     ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    request, request,
                     0L, FailureReason.PREFIX_CHANGED,
                     "L0 旧前缀已变化，本次不裁剪");
             case TIMED_OUT -> failure(
                     ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    request, request,
                     0L, FailureReason.TIMED_OUT,
                     "提交初始 L0 裁剪超过绝对截止");
             case INTERRUPTED -> failure(
                     ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    request, request,
                     0L, FailureReason.INTERRUPTED,
                     "提交初始 L0 裁剪被中断");
             case DEPENDENCY_FAILED -> failure(
                     ContextCompressionMode.ADMISSION_FAILED,
-                    EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    request, request,
                     0L, FailureReason.DEPENDENCY_FAILED,
                     "提交初始 L0 裁剪依赖失败");
         };
@@ -975,10 +994,22 @@ public class ContextCompressionCoordinator {
 
     private RequestSnapshot captureRequestSnapshot(
             CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools) {
+            List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages) {
         List<ChatMessage> messages = List.copyOf(memory.messages());
-        return new RequestSnapshot(messages,
-                tokenEstimator.estimateRequest(messages, tools));
+        return requestSnapshot(messages, tools, transientMessages);
+    }
+
+    private RequestSnapshot requestSnapshot(
+            List<ChatMessage> realMessages,
+            List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages) {
+        List<ChatMessage> requestMessages = new java.util.ArrayList<>(
+                realMessages.size() + transientMessages.size());
+        requestMessages.addAll(realMessages);
+        requestMessages.addAll(transientMessages);
+        return new RequestSnapshot(requestMessages,
+                tokenEstimator.estimateRequest(requestMessages, tools));
     }
 
     private boolean isCompressionSuccess(MemoryCompressionResult result) {
@@ -1125,9 +1156,10 @@ public class ContextCompressionCoordinator {
         }
 
         private static InitialRequestPreparation failed(
+                RequestSnapshot request,
                 FailureReason failureReason, String detail) {
             return new InitialRequestPreparation(
-                    null, EMPTY_REQUEST_SNAPSHOT, failureReason, detail);
+                    null, request, failureReason, detail);
         }
     }
 

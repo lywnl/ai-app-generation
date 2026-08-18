@@ -16,6 +16,7 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
@@ -243,7 +244,8 @@ class ContextCompressionModelRequestGateTest {
                                     action -> {
                                         action.run();
                                         return true;
-                                    }))
+                                    },
+                                    List.of()))
                     .toCompletableFuture().get(2, TimeUnit.SECONDS);
 
             assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
@@ -251,6 +253,64 @@ class ContextCompressionModelRequestGateTest {
             assertEquals(29_000, decision.estimatedInputTokens());
             assertEquals(1, memoryReads.get(),
                     "模型请求必须复用协调器审核的同一份快照");
+        }
+    }
+
+    @Test
+    void Request防御性复制并归一化临时消息() {
+        SystemMessage transientMessage = SystemMessage.from("仅用于本次请求");
+        List<ChatMessage> mutable = new java.util.ArrayList<>();
+        mutable.add(transientMessage);
+
+        ModelRequestGate.Request request = new ModelRequestGate.Request(
+                7L, () -> memory("真实消息"), List.of(),
+                action -> true, mutable);
+        mutable.clear();
+
+        assertEquals(List.of(transientMessage), request.transientMessages());
+        assertTrue(new ModelRequestGate.Request(
+                7L, () -> memory("真实消息"), List.of(),
+                action -> true, null).transientMessages().isEmpty());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                NullPointerException.class,
+                () -> new ModelRequestGate.Request(
+                        7L, () -> memory("真实消息"), List.of(),
+                        action -> true,
+                        java.util.Arrays.asList((ChatMessage) null)));
+    }
+
+    @Test
+    void 临时消息交给协调器并保持在Decision尾部() throws Exception {
+        ContextCompressionCoordinator coordinator =
+                mock(ContextCompressionCoordinator.class);
+        CompressionAwareChatMemory memory = compressionMemory("真实消息");
+        SystemMessage transientMessage = SystemMessage.from("仅用于本次请求");
+        List<ChatMessage> auditedMessages = new java.util.ArrayList<>(
+                memory.messages());
+        auditedMessages.add(transientMessage);
+        when(coordinator.admit(eq(memory), eq(List.of()),
+                eq(List.of(transientMessage)), any(), any()))
+                .thenReturn(result(ContextCompressionMode.NORMAL,
+                        ContextAdmissionResult.FailureReason.NONE,
+                        100, 100, auditedMessages));
+
+        try (ExecutorService executor =
+                     Executors.newVirtualThreadPerTaskExecutor()) {
+            ContextCompressionModelRequestGate gate =
+                    new ContextCompressionModelRequestGate(
+                            coordinator, executor);
+
+            ModelRequestGate.Decision decision = gate.prepare(
+                            new ModelRequestGate.Request(
+                                    7L, () -> memory, List.of(),
+                                    action -> {
+                                        action.run();
+                                        return true;
+                                    }, List.of(transientMessage)))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertEquals(transientMessage, decision.messages().getLast());
+            assertFalse(memory.messages().contains(transientMessage));
         }
     }
 
@@ -1240,7 +1300,7 @@ class ContextCompressionModelRequestGateTest {
             ChatMemory memory,
             ModelRequestGate.ContinuationGate continuationGate) {
         return new ModelRequestGate.Request(
-                7L, () -> memory, List.of(), continuationGate);
+                7L, () -> memory, List.of(), continuationGate, List.of());
     }
 
     private ContextAdmissionResult result(

@@ -413,7 +413,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     memoryId,
                     this::getMemory,
                     toolSpecifications,
-                    continuationGate));
+                    continuationGate,
+                    List.of()));
         } catch (RuntimeException exception) {
             return claimPreparationFailure(new IllegalStateException(
                     "模型请求门禁准备失败", exception));

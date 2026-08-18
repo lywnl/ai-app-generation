@@ -10,6 +10,7 @@ import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.store.memory.chat.ChatMemoryStore;
@@ -147,6 +148,45 @@ class ContextCompressionCoordinatorTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void 阻塞压缩只以真实记忆准备和写回临时消息仅留在最终请求快照() {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
+            CompressionAwareChatMemory memory = org.mockito.Mockito.mock(
+                    CompressionAwareChatMemory.class,
+                    org.mockito.Mockito.withSettings()
+                            .spiedInstance(fixture.memory())
+                            .defaultAnswer(org.mockito.Mockito
+                                    .CALLS_REAL_METHODS)
+                            .mockMaker(org.mockito.MockMakers.INLINE));
+            SystemMessage transientMessage =
+                    SystemMessage.from("仅本次请求可见的临时系统消息");
+            org.mockito.ArgumentCaptor<List<ChatMessage>> prefixCaptor =
+                    org.mockito.ArgumentCaptor.forClass(List.class);
+            org.mockito.ArgumentCaptor<LayeredChatMemory.PreparedLayeredMessages>
+                    preparedCaptor = org.mockito.ArgumentCaptor.forClass(
+                    LayeredChatMemory.PreparedLayeredMessages.class);
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    memory, List.of(), List.of(transientMessage),
+                    ignored -> { }, ContextContinuationGate.alwaysOpen());
+
+            verify(memory).prepareAfterCompletedPrefix(
+                    prefixCaptor.capture(), eq(VALID_SUMMARY));
+            verify(memory).applyPreparedPrefix(
+                    preparedCaptor.capture(), any(AdmissionDeadline.class));
+            assertFalse(prefixCaptor.getValue().contains(transientMessage));
+            assertFalse(preparedCaptor.getValue().l0Snapshot()
+                    .contains(transientMessage));
+            assertFalse(preparedCaptor.getValue().retainedL0()
+                    .contains(transientMessage));
+            assertFalse(preparedCaptor.getValue().requestMessages()
+                    .contains(transientMessage));
+            assertEquals(ContextCompressionMode.BLOCKING_COMPLETED,
+                    result.mode());
+            assertEquals(transientMessage, result.requestMessages().getLast());
+        }
+    }
+
     @ParameterizedTest
     @EnumSource(value = ThrowingMeterRegistry.FailurePoint.class,
             names = {
@@ -175,6 +215,82 @@ class ContextCompressionCoordinatorTest {
             } finally {
                 registry.close();
             }
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("transientThresholds")
+    void 临时消息参与三段精确阈值且不进入真实记忆(
+            int completeRequestTokens,
+            ContextCompressionMode expectedMode) {
+        try (Fixture fixture = fixture(1_000, 27_000)) {
+            SystemMessage transientMessage =
+                    SystemMessage.from("仅用于本次模型请求");
+            AtomicLong estimates = new AtomicLong();
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> {
+                        List<ChatMessage> messages = invocation.getArgument(0);
+                        assertEquals(transientMessage, messages.getLast());
+                        return estimates.getAndIncrement() == 0
+                                ? completeRequestTokens : 27_000;
+                    });
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of(), List.of(transientMessage),
+                    ignored -> { }, ContextContinuationGate.alwaysOpen());
+
+            assertEquals(expectedMode, result.mode());
+            assertEquals(completeRequestTokens, result.initialTokens());
+            assertEquals(transientMessage, result.requestMessages().getLast());
+            assertFalse(fixture.memory().messages().contains(transientMessage),
+                    "临时消息不得进入真实 ChatMemory");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 压缩后完整快照仍超硬上限时拒绝并保留临时消息尾部() {
+        try (Fixture fixture = fixture(30_720, 32_768)) {
+            SystemMessage transientMessage =
+                    SystemMessage.from("压缩后仍参与复检");
+            org.mockito.ArgumentCaptor<List<ChatMessage>> messagesCaptor =
+                    org.mockito.ArgumentCaptor.forClass(List.class);
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of(), List.of(transientMessage),
+                    ignored -> { }, ContextContinuationGate.alwaysOpen());
+
+            assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                    result.mode());
+            assertEquals(32_768, result.finalTokens());
+            assertEquals(transientMessage, result.requestMessages().getLast());
+            verify(fixture.estimator(), org.mockito.Mockito.atLeast(2))
+                    .estimateRequest(messagesCaptor.capture(), eq(List.of()));
+            assertTrue(messagesCaptor.getAllValues().stream()
+                    .allMatch(messages -> messages.getLast()
+                            .equals(transientMessage)));
+            assertFalse(fixture.memory().messages().contains(transientMessage));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 初始回合门关闭时不再读取真实记忆或临时消息() {
+        try (Fixture fixture = fixture(1_000, 1_000)) {
+            SystemMessage transientMessage =
+                    SystemMessage.from("终止时仍需保留");
+            TestContinuationGate continuationGate =
+                    new TestContinuationGate();
+            continuationGate.revoke();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    fixture.memory(), List.of(), List.of(transientMessage),
+                    ignored -> { }, continuationGate);
+
+            assertEquals(
+                    ContextAdmissionResult.FailureReason.TURN_TERMINATED,
+                    result.failureReason());
+            assertTrue(result.requestMessages().isEmpty());
+            verify(fixture.estimator(), never())
+                    .estimateRequest(anyList(), anyList());
         }
     }
 
@@ -1590,6 +1706,16 @@ class ContextCompressionCoordinatorTest {
                         false, true),
                 Arguments.of(32_768, ContextCompressionMode.BLOCKING_COMPLETED,
                         false, true));
+    }
+
+    private static Stream<Arguments> transientThresholds() {
+        return Stream.of(
+                Arguments.of(28_672,
+                        ContextCompressionMode.ASYNC_SCHEDULED),
+                Arguments.of(30_720,
+                        ContextCompressionMode.BLOCKING_COMPLETED),
+                Arguments.of(32_768,
+                        ContextCompressionMode.BLOCKING_COMPLETED));
     }
 
     private static Stream<Arguments> postCompressionIntervals() {

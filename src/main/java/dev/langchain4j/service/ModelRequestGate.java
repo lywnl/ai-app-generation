@@ -40,7 +40,8 @@ public interface ModelRequestGate {
             Object memoryId,
             Supplier<ChatMemory> latestMemory,
             List<ToolSpecification> toolSpecifications,
-            ContinuationGate continuationGate) {
+            ContinuationGate continuationGate,
+            List<ChatMessage> transientMessages) {
 
         public Request {
             memoryId = Objects.requireNonNull(memoryId, "记忆 ID 不能为空");
@@ -50,6 +51,8 @@ public interface ModelRequestGate {
                     toolSpecifications == null ? List.of() : toolSpecifications);
             continuationGate = Objects.requireNonNull(
                     continuationGate, "回合原子门不能为空");
+            transientMessages = List.copyOf(
+                    transientMessages == null ? List.of() : transientMessages);
         }
     }
 

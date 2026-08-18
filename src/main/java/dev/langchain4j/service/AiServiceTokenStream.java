@@ -191,7 +191,8 @@ public class AiServiceTokenStream implements TokenStream {
                     memoryId,
                     () -> activeMemory(temporaryMemory),
                     toolSpecifications,
-                    continuationGate));
+                    continuationGate,
+                    List.of()));
         } catch (RuntimeException exception) {
             deliverGateFailure(new IllegalStateException(
                     "模型请求门禁准备失败", exception));
