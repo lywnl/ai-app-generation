@@ -4,6 +4,7 @@ import com.mybatisflex.annotation.Column;
 import com.mybatisflex.annotation.Id;
 import com.mybatisflex.annotation.KeyType;
 import com.mybatisflex.annotation.Table;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 
@@ -40,6 +41,18 @@ public class ChatHistory implements Serializable {
      * 消息
      */
     private String message;
+
+    /**
+     * 供模型上下文使用的可信记忆投影。
+     */
+    @Column("memoryMessage")
+    private String memoryMessage;
+
+    /**
+     * 记忆投影对应的回合结果。
+     */
+    @Column("memoryOutcome")
+    private ChatMemoryOutcome memoryOutcome;
 
     /**
      * user/ai

@@ -2,6 +2,8 @@ package com.lyw.appgeneration.sql;
 
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
+import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.mybatisflex.annotation.Column;
 import org.junit.jupiter.api.Test;
 
@@ -27,11 +29,22 @@ class MemorySchemaMigrationContractTest {
     private static final List<String> MIGRATION_FILES = List.of(
             "sql/migrations/2026-08-15-token-layered-memory-v3.sql",
             "prod/sql/migrations/2026-08-15-token-layered-memory-v3.sql");
+    private static final List<String> CHAT_MEMORY_MIGRATION_FILES = List.of(
+            "sql/migrations/2026-08-18-chat-history-memory-projection.sql",
+            "prod/sql/migrations/2026-08-18-chat-history-memory-projection.sql");
 
     @Test
     void retryTimeEntitiesUseExplicitLocalDateTimeColumns() throws Exception {
         assertColumn(AppMemorySummary.class, "nextRetryTime");
         assertColumn(AppMemoryExtractCursor.class, "nextRetryTime");
+    }
+
+    @Test
+    void chatHistoryEntityUsesExplicitMemoryProjectionColumns()
+            throws Exception {
+        assertColumn(ChatHistory.class, "memoryMessage", String.class);
+        assertColumn(ChatHistory.class, "memoryOutcome",
+                ChatMemoryOutcome.class);
     }
 
     @Test
@@ -119,10 +132,85 @@ class MemorySchemaMigrationContractTest {
                 "破坏性删列 SQL 只能作为注释中的手工参考");
     }
 
+    @Test
+    void chatMemoryProjectionSchemasExposeNullableColumns() throws Exception {
+        for (String relativePath : SCHEMA_FILES) {
+            String history = tableDefinition(read(relativePath),
+                    "chat_history");
+            assertContainsColumn(history,
+                    "memoryMessage MEDIUMTEXT NULL", relativePath);
+            assertContainsColumn(history,
+                    "memoryOutcome VARCHAR(32) NULL", relativePath);
+        }
+    }
+
+    @Test
+    void chatMemoryProjectionMigrationsAreIdenticalAndSafe() throws Exception {
+        for (String relativePath : CHAT_MEMORY_MIGRATION_FILES) {
+            assertTrue(Files.isRegularFile(projectRoot().resolve(relativePath)),
+                    "缺少 migration: " + relativePath);
+        }
+        String development = read(CHAT_MEMORY_MIGRATION_FILES.getFirst());
+        String production = read(CHAT_MEMORY_MIGRATION_FILES.getLast());
+        assertEquals(development, production,
+                "开发和生产聊天记忆投影 migration 必须字节级一致");
+
+        String normalized = normalize(development);
+        assertTrue(normalized.contains("mysql 8.0.40"));
+        assertTrue(normalized.contains("information_schema.columns"));
+        assertTrue(normalized.contains("if not exists"));
+        assertTrue(normalized.contains(
+                "add column memorymessage mediumtext null"));
+        assertTrue(normalized.contains(
+                "add column memoryoutcome varchar(32) null"));
+        assertTrue(normalized.contains("start transaction"));
+        assertTrue(normalized.contains("commit"));
+        assertTrue(normalized.contains("join app"));
+        assertTrue(normalized.contains("codegentype = 'vue_project'"));
+        assertTrue(normalized.contains(
+                "codegentype in ('html', 'multi_file')"));
+        assertTrue(normalized.contains("messageid = 447109043745288192")
+                        || normalized.contains("id = 447109043745288192"),
+                "必须定向处理已知协议异常消息");
+        assertTrue(normalized.contains("legacy_unverified"));
+        assertTrue(normalized.contains("legacy_imported"));
+        assertTrue(normalized.contains("protocol_error"));
+        assertTrue(normalized.contains(
+                "历史 vue 回合缺少可信结构化执行证据。本轮内容不得作为后续工程状态依据，后续操作以当前工程文件为准。"));
+        assertTrue(normalized.contains(
+                "本轮发生工具协议异常，未完成真实工具执行或构建。不得复用本轮生成内容，后续操作以当前工程文件为准。"));
+        assertTrue(normalized.contains("messagetype = 'ai'"));
+        assertTrue(normalized.contains("memorymessage is null"));
+        assertTrue(normalized.contains("memoryoutcome is null"));
+        assertTrue(normalized.contains("data_type = 'mediumtext'"));
+        assertTrue(normalized.contains("character_maximum_length = 32"));
+        assertTrue(Pattern.compile(
+                "(?is)update\\s+chat_history\\s+set\\s+memorymessage"
+                                + "[^;]*where\\s+id\\s*=\\s*447109043745288192"
+                                + "[^;]*memorymessage\\s+is\\s+null"
+                                + "[^;]*memoryoutcome\\s+is\\s+null\\s*;")
+                        .matcher(development).find(),
+                "已知故障行只能在双投影字段均为空时回填");
+        assertFalse(Pattern.compile(
+                        "(?is)\\bset\\s+(?:[a-z_][a-z0-9_]*\\.)?message\\s*=")
+                        .matcher(development).find(),
+                "迁移不得修改展示字段 message");
+        assertFalse(Pattern.compile("(?is)\\b(create|replace|truncate)\\s+"
+                        + "(?:table\\s+)?[^;]*backup")
+                        .matcher(development).find(),
+                "迁移不得创建或覆盖备份表");
+    }
+
     private void assertColumn(Class<?> entityType, String fieldName)
             throws Exception {
+        assertColumn(entityType, fieldName, LocalDateTime.class);
+    }
+
+    private void assertColumn(
+            Class<?> entityType, String fieldName, Class<?> expectedType)
+            throws Exception {
         Field field = entityType.getDeclaredField(fieldName);
-        assertEquals(LocalDateTime.class, field.getType());
+        assertEquals(expectedType, field.getType());
         Column column = field.getAnnotation(Column.class);
         assertTrue(column != null, fieldName + " 必须显式声明 @Column");
         assertEquals(fieldName, column.value());
@@ -136,7 +224,7 @@ class MemorySchemaMigrationContractTest {
 
     private String tableDefinition(String schema, String tableName) {
         Pattern pattern = Pattern.compile(
-                "(?is)create\\s+table\\s+if\\s+not\\s+exists\\s+`?"
+                "(?is)create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?`?"
                         + Pattern.quote(tableName)
                         + "`?\\s*\\((.*?)\\)\\s*comment");
         Matcher matcher = pattern.matcher(schema);

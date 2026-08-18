@@ -128,11 +128,11 @@ public Optional<String> resolveModelText(ChatHistory history);
 public boolean isEligibleForLongTermPreference(ChatHistory aiHistory);
 ```
 
-- [ ] **步骤 1.1：先写数据库与解析器红测**
+- [x] ✅ **步骤 1.1：先写数据库与解析器红测**
 
   测试必须断言：实体存在 `memoryMessage/memoryOutcome`；AI 专用写入同时保存三个字段；用户消息仍只需 `message`；`repairOrphanUserTurn` 使用固定安全投影与 `SYSTEM_ERROR`，不得经旧通用 API 产生空投影 AI 行；AI 投影为空时 `resolveModelText` 返回空且绝不读取展示文本；用户消息解析为原始 `message`；L2 排除 `PROTOCOL_ERROR/LEGACY_UNVERIFIED/null`。
 
-- [ ] **步骤 1.2：运行红测并保存失败证据**
+- [x] ✅ **步骤 1.2：运行红测并保存失败证据**
 
   ```bash
   bash mvnw -Dtest='MemorySchemaMigrationContractTest,ChatHistoryServiceImplLoadTest,ChatHistoryMemoryResolverTest' test \
@@ -141,11 +141,11 @@ public boolean isEligibleForLongTermPreference(ChatHistory aiHistory);
 
   预期：因字段、枚举、AI 专用写入接口和迁移文件不存在而失败。
 
-- [ ] **步骤 1.3：实现最小领域与持久化契约**
+- [x] ✅ **步骤 1.3：实现最小领域与持久化契约**
 
   `memoryMessage` 映射 `MEDIUMTEXT NULL`，`memoryOutcome` 映射 `VARCHAR(32) NULL`；旧 `addChatMessage/addChatMessageAndReturn` 行为保持兼容，但所有生产 AI 调用方必须迁移到专用接口。`addAiMessageAndReturn` 固定写入 `messageType=ai` 并校验投影和 outcome 非空，避免调用方写错角色；`repairOrphanUserTurn` 也必须使用该接口写入可信系统错误投影。
 
-- [ ] **步骤 1.4：编写幂等 MySQL 迁移**
+- [x] ✅ **步骤 1.4：编写幂等 MySQL 迁移**
 
   两份迁移必须字节级相同；条件加列后按 `app.codeGenType` 回填：
 
@@ -155,7 +155,7 @@ public boolean isEligibleForLongTermPreference(ChatHistory aiHistory);
   - 用户行保持 `memoryMessage/memoryOutcome=NULL`；
   - 不修改 `message`，脚本可重复执行且带元数据验收。
 
-- [ ] **步骤 1.5：运行绿测与静态一致性检查**
+- [x] ✅ **步骤 1.5：运行绿测与静态一致性检查**
 
   ```bash
   bash mvnw -Dtest='MemorySchemaMigrationContractTest,ChatHistoryServiceImplLoadTest,ChatHistoryMemoryResolverTest' test
@@ -164,7 +164,7 @@ public boolean isEligibleForLongTermPreference(ChatHistory aiHistory);
   git diff --check
   ```
 
-- [ ] **步骤 1.6：独立审查、修复重要问题、勾选并提交**
+- [x] ✅ **步骤 1.6：独立审查、修复重要问题、勾选并提交**
 
   ```bash
   git add src/main/java/com/lyw/appgeneration/model/entity/ChatHistory.java \

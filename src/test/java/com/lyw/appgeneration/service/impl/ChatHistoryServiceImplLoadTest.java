@@ -2,6 +2,7 @@ package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService.HistoryLoadStatus;
 import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.data.message.AiMessage;
@@ -19,10 +20,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -58,6 +61,82 @@ class ChatHistoryServiceImplLoadTest {
                 7L, "保存失败", "ai", 9L));
         assertFalse(service.addChatMessage(
                 7L, "仍然失败", "user", 9L));
+    }
+
+    @Test
+    void AI专用接口同时保存展示文本投影和结果() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        ArgumentCaptor<ChatHistory> historyCaptor =
+                ArgumentCaptor.forClass(ChatHistory.class);
+        doAnswer(invocation -> true).when(service)
+                .save(historyCaptor.capture());
+
+        ChatHistory saved = service.addAiMessageAndReturn(
+                7L, "页面已生成", "已修改 index.html，构建成功。",
+                ChatMemoryOutcome.SUCCEEDED, 9L);
+
+        assertNotNull(saved);
+        assertEquals("页面已生成", saved.getMessage());
+        assertEquals("已修改 index.html，构建成功。",
+                saved.getMemoryMessage());
+        assertEquals(ChatMemoryOutcome.SUCCEEDED,
+                saved.getMemoryOutcome());
+        assertEquals("ai", saved.getMessageType());
+        assertEquals(saved, historyCaptor.getValue());
+    }
+
+    @Test
+    void AI专用接口拒绝空投影和空结果且不写库() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(true).when(service).save(any(ChatHistory.class));
+
+        assertThrows(RuntimeException.class, () ->
+                service.addAiMessageAndReturn(
+                        7L, "展示", "  ",
+                        ChatMemoryOutcome.SUCCEEDED, 9L));
+        assertThrows(RuntimeException.class, () ->
+                service.addAiMessageAndReturn(
+                        7L, "展示", "可信投影", null, 9L));
+
+        verify(service, never()).save(any(ChatHistory.class));
+    }
+
+    @Test
+    void 用户消息继续只保存展示文本() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        ArgumentCaptor<ChatHistory> historyCaptor =
+                ArgumentCaptor.forClass(ChatHistory.class);
+        doReturn(true).when(service).save(historyCaptor.capture());
+
+        assertTrue(service.addChatMessage(7L, "继续修改", "user", 9L));
+
+        ChatHistory saved = historyCaptor.getValue();
+        assertEquals("继续修改", saved.getMessage());
+        assertEquals("user", saved.getMessageType());
+        assertNull(saved.getMemoryMessage());
+        assertNull(saved.getMemoryOutcome());
+    }
+
+    @Test
+    void 修复孤立用户回合写入固定系统错误投影() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(message(11L, "上一轮需求", "user"))
+                .when(service).getLastMessage(7L);
+        doReturn(true).when(service).save(any(ChatHistory.class));
+
+        assertTrue(service.repairOrphanUserTurn(
+                7L, 9L, "系统异常，请重试。"));
+
+        verify(service).addAiMessageAndReturn(
+                7L,
+                "系统异常，请重试。",
+                "上一轮因系统异常未完成，未改变项目文件或构建状态。",
+                ChatMemoryOutcome.SYSTEM_ERROR,
+                9L);
+        verify(service, never()).addChatMessage(
+                7L, "系统异常，请重试。", "ai", 9L);
+        verify(service, never()).addChatMessageAndReturn(
+                7L, "系统异常，请重试。", "ai", 9L);
     }
 
     @Test

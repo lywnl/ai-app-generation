@@ -5,6 +5,7 @@ import com.lyw.appgeneration.model.dto.app.ChatHistoryQueryRequest;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
@@ -39,6 +40,16 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      */
     ChatHistory addChatMessageAndReturn(
             Long appId, String message, String messageType, Long userId);
+
+    /**
+     * 添加 AI 展示消息及其可信记忆投影，保存失败时返回 {@code null}。
+     */
+    ChatHistory addAiMessageAndReturn(
+            Long appId,
+            String displayMessage,
+            String memoryMessage,
+            ChatMemoryOutcome memoryOutcome,
+            Long userId);
 
     /**
      * 根据应用ID删除对话消息

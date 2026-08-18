@@ -14,6 +14,7 @@ import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.mybatisflex.core.paginate.Page;
@@ -44,6 +45,8 @@ import java.util.Objects;
 public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatHistory>  implements ChatHistoryService {
 
     private static final int COMPLETE_TURN_LOAD_BATCH_SIZE = 100;
+    private static final String ORPHAN_TURN_MEMORY_MESSAGE =
+            "上一轮因系统异常未完成，未改变项目文件或构建状态。";
 
     @Resource
     @Lazy
@@ -69,6 +72,34 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 .appId(appId)
                 .message(message)
                 .messageType(messageType)
+                .userId(userId)
+                .build();
+        return this.save(chatHistory) ? chatHistory : null;
+    }
+
+    @Override
+    public ChatHistory addAiMessageAndReturn(
+            Long appId,
+            String displayMessage,
+            String memoryMessage,
+            ChatMemoryOutcome memoryOutcome,
+            Long userId) {
+        ThrowUtils.throwIf(StrUtil.isBlank(memoryMessage),
+                ErrorCode.PARAMS_ERROR, "AI 记忆投影不能为空");
+        ThrowUtils.throwIf(memoryOutcome == null,
+                ErrorCode.PARAMS_ERROR, "AI 记忆结果不能为空");
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用ID不能为空");
+        ThrowUtils.throwIf(StrUtil.isBlank(displayMessage),
+                ErrorCode.PARAMS_ERROR, "消息内容不能为空");
+        ThrowUtils.throwIf(userId == null || userId <= 0,
+                ErrorCode.PARAMS_ERROR, "用户ID不能为空");
+        ChatHistory chatHistory = ChatHistory.builder()
+                .appId(appId)
+                .message(displayMessage)
+                .memoryMessage(memoryMessage)
+                .memoryOutcome(memoryOutcome)
+                .messageType(ChatHistoryMessageTypeEnum.AI.getValue())
                 .userId(userId)
                 .build();
         return this.save(chatHistory) ? chatHistory : null;
@@ -170,8 +201,12 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 .equals(lastMessage.getMessageType())) {
             return false;
         }
-        return addChatMessage(appId, aiMessage,
-                ChatHistoryMessageTypeEnum.AI.getValue(), userId);
+        return addAiMessageAndReturn(
+                appId,
+                aiMessage,
+                ORPHAN_TURN_MEMORY_MESSAGE,
+                ChatMemoryOutcome.SYSTEM_ERROR,
+                userId) != null;
     }
 
     @Override

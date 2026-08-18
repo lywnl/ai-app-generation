@@ -49,8 +49,10 @@ create table app
 create table chat_history
 (
     id          bigint auto_increment comment 'id' primary key,
-    message     MEDIUMTEXT                         not null comment '消息',
-    messageType varchar(32)                        not null comment 'user/ai',
+    message       MEDIUMTEXT                         not null comment '展示消息',
+    memoryMessage MEDIUMTEXT                         null comment '模型记忆投影',
+    memoryOutcome varchar(32)                        null comment '记忆投影结果',
+    messageType   varchar(32)                        not null comment 'user/ai',
     appId       bigint                             not null comment '应用id',
     userId      bigint                             not null comment '创建用户id',
     createTime  datetime default CURRENT_TIMESTAMP not null comment '创建时间',
