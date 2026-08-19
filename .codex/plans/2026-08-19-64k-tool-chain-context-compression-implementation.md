@@ -194,7 +194,7 @@
 
 - 运行并必要时修正 `src/main/java/com/lyw/appgeneration/ai/memory/ToolMessageCollapser.java`
 - 运行 `src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java`、L1/L2 相关测试，不改变其已确认语义
-- 修改/新增 `src/test/java/com/lyw/appgeneration/ai/memory/ToolMessageCollapserTest.java`、`LayeredMemoryIntegrationTest.java`、`MemorySummaryDraftEngineTest.java`（仅在测试暴露接口回归时）
+- 修改/新增 `src/test/java/com/lyw/appgeneration/ai/memory/ToolMessageCollapserTest.java`、`LayeredMemoryIntegrationTest.java`、`ContextCompressionModelRequestGateTest.java`、`src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java`、`src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryDraftEngineTest.java`、`UserPreferenceBatchBuilderTest.java`（仅在测试暴露接口回归时）
 
 **验收要求：**
 
@@ -205,10 +205,10 @@
 
 **TDD 步骤：**
 
-- [ ] 增加“请求级检查点结束后底层消息完全不变”的断言。
-- [ ] 增加“回合最终折叠后无孤立工具消息、摘要只见可信投影”的断言。
-- [ ] 运行 `bash mvnw -Dtest=ToolMessageCollapserTest,LayeredMemoryIntegrationTest,MemorySummaryDraftEngineTest test`。
-- [ ] 提交：`回归64K压缩后的分层记忆折叠`。
+- [x] ✅ 增加“请求级检查点结束后底层消息完全不变”的断言，并贯穿真实 `ModelRequestGate.Decision.messages()` 请求视图。
+- [x] ✅ 增加“回合最终折叠后无孤立工具消息、摘要只见可信投影”的断言，并覆盖 Redis 空 L0 经工厂从 MySQL 冷启动重建。
+- [x] ✅ 运行 `bash mvnw -Dtest=ToolMessageCollapserTest,LayeredMemoryIntegrationTest,MemorySummaryDraftEngineTest,UserPreferenceBatchBuilderTest,ChatHistoryServiceImplLoadTest,ChatHistoryMemoryResolverTest,ContextCompressionCoordinatorTest,ContextCompressionModelRequestGateTest,AiGeneratorServiceFactoryTest test`，193/193 通过。
+- [x] ✅ 提交：`回归64K压缩后的分层记忆折叠`；独立审查修复提交：`补全64K分层记忆纵向回归`。
 
 ## 任务 7：端到端验证、配置审计与交付检查
 
