@@ -86,10 +86,28 @@ class VueProjectSystemPromptTest {
     @Test
     void onlinePromptRequiresNativeStructuredToolCalls() throws IOException {
         String prompt = readPrompt(PROMPT_RESOURCE);
+        int protocolIndex = prompt.indexOf(
+                "## 【最高优先级】原生工具调用协议");
+        int toolRulesIndex = prompt.indexOf(
+                "## 【最重要!必须严格遵守】工具使用规则");
 
-        assertTrue(prompt.contains("普通正文中的工具名称、参数或执行结果不会被系统执行"));
-        assertTrue(prompt.contains("必须使用系统提供的原生结构化工具调用"));
-        assertTrue(prompt.contains("不要在普通正文中模拟工具调用"));
+        assertTrue(protocolIndex >= 0, "必须存在独立的最高优先级协议章节");
+        assertTrue(protocolIndex < toolRulesIndex,
+                "原生工具协议必须位于普通工具规则之前");
+        assertTrue(prompt.contains("原生结构化 tool_calls"));
+        assertTrue(prompt.contains("系统当前提供的工具列表"));
+        assertTrue(prompt.contains("符合工具 JSON Schema 的真实参数对象"));
+        assertTrue(prompt.contains("只能放入结构化 arguments"));
+        assertTrue(prompt.contains("不得复制、续写或模仿"));
+        assertTrue(prompt.contains("上下文中的历史工具调用"));
+        assertTrue(prompt.contains("普通正文 content 中禁止输出“[工具调用]”"));
+        assertTrue(prompt.contains("只有收到系统返回的真实工具结果后"));
+        assertTrue(prompt.contains("立即返回结构化工具调用"));
+        assertFalse(prompt.contains("禁止输出任何代码"),
+                "不得用笼统禁令阻止模型填写真实工具源码参数");
+        assertFalse(prompt.contains(
+                "普通正文中的工具名称、参数或执行结果不会被系统执行。需要操作工程文件时"),
+                "旧单行协议必须删除，避免出现两套重复表述");
     }
 
     private String readPrompt() throws IOException {

@@ -174,7 +174,7 @@ git commit -m "重构伪工具正文严格隔离状态机"
 
 预期：全部通过。
 
-- [ ] 定向提交：
+- [x] ✅ 定向提交：
 
 ```bash
 git add src/main/java/dev/langchain4j/service/ToolProtocolRecoveryCoordinator.java \
@@ -194,7 +194,7 @@ git commit -m "修复伪工具正文前端与记忆泄漏"
 - 修改：`src/main/resources/prompt/codegen-vue-project-system-prompt.txt`
 - 修改：`src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java`
 
-- [ ] 将现有单行规则扩展成靠近提示词开头的独立最高优先级协议：
+- [x] ✅ 将现有单行规则扩展成靠近提示词开头的独立最高优先级协议：
 
 ```text
 ## 【最高优先级】原生工具调用协议
@@ -208,12 +208,12 @@ git commit -m "修复伪工具正文前端与记忆泄漏"
 7. 需要工具时不要解释调用格式，立即返回结构化工具调用；不需要工具时才直接返回面向用户的最终答复。
 ```
 
-- [ ] 删除与新协议重复的旧单行规则，避免同一行为存在多套表述。
-- [ ] 不使用“禁止输出任何代码”之类的笼统措辞，避免模型拒绝把源码放进真实工具参数。
-- [ ] 保留每个文件只写一次、禁止并行工具、完成后真实构建等现有业务规则。
-- [ ] 更新契约测试，断言原生 `tool_calls`、JSON Schema、结构化 arguments、历史轨迹不可模仿、真实结果前不得声明成功等语义存在。
-- [ ] 增加反向断言，确保提示词不存在“禁止输出任何代码”。
-- [ ] 运行测试：
+- [x] ✅ 删除与新协议重复的旧单行规则，避免同一行为存在多套表述。
+- [x] ✅ 不使用“禁止输出任何代码”之类的笼统措辞，避免模型拒绝把源码放进真实工具参数。
+- [x] ✅ 保留每个文件只写一次、禁止并行工具、完成后真实构建等现有业务规则。
+- [x] ✅ 更新契约测试，断言原生 `tool_calls`、JSON Schema、结构化 arguments、历史轨迹不可模仿、真实结果前不得声明成功等语义存在。
+- [x] ✅ 增加反向断言，确保提示词不存在“禁止输出任何代码”。
+- [x] ✅ 运行测试：
 
 ```bash
 ./mvnw -Dtest=VueProjectSystemPromptTest test
