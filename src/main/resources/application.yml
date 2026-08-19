@@ -170,11 +170,11 @@ ai:
       l0-retained-tokens: 12288
       l1-max-summary-tokens: 3072
       l2-max-recall-tokens: 1024
-      async-compression-threshold: 28672
-      blocking-compression-threshold: 30720
-      hard-input-limit: 32768
+      async-compression-threshold: 49152
+      blocking-compression-threshold: 57344
+      hard-input-limit: 65536
       max-output-tokens: 8192
-      minimum-model-context-window: 40960
+      minimum-model-context-window: 73728
       blocking-timeout: 60s
       l2-debounce: 30s
       estimation-safety-factor: 1.15

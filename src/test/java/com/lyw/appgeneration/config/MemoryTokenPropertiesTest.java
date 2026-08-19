@@ -18,11 +18,11 @@ class MemoryTokenPropertiesTest {
         assertEquals(12_288, properties.getL0RetainedTokens());
         assertEquals(3_072, properties.getL1MaxSummaryTokens());
         assertEquals(1_024, properties.getL2MaxRecallTokens());
-        assertEquals(28_672, properties.getAsyncCompressionThreshold());
-        assertEquals(30_720, properties.getBlockingCompressionThreshold());
-        assertEquals(32_768, properties.getHardInputLimit());
+        assertEquals(49_152, properties.getAsyncCompressionThreshold());
+        assertEquals(57_344, properties.getBlockingCompressionThreshold());
+        assertEquals(65_536, properties.getHardInputLimit());
         assertEquals(8_192, properties.getMaxOutputTokens());
-        assertEquals(40_960, properties.getMinimumModelContextWindow());
+        assertEquals(73_728, properties.getMinimumModelContextWindow());
         assertEquals(Duration.ofSeconds(60), properties.getBlockingTimeout());
         assertEquals(Duration.ofSeconds(30), properties.getL2Debounce());
         assertEquals(1.15D, properties.getEstimationSafetyFactor());
@@ -63,28 +63,28 @@ class MemoryTokenPropertiesTest {
     }
 
     @Test
-    @DisplayName("启动校验拒绝任何非 28672 的异步压缩阈值")
+    @DisplayName("启动校验拒绝任何非 49152 的异步压缩阈值")
     void 启动拒绝非固定异步压缩阈值() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setAsyncCompressionThreshold(28_673);
+        properties.setAsyncCompressionThreshold(49_153);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
 
     @Test
-    @DisplayName("启动校验拒绝任何非 30720 的同步压缩阈值")
+    @DisplayName("启动校验拒绝任何非 57344 的同步压缩阈值")
     void rejectsNonCanonicalBlockingCompressionThreshold() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setBlockingCompressionThreshold(30_721);
+        properties.setBlockingCompressionThreshold(57_345);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
 
     @Test
-    @DisplayName("启动校验拒绝任何非 32768 的输入硬上限")
+    @DisplayName("启动校验拒绝任何非 65536 的输入硬上限")
     void rejectsNonCanonicalHardInputLimit() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setHardInputLimit(32_767);
+        properties.setHardInputLimit(65_535);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
@@ -99,10 +99,10 @@ class MemoryTokenPropertiesTest {
     }
 
     @Test
-    @DisplayName("启动校验拒绝任何非 40960 的模型最小上下文窗口")
+    @DisplayName("启动校验拒绝任何非 73728 的模型最小上下文窗口")
     void rejectsNonCanonicalMinimumModelContextWindow() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setMinimumModelContextWindow(40_961);
+        properties.setMinimumModelContextWindow(73_729);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
@@ -136,7 +136,7 @@ class MemoryTokenPropertiesTest {
     @Test
     void rejectsModelWindowThatCannotHoldInputAndOutputBudgets() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setMinimumModelContextWindow(40_959);
+        properties.setMinimumModelContextWindow(73_727);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }
