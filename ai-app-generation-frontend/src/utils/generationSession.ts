@@ -113,9 +113,15 @@ export function getGenerationStatusText(
 export function shouldShowGenerationStatus(
   loading: boolean,
   contextCompression: ContextCompressionState,
+  toolProtocolRecovery: ToolProtocolRecoveryState,
   hasVisibleOutput: boolean,
 ): boolean {
-  return loading && (contextCompression === 'compressing' || !hasVisibleOutput)
+  return (
+    loading &&
+    (contextCompression === 'compressing' ||
+      toolProtocolRecovery === 'recovering' ||
+      !hasVisibleOutput)
+  )
 }
 
 export interface StartGenerationSessionOptions {
@@ -650,6 +656,7 @@ function handleToolProtocolRecovery(appId: string, requestId: number, data: stri
   } else {
     session.snapshot.toolProtocolRecovery = 'idle'
     session.toolProtocolRecoveryPhase = 'failed'
+    session.snapshot.errorMessage = TOOL_PROTOCOL_RECOVERY_MESSAGES.FAILED
   }
   emit(appId, 'delta', requestId)
 }
@@ -743,7 +750,7 @@ function handleTurnOutcome(appId: string, requestId: number, data: string): void
   }
   session.snapshot.outcome = outcome
   session.awaitingDone = true
-  if (outcome !== 'succeeded') {
+  if (outcome !== 'succeeded' && session.toolProtocolRecoveryPhase !== 'failed') {
     session.snapshot.errorMessage = message
   }
   emit(appId, 'delta', requestId)

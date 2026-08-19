@@ -620,6 +620,7 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.loading = shouldShowGenerationStatus(
     snapshot.loading,
     snapshot.contextCompression,
+    snapshot.toolProtocolRecovery,
     hasVisibleOutput,
   )
   isGenerating.value = snapshot.status === 'streaming'

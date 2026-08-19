@@ -16,11 +16,19 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).not.toContain('正在构建中，请您耐心等待')
   })
 
-  it('左侧状态行只在尚无正文和工具调用时显示', () => {
+  it('普通思考仅在无输出时显示但压缩和恢复状态始终优先可见', () => {
     expect(pageSource).toContain(
       'const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0',
     )
     expect(pageSource).toContain('aiMessage.loading = shouldShowGenerationStatus(')
+    expect(pageSource).toContain(
+      `aiMessage.loading = shouldShowGenerationStatus(
+    snapshot.loading,
+    snapshot.contextCompression,
+    snapshot.toolProtocolRecovery,
+    hasVisibleOutput,
+  )`,
+    )
     expect(pageSource).not.toContain('aiMessage.loading = snapshot.loading\n')
     expect(pageSource).toContain('snapshot.contextCompression')
     expect(pageSource).toContain('snapshot.toolProtocolRecovery')

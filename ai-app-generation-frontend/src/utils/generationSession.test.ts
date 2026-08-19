@@ -124,13 +124,13 @@ describe('generationSession Vue SSE 状态机', () => {
   it.each([
     ['压缩中且已有正文', 'compressing', 'idle', true, true],
     ['压缩中且已有工具卡', 'compressing', 'idle', true, true],
-    ['恢复中且已有输出', 'idle', 'recovering', true, false],
+    ['恢复中且已有输出', 'idle', 'recovering', true, true],
     ['空闲且已有输出', 'idle', 'idle', true, false],
   ] as const)(
     '%s 时状态区可见性符合最高优先级',
     (_name, compression, recovery, hasVisibleOutput, expected) => {
       expect(
-        shouldShowGenerationStatus(true, compression, hasVisibleOutput),
+        shouldShowGenerationStatus(true, compression, recovery, hasVisibleOutput),
       ).toBe(expected)
       expect(getGenerationStatusText(compression, recovery, 'AI 正在思考...')).toBe(
         compression === 'compressing'
@@ -335,7 +335,8 @@ describe('generationSession Vue SSE 状态机', () => {
     expect(snapshot).toMatchObject({
       status: 'done',
       outcome: 'protocol_error',
-      errorMessage: '回合结果：PROTOCOL_ERROR',
+      errorMessage:
+        '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
       toolProtocolRecovery: 'idle',
     })
   })

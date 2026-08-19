@@ -221,7 +221,7 @@ git commit -m "修复伪工具正文前端与记忆泄漏"
 
 预期：全部通过。
 
-- [ ] 定向提交：
+- [x] ✅ 定向提交：
 
 ```bash
 git add src/main/resources/prompt/codegen-vue-project-system-prompt.txt \
@@ -242,13 +242,13 @@ git commit -m "强化原生工具调用系统提示词约束"
 
 **接口决策：** 继续使用现有 `tool-protocol-recovery/v1`，不新增 SSE 字段和前端伪工具解析类型。
 
-- [ ] `STARTED` 到达时清除尚未 flush 的正文缓冲，并回退到 `trustedContentCheckpoint`。
-- [ ] `STARTED` 后显示“正在校正工具调用，请稍候…”，即使已有可信正文或旧工具卡也必须可见。
-- [ ] `RECOVERED` 到达，或恢复 generation 开始输出真实正文/工具卡后，隐藏恢复提示。
-- [ ] `FAILED` 只显示固定友好错误，不显示模型原始伪工具正文。
-- [ ] 不增加 `[工具调用]` 正则过滤，避免前后端形成两套不一致的判定逻辑。
-- [ ] 保持真实工具卡、参数脱敏和构建结果显示行为不变。
-- [ ] 运行前端定向验证：
+- [x] ✅ `STARTED` 到达时清除尚未 flush 的正文缓冲，并回退到 `trustedContentCheckpoint`。
+- [x] ✅ `STARTED` 后显示“正在校正工具调用，请稍候…”，即使已有可信正文或旧工具卡也必须可见。
+- [x] ✅ `RECOVERED` 到达，或恢复 generation 开始输出真实正文/工具卡后，隐藏恢复提示。
+- [x] ✅ `FAILED` 只显示固定友好错误，不显示模型原始伪工具正文。
+- [x] ✅ 不增加 `[工具调用]` 正则过滤，避免前后端形成两套不一致的判定逻辑。
+- [x] ✅ 保持真实工具卡、参数脱敏和构建结果显示行为不变。
+- [x] ✅ 运行前端定向验证：
 
 ```bash
 cd ai-app-generation-frontend
