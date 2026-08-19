@@ -157,7 +157,7 @@ describe('generationSession Vue SSE 状态机', () => {
     })
   })
 
-  it('恢复开始原子清除 direct 污染正文且控制文案不进入正文', async () => {
+  it('恢复开始保留后端已下发的 direct 可信正文且控制文案不进入正文', async () => {
     const appId = 'tool-recovery-direct-isolation'
     appIds.add(appId)
     const observed: Array<{ content: string; recovery: string | undefined }> = []
@@ -171,7 +171,7 @@ describe('generationSession Vue SSE 状态机', () => {
       'fetch',
       vi.fn().mockResolvedValue(
         streamResponse([
-          'data: {"d":"伪造正文"}\n\n',
+          'data: {"d":"可信前缀"}\n\n',
           toolProtocolRecoveryEvent('STARTED'),
           toolProtocolRecoveryEvent('RECOVERED'),
           outcomeEvent('SUCCEEDED', true),
@@ -189,16 +189,16 @@ describe('generationSession Vue SSE 状态机', () => {
     })
 
     await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(observed).toContainEqual({ content: '', recovery: 'recovering' })
+    expect(observed).toContainEqual({ content: '可信前缀', recovery: 'recovering' })
     expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-      content: '',
+      content: '可信前缀',
       toolProtocolRecovery: 'idle',
       outcome: 'succeeded',
     })
     expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('校正工具调用')
   })
 
-  it('恢复开始清空 throttled buffer 与 timer 且终态后不能复活污染正文', async () => {
+  it('恢复开始把 throttled 可信缓冲固化为检查点且终态后不重复追加', async () => {
     vi.useFakeTimers()
     try {
       const appId = 'tool-recovery-throttled-isolation'
@@ -207,7 +207,7 @@ describe('generationSession Vue SSE 状态机', () => {
         'fetch',
         vi.fn().mockResolvedValue(
           streamResponse([
-            'data: {"d":"缓冲污染"}\n\n',
+            'data: {"d":"缓冲可信前缀"}\n\n',
             toolProtocolRecoveryEvent('STARTED'),
             toolProtocolRecoveryEvent('RECOVERED'),
             outcomeEvent('SUCCEEDED', true),
@@ -226,15 +226,15 @@ describe('generationSession Vue SSE 状态机', () => {
       })
 
       await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-      expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
+      expect(getGenerationSessionSnapshot(appId)?.content).toBe('缓冲可信前缀')
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
+      expect(getGenerationSessionSnapshot(appId)?.content).toBe('缓冲可信前缀')
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('恢复开始保留已经由结构化 SSE 建立的可信工具卡', async () => {
+  it('恢复开始保留已经由结构化 SSE 建立的可信工具卡和可信正文', async () => {
     const appId = 'tool-recovery-preserves-tool-card'
     appIds.add(appId)
     const observed: Array<{
@@ -257,7 +257,7 @@ describe('generationSession Vue SSE 状态机', () => {
             name: 'writeFile',
             arguments: '{}',
           }),
-          'data: {"d":"污染正文"}\n\n',
+          'data: {"d":"工具卡后的可信正文"}\n\n',
           toolProtocolRecoveryEvent('STARTED'),
           toolProtocolRecoveryEvent('FAILED'),
           outcomeEvent('FAILED'),
@@ -280,10 +280,10 @@ describe('generationSession Vue SSE 状态机', () => {
       toolIds: ['trusted-tool'],
     })
     expect(getGenerationSessionSnapshot(appId)?.toolCalls.has('trusted-tool')).toBe(true)
-    expect(getGenerationSessionSnapshot(appId)?.content).toBe('')
+    expect(getGenerationSessionSnapshot(appId)?.content).toBe('工具卡后的可信正文')
   })
 
-  it('后续 generation 退化时只回滚该代正文并保留此前可信正文', async () => {
+  it('后续 generation 退化时保留后端在 STARTED 前已下发的全部可信正文', async () => {
     const snapshot = await runSession([
       'data: {"d":"此前可信正文"}\n\n',
       messageEvent({
@@ -307,7 +307,7 @@ describe('generationSession Vue SSE 状态机', () => {
           content: '不应展示的源码',
         }),
       }),
-      'data: {"d":"退化代临时正文"}\n\n',
+      'data: {"d":"后续可信正文"}\n\n',
       toolProtocolRecoveryEvent('STARTED'),
       toolProtocolRecoveryEvent('FAILED'),
       outcomeEvent('PROTOCOL_ERROR'),
@@ -315,11 +315,10 @@ describe('generationSession Vue SSE 状态机', () => {
     ])
 
     expect(snapshot).toMatchObject({
-      content: '此前可信正文',
+      content: '此前可信正文后续可信正文',
       outcome: 'protocol_error',
       toolProtocolRecovery: 'idle',
     })
-    expect(snapshot?.content).not.toContain('退化代临时正文')
     expect(snapshot?.toolCalls.has('trusted-tool')).toBe(true)
   })
 
@@ -492,26 +491,26 @@ describe('generationSession Vue SSE 状态机', () => {
     })
   })
 
-  it('markDone 与错误终止都重置恢复状态且不能复活已隔离内容', async () => {
+  it('markDone 与错误终止都重置恢复状态且保留已下发可信正文', async () => {
     const doneSnapshot = await runSession([
-      'data: {"d":"污染正文"}\n\n',
+      'data: {"d":"完成前可信正文"}\n\n',
       toolProtocolRecoveryEvent('STARTED'),
       outcomeEvent('SUCCEEDED', true),
       event('done'),
     ])
     const errorSnapshot = await runSession([
-      'data: {"d":"另一段污染"}\n\n',
+      'data: {"d":"错误前可信正文"}\n\n',
       toolProtocolRecoveryEvent('STARTED'),
       event('unexpected', '{}'),
     ])
 
     expect(doneSnapshot).toMatchObject({
-      content: '',
+      content: '完成前可信正文',
       status: 'done',
       toolProtocolRecovery: 'idle',
     })
     expect(errorSnapshot).toMatchObject({
-      content: '',
+      content: '错误前可信正文',
       status: 'error',
       outcome: 'protocol_error',
       toolProtocolRecovery: 'idle',

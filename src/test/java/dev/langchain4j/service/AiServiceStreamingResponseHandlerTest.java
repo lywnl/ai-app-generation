@@ -1881,6 +1881,153 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void 单个模型响应超过本地跟踪上限时必须受控终止且不继续缓存() {
+        int maxTrackedResponseChars =
+                AiServiceStreamingResponseHandler.MAX_TRACKED_RESPONSE_CHARS;
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        configureOutputGuardrails(context, null);
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
+                terminal = new AtomicReference<>();
+        controller.onControlledTermination(terminal::set);
+        List<String> partials = new ArrayList<>();
+        AtomicInteger handleCancellations = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10),
+                partials::add, response -> { },
+                error -> fail("响应超限应走受控终止", error), controller);
+        handler.onRequestHandle(handleCancellations::incrementAndGet);
+        String accepted = "a".repeat(maxTrackedResponseChars);
+
+        handler.onPartialResponse(accepted);
+        handler.onPartialResponse("b");
+
+        assertEquals(ToolLoopTerminationProtocol
+                        .ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED,
+                terminal.get().reason());
+        assertEquals(1, handleCancellations.get(),
+                "当前 generation 超限必须取消底层模型请求");
+        @SuppressWarnings("unchecked")
+        List<String> buffered = (List<String>)
+                org.springframework.test.util.ReflectionTestUtils.getField(
+                        handler, "responseBuffer");
+        assertTrue(partials.isEmpty());
+        assertEquals(maxTrackedResponseChars,
+                buffered.stream().mapToInt(String::length).sum());
+    }
+
+    @Test
+    void 已取消旧generation的迟到超限回调不得终止协议纠正() throws Exception {
+        int maxTrackedResponseChars =
+                AiServiceStreamingResponseHandler.MAX_TRACKED_RESPONSE_CHARS;
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
+                terminal = new AtomicReference<>();
+        controller.onControlledTermination(terminal::set);
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10),
+                ignored -> { }, response -> { },
+                error -> fail("旧代迟到回调不应触发错误", error), controller);
+        AtomicInteger handleCancellations = new AtomicInteger();
+        handler.onRequestHandle(handleCancellations::incrementAndGet);
+        Object responseMonitor =
+                org.springframework.test.util.ReflectionTestUtils.getField(
+                        handler, "recoveryDetectionMonitor");
+        assertNotNull(responseMonitor);
+        long generation = controller.latestModelRequestGeneration();
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> lateResponse;
+            synchronized (responseMonitor) {
+                lateResponse = executor.submit(() -> handler.onPartialResponse(
+                        "a".repeat(maxTrackedResponseChars + 1)));
+                long deadline = System.nanoTime()
+                        + TimeUnit.SECONDS.toNanos(2);
+                while ((int) org.springframework.test.util.ReflectionTestUtils
+                        .getField(controller, "activeCallbacks") != 1
+                        && System.nanoTime() < deadline) {
+                    Thread.onSpinWait();
+                }
+                assertEquals(1,
+                        org.springframework.test.util.ReflectionTestUtils
+                                .getField(controller, "activeCallbacks"),
+                        "旧 generation 回调必须先进入响应上限检查");
+                assertEquals(StreamingRequestController
+                                .GenerationCancellation.CANCELLED,
+                        controller.cancelGenerationForRecovery(generation));
+            }
+            lateResponse.get(2, TimeUnit.SECONDS);
+        }
+
+        assertNull(terminal.get(),
+                "已取消旧 generation 的迟到回调不能误杀协议纠正");
+        assertTrue(controller.isRecoverySourceGeneration(generation));
+        assertEquals(1, handleCancellations.get(),
+                "旧代句柄只能由恢复撤销取消一次");
+        StreamingRequestController.ModelRequestClaim recoveryClaim =
+                controller.claimRecoveryModelRequest(generation);
+        assertNotNull(recoveryClaim);
+        assertTrue(controller.tryCommitModelRequestStart(recoveryClaim));
+        controller.registerRequestHandle(
+                recoveryClaim.generation(),
+                handleCancellations::incrementAndGet);
+        assertEquals(1, handleCancellations.get(),
+                "迟到超限不得取消新恢复 generation 的句柄");
+        assertTrue(controller.isCurrentGeneration(
+                recoveryClaim.generation()));
+    }
+
+    @Test
+    void completeOnly正文超过本地跟踪上限时不得写入记忆() {
+        int maxTrackedResponseChars =
+                AiServiceStreamingResponseHandler.MAX_TRACKED_RESPONSE_CHARS;
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
+                terminal = new AtomicReference<>();
+        controller.onControlledTermination(terminal::set);
+        MessageWindowChatMemory memory =
+                MessageWindowChatMemory.withMaxMessages(10);
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, memory, ignored -> { }, response -> fail(
+                        "响应超限后不得普通完成"),
+                error -> fail("响应超限应走受控终止", error), controller);
+
+        handler.onCompleteResponse(ordinaryResponse(
+                "a".repeat(maxTrackedResponseChars + 1)));
+
+        assertEquals(ToolLoopTerminationProtocol
+                        .ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED,
+                terminal.get().reason());
+        assertTrue(memory.messages().isEmpty());
+    }
+
+    @Test
+    void null完整响应必须统一报告流一致性错误而不是抛出空指针() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context, MessageWindowChatMemory.withMaxMessages(10),
+                ignored -> { }, response -> fail("null 响应不得普通完成"),
+                failure::set, controller);
+
+        assertDoesNotThrow(() -> handler.onCompleteResponse(null));
+
+        assertInstanceOf(StreamingResponseConsistencyException.class,
+                failure.get());
+    }
+
+    @Test
     void ordinaryResponseSuccessCompletesOnceWithoutError() {
         AiServiceContext context = new AiServiceContext(Object.class);
         context.streamingChatModel = new CapturingStreamingChatModel();

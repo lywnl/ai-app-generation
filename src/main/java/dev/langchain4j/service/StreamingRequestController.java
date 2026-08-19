@@ -625,6 +625,37 @@ public final class StreamingRequestController {
         return true;
     }
 
+    /**
+     * 仅允许当前 generation 触发受控终止，并只取消属于该 generation 的
+     * 底层请求句柄。恢复流程撤销后的旧回调必须被拒绝，不能终止新请求。
+     */
+    boolean terminate(
+            long requestGeneration,
+            ControlledTermination controlledTermination) {
+        if (requestGeneration < 0L) {
+            throw new IllegalArgumentException("模型请求代次不能为负数");
+        }
+        Objects.requireNonNull(controlledTermination, "受控终止不能为空");
+        HandleSlot handle;
+        synchronized (this) {
+            if (!isCurrentGenerationActive(requestGeneration)) {
+                return false;
+            }
+            state = State.CONTROLLED_TERMINATION;
+            pendingModelRequestClaim = null;
+            termination = controlledTermination;
+            handle = latestHandleGeneration == requestGeneration
+                    ? latestHandle : null;
+            notifyAll();
+        }
+        dispatchRecoveryReadinessWaiters();
+        if (handle != null) {
+            cancelHandleBestEffort(handle);
+        }
+        dispatchTermination(controlledTermination);
+        return true;
+    }
+
     private static final HandleSlot REJECTED_TERMINATION = new HandleSlot(() -> { });
 
     private HandleSlot claimControlledTerminationAndGetHandle(

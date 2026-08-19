@@ -261,6 +261,7 @@ function flushBuffer(appId: string, requestId: number): void {
   }
   session.snapshot.content += session.buffer
   session.buffer = ''
+  session.trustedContentCheckpoint = session.snapshot.content
   emit(appId, 'delta', requestId)
 }
 
@@ -283,6 +284,7 @@ function queueDelta(appId: string, requestId: number, chunk: string): void {
   if (session.renderMode === 'direct') {
     hideToolProtocolRecovery(session)
     session.snapshot.content += chunk
+    session.trustedContentCheckpoint = session.snapshot.content
     emit(appId, 'delta', requestId)
     return
   }
@@ -290,6 +292,9 @@ function queueDelta(appId: string, requestId: number, chunk: string): void {
     emit(appId, 'delta', requestId)
   }
   session.buffer += chunk
+  // 后端只会把已通过伪工具隔离的受信正文下发到 SSE。恢复事件仅说明
+  // 未下发的候选触发了纠正，因此节流缓冲也属于可保留的可信前缀。
+  session.trustedContentCheckpoint = session.snapshot.content + session.buffer
   if (!session.flushTimer) {
     session.flushTimer = setTimeout(() => {
       const active = getActiveSession(appId, requestId)
@@ -642,6 +647,8 @@ function handleToolProtocolRecovery(appId: string, requestId: number, data: stri
     return
   }
   if (phase === 'STARTED') {
+    // 仅丢弃尚未下发的候选；可信正文可能仍在节流 buffer 中，先固化再清空。
+    session.trustedContentCheckpoint = session.snapshot.content + session.buffer
     if (session.flushTimer) {
       clearTimeout(session.flushTimer)
       session.flushTimer = undefined

@@ -1038,6 +1038,90 @@ class AiServiceTokenStreamTest {
     }
 
     @Test
+    void 普通响应已有partial但complete正文为空时必须报告一致性错误()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicInteger completes = new AtomicInteger();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            recoveryService(model, memory).chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(
+                            new CopyOnWriteArrayList<>()))
+                    .onPartialResponse(ignored -> { })
+                    .onCompleteResponse(ignored -> completes.incrementAndGet())
+                    .onError(failure::set)
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onPartialResponse("可信前缀");
+            model.handler(0).onCompleteResponse(response(
+                    "", new TokenUsage(3, 5, 8)));
+            gate.awaitIdle();
+
+            assertInstanceOf(StreamingResponseConsistencyException.class,
+                    failure.get());
+            assertEquals(0, completes.get());
+            assertFalse(memory.messages().stream()
+                    .filter(AiMessage.class::isInstance)
+                    .map(AiMessage.class::cast)
+                    .anyMatch(message -> message.text() != null));
+        }
+    }
+
+    @Test
+    void 工具响应省略complete正文时必须使用累计可信partial重建消息()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicInteger toolCalls = new AtomicInteger();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("omitted-tool-text")
+                .name("writeFile")
+                .arguments("{}")
+                .build();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new RecoveryTools(toolCalls))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(
+                            new CopyOnWriteArrayList<>()))
+                    .onPartialResponse(partials::add)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "省略工具完整正文时应继续执行", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            StreamingChatResponseHandler handler = model.handler(0);
+            handler.onPartialResponse("可信前缀");
+            handler.onCompleteResponse(toolResponse("", request));
+            assertTrue(model.awaitCalls(2));
+            model.handler(1).onCompleteResponse(response(
+                    "完成", new TokenUsage(2, 2, 4)));
+            gate.awaitIdle();
+
+            AiMessage storedToolRequest = memory.messages().stream()
+                    .filter(AiMessage.class::isInstance)
+                    .map(AiMessage.class::cast)
+                    .filter(AiMessage::hasToolExecutionRequests)
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals("可信前缀", storedToolRequest.text());
+            assertEquals(List.of("可信前缀", "完成"), partials);
+            assertEquals(1, toolCalls.get());
+        }
+    }
+
+    @Test
     void 含伪工具文本的非前缀complete必须报告普通流一致性错误()
             throws Exception {
         MutableChatMemory memory = memoryWithQuestion();

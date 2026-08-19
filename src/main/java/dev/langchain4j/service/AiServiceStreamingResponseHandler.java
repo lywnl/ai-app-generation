@@ -43,6 +43,7 @@ import static dev.langchain4j.internal.ValidationUtils.ensureNotNull;
 @Internal
 class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler {
     private static final Logger LOG = LoggerFactory.getLogger(AiServiceStreamingResponseHandler.class);
+    static final int MAX_TRACKED_RESPONSE_CHARS = 65_536;
 
     private final ChatExecutor chatExecutor;
     private final AiServiceContext context;
@@ -78,6 +79,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final Object recoveryDetectionMonitor = new Object();
     private final StringBuilder observedResponseText = new StringBuilder();
     private final StringBuilder trustedResponseText = new StringBuilder();
+    private int streamedResponseChars;
     private final Set<String> completedToolRequestIds =
             ConcurrentHashMap.newKeySet();
 
@@ -349,6 +351,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private void processPartialResponse(
             String partialResponse,
             AtomicBoolean recoveryPrepared) {
+        if (!reservePartialResponse(partialResponse)) {
+            terminateForResponseLimit();
+            return;
+        }
         if (recoveryDetector == null) {
             deliverTrustedPartial(partialResponse);
             return;
@@ -517,7 +523,15 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         if (!requestController.isCurrentGeneration(requestGeneration)) {
             return;
         }
+        if (completeResponse == null || completeResponse.aiMessage() == null) {
+            failStreamConsistency();
+            return;
+        }
         AiMessage aiMessage = completeResponse.aiMessage();
+        if (!isCompleteTextWithinLimit(aiMessage.text())) {
+            terminateForResponseLimit();
+            return;
+        }
         if (!aiMessage.hasToolExecutionRequests()) {
             if (!completeRecoveryDetection(
                     aiMessage.text(), recoveryPrepared)) {
@@ -909,6 +923,34 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         if (requestController.claimErrorCompletion(requestGeneration)) {
             notifyError(new StreamingResponseConsistencyException());
         }
+    }
+
+    private boolean reservePartialResponse(String partialResponse) {
+        Objects.requireNonNull(partialResponse, "流式正文分片不能为空");
+        synchronized (recoveryDetectionMonitor) {
+            int remaining = MAX_TRACKED_RESPONSE_CHARS
+                    - streamedResponseChars;
+            if (partialResponse.length() > remaining) {
+                return false;
+            }
+            streamedResponseChars += partialResponse.length();
+            return true;
+        }
+    }
+
+    private boolean isCompleteTextWithinLimit(String completeText) {
+        return completeText == null
+                || completeText.length() <= MAX_TRACKED_RESPONSE_CHARS;
+    }
+
+    private void terminateForResponseLimit() {
+        ToolLoopTerminationProtocol.ControlledTermination termination =
+                new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol
+                                .ControlledTerminationReason
+                                .RESOURCE_LIMIT_EXCEEDED,
+                        null);
+        requestController.terminate(requestGeneration, termination);
     }
 
     private void prepareRecoveryRequest(TokenUsage accumulatedUsage) {
