@@ -214,18 +214,18 @@
 
 **验证范围：**
 
-- [ ] 运行聚焦测试：
+- [x] ✅ 运行聚焦测试，238/238 通过：
 
   ```bash
   bash mvnw -Dtest=MemoryTokenPropertiesTest,UnfinishedToolChainCheckpointProjectorTest,ContextCompressionCoordinatorTest,ContextCompressionModelRequestGateTest,AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest,ToolMessageCollapserTest,LayeredMemoryIntegrationTest test
   ```
 
-- [ ] 运行后端全量测试：`bash mvnw test`；若全量已有环境性失败，记录完整测试类、失败原因和与本改动无关的证据，不得把未验证内容称为通过。
-- [ ] 执行 `git diff --check`、源码 UTF-8 检查、YAML 配置检查，并确认不存在旧阈值 `28672/30720/32768/40960` 的生产配置残留。
-- [ ] 使用脱敏日志验证：不会输出用户原文、源码、工具参数、完整构建日志、Redis 原始消息内容；只输出模式、结果、Token 区间和耗时。
-- [ ] 验证前端收到 `STARTED → COMPLETED`，64K压缩完成后继续展示后续模型输出；失败时只收到一次安全错误终态。
-- [ ] 检查 `git status --short`，只暂存本计划涉及文件；不得纳入既有 `.codex/` 未跟踪材料或 `.codex/sdd/progress.md` 用户改动。
-- [ ] 最终中文提交：`完成48K至64K上下文压缩与工具链续行`；未经用户明确允许不 push。
+- [x] ✅ 运行后端全量测试：`bash mvnw test`，1604 项测试、0 失败、0 错误、7 项按标签跳过；同时修复旧 32K 测试夹具导致的 L1 滚动摘要阈值回归。
+- [x] ✅ 执行 `git diff --check`、源码 UTF-8/无 BOM/无 `U+FFFD` 检查及 Spring Boot YAML 启动绑定检查；生产代码不存在旧阈值 `28672/30720/32768/40960` 残留。
+- [x] ✅ 完成日志与指标脱敏审计：新链路未新增正文日志，指标入口只接受固定枚举、Token 数和耗时；Prometheus 抓取测试确认不包含用户原文、源码、工具参数、完整日志或 Redis 原始消息。
+- [x] ✅ 验证前端收到 `STARTED → COMPLETED → 后续正文 → 成功终态`；后端 SSE 契约测试与前端 163 项测试通过，乱序、重复或非法控制帧只产生一次安全错误终态。
+- [x] ✅ 检查 `git status --short` 并显式暂存计划涉及文件；既有 `.codex/` 未跟踪材料和 `.codex/sdd/progress.md` 用户改动均未纳入提交。
+- [x] ✅ 最终中文提交：`完成48K至64K上下文压缩与工具链续行`；未经用户明确允许未 push。
 
 ## 验收标准
 
