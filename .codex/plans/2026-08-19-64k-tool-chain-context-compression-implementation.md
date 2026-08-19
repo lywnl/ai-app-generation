@@ -18,14 +18,14 @@
 - 64K 压缩只允许在一个工具批次所有结果已持久化、`tool_call` 与 `tool_result` 完整配对后进行；不得在工具执行中间删除消息。
 - 检查点不得包含 `readFile` 源码、`modifyFile.oldContent/newContent`、`writeFile` 完整内容、完整构建日志、重复工具轨迹、模型普通正文或未经执行的成功声明。
 - 64K 压缩不调用摘要模型自由总结；只根据后端真实结构化工具事件生成确定性内容。
-- 每个用户回合最多进行一次未完成工具链检查点压缩；压缩后仍达到64K必须安全失败，不能递归重试。
+- 每个用户回合最多一次进入未完成工具链检查点模式；进入后允许基于最新完整工具批次重建请求视图，但不得再次调用摘要模型或递归进入压缩。检查点视图仍达到64K时必须安全失败。
 - 现有前端 `ContextCompressionMessage.started()/completed()` 文案继续复用：开始时显示“正在压缩上下文，请稍候…”，完成后显示“上下文压缩完成，继续生成…”。
 
 ## 文件与接口边界
 
 - 修改 `src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java` 和 `src/main/resources/application.yml`：同步新阈值及严格启动校验。
 - 新增 `src/main/java/com/lyw/appgeneration/ai/memory/UnfinishedToolChainCheckpointProjector.java`：解析未完成尾部，输出受信 `SystemMessage` 和投影结果；不持久化、不修改 Redis。
-- 必要时新增同包的不可变 DTO（例如 `UnfinishedToolChainCheckpoint`、`ToolChainCheckpointResult`），只承载用户请求、工具事实、文件路径、构建状态和继续约束。
+- 必要时新增同包的不可变 DTO（例如 `UnfinishedToolChainCheckpoint`、`ToolChainCheckpointResult`），只承载原始 `UserMessage`、工具事实、文件路径、构建状态和继续约束；用户要求不得提升为 `SystemMessage`。
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ConversationTurnSnapshotParser.java`：明确未完成尾部边界，保留工具调用/结果配对顺序供检查点投影器使用。
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinator.java`：实现三段阈值路由、无旧回合放行、64K请求视图压缩、重估和单次失败关闭。
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextAdmissionResult.java`、`ContextCompressionMode.java`：增加检查点压缩成功/失败所需的类型化状态，禁止把“无旧回合但低于64K”误判为失败。
@@ -40,7 +40,7 @@
 2. `48K ≤ Token <56K`：异步提交“旧完整回合”压缩计划，本次请求继续；没有可压缩旧回合时也继续，不阻塞。
 3. `56K ≤ Token <64K`：阻塞压缩旧完整回合；若唯一失败原因是 `NO_COMPRESSIBLE_TURN`，允许本次请求继续；对齐失败、游标失败、依赖失败、超时、执行器拒绝等仍失败关闭。
 4. `Token ≥64K`：先完成可用的旧完整回合阻塞压缩并重新读取最新请求；若重新估算仍达到64K且存在未完成尾部，执行一次工具链检查点压缩。没有未完成尾部、无法构造合法检查点或压缩后仍达到64K时，返回类型化安全失败，禁止调用模型。
-5. 检查点压缩成功后，删除本次请求视图中的冗长未完成尾部，追加一个受信 `SystemMessage`，内容至少包括：用户原始要求、已执行工具及状态、已读取路径、真实创建/修改/删除路径、构建次数、最近构建状态和必要错误摘要、文件已落盘且以磁盘为准、需要源码必须重新 `readFile`、当前任务尚未完成并继续剩余工作。
+5. 检查点压缩成功后，删除本次请求视图中的冗长未完成尾部；替换片段保留原始 `UserMessage`，并追加一个只包含受信工具事实与继续约束的 `SystemMessage`，内容至少包括：已执行工具及状态、已读取路径、真实创建/修改/删除路径、构建次数、最近构建状态和结构化错误摘要、文件已落盘且以磁盘为准、需要源码必须重新 `readFile`、当前任务尚未完成并继续剩余工作。
 6. 检查点只存在于 `ModelRequestGate.Decision.messages`；Redis 中的原始未完成工具链保持不变，下一次门禁重新从最新活动记忆生成请求视图。
 7. 工具批次完成后才调用 `submitNextModelRequest()`；代次取消、删除接管、回合终态或旧 generation 迟到回调都不得启动新的模型请求。
 
@@ -79,24 +79,24 @@
 **输入与输出：**
 
 - 输入：`ConversationTurnSnapshotParser.Snapshot.unfinishedTail()`、当前回合工具注册表和可信工具结果文本；输入必须只接受结构化 `AiMessage.toolExecutionRequests` 与 `ToolExecutionResultMessage`。
-- 输出：不可变 `ToolChainCheckpointResult`，包含 `List<ChatMessage> requestMessages` 替换片段、`SystemMessage checkpointMessage`、Token 前后统计所需的事实集合和 `complete`/`failureReason`。
-- 检查点统一以固定前缀标识，例如“本轮可信执行检查点”，并使用单行安全路径；每个路径、状态和错误摘要都做长度上限与控制字符校验。
+- 输出：不可变 `ToolChainCheckpointResult`，包含由原始 `UserMessage` 和受信 `SystemMessage` 组成的 `List<ChatMessage> requestMessages` 替换片段、`SystemMessage checkpointMessage`、Token 前后统计所需的事实集合和 `complete`/`failureReason`。
+- 检查点统一以固定前缀标识，例如“本轮可信执行检查点”；路径以明确标注的 JSON 数据数组渲染，每个路径和状态都做长度上限与控制字符校验。
 
 **确定性投影规则：**
 
 - 用户原始要求取未完成尾部首个 `UserMessage` 的纯文本；缺失或多用户边界不明确时拒绝投影。
 - 工具调用记录工具名和调用状态；工具结果按 `id` 配对，孤立调用或孤立结果直接拒绝，不允许猜测。
 - `readFile/readDir` 只保留路径和成功/失败状态，删除正文；`writeFile/modifyFile/deleteFile` 只保留真实状态和路径，禁止保留内容或 diff。
-- `buildProject` 只保留次数、最近成功/失败/取消/超时状态和截断后的 `errorSummary`；禁止完整日志。
+- `buildProject` 只保留次数、最近成功/失败/取消/超时状态，以及由阶段、失败类型、超时等受信结构化枚举确定性生成的错误摘要；禁止复用模型或构建工具返回的自由文本日志。
 - 固定追加“文件已落盘，以当前工程文件为准；源码正文未保留，需要时重新调用 readFile；继续完成剩余修改并执行真实构建”。
 - 任意协议不完整、事实解析失败或结果超出边界都返回不可用，不生成部分可信检查点。
 
 **TDD 步骤：**
 
-- [ ] 先测试成功投影、读取路径保留、修改路径保留、构建错误摘要截断及所有敏感内容排除，确认新类不存在或断言失败。
-- [ ] 再测试孤立 `tool_call`、孤立 `tool_result`、非法路径、完整源码/`oldContent`/`newContent` 注入和缺失用户要求必须拒绝。
-- [ ] 实现最小确定性投影器；运行 `bash mvnw -Dtest=UnfinishedToolChainCheckpointProjectorTest,VueToolExecutionFactTest test`，预期通过。
-- [ ] 提交：`增加未完成工具链可信检查点投影`。
+- [x] ✅ 先测试成功投影、读取路径保留、修改路径保留、结构化构建错误摘要及所有敏感内容排除，确认新类不存在或断言失败。
+- [x] ✅ 再测试孤立 `tool_call`、孤立 `tool_result`、跨批次不完整、非法路径、路径注入、完整源码/`oldContent`/`newContent` 注入、用户角色提升和缺失用户要求必须拒绝。
+- [x] ✅ 实现最小确定性投影器；运行 `bash mvnw -Dtest=UnfinishedToolChainCheckpointProjectorTest,VueToolExecutionFactTest test`，预期通过。
+- [x] ✅ 提交：`增加未完成工具链可信检查点投影`。
 
 ## 任务 3：扩展上下文协调器的三段门禁与64K请求视图压缩
 
@@ -111,7 +111,7 @@
 **接口与状态：**
 
 - 为 `admit` 增加携带 `ContextCompressionAttemptState` 的入口；旧测试用的无状态重载保留并创建独立状态。
-- `ContextCompressionAttemptState` 使用线程安全的一次性认领；只有成功构造并提交检查点后才标记已使用，失败不允许自动递归再次尝试。
+- `ContextCompressionAttemptState` 使用线程安全状态机；只允许一次从普通模式进入检查点模式。进入后每次续调用可根据最新完整工具批次重建临时请求视图，但失败不允许递归重试。
 - `ContextAdmissionResult` 必须返回与最终请求消息同次估算的 `finalTokens`；检查点压缩结果必须能区分“允许继续”“已到64K仍拒绝”“回合已终止”。
 
 **协调流程：**
@@ -156,7 +156,7 @@
 
 **TDD 步骤：**
 
-- [ ] 测试同一回合多个 continuation 只允许一次检查点压缩，压缩后的模型请求确实包含检查点而不包含原始源码。
+- [ ] 测试同一回合只进入一次检查点模式，多个 continuation 均基于最新完整工具批次重建检查点视图，且模型请求不包含原始源码。
 - [ ] 测试工具批次未全部落库时不压缩，批次完成后才压缩；测试压缩后继续第二批工具并最终完成。
 - [ ] 测试取消、删除接管、旧 generation 迟到回调不会启动模型、不会发送完成事件、不会写入错误记忆。
 - [ ] 运行 `bash mvnw -Dtest=ContextCompressionModelRequestGateTest,AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest test`，先 RED 后 GREEN。
