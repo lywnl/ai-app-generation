@@ -194,6 +194,43 @@ class ToolMessageCollapserTest {
     }
 
     @Test
+    void 正式回合折叠后只持久化用户消息与可信Ai投影() {
+        long appId = 556L;
+        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
+        MessageWindowChatMemory memory = MessageWindowChatMemory.builder()
+                .id(appId).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
+        ToolExecutionRequest request = req("正式回合工具调用", "writeFile");
+        String displayText = "本轮可信执行检查点\n[工具调用] writeFile"
+                + "({\"source\":\"不得持久化的源码\"})";
+        String memoryAiText = "已修改 src/App.vue，构建成功。";
+
+        memory.add(UserMessage.from("修改首页"));
+        memory.add(AiMessage.from(request));
+        memory.add(ToolExecutionResultMessage.from(request, displayText));
+        memory.add(AiMessage.from(displayText));
+
+        ToolMessageCollapser.CollapseResult result =
+                new ToolMessageCollapser(store).collapseLastTurn(
+                        appId, memoryAiText);
+
+        assertEquals(ToolMessageCollapser.CollapseStatus.COLLAPSED,
+                result.status());
+        assertEquals(List.of("修改首页", memoryAiText),
+                memory.messages().stream().map(message ->
+                        message instanceof UserMessage userMessage
+                                ? userMessage.singleText()
+                                : ((AiMessage) message).text()).toList());
+        assertTrue(memory.messages().stream().noneMatch(message ->
+                message instanceof ToolExecutionResultMessage
+                        || message instanceof AiMessage aiMessage
+                        && aiMessage.hasToolExecutionRequests()));
+        assertFalse(memory.messages().toString().contains("检查点"));
+        assertFalse(memory.messages().toString().contains("不得持久化的源码"));
+        assertFalse(memory.messages().toString().contains("工具调用"));
+    }
+
+    @Test
     void collapseDistinguishesEmptyBoundaryAndStoreFailure() {
         long appId = 557L;
         ChatMemoryStore store = mock(ChatMemoryStore.class);

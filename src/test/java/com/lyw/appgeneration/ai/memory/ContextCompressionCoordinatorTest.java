@@ -474,6 +474,36 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
+    void 六十四K检查点只存在于请求视图且L0完整快照逐项不变() {
+        try (Fixture fixture = fixture(65_536, 65_536)) {
+            CompressionAwareChatMemory toolMemory = toolChainMemory(
+                    fixture.summaryService(), "不得进入持久层的源码");
+            List<ChatMessage> l0Before = List.copyOf(toolMemory.messages());
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> containsCheckpoint(
+                            invocation.getArgument(0)) ? 18_000 : 65_536);
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    toolMemory, vueTools());
+
+            assertEquals(ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED,
+                    result.mode());
+            assertEquals(l0Before, toolMemory.messages(),
+                    "检查点不得改变 L0 活动消息的任何元素");
+            assertEquals(l0Before, toolMemory.completeTurnSnapshot()
+                    .unfinishedTail(), "检查点不得替换 Redis/L0 未完成工具链");
+            assertTrue(result.requestMessages().stream()
+                    .anyMatch(this::isCheckpoint));
+            assertFalse(toolMemory.messages().stream()
+                    .anyMatch(this::isCheckpoint));
+            verify(fixture.summaryService(), never()).compressNow(
+                    any(), any(Long.class), any(Duration.class));
+            verify(fixture.historyService(), never())
+                    .listRecentCompleteTurnBoundaries(any(), any(Integer.class));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
     void 六十四K检查点后仍超限时安全失败且同状态不得递归重试() {
         try (Fixture fixture = fixture(65_536, 65_536)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
