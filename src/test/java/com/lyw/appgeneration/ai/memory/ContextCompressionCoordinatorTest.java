@@ -427,12 +427,20 @@ class ContextCompressionCoordinatorTest {
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> containsCheckpoint(
                             invocation.getArgument(0)) ? 18_000 : 65_536);
+            List<ContextAdmissionResult> transitions = new ArrayList<>();
+            ContextCompressionAttemptState state =
+                    new ContextCompressionAttemptState();
 
             ContextAdmissionResult result = fixture.coordinator().admit(
-                    toolMemory, vueTools(), new ContextCompressionAttemptState());
+                    toolMemory, vueTools(), List.of(), transitions::add,
+                    ContextContinuationGate.alwaysOpen(), state);
 
             assertEquals(ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED,
                     result.mode());
+            assertEquals(List.of("TOOL_CHAIN_CHECKPOINT_STARTED"),
+                    transitions.stream()
+                            .map(transition -> transition.mode().name())
+                            .toList());
             assertTrue(result.canProceed());
             assertEquals(18_000, result.finalTokens());
             assertTrue(result.requestMessages().stream()
@@ -446,6 +454,15 @@ class ContextCompressionCoordinatorTest {
             assertFalse(result.requestMessages().toString().contains("绝密源码"));
             assertEquals(original, toolMemory.completeTurnSnapshot()
                     .unfinishedTail(), "请求级检查点不得改写底层L0/Redis轨迹");
+
+            transitions.clear();
+            ContextAdmissionResult rebuilt = fixture.coordinator().admit(
+                    toolMemory, vueTools(), List.of(), transitions::add,
+                    ContextContinuationGate.alwaysOpen(), state);
+            assertEquals("TOOL_CHAIN_CHECKPOINT_REBUILT",
+                    rebuilt.mode().name());
+            assertTrue(transitions.isEmpty(),
+                    "ACTIVE 后续重建不得重复发布检查点进度");
         }
     }
 
@@ -619,7 +636,7 @@ class ContextCompressionCoordinatorTest {
             ContextAdmissionResult result = fixture.coordinator().admit(
                     toolMemory, vueTools(), state);
 
-            assertEquals(ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED,
+            assertEquals(ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_REBUILT,
                     result.mode());
             assertTrue(result.requestMessages().toString()
                     .contains("src/latest.vue"));
@@ -757,6 +774,95 @@ class ContextCompressionCoordinatorTest {
             assertFalse(toolMemory.messages().contains(transientMessage));
             assertEquals(1L, result.requestMessages().stream()
                     .filter(transientMessage::equals).count());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 检查点开始监听器异常必须释放owner并返回类型化依赖失败() {
+        try (Fixture fixture = fixture(65_536, 18_000)) {
+            CompressionAwareChatMemory toolMemory = toolChainMemory(
+                    fixture.summaryService(), "绝密源码");
+            ContextCompressionAttemptState state =
+                    new ContextCompressionAttemptState();
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    toolMemory, vueTools(), List.of(), ignored -> {
+                        throw new IllegalStateException("listener down");
+                    }, ContextContinuationGate.alwaysOpen(), state);
+
+            assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            assertTrue(result.requestMessages().stream()
+                    .noneMatch(this::isCheckpoint));
+            assertEquals(ContextCompressionAttemptState.EnterDecision
+                            .ALREADY_FAILED,
+                    state.tryEnterCheckpointMode().decision());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void ACTIVE检查点最终提交门异常必须释放owner且不泄漏投影() {
+        try (Fixture fixture = fixture(65_536, 18_000)) {
+            CompressionAwareChatMemory toolMemory = toolChainMemory(
+                    fixture.summaryService(), "绝密源码");
+            ContextCompressionAttemptState state =
+                    new ContextCompressionAttemptState();
+            ContextCompressionAttemptState.CheckpointClaim first =
+                    state.tryEnterCheckpointMode();
+            assertTrue(state.markCheckpointReady(first));
+            AtomicLong gateInvocations = new AtomicLong();
+            ContextContinuationGate gate = action -> {
+                if (gateInvocations.incrementAndGet() == 5L) {
+                    throw new IllegalStateException("gate down");
+                }
+                action.run();
+                return true;
+            };
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    toolMemory, vueTools(), List.of(), ignored -> { }, gate,
+                    state);
+
+            assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            assertTrue(result.requestMessages().stream()
+                    .noneMatch(this::isCheckpoint));
+            assertEquals(ContextCompressionAttemptState.EnterDecision
+                            .ALREADY_FAILED,
+                    state.tryEnterCheckpointMode().decision());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 检查点估算器异常必须释放owner且不泄漏投影() {
+        try (Fixture fixture = fixture(65_536, 18_000)) {
+            CompressionAwareChatMemory toolMemory = toolChainMemory(
+                    fixture.summaryService(), "绝密源码");
+            ContextCompressionAttemptState state =
+                    new ContextCompressionAttemptState();
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenReturn(65_536)
+                    .thenThrow(new IllegalStateException("tokenizer down"));
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    toolMemory, vueTools(), state);
+
+            assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+                    result.failureReason());
+            assertFalse(result.canProceed());
+            assertTrue(result.requestMessages().stream()
+                    .noneMatch(this::isCheckpoint));
+            assertEquals(ContextCompressionAttemptState.EnterDecision
+                            .ALREADY_FAILED,
+                    state.tryEnterCheckpointMode().decision());
         }
     }
 

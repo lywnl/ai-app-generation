@@ -1,5 +1,6 @@
 package dev.langchain4j.service;
 
+import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.memory.ChatMemory;
@@ -41,7 +42,19 @@ public interface ModelRequestGate {
             Supplier<ChatMemory> latestMemory,
             List<ToolSpecification> toolSpecifications,
             ContinuationGate continuationGate,
-            List<ChatMessage> transientMessages) {
+            List<ChatMessage> transientMessages,
+            ContextCompressionAttemptState contextCompressionAttemptState) {
+
+        /** 兼容既有调用；生产模型请求必须显式传入回合共享状态。 */
+        public Request(
+                Object memoryId,
+                Supplier<ChatMemory> latestMemory,
+                List<ToolSpecification> toolSpecifications,
+                ContinuationGate continuationGate,
+                List<ChatMessage> transientMessages) {
+            this(memoryId, latestMemory, toolSpecifications, continuationGate,
+                    transientMessages, new ContextCompressionAttemptState());
+        }
 
         public Request {
             memoryId = Objects.requireNonNull(memoryId, "记忆 ID 不能为空");
@@ -53,6 +66,9 @@ public interface ModelRequestGate {
                     continuationGate, "回合原子门不能为空");
             transientMessages = List.copyOf(
                     transientMessages == null ? List.of() : transientMessages);
+            contextCompressionAttemptState = Objects.requireNonNull(
+                    contextCompressionAttemptState,
+                    "上下文压缩尝试状态不能为空");
         }
     }
 

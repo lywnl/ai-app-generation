@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -596,7 +597,8 @@ class AiServiceStreamingResponseHandlerTest {
                     }, error -> fail("不应触发错误回调", error));
 
             handler.onCompleteResponse(responseWithTools(
-                    tool("large-tool", "writeFile")));
+                    tool("large-tool-1", "writeFile"),
+                    tool("large-tool-2", "writeFile")));
 
             assertEquals(0, model.chatInvocations,
                     "工具结果加入后必须先等待统一门禁");
@@ -604,6 +606,13 @@ class AiServiceStreamingResponseHandlerTest {
                             java.time.Duration.ofMillis(100)),
                     "prepare 返回后必须立即释放当前 SDK callback 票据");
             assertSame(memory, gateRequest.get().latestMemory().get());
+            List<ChatMessage> completeBatch =
+                    gateRequest.get().latestMemory().get().messages();
+            assertEquals(2L, completeBatch.stream()
+                    .filter(ToolExecutionResultMessage.class::isInstance)
+                    .count(), "门禁只能在全部工具结果写入且批次闭合后运行");
+            assertFalse(hasUnpairedToolRequests(completeBatch),
+                    "门禁不得观察到孤立 tool_call");
 
             List<ChatMessage> compressedMessages = List.of(
                     UserMessage.from("压缩后的工具上下文"));
@@ -616,6 +625,71 @@ class AiServiceStreamingResponseHandlerTest {
 
             assertEquals(1, model.chatInvocations);
             assertEquals(compressedMessages, model.lastChatRequest.messages());
+        }
+    }
+
+    @Test
+    void 工具结果提交后终态抢占使批次完成失败且不得进入续调门禁()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        AtomicBoolean committedResultObserved = new AtomicBoolean();
+        AtomicInteger gateCalls = new AtomicInteger();
+        AtomicInteger continuationCalls = new AtomicInteger();
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
+                request -> {
+                    gateCalls.incrementAndGet();
+                    return CompletableFuture.completedFuture(
+                            allowed(request.latestMemory().get().messages()));
+                })) {
+            AiServiceStreamingResponseHandler handler =
+                    new AiServiceStreamingResponseHandler(
+                            new NoopChatExecutor(), context, "mem-1",
+                            partial -> { },
+                            (index, request) -> { },
+                            (index, request) -> { },
+                            execution -> {
+                                committedResultObserved.set(memory.messages()
+                                        .stream()
+                                        .anyMatch(ToolExecutionResultMessage
+                                                .class::isInstance));
+                                controller.cancel();
+                            },
+                            response -> { },
+                            error -> fail("终态抢占后不应报告普通错误", error),
+                            memory,
+                            new TokenUsage(),
+                            List.<ToolSpecification>of(),
+                            Map.<String, ToolExecutor>of(
+                                    "writeFile", (request, memoryId) ->
+                                            "已提交工具结果"),
+                            null,
+                            "method-1",
+                            controller,
+                            ToolExecutionGuard.direct(),
+                            controller.latestModelRequestGeneration(),
+                            gate,
+                            action -> {
+                                continuationCalls.incrementAndGet();
+                                action.run();
+                                return true;
+                            });
+
+            handler.onCompleteResponse(responseWithTools(
+                    tool("cancel-before-finish", "writeFile")));
+            gate.awaitIdle();
+
+            assertTrue(committedResultObserved.get(),
+                    "终态必须在工具结果提交后、批次完成前抢占");
+            assertTrue(controller.isCancelled());
+            assertEquals(0, gateCalls.get(),
+                    "finishToolBatch 返回 false 后不得运行模型门禁");
+            assertEquals(0, continuationCalls.get());
+            assertEquals(0, model.chatInvocations);
         }
     }
 
@@ -1991,6 +2065,22 @@ class AiServiceStreamingResponseHandlerTest {
 
     private static ToolExecutionRequest tool(String id, String name) {
         return ToolExecutionRequest.builder().id(id).name(name).arguments("{}").build();
+    }
+
+    private static boolean hasUnpairedToolRequests(
+            List<ChatMessage> messages) {
+        Set<String> pendingIds = new java.util.HashSet<>();
+        for (ChatMessage message : messages) {
+            if (message instanceof AiMessage aiMessage
+                    && aiMessage.hasToolExecutionRequests()) {
+                aiMessage.toolExecutionRequests().stream()
+                        .map(ToolExecutionRequest::id)
+                        .forEach(pendingIds::add);
+            } else if (message instanceof ToolExecutionResultMessage result) {
+                pendingIds.remove(result.id());
+            }
+        }
+        return !pendingIds.isEmpty();
     }
 
     private static final class RecordingChatMemory implements ChatMemory {

@@ -1,5 +1,6 @@
 package dev.langchain4j.service;
 
+import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -201,6 +202,8 @@ public class AiServiceTokenStream implements TokenStream {
         }
 
         ChatMemory temporaryMemory = initTemporaryMemory(context, messages);
+        ContextCompressionAttemptState compressionAttemptState =
+                new ContextCompressionAttemptState();
         requestOrchestrator = new GenerationAwareModelRequestOrchestrator(
                 requestController, modelRequestGate, continuationGate);
         ModelRequestGate.Request gateRequest = modelRequestGate == null
@@ -210,7 +213,8 @@ public class AiServiceTokenStream implements TokenStream {
                         () -> activeMemory(temporaryMemory),
                         toolSpecifications,
                         continuationGate,
-                        List.of());
+                        List.of(),
+                        compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.initial(
                         gateRequest,
@@ -220,13 +224,15 @@ public class AiServiceTokenStream implements TokenStream {
                                 prepareInitialModelRequest(
                                         preparedMessages,
                                         temporaryMemory,
-                                        generation)));
+                                        generation,
+                                        compressionAttemptState)));
     }
 
     private Runnable prepareInitialModelRequest(
             List<ChatMessage> requestMessages,
             ChatMemory temporaryMemory,
-            long requestGeneration) {
+            long requestGeneration,
+            ContextCompressionAttemptState compressionAttemptState) {
         ChatRequest chatRequest = ChatRequest.builder()
                 .messages(requestMessages)
                 .toolSpecifications(toolSpecifications)
@@ -258,7 +264,8 @@ public class AiServiceTokenStream implements TokenStream {
                 requestGeneration,
                 modelRequestGate,
                 continuationGate,
-                recoveryCoordinator);
+                recoveryCoordinator,
+                compressionAttemptState);
 
         if (contentsHandler != null && retrievedContents != null) {
             contentsHandler.accept(retrievedContents);

@@ -143,6 +143,9 @@
 - 修改 `src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java`
 - 修改 `src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java`
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGate.java`
+- 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinator.java`
+- 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionMode.java`
+- 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextAdmissionResult.java`
 - 修改 `src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java`
 - 修改 `src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java`、`AiServiceStreamingResponseHandlerTest.java`
 
@@ -157,11 +160,11 @@
 
 **TDD 步骤：**
 
-- [ ] 测试同一回合只进入一次检查点模式，多个 continuation 均基于最新完整工具批次重建检查点视图，且模型请求不包含原始源码。
-- [ ] 测试工具批次未全部落库时不压缩，批次完成后才压缩；测试压缩后继续第二批工具并最终完成。
-- [ ] 测试取消、删除接管、旧 generation 迟到回调不会启动模型、不会发送完成事件、不会写入错误记忆。
-- [ ] 运行 `bash mvnw -Dtest=ContextCompressionModelRequestGateTest,AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest test`，先 RED 后 GREEN。
-- [ ] 提交：`贯通64K检查点与工具循环代次状态`。
+- [x] ✅ 测试同一回合只进入一次检查点模式，多个 continuation 均基于最新完整工具批次重建检查点视图，且模型请求不包含原始源码。
+- [x] ✅ 测试工具批次未全部落库时不压缩，批次完成后才压缩；测试压缩后继续第二批工具并最终完成。
+- [x] ✅ 测试取消、删除接管、旧 generation 迟到回调不会启动模型、不会发送完成事件、不会写入错误记忆。
+- [x] ✅ 运行 `bash mvnw -Dtest=ContextCompressionModelRequestGateTest,AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest test`，先 RED 后 GREEN。
+- [x] ✅ 提交：`贯通64K检查点与工具循环代次状态`。
 
 ## 任务 5：复用前端压缩状态并补充观测指标
 

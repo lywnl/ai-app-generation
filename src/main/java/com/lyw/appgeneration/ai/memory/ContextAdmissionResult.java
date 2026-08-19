@@ -38,7 +38,8 @@ public record ContextAdmissionResult(
         return mode == ContextCompressionMode.NORMAL
                 || mode == ContextCompressionMode.ASYNC_SCHEDULED
                 || mode == ContextCompressionMode.BLOCKING_COMPLETED
-                || mode == ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED;
+                || mode == ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED
+                || mode == ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_REBUILT;
     }
 
     public enum FailureReason {

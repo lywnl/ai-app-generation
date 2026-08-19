@@ -311,7 +311,7 @@ public class ContextCompressionCoordinator {
             return checkpointOrReject(
                     appId, memory, stableTools, stableTransientMessages,
                     initialRequest, initialRequest, 0L, continuationGate,
-                    attemptState, null, deadline);
+                    attemptState, null, transitionListener, deadline);
         }
         if (initialTokens < properties.getAsyncCompressionThreshold()) {
             if (!tryCommitContinuation(continuationGate)) {
@@ -359,7 +359,7 @@ public class ContextCompressionCoordinator {
                 return checkpointOrReject(
                         appId, memory, stableTools, stableTransientMessages,
                         initialRequest, initialRequest, 0L, continuationGate,
-                        attemptState, null, deadline);
+                        attemptState, null, transitionListener, deadline);
             }
             return failure(planningFailureMode(initialTokens),
                     initialRequest, initialRequest, 0L,
@@ -410,6 +410,7 @@ public class ContextCompressionCoordinator {
             ContextContinuationGate continuationGate,
             ContextCompressionAttemptState attemptState,
             PreparedBlockingRequest blockingPreparation,
+            Consumer<ContextAdmissionResult> transitionListener,
             AdmissionDeadline deadline) {
         ContextCompressionAttemptState.CheckpointClaim claim =
                 attemptState.tryEnterCheckpointMode();
@@ -427,35 +428,57 @@ public class ContextCompressionCoordinator {
                             ? "本回合工具链检查点正在构建"
                             : "本回合工具链检查点已失败，禁止递归重试");
         }
-        if (!tryCommitContinuation(continuationGate)) {
-            attemptState.markCheckpointFailed(claim);
-            return checkpointTurnTerminated(
-                    initialRequest, currentRequest,
-                    summarizeThroughId, appId);
-        }
-        CheckpointPreparation preparation = prepareCheckpointRequest(
-                memory, tools, transientMessages,
-                blockingPreparation, deadline);
-        if (!preparation.complete()) {
+        try {
+            if (!tryCommitContinuation(continuationGate)) {
+                attemptState.markCheckpointFailed(claim);
+                return checkpointTurnTerminated(
+                        initialRequest, currentRequest,
+                        summarizeThroughId, appId);
+            }
+            if (enterDecision == ContextCompressionAttemptState.EnterDecision
+                    .FIRST_ENTRY && blockingPreparation == null
+                    && !continuationGate.tryRun(() -> transitionListener.accept(
+                    success(ContextCompressionMode
+                                    .TOOL_CHAIN_CHECKPOINT_STARTED,
+                            initialRequest, currentRequest, summarizeThroughId,
+                            "开始生成未完成工具链检查点")))) {
+                attemptState.markCheckpointFailed(claim);
+                return checkpointTurnTerminated(
+                        initialRequest, currentRequest,
+                        summarizeThroughId, appId);
+            }
+            CheckpointPreparation preparation = prepareCheckpointRequest(
+                    memory, tools, transientMessages,
+                    blockingPreparation, deadline);
+            if (!preparation.complete()) {
+                attemptState.markCheckpointFailed(claim);
+                return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                        initialRequest, currentRequest, summarizeThroughId,
+                        preparation.failureReason(), preparation.detail());
+            }
+            AtomicReference<ContextAdmissionResult> committed =
+                    new AtomicReference<>();
+            boolean accepted = continuationGate.tryRun(() -> committed.set(
+                    commitCheckpoint(
+                            appId, memory, initialRequest, currentRequest,
+                            summarizeThroughId, preparation,
+                            blockingPreparation, deadline,
+                            attemptState, claim)));
+            if (!accepted) {
+                attemptState.markCheckpointFailed(claim);
+                return checkpointTurnTerminated(
+                        initialRequest, currentRequest,
+                        summarizeThroughId, appId);
+            }
+            return requireCommitted(committed, "工具链检查点提交");
+        } catch (RuntimeException exception) {
             attemptState.markCheckpointFailed(claim);
             return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
                     initialRequest, currentRequest, summarizeThroughId,
-                    preparation.failureReason(), preparation.detail());
+                    FailureReason.DEPENDENCY_FAILED,
+                    "生成工具链检查点依赖异常，type="
+                            + exception.getClass().getSimpleName());
         }
-        AtomicReference<ContextAdmissionResult> committed =
-                new AtomicReference<>();
-        boolean accepted = continuationGate.tryRun(() -> committed.set(
-                commitCheckpoint(
-                        appId, memory, initialRequest, currentRequest,
-                        summarizeThroughId, preparation,
-                        blockingPreparation, deadline, attemptState, claim)));
-        if (!accepted) {
-            attemptState.markCheckpointFailed(claim);
-            return checkpointTurnTerminated(
-                    initialRequest, currentRequest,
-                    summarizeThroughId, appId);
-        }
-        return requireCommitted(committed, "工具链检查点提交");
     }
 
     private CheckpointPreparation prepareCheckpointRequest(
@@ -587,7 +610,12 @@ public class ContextCompressionCoordinator {
                         "工具链检查点owner已失效");
             }
             return success(
-                    ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED,
+                    claim.decision() == ContextCompressionAttemptState
+                            .EnterDecision.FIRST_ENTRY
+                            ? ContextCompressionMode
+                            .TOOL_CHAIN_CHECKPOINT_COMPLETED
+                            : ContextCompressionMode
+                            .TOOL_CHAIN_CHECKPOINT_REBUILT,
                     initialRequest, preparation.request(),
                     summarizeThroughId, "未完成工具链检查点已生成");
         }
@@ -855,7 +883,7 @@ public class ContextCompressionCoordinator {
                     appId, memory, tools, transientMessages,
                     initialRequest, prepared.request(),
                     plan.summarizeThroughId(), continuationGate,
-                    attemptState, prepared, deadline);
+                    attemptState, prepared, transitionListener, deadline);
         }
         return commitPreparedBlockingRequest(
                 appId, memory, initialRequest, plan,
