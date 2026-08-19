@@ -77,6 +77,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final GenerationAwareModelRequestOrchestrator requestOrchestrator;
     private final Object recoveryDetectionMonitor = new Object();
     private final StringBuilder observedResponseText = new StringBuilder();
+    private final StringBuilder trustedResponseText = new StringBuilder();
     private final Set<String> completedToolRequestIds =
             ConcurrentHashMap.newKeySet();
 
@@ -368,17 +369,31 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             deliverTrustedPartial(text.text());
             return true;
         }
-        if (!(result instanceof ToolProtocolRecoveryDetector.Duplicate duplicate)) {
+        if (!(result instanceof ToolProtocolRecoveryDetector.Violation violation)) {
             return true;
         }
-        deliverTrustedPartial(duplicate.text());
-        handleDuplicate(recoveryPrepared);
+        deliverTrustedPartial(violation.trustedText());
+        if (structuredToolCallSupersedesViolation()) {
+            return true;
+        }
+        handleViolation(recoveryPrepared);
         return false;
+    }
+
+    private boolean structuredToolCallSupersedesViolation() {
+        synchronized (recoveryDetectionMonitor) {
+            return recoveryDetector.hasObservedStructuredToolCall()
+                    && !recoveryDetector
+                            .hasViolationObservedBeforeStructuredToolCall();
+        }
     }
 
     private void deliverTrustedPartial(String text) {
         if (text.isEmpty()) {
             return;
+        }
+        synchronized (recoveryDetectionMonitor) {
+            trustedResponseText.append(text);
         }
         if (hasOutputGuardrails) {
             responseBuffer.add(text);
@@ -393,13 +408,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         }
     }
 
-    private void handleDuplicate(AtomicBoolean recoveryPrepared) {
-        ToolProtocolRecoveryCoordinator.DuplicateAction action =
-                recoveryCoordinator.claimDuplicate(requestGeneration);
-        if (action == ToolProtocolRecoveryCoordinator.DuplicateAction.IGNORE) {
+    private void handleViolation(AtomicBoolean recoveryPrepared) {
+        ToolProtocolRecoveryCoordinator.ViolationAction action =
+                recoveryCoordinator.claimViolation(requestGeneration);
+        if (action == ToolProtocolRecoveryCoordinator.ViolationAction.IGNORE) {
             return;
         }
-        if (action == ToolProtocolRecoveryCoordinator.DuplicateAction.FAIL) {
+        if (action == ToolProtocolRecoveryCoordinator.ViolationAction.FAIL) {
             failProtocolRecovery();
             return;
         }
@@ -464,8 +479,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         synchronized (recoveryDetectionMonitor) {
             result = recoveryDetector.observeStructuredToolCall();
         }
-        if (result instanceof ToolProtocolRecoveryDetector.Text text) {
+        if (!(result instanceof ToolProtocolRecoveryDetector.Violation)) {
             markRecoveredBeforeTrustedOutput();
+        }
+        if (result instanceof ToolProtocolRecoveryDetector.Text text) {
             deliverTrustedPartial(text.text());
         }
     }
@@ -511,6 +528,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             return;
         }
         observeStructuredToolCall();
+        if (!completeToolRecoveryDetection(aiMessage.text())) {
+            return;
+        }
+        aiMessage = sanitizedToolMessage(aiMessage);
         List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
         StreamingRequestController.ToolBatchTicket batchTicket =
                 requestController.prepareToolBatch(
@@ -544,6 +565,64 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         executeCommittedToolBatch(
                 requests, batchTicket, completeResponse,
                 continuationResponse);
+    }
+
+    private AiMessage sanitizedToolMessage(AiMessage original) {
+        if (recoveryDetector == null) {
+            return original;
+        }
+        String trustedText;
+        synchronized (recoveryDetectionMonitor) {
+            trustedText = trustedResponseText.toString();
+        }
+        List<ToolExecutionRequest> requests =
+                original.toolExecutionRequests();
+        return trustedText.isEmpty()
+                ? AiMessage.from(requests)
+                : AiMessage.from(trustedText, requests);
+    }
+
+    private boolean completeToolRecoveryDetection(String completeText) {
+        if (recoveryDetector == null) {
+            return true;
+        }
+        String normalizedText = completeText == null ? "" : completeText;
+        ToolProtocolRecoveryDetector.Result suffixResult;
+        ToolProtocolRecoveryDetector.Result finishResult;
+        boolean streamMismatch;
+        synchronized (recoveryDetectionMonitor) {
+            String observed = observedResponseText.toString();
+            boolean completeTextOmitted = normalizedText.isEmpty();
+            streamMismatch = !completeTextOmitted
+                    && !normalizedText.startsWith(observed);
+            if (streamMismatch) {
+                suffixResult = null;
+                finishResult = null;
+            } else {
+                String suffix = completeTextOmitted
+                        ? "" : normalizedText.substring(observed.length());
+                observedResponseText.append(suffix);
+                suffixResult = recoveryDetector.accept(suffix);
+                finishResult = recoveryDetector.finish();
+            }
+        }
+        if (streamMismatch) {
+            failStreamConsistency();
+            return false;
+        }
+        deliverToolResponseText(suffixResult);
+        deliverToolResponseText(finishResult);
+        return requestController.isCurrentGeneration(requestGeneration);
+    }
+
+    private void deliverToolResponseText(
+            ToolProtocolRecoveryDetector.Result result) {
+        if (result instanceof ToolProtocolRecoveryDetector.Text text) {
+            deliverTrustedPartial(text.text());
+        } else if (result instanceof ToolProtocolRecoveryDetector.Violation
+                violation) {
+            deliverTrustedPartial(violation.trustedText());
+        }
     }
 
     private void executeCommittedToolBatch(
@@ -805,7 +884,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 String suffix = normalizedText.substring(observed.length());
                 observedResponseText.append(suffix);
                 suffixResult = recoveryDetector.accept(suffix);
-                if (suffixResult instanceof ToolProtocolRecoveryDetector.Duplicate) {
+                if (suffixResult instanceof ToolProtocolRecoveryDetector.Violation) {
                     finishResult = null;
                 } else {
                     finishResult = recoveryDetector.finish();

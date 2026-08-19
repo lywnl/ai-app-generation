@@ -82,7 +82,7 @@
 
 预期：`ToolProtocolRecoveryDetectorTest` 全部通过。
 
-- [ ] 定向提交：
+- [x] ✅ 定向提交：
 
 ```bash
 git add src/main/java/dev/langchain4j/service/ToolProtocolRecoveryDetector.java \
@@ -103,13 +103,13 @@ git commit -m "重构伪工具正文严格隔离状态机"
 
 **接口决策：** 将 `claimDuplicate(long)` 泛化为 `claimViolation(long)`；保持 `DuplicateAction` 对应的单次额度语义，但重命名为 `ViolationAction`，枚举值为 `START_RECOVERY`、`FAIL`、`IGNORE`。
 
-- [ ] 保持回合状态机：`AVAILABLE → STARTING → RECOVERING → RECOVERED`；纠正后再次退化进入 `FAILED`。
-- [ ] 对重复块和隔离上限立即取消当前异常 generation。
-- [ ] 对单个、不同、残缺或坏 JSON 候选，在流结束时取消当前 generation 并启动恢复。
-- [ ] 只取消当前异常 generation，不取消整个用户回合。
-- [ ] 恢复继续通过原始上下文和临时 `SystemMessage` 发起新的模型请求。
-- [ ] 旧 generation 的迟到正文、工具分片、完成回调和异常继续按 generation 丢弃。
-- [ ] 临时纠正提示固定为：
+- [x] ✅ 保持回合状态机：`AVAILABLE → STARTING → RECOVERING → RECOVERED`；纠正后再次退化进入 `FAILED`。
+- [x] ✅ 对重复块和隔离上限立即取消当前异常 generation。
+- [x] ✅ 对单个、不同、残缺或坏 JSON 候选，在流结束时取消当前 generation 并启动恢复。
+- [x] ✅ 只取消当前异常 generation，不取消整个用户回合。
+- [x] ✅ 恢复继续通过原始上下文和临时 `SystemMessage` 发起新的模型请求。
+- [x] ✅ 旧 generation 的迟到正文、工具分片、完成回调和异常继续按 generation 丢弃。
+- [x] ✅ 临时纠正提示固定为：
 
 ```text
 上一响应未遵守工具调用协议。你在普通正文 content 中输出了工具调用内容，
@@ -130,8 +130,8 @@ git commit -m "重构伪工具正文严格隔离状态机"
 ```
 
 - [ ] 断言纠正提示只出现在纠正请求的临时消息中，不进入 ChatMemory、MySQL、L0、L1 或 L2。
-- [ ] 保持真实 Token Usage 累计；供应商没有返回被取消 generation 用量时不伪造费用数据。
-- [ ] 运行定向测试：
+- [x] ✅ 保持真实 Token Usage 累计；供应商没有返回被取消 generation 用量时不伪造费用数据。
+- [x] ✅ 运行定向测试：
 
 ```bash
 ./mvnw -Dtest=AiServiceTokenStreamTest,StreamingRequestControllerRecoveryTest test
@@ -151,22 +151,22 @@ git commit -m "重构伪工具正文严格隔离状态机"
 
 **输出契约：** 真实结构化工具调用保留原始 ID、名称和参数；`AiMessage.text()` 只能包含标记之前的可信前缀，不能包含被隔离后缀。
 
-- [ ] 对普通完成响应和带 `tool_calls` 的完成响应统一执行流式分片与完整文本一致性校验。
-- [ ] 在处理结构化工具批次前，根据检测器状态得到可信正文和需要丢弃的隔离正文。
-- [ ] 模型同时返回伪工具正文和真实 `tool_calls` 时，丢弃隔离正文并保留真实工具请求。
-- [ ] 可信前缀非空时，用“可信前缀 + 原始工具请求”重建 `AiMessage`。
-- [ ] 可信前缀为空时，用只包含原始工具请求的 `AiMessage`。
-- [ ] 只把清洗后的 `AiMessage` 写入 ChatMemory，并将其传给工具循环和最终完成回调。
-- [ ] 如果没有伪工具候选，保持现有响应内容、工具执行顺序和配对语义不变。
-- [ ] Output Guardrail 只接收可信正文，不能在最终 flush 时重新释放隔离内容。
-- [ ] 覆盖以下测试：
+- [x] ✅ 对普通完成响应和带 `tool_calls` 的完成响应统一执行流式分片与完整文本一致性校验。
+- [x] ✅ 在处理结构化工具批次前，根据检测器状态得到可信正文和需要丢弃的隔离正文。
+- [x] ✅ 模型同时返回伪工具正文和真实 `tool_calls` 时，丢弃隔离正文并保留真实工具请求。
+- [x] ✅ 可信前缀非空时，用“可信前缀 + 原始工具请求”重建 `AiMessage`。
+- [x] ✅ 可信前缀为空时，用只包含原始工具请求的 `AiMessage`。
+- [x] ✅ 只把清洗后的 `AiMessage` 写入 ChatMemory，并将其传给工具循环和最终完成回调。
+- [x] ✅ 如果没有伪工具候选，保持现有响应内容、工具执行顺序和配对语义不变。
+- [x] ✅ Output Guardrail 只接收可信正文，不能在最终 flush 时重新释放隔离内容。
+- [x] ✅ 覆盖以下测试：
   - complete-only 混合响应；
   - 先伪工具正文、后结构化工具分片；
   - 先结构化工具分片、后伪工具正文；
   - 启用 Output Guardrail；
   - 清洗后工具执行并续调；
   - ChatMemory 不存在伪工具正文或孤立工具请求。
-- [ ] 运行定向测试：
+- [x] ✅ 运行定向测试：
 
 ```bash
 ./mvnw -Dtest=AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest,StreamingRequestControllerRecoveryTest test

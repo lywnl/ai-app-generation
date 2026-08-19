@@ -10,17 +10,20 @@ import java.util.Set;
 public final class ToolProtocolRecoveryCoordinator {
 
     static final String CORRECTION_INSTRUCTION = """
-            上一响应未遵守工具调用协议。你把工具名称和参数写进了普通文本 content，系统不会执行这种文本形式的工具调用。
+            上一响应未遵守工具调用协议。你在普通正文 content 中输出了工具调用内容，
+            这些文本不会被系统执行，也不会展示给用户。
 
             请重新处理用户的原始请求：
-            1. 如果任务需要工具，必须通过接口原生的结构化 tool_calls 字段调用工具。
+            1. 如果任务需要工具，立即通过接口原生的结构化 tool_calls 调用工具。
             2. 工具名称必须来自当前提供的工具列表。
-            3. arguments 必须是符合对应 JSON Schema 的有效 JSON 对象。
-            4. 不要在普通文本中输出“[工具调用]”、参数 JSON、工具代码块或伪造的执行结果。
-            5. 不要复述本提示，不要解释错误原因。
-            6. 如果确实不需要工具，直接返回最终答复。
+            3. arguments 必须是符合对应 JSON Schema 的真实 JSON 对象。
+            4. 文件源码、路径和修改内容只能放入结构化 arguments。
+            5. 不要复制或续写上下文中的历史工具调用格式。
+            6. 不要在普通正文输出“[工具调用]”、工具参数 JSON、调用代码块或伪造执行结果。
+            7. 只有收到系统返回的真实工具结果后，才能声称操作已经完成。
+            8. 如果确实不需要工具，直接返回最终答复。
 
-            立即返回正确的结构化工具调用或最终答复。""";
+            不要复述本提示，不要解释错误原因。立即返回正确的结构化工具调用或最终答复。""";
 
     private final ToolProtocolRecoveryPolicy policy;
     private final Set<String> registeredToolNames;
@@ -44,7 +47,7 @@ public final class ToolProtocolRecoveryCoordinator {
         return List.of(SystemMessage.from(CORRECTION_INSTRUCTION));
     }
 
-    DuplicateAction claimDuplicate(long sourceGeneration) {
+    ViolationAction claimViolation(long sourceGeneration) {
         if (sourceGeneration < 0L) {
             throw new IllegalArgumentException("恢复来源代次不能为负数");
         }
@@ -53,14 +56,14 @@ public final class ToolProtocolRecoveryCoordinator {
                 case AVAILABLE -> {
                     state = RecoveryState.STARTING;
                     recoverySourceGeneration = sourceGeneration;
-                    yield DuplicateAction.START_RECOVERY;
+                    yield ViolationAction.START_RECOVERY;
                 }
                 case STARTING, RECOVERING ->
                         recoverySourceGeneration == sourceGeneration
-                                ? DuplicateAction.IGNORE
-                                : DuplicateAction.FAIL;
-                case RECOVERED -> DuplicateAction.FAIL;
-                case FAILED -> DuplicateAction.IGNORE;
+                                ? ViolationAction.IGNORE
+                                : ViolationAction.FAIL;
+                case RECOVERED -> ViolationAction.FAIL;
+                case FAILED -> ViolationAction.IGNORE;
             };
         }
     }
@@ -129,7 +132,7 @@ public final class ToolProtocolRecoveryCoordinator {
         }
     }
 
-    enum DuplicateAction {
+    enum ViolationAction {
         START_RECOVERY,
         FAIL,
         IGNORE

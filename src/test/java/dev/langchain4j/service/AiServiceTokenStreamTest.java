@@ -43,17 +43,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AiServiceTokenStreamTest {
 
     private static final String CORRECTION_INSTRUCTION = """
-            上一响应未遵守工具调用协议。你把工具名称和参数写进了普通文本 content，系统不会执行这种文本形式的工具调用。
+            上一响应未遵守工具调用协议。你在普通正文 content 中输出了工具调用内容，
+            这些文本不会被系统执行，也不会展示给用户。
 
             请重新处理用户的原始请求：
-            1. 如果任务需要工具，必须通过接口原生的结构化 tool_calls 字段调用工具。
+            1. 如果任务需要工具，立即通过接口原生的结构化 tool_calls 调用工具。
             2. 工具名称必须来自当前提供的工具列表。
-            3. arguments 必须是符合对应 JSON Schema 的有效 JSON 对象。
-            4. 不要在普通文本中输出“[工具调用]”、参数 JSON、工具代码块或伪造的执行结果。
-            5. 不要复述本提示，不要解释错误原因。
-            6. 如果确实不需要工具，直接返回最终答复。
+            3. arguments 必须是符合对应 JSON Schema 的真实 JSON 对象。
+            4. 文件源码、路径和修改内容只能放入结构化 arguments。
+            5. 不要复制或续写上下文中的历史工具调用格式。
+            6. 不要在普通正文输出“[工具调用]”、工具参数 JSON、调用代码块或伪造执行结果。
+            7. 只有收到系统返回的真实工具结果后，才能声称操作已经完成。
+            8. 如果确实不需要工具，直接返回最终答复。
 
-            立即返回正确的结构化工具调用或最终答复。""";
+            不要复述本提示，不要解释错误原因。立即返回正确的结构化工具调用或最终答复。""";
     private static final String DUPLICATE_PSEUDO_TOOL = """
             [工具调用]
             writeFile
@@ -69,17 +72,17 @@ class AiServiceTokenStreamTest {
                         recoveryPolicy(new CopyOnWriteArrayList<>()),
                         Set.of("writeFile"));
 
-        assertEquals(ToolProtocolRecoveryCoordinator.DuplicateAction.START_RECOVERY,
-                coordinator.claimDuplicate(7L));
-        assertEquals(ToolProtocolRecoveryCoordinator.DuplicateAction.IGNORE,
-                coordinator.claimDuplicate(7L));
+        assertEquals(ToolProtocolRecoveryCoordinator.ViolationAction.START_RECOVERY,
+                coordinator.claimViolation(7L));
+        assertEquals(ToolProtocolRecoveryCoordinator.ViolationAction.IGNORE,
+                coordinator.claimViolation(7L));
 
         coordinator.recoveryStarted();
 
-        assertEquals(ToolProtocolRecoveryCoordinator.DuplicateAction.IGNORE,
-                coordinator.claimDuplicate(7L));
-        assertEquals(ToolProtocolRecoveryCoordinator.DuplicateAction.FAIL,
-                coordinator.claimDuplicate(8L));
+        assertEquals(ToolProtocolRecoveryCoordinator.ViolationAction.IGNORE,
+                coordinator.claimViolation(7L));
+        assertEquals(ToolProtocolRecoveryCoordinator.ViolationAction.FAIL,
+                coordinator.claimViolation(8L));
     }
 
     @Test
@@ -191,6 +194,228 @@ class AiServiceTokenStreamTest {
             assertFalse(memory.messages().contains(
                     SystemMessage.from(CORRECTION_INSTRUCTION)));
             assertFalse(containsAiText(memory.messages(), DUPLICATE_PSEUDO_TOOL));
+        }
+    }
+
+    @Test
+    void 各类流结束伪工具候选都必须隔离并自动纠正一次()
+            throws Exception {
+        List<String> candidates = List.of(
+                "[工具调用] writeFile {\"path\":\"src/App.vue\"}",
+                "[工具调用] writeFile {\"path\":\"src/A.vue\"}"
+                        + "候选之间的未受信正文"
+                        + "[工具调用] writeFile {\"path\":\"src/B.vue\"}",
+                "[工具调用] deleteFile {\"path\":\"src/App.vue\"}",
+                "[工具调用] writeFile {\"path\":\"a\",\"path\":\"b\"}",
+                "[工具调用] writeFile {\"path\":\"src/App.vue\"");
+
+        for (String candidate : candidates) {
+            assertStreamFinishedCandidateRecovers(candidate);
+        }
+    }
+
+    @Test
+    void 隔离内容达到上限必须立即自动纠正而不等待流结束()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        List<ToolProtocolRecoveryPolicy.Phase> phases =
+                new CopyOnWriteArrayList<>();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        String quarantined = "[工具调用]" + "x".repeat(
+                ToolProtocolRecoveryDetector.QUARANTINE_LIMIT
+                        - "[工具调用]".length());
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            recoveryService(model, memory).chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(phases))
+                    .onPartialResponse(partials::add)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "隔离上限应自动纠正", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onPartialResponse(quarantined);
+            assertTrue(model.awaitCalls(2),
+                    "达到隔离上限时必须立即启动纠正 generation");
+
+            model.handler(1).onCompleteResponse(response(
+                    "纠正完成", new TokenUsage(4, 5, 9)));
+            gate.awaitIdle();
+
+            assertEquals(2, model.callCount());
+            assertEquals(List.of(
+                    ToolProtocolRecoveryPolicy.Phase.STARTED,
+                    ToolProtocolRecoveryPolicy.Phase.RECOVERED), phases);
+            assertEquals(List.of("纠正完成"), partials);
+            assertFalse(containsAiTextFragment(
+                    memory.messages(), "[工具调用]"));
+        }
+    }
+
+    @Test
+    void 混合响应必须只保留可信正文并执行真实结构化工具()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicInteger toolCalls = new AtomicInteger();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        List<ToolProtocolRecoveryPolicy.Phase> phases =
+                new CopyOnWriteArrayList<>();
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("write-mixed-1")
+                .name("writeFile")
+                .arguments("{}")
+                .build();
+        String pseudoTool = DUPLICATE_PSEUDO_TOOL;
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new RecoveryTools(toolCalls))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(phases))
+                    .onPartialResponse(partials::add)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "混合响应中的真实工具应正常执行", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onCompleteResponse(toolResponse(
+                    "可信前缀" + pseudoTool, request));
+            assertTrue(model.awaitCalls(2));
+            model.handler(1).onCompleteResponse(response(
+                    "完成", new TokenUsage(2, 2, 4)));
+            gate.awaitIdle();
+
+            AiMessage storedToolRequest = memory.messages().stream()
+                    .filter(AiMessage.class::isInstance)
+                    .map(AiMessage.class::cast)
+                    .filter(AiMessage::hasToolExecutionRequests)
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(List.of("可信前缀", "完成"), partials);
+            assertEquals("可信前缀", storedToolRequest.text());
+            assertEquals(List.of(request),
+                    storedToolRequest.toolExecutionRequests());
+            assertEquals(1, toolCalls.get());
+            assertTrue(phases.isEmpty());
+            assertFalse(containsAiTextFragment(
+                    memory.messages(), pseudoTool));
+        }
+    }
+
+    @Test
+    void 真实工具分片先到后续伪正文仍必须隔离()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicInteger toolCalls = new AtomicInteger();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("write-before-pseudo")
+                .name("writeFile")
+                .arguments("{}")
+                .build();
+        String pseudoTool = DUPLICATE_PSEUDO_TOOL;
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new RecoveryTools(toolCalls))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(
+                            new CopyOnWriteArrayList<>()))
+                    .onPartialResponse(partials::add)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "真实工具先到时不应触发恢复失败", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            StreamingChatResponseHandler handler = model.handler(0);
+            handler.onPartialToolExecutionRequest(0, request);
+            handler.onPartialResponse(pseudoTool);
+            handler.onCompleteResponse(toolResponse(pseudoTool, request));
+            assertTrue(model.awaitCalls(2));
+            model.handler(1).onCompleteResponse(response(
+                    "完成", new TokenUsage(2, 2, 4)));
+            gate.awaitIdle();
+
+            assertEquals(List.of("完成"), partials);
+            assertEquals(1, toolCalls.get());
+            assertFalse(containsAiTextFragment(
+                    memory.messages(), pseudoTool));
+            assertFalse(hasUnpairedToolRequests(memory.messages()));
+        }
+    }
+
+    @Test
+    void 单个伪工具候选先到后续真实工具仍必须执行且不得恢复()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicInteger toolCalls = new AtomicInteger();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        List<ToolProtocolRecoveryPolicy.Phase> phases =
+                new CopyOnWriteArrayList<>();
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("pseudo-before-write")
+                .name("writeFile")
+                .arguments("{}")
+                .build();
+        String pseudoTool =
+                "[工具调用] writeFile {\"path\":\"src/App.vue\"}";
+        String mixedText = "可信前缀" + pseudoTool;
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new RecoveryTools(toolCalls))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(phases))
+                    .onPartialResponse(partials::add)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "真实工具随后到达时应继续正常执行", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            StreamingChatResponseHandler handler = model.handler(0);
+            handler.onPartialResponse(mixedText);
+            handler.onPartialToolExecutionRequest(0, request);
+            handler.onCompleteResponse(toolResponse(mixedText, request));
+            assertTrue(model.awaitCalls(2));
+            model.handler(1).onCompleteResponse(response(
+                    "完成", new TokenUsage(2, 2, 4)));
+            gate.awaitIdle();
+
+            AiMessage storedToolRequest = memory.messages().stream()
+                    .filter(AiMessage.class::isInstance)
+                    .map(AiMessage.class::cast)
+                    .filter(AiMessage::hasToolExecutionRequests)
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(List.of("可信前缀", "完成"), partials);
+            assertEquals("可信前缀", storedToolRequest.text());
+            assertEquals(List.of(request),
+                    storedToolRequest.toolExecutionRequests());
+            assertEquals(1, toolCalls.get());
+            assertTrue(phases.isEmpty());
+            assertFalse(containsAiTextFragment(
+                    memory.messages(), pseudoTool));
+            assertFalse(hasUnpairedToolRequests(memory.messages()));
         }
     }
 
@@ -1626,6 +1851,55 @@ class AiServiceTokenStreamTest {
                 .anyMatch(message -> expected.equals(message.text()));
     }
 
+    private void assertStreamFinishedCandidateRecovers(String candidate)
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        List<ToolProtocolRecoveryPolicy.Phase> phases =
+                new CopyOnWriteArrayList<>();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        AtomicReference<ChatResponse> completed = new AtomicReference<>();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            recoveryService(model, memory).chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(recoveryPolicy(phases))
+                    .onPartialResponse(partials::add)
+                    .onCompleteResponse(completed::set)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "流结束伪工具候选应自动纠正", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onCompleteResponse(response(
+                    candidate, new TokenUsage(2, 3, 5)));
+            assertTrue(model.awaitCalls(2),
+                    "流结束必须启动纠正 generation：" + candidate);
+            model.handler(1).onCompleteResponse(response(
+                    "纠正完成", new TokenUsage(4, 5, 9)));
+            gate.awaitIdle();
+
+            assertEquals(2, model.callCount());
+            assertEquals(List.of(
+                    ToolProtocolRecoveryPolicy.Phase.STARTED,
+                    ToolProtocolRecoveryPolicy.Phase.RECOVERED), phases);
+            assertEquals(List.of("纠正完成"), partials);
+            assertEquals("纠正完成", completed.get().aiMessage().text());
+            assertFalse(containsAiTextFragment(
+                    memory.messages(), "[工具调用]"));
+        }
+    }
+
+    private boolean containsAiTextFragment(
+            List<ChatMessage> messages, String expected) {
+        return messages.stream()
+                .filter(AiMessage.class::isInstance)
+                .map(AiMessage.class::cast)
+                .map(AiMessage::text)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(text -> text.contains(expected));
+    }
+
     private boolean hasUnpairedToolRequests(List<ChatMessage> messages) {
         Set<String> pendingIds = new java.util.HashSet<>();
         for (ChatMessage message : messages) {
@@ -1655,8 +1929,15 @@ class AiServiceTokenStreamTest {
     }
 
     private ChatResponse toolResponse(ToolExecutionRequest request) {
+        return toolResponse(null, request);
+    }
+
+    private ChatResponse toolResponse(
+            String text, ToolExecutionRequest request) {
         return ChatResponse.builder()
-                .aiMessage(AiMessage.from(List.of(request)))
+                .aiMessage(text == null
+                        ? AiMessage.from(List.of(request))
+                        : AiMessage.from(text, List.of(request)))
                 .metadata(ChatResponseMetadata.builder()
                         .tokenUsage(new TokenUsage(3, 4, 7))
                         .build())

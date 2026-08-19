@@ -1825,6 +1825,62 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void outputGuardrailBufferNeverReceivesPseudoToolSuffix()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        configureOutputGuardrails(context, null);
+        MessageWindowChatMemory memory =
+                MessageWindowChatMemory.withMaxMessages(20);
+        List<String> partials = new ArrayList<>();
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        ToolProtocolRecoveryCoordinator coordinator =
+                new ToolProtocolRecoveryCoordinator(
+                        new ToolProtocolRecoveryPolicy(
+                                Set.of("writeFile"), ignored -> { }),
+                        Set.of("writeFile"));
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        partials::add, (index, request) -> { },
+                        (index, request) -> { }, execution -> { },
+                        response -> { }, throwable -> fail(
+                        "Guardrail 混合响应不应报错", throwable),
+                        memory, new TokenUsage(),
+                        List.of(ToolSpecification.builder()
+                                .name("writeFile").build()),
+                        Map.of("writeFile", (request, memoryId) -> "成功"),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        controller.latestModelRequestGeneration(),
+                        null, null, coordinator);
+        ToolExecutionRequest request =
+                tool("guardrail-mixed", "writeFile");
+        String pseudoTool =
+                "[工具调用] writeFile {\"path\":\"src/App.vue\"}";
+
+        handler.onCompleteResponse(responseWithTextAndTools(
+                "可信前缀" + pseudoTool, request));
+
+        @SuppressWarnings("unchecked")
+        List<String> buffered = (List<String>)
+                org.springframework.test.util.ReflectionTestUtils.getField(
+                        handler, "responseBuffer");
+        AiMessage stored = memory.messages().stream()
+                .filter(AiMessage.class::isInstance)
+                .map(AiMessage.class::cast)
+                .filter(AiMessage::hasToolExecutionRequests)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(List.of("可信前缀"), buffered);
+        assertTrue(partials.stream()
+                .noneMatch(text -> text.contains(pseudoTool)));
+        assertEquals("可信前缀", stored.text());
+        assertFalse(stored.text().contains(pseudoTool));
+    }
+
+    @Test
     void ordinaryResponseSuccessCompletesOnceWithoutError() {
         AiServiceContext context = new AiServiceContext(Object.class);
         context.streamingChatModel = new CapturingStreamingChatModel();
@@ -2015,6 +2071,15 @@ class AiServiceStreamingResponseHandlerTest {
         return ChatResponse.builder()
                 .aiMessage(AiMessage.from(List.of(requests)))
                 .metadata(ChatResponseMetadata.builder().tokenUsage(new TokenUsage()).build())
+                .build();
+    }
+
+    private static ChatResponse responseWithTextAndTools(
+            String text, ToolExecutionRequest... requests) {
+        return ChatResponse.builder()
+                .aiMessage(AiMessage.from(text, List.of(requests)))
+                .metadata(ChatResponseMetadata.builder()
+                        .tokenUsage(new TokenUsage()).build())
                 .build();
     }
 

@@ -153,8 +153,8 @@ class StreamingRequestControllerRecoveryTest {
                         new ToolProtocolRecoveryPolicy(
                                 java.util.Set.of("writeFile"), phases::add),
                         java.util.Set.of("writeFile"));
-        assertEquals(ToolProtocolRecoveryCoordinator.DuplicateAction.START_RECOVERY,
-                coordinator.claimDuplicate(sourceGeneration));
+        assertEquals(ToolProtocolRecoveryCoordinator.ViolationAction.START_RECOVERY,
+                coordinator.claimViolation(sourceGeneration));
         coordinator.recoveryStarted();
         AtomicInteger errors = new AtomicInteger();
         AtomicInteger starts = new AtomicInteger();
@@ -953,8 +953,8 @@ class StreamingRequestControllerRecoveryTest {
                         new ToolProtocolRecoveryPolicy(
                                 java.util.Set.of("writeFile"), phases::add),
                         java.util.Set.of("writeFile"));
-        assertEquals(ToolProtocolRecoveryCoordinator.DuplicateAction.START_RECOVERY,
-                coordinator.claimDuplicate(sourceGeneration));
+        assertEquals(ToolProtocolRecoveryCoordinator.ViolationAction.START_RECOVERY,
+                coordinator.claimViolation(sourceGeneration));
         coordinator.recoveryStarted();
         return coordinator;
     }
