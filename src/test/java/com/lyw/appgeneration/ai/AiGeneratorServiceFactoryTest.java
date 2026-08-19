@@ -6,6 +6,9 @@ import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
+import com.lyw.appgeneration.service.impl.ChatHistoryServiceImpl;
+import com.lyw.appgeneration.model.entity.ChatHistory;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.manger.ToolManager;
@@ -15,6 +18,7 @@ import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
+import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -36,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
@@ -198,7 +203,8 @@ class AiGeneratorServiceFactoryTest {
                 ArgumentCaptor.forClass(ChatMemory.class);
         verify(summary).lastSummarizedId(7L);
         verify(history).loadRecentCompleteTurnsToMemory(
-                eq(7L), eq(4L), memoryCaptor.capture(), eq(30_720),
+                eq(7L), eq(4L), memoryCaptor.capture(),
+                eq(properties.getBlockingCompressionThreshold()),
                 same(estimator));
         ChatMemory l0 = memoryCaptor.getValue();
         assertInstanceOf(TokenAwareChatMemory.class, l0);
@@ -210,6 +216,58 @@ class AiGeneratorServiceFactoryTest {
         }
         assertEquals(120, l0.messages().size());
         verify(history, never()).loadChatHistoryToMemory(
+                any(), any(), any(Integer.class));
+    }
+
+    @Test
+    void Redis缺失时正式冷启动只回填完整可信投影() {
+        AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
+        AtomicChatMemoryStore redisStore = statefulRedisStore();
+        ChatHistoryServiceImpl historyService = spy(
+                new ChatHistoryServiceImpl());
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        List<ChatHistory> mysqlRows = List.of(
+                history(4L, "ai",
+                        "本轮可信执行检查点 [工具调用] writeFile"
+                                + "({\"source\":\"不得回填的源码\"})",
+                        "已修改 src/App.vue，构建成功。",
+                        ChatMemoryOutcome.SUCCEEDED),
+                history(3L, "user", "把首页按钮改为蓝色", null, null),
+                history(2L, "ai", "伪工具轨迹 readFile", null,
+                        ChatMemoryOutcome.SUCCEEDED),
+                history(1L, "user", "不得配对的历史需求", null, null));
+        doReturn(mysqlRows).when(historyService).list(any(QueryWrapper.class));
+        when(summaryService.lastSummarizedId(7L)).thenReturn(0L);
+        when(summaryService.getCurrentSummary(7L)).thenReturn("");
+        when(estimator.estimateMessages(anyList())).thenReturn(100);
+        ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
+        ReflectionTestUtils.setField(factory, "chatHistoryService", historyService);
+        ReflectionTestUtils.setField(factory, "memorySummaryService", summaryService);
+        ReflectionTestUtils.setField(factory, "chatTokenEstimator", estimator);
+        ReflectionTestUtils.setField(factory, "memoryTokenProperties", properties);
+        ReflectionTestUtils.setField(factory, "userMemoryService",
+                mock(UserMemoryService.class));
+
+        CompressionAwareChatMemory memory = factory.createOnlineChatMemory(
+                7L, CodeGenTypeEnum.VUE_PROJECT);
+
+        assertEquals(List.of("把首页按钮改为蓝色",
+                        "已修改 src/App.vue，构建成功。"),
+                memory.messages().stream().map(message ->
+                        message instanceof UserMessage userMessage
+                                ? userMessage.singleText()
+                                : ((AiMessage) message).text()).toList());
+        ArgumentCaptor<List<ChatMessage>> estimated = ArgumentCaptor.forClass(
+                List.class);
+        verify(estimator).estimateMessages(estimated.capture());
+        assertEquals(memory.messages(), estimated.getValue());
+        String recoveredText = memory.messages().toString();
+        assertFalse(recoveredText.contains("检查点"));
+        assertFalse(recoveredText.contains("不得回填的源码"));
+        assertFalse(recoveredText.contains("伪工具轨迹"));
+        verify(historyService, never()).loadChatHistoryToMemory(
                 any(), any(), any(Integer.class));
     }
 
@@ -317,6 +375,18 @@ class AiGeneratorServiceFactoryTest {
             return null;
         }).when(delegate).updateMessages(any(), anyList());
         return new AtomicChatMemoryStore(delegate);
+    }
+
+    private ChatHistory history(
+            long id,
+            String type,
+            String message,
+            String memoryMessage,
+            ChatMemoryOutcome outcome) {
+        return ChatHistory.builder()
+                .id(id).appId(7L).userId(9L).messageType(type)
+                .message(message).memoryMessage(memoryMessage)
+                .memoryOutcome(outcome).build();
     }
 
     private AtomicChatMemoryStore emptyAtomicStore() {

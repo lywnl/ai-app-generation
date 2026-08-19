@@ -21,6 +21,7 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.store.memory.chat.InMemoryChatMemoryStore;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -65,11 +66,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ContextCompressionModelRequestGateTest {
@@ -86,6 +89,83 @@ class ContextCompressionModelRequestGateTest {
             # 当前进度速览
             已完成早期回合
             """.strip();
+
+    @Test
+    void 六十四K未完成工具链只映射到Decision临时检查点而不改写真实L0()
+            throws Exception {
+        long appId = 64L;
+        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(appId).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        UserMemoryService userMemoryService = mock(UserMemoryService.class);
+        when(summaryService.getCurrentSummary(appId)).thenReturn("");
+        when(summaryService.lastSummarizedId(appId)).thenReturn(0L);
+        when(userMemoryService.recallByApp(appId)).thenReturn("");
+        CompressionAwareChatMemory memory = new CompressionAwareChatMemory(
+                new TokenAwareChatMemory(delegate), summaryService,
+                userMemoryService);
+        ToolExecutionRequest toolRequest = ToolExecutionRequest.builder()
+                .id("checkpoint-read")
+                .name("readFile")
+                .arguments("{\"path\":\"src/App.vue\"}")
+                .build();
+        memory.add(UserMessage.from("调整首页"));
+        memory.add(AiMessage.from(toolRequest));
+        memory.add(ToolExecutionResultMessage.from(toolRequest,
+                "{\"protocol\":\"file-tool/v1\","
+                        + "\"operation\":\"readFile\","
+                        + "\"status\":\"APPLIED\","
+                        + "\"relativePath\":\"src/App.vue\","
+                        + "\"changed\":false,\"message\":\"已执行\","
+                        + "\"failureReason\":null,"
+                        + "\"content\":\"不得泄漏的源码\"}"));
+        List<ChatMessage> l0Before = List.copyOf(store.getMessages(appId));
+
+        ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
+        when(estimator.estimateRequest(anyList(), anyList())).thenAnswer(
+                invocation -> containsCheckpoint(invocation.getArgument(0))
+                        ? 18_000 : 65_536);
+        ChatHistoryService historyService = mock(ChatHistoryService.class);
+        when(historyService.listRecentCompleteTurnBoundaries(appId, 1))
+                .thenReturn(List.of());
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        try (ExecutorService compressionExecutor =
+                     Executors.newSingleThreadExecutor();
+             ExecutorService gateExecutor =
+                     Executors.newVirtualThreadPerTaskExecutor()) {
+            ContextCompressionCoordinator coordinator =
+                    new ContextCompressionCoordinator(estimator,
+                            historyService, summaryService, properties,
+                            compressionExecutor, new AppDataLifecycleFence(),
+                            new MemoryCompressionMetricsCollector(
+                                    new SimpleMeterRegistry()));
+            ContextCompressionModelRequestGate gate =
+                    new ContextCompressionModelRequestGate(
+                            coordinator, gateExecutor);
+            ModelRequestGate.Request request = new ModelRequestGate.Request(
+                    appId, () -> memory,
+                    List.of(ToolSpecification.builder().name("readFile").build()),
+                    action -> {
+                        action.run();
+                        return true;
+                    }, List.of());
+
+            ModelRequestGate.Decision decision = gate.prepare(request)
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
+            assertTrue(containsCheckpoint(decision.messages()));
+            assertEquals(l0Before, store.getMessages(appId));
+            assertEquals(l0Before, memory.messages());
+            assertFalse(memory.messages().stream().anyMatch(
+                    SystemMessage.class::isInstance));
+            verify(summaryService, never()).compressNow(
+                    anyLong(), anyLong(), any(Duration.class));
+            verifyNoInteractions(historyService);
+        }
+    }
 
     @Test
     void Request显式状态引用必须原样传给协调器() throws Exception {
@@ -1051,6 +1131,12 @@ class ContextCompressionModelRequestGateTest {
             }
             return false;
         });
+    }
+
+    private boolean containsCheckpoint(List<ChatMessage> messages) {
+        return messages.stream().anyMatch(message ->
+                message instanceof SystemMessage systemMessage
+                        && systemMessage.text().startsWith("本轮可信执行检查点"));
     }
 
     private ChatResponse toolResponse() {
