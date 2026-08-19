@@ -103,6 +103,7 @@
 **文件：**
 
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinator.java`
+- 新增 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionAttemptState.java`
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextAdmissionResult.java`
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionMode.java`
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ConversationTurnSnapshotParser.java`
@@ -126,12 +127,12 @@
 
 **TDD 步骤：**
 
-- [ ] 更新原有 28K/30K/32K 测试为 48K/56K/64K，并新增“56K无旧完整回合允许继续”。
-- [ ] 新增“64K工具链检查点成功、请求 Token 降到64K以下、Redis原始消息未改变、工具消息无孤立项”。
-- [ ] 新增“旧回合压缩后仍64K再做检查点”“检查点后仍64K只失败一次”“对齐/超时/执行器拒绝仍失败关闭”。
-- [ ] 新增取消、删除接管、代次变化和压缩期间记忆变化测试，确认迟到提交不会污染请求视图。
-- [ ] 先运行 `bash mvnw -Dtest=ContextCompressionCoordinatorTest test` 观察 RED，再实现并运行至 GREEN。
-- [ ] 提交：`实现64K未完成工具链上下文门禁`。
+- [x] ✅ 更新原有 28K/30K/32K 测试为 48K/56K/64K，并新增“56K无旧完整回合允许继续”。
+- [x] ✅ 新增“64K工具链检查点成功、请求 Token 降到64K以下、Redis原始消息未改变、工具消息无孤立项”。
+- [x] ✅ 新增“旧回合压缩后仍64K再做检查点”“检查点后仍64K只失败一次”“对齐/超时/执行器拒绝仍失败关闭”。
+- [x] ✅ 新增取消、删除接管、代次变化和压缩期间记忆变化测试，确认迟到提交不会污染请求视图。
+- [x] ✅ 先运行 `bash mvnw -Dtest=ContextCompressionCoordinatorTest test` 观察 RED，再实现并运行至 GREEN。
+- [x] ✅ 提交：`实现64K未完成工具链上下文门禁`。
 
 ## 任务 4：把一次性压缩状态贯穿初始请求和工具续循环
 

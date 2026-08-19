@@ -79,6 +79,10 @@ public final class ConversationTurnSnapshotParser {
             unfinishedTail = List.copyOf(Objects.requireNonNull(
                     unfinishedTail, "未完成尾部不能为空"));
         }
+
+        public boolean hasUnfinishedTail() {
+            return !unfinishedTail.isEmpty();
+        }
     }
 
     public record CompletedTurn(

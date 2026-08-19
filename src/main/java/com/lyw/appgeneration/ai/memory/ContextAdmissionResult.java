@@ -37,7 +37,8 @@ public record ContextAdmissionResult(
     public boolean canProceed() {
         return mode == ContextCompressionMode.NORMAL
                 || mode == ContextCompressionMode.ASYNC_SCHEDULED
-                || mode == ContextCompressionMode.BLOCKING_COMPLETED;
+                || mode == ContextCompressionMode.BLOCKING_COMPLETED
+                || mode == ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED;
     }
 
     public enum FailureReason {
@@ -55,6 +56,8 @@ public record ContextAdmissionResult(
         MODEL_FAILED,
         DELETE_REJECTED,
         STILL_OVER_HARD_LIMIT,
+        INVALID_TOOL_CHAIN_CHECKPOINT,
+        CHECKPOINT_ALREADY_ATTEMPTED,
         UNKNOWN
     }
 }
