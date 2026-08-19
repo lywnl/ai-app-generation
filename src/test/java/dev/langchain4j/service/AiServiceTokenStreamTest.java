@@ -1406,7 +1406,7 @@ class AiServiceTokenStreamTest {
                                 ModelRequestGate.Status.HARD_LIMIT_REJECTED,
                                 request.latestMemory().get().messages(),
                                 37_785,
-                                "对话上下文过长，请开启新会话后重试")))) {
+                                "本轮上下文无法安全继续，生成已停止，请重试")))) {
             TokenStream stream = service.chat(7L, "本轮问题");
 
             stream.modelRequestGate(gate, action -> {
@@ -1425,7 +1425,7 @@ class AiServiceTokenStreamTest {
                     rejection.stage());
             assertEquals(ModelRequestGate.Status.HARD_LIMIT_REJECTED,
                     rejection.status());
-            assertEquals("对话上下文过长，请开启新会话后重试",
+            assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
                     rejection.getMessage());
         }
     }

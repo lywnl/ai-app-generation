@@ -796,7 +796,7 @@ class ContextCompressionModelRequestGateTest {
                 assertTrue(errorDelivered.await(2, TimeUnit.SECONDS));
                 assertEquals(0, model.callCount(),
                         "压缩后仍达到 64K 时不得调用模型");
-                assertEquals("对话上下文过长，请开启新会话后重试",
+                assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
                         error.get().getMessage());
                 assertTrue(fixture.estimator().estimateRequest(
                                 fixture.memory().messages(), List.of())
@@ -1469,6 +1469,11 @@ class ContextCompressionModelRequestGateTest {
             assertEquals(29_000, decision.estimatedInputTokens());
             if (expected == ModelRequestGate.Status.ALLOWED) {
                 assertTrue(decision.safeMessage().isBlank());
+            } else if (expected
+                    == ModelRequestGate.Status.HARD_LIMIT_REJECTED) {
+                assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
+                        decision.safeMessage());
+                assertFalse(decision.safeMessage().contains("开启新会话"));
             } else {
                 assertFalse(decision.safeMessage().isBlank());
             }

@@ -879,7 +879,7 @@ describe('generationSession Vue SSE 状态机', () => {
     const snapshot = await runSession(
       [
         contextCompressionEvent('STARTED'),
-        businessErrorEvent('BUSINESS', '对话上下文过长，请开启新会话后重试'),
+        businessErrorEvent('BUSINESS', '本轮上下文无法安全继续，生成已停止，请重试'),
         event('done'),
       ],
       false,
@@ -889,7 +889,7 @@ describe('generationSession Vue SSE 状态机', () => {
       content: '',
       status: 'done',
       outcome: 'system_error',
-      errorMessage: '对话上下文过长，请开启新会话后重试',
+      errorMessage: '本轮上下文无法安全继续，生成已停止，请重试',
       contextCompression: 'idle',
     })
   })

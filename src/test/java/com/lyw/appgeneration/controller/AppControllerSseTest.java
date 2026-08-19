@@ -362,7 +362,7 @@ class AppControllerSseTest {
                 .thenReturn(Flux.error(new ModelRequestGateException(
                         ModelRequestGateException.Stage.INITIAL,
                         ModelRequestGate.Status.HARD_LIMIT_REJECTED,
-                        "对话上下文过长，请开启新会话后重试")));
+                        "本轮上下文无法安全继续，生成已停止，请重试")));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
                 requestBody(), request).collectList().block();
@@ -373,7 +373,7 @@ class AppControllerSseTest {
         assertEquals("BUSINESS", error.getStr("kind"));
         assertEquals(ErrorCode.OPERATION_ERROR.getCode(),
                 error.getInt("code"));
-        assertEquals("对话上下文过长，请开启新会话后重试",
+        assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
                 error.getStr("message"));
         assertEquals(1.0, metricsRegistry.get(
                         "generation_sse_protocol_results_total")
@@ -414,7 +414,7 @@ class AppControllerSseTest {
                         Flux.error(new ModelRequestGateException(
                                 ModelRequestGateException.Stage.INITIAL,
                                 ModelRequestGate.Status.HARD_LIMIT_REJECTED,
-                                "对话上下文过长，请开启新会话后重试"))));
+                                "本轮上下文无法安全继续，生成已停止，请重试"))));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
                 requestBody(), request).collectList().block();
@@ -422,7 +422,7 @@ class AppControllerSseTest {
         assertEquals(List.of(
                         "context-compression", "business-error", "done"),
                 events.stream().map(ServerSentEvent::event).toList());
-        assertEquals("对话上下文过长，请开启新会话后重试",
+        assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
                 JSONUtil.parseObj(events.get(1).data()).getStr("message"));
     }
 

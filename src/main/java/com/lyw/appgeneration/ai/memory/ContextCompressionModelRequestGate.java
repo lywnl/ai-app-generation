@@ -22,7 +22,7 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
     private static final String COMPRESSION_FAILED_MESSAGE =
             "对话上下文整理失败，请稍后重试";
     private static final String HARD_LIMIT_MESSAGE =
-            "对话上下文过长，请开启新会话后重试";
+            "本轮上下文无法安全继续，生成已停止，请重试";
 
     private final ContextCompressionCoordinator coordinator;
     private final ExecutorService gateExecutor;
