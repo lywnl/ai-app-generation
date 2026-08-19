@@ -457,7 +457,7 @@ class MemorySummaryServiceImplTest {
                 return exact;
             }
             return text.contains("第一轮问题") && text.contains("第二轮问题")
-                    ? 40_000 : 10_000;
+                    ? properties.getHardInputLimit() + 1 : 10_000;
         });
         List<String> observedPrompts = new CopyOnWriteArrayList<>();
         when(summarizationModel.chat(anyString())).thenAnswer(invocation -> {
