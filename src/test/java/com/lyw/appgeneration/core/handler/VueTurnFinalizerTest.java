@@ -130,6 +130,34 @@ class VueTurnFinalizerTest {
     }
 
     @Test
+    void 二次协议退化只持久化固定友好终态和协议失败投影() {
+        VueTurnOutcome requested = new VueTurnOutcome(
+                VueBuildPhase.GENERATING, PROTOCOL_ERROR,
+                VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                false, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE);
+
+        VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
+                VueTurnContext.testing(APP_ID, USER_ID,
+                        "turn-protocol-recovery-failed",
+                        VueBuildPhase.GENERATING),
+                requested);
+
+        assertTrue(result.persisted());
+        assertEquals(PROTOCOL_ERROR, result.outcome().outcome());
+        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                result.outcome().displayAiText());
+        assertEquals(VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                result.outcome().memoryAiText());
+        verify(history).addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
+        verify(collapser).collapseLastTurn(
+                APP_ID, VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION);
+    }
+
+    @Test
     void 稳定AI消息ID非法时保留持久化结果但不触发L2() {
         when(history.addAiMessageAndReturn(
                 eq(APP_ID), eq("项目已生成并构建成功。"),

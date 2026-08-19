@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.ChatHistoryService.HistoryLoadStatus;
@@ -205,6 +206,33 @@ class ChatHistoryServiceImplLoadTest {
         assertFalse(messageTexts(memory.messages()).stream()
                 .anyMatch(text -> text.contains("工具调用")
                         || text.contains("展示源码")));
+    }
+
+    @Test
+    void 后端重启恢复协议失败轮时只加载固定可信投影() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        String pollutedDisplay = "可信前缀[工具调用] writeFile "
+                + "{\"content\":\"重启后不得恢复的伪源码\"}"
+                + "上一响应未遵守工具调用协议";
+        doReturn(List.of(
+                projectedAi(2L, pollutedDisplay,
+                        VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                        ChatMemoryOutcome.PROTOCOL_ERROR),
+                message(1L, "继续修复项目", "user")))
+                .when(service).list(any(QueryWrapper.class));
+        var memory = MessageWindowChatMemory.withMaxMessages(20);
+
+        var result = service.loadChatHistoryToMemory(7L, memory, 2);
+
+        assertEquals(HistoryLoadStatus.LOADED, result.status());
+        assertEquals(List.of(
+                        "继续修复项目",
+                        VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION),
+                messageTexts(memory.messages()));
+        assertFalse(memory.messages().toString()
+                .contains("重启后不得恢复的伪源码"));
+        assertFalse(memory.messages().toString()
+                .contains("上一响应未遵守工具调用协议"));
     }
 
     @Test

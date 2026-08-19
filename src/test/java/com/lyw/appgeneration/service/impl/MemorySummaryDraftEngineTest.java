@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
@@ -191,6 +192,50 @@ class MemorySummaryDraftEngineTest {
             assertFalse(result.changed());
             assertEquals(0L, result.summarizedThroughId());
             verify(model, org.mockito.Mockito.never()).chat(anyString());
+        } finally {
+            modelExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("协议失败轮的 L1 只读取固定可信投影")
+    void 协议失败轮摘要不得读取伪工具正文或临时纠正提示() {
+        ChatHistoryService chatHistoryService = mock(ChatHistoryService.class);
+        ChatModel model = mock(ChatModel.class);
+        ChatTokenEstimator tokenEstimator = mock(ChatTokenEstimator.class);
+        String pollutedDisplay = "可信前缀[工具调用] writeFile "
+                + "{\"content\":\"不得进入摘要的伪源码\"}"
+                + "上一响应未遵守工具调用协议";
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "继续完成首页"),
+                        projectedAi(2L, pollutedDisplay,
+                                VueTurnMemoryProjection
+                                        .PROTOCOL_ERROR_PROJECTION,
+                                ChatMemoryOutcome.PROTOCOL_ERROR)));
+        when(model.chat(anyString())).thenReturn(SUMMARY);
+        when(tokenEstimator.estimateText(anyString())).thenAnswer(invocation ->
+                invocation.<String>getArgument(0).isEmpty() ? 0 : 100);
+        ExecutorService modelExecutor = Executors.newSingleThreadExecutor();
+        try {
+            MemorySummaryDraftEngine engine = new MemorySummaryDraftEngine(
+                    chatHistoryService, model, modelExecutor,
+                    tokenEstimator, new MemoryTokenProperties());
+
+            MemorySummaryDraftEngine.DraftResult result = engine.buildDraft(
+                    1L, 2L, null, Long.MAX_VALUE);
+
+            assertNull(result.failureStatus());
+            assertEquals(2L, result.summarizedThroughId());
+            ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(
+                    String.class);
+            verify(model).chat(prompt.capture());
+            assertTrue(prompt.getValue().contains("继续完成首页"));
+            assertTrue(prompt.getValue().contains(
+                    VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION));
+            assertFalse(prompt.getValue().contains("不得进入摘要的伪源码"));
+            assertFalse(prompt.getValue().contains(
+                    "上一响应未遵守工具调用协议"));
         } finally {
             modelExecutor.shutdownNow();
         }

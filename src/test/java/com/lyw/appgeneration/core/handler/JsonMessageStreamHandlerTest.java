@@ -6,6 +6,7 @@ import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
@@ -29,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
@@ -128,6 +130,139 @@ class JsonMessageStreamHandlerTest {
         assertEquals("正文", contentText(events.get(1)));
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 outcomeOf(events.getLast()).outcome());
+    }
+
+    @Test
+    void 自动纠正成功后只下发清洗正文并持久化真实工具事实() {
+        String pseudoToolText = "[工具调用] writeFile "
+                + "{\"relativeFilePath\":\"src/Leak.vue\","
+                + "\"content\":\"不得泄漏的伪源码\"}";
+        String correctionPromptMarker = "上一响应未遵守工具调用协议";
+        VueTurnContext context = context(
+                "turn-recovery-memory-isolation", VueBuildPhase.SUCCEEDED);
+        context.recordControlledTermination(new ToolLoopTerminationProtocol
+                .ControlledTermination(ToolLoopTerminationProtocol
+                .ControlledTerminationReason.BUILD_SUCCEEDED,
+                JsonMessageStreamHandler.SUCCESS_MESSAGE));
+        BaseTool writeTool = mock(BaseTool.class);
+        BaseTool buildTool = mock(BaseTool.class);
+        when(toolManager.getTool("writeFile")).thenReturn(writeTool);
+        when(toolManager.getTool("buildProject")).thenReturn(buildTool);
+        String writeResult = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"writeFile\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":true,"
+                + "\"message\":\"已写入\",\"failureReason\":null,"
+                + "\"content\":null}";
+        String buildResult = "{\"protocol\":\"vue-build-tool/v1\","
+                + "\"invocationStatus\":\"COMPLETED\",\"success\":true,"
+                + "\"attempt\":1,\"maxAttempts\":3,\"stage\":\"SUCCESS\","
+                + "\"failureKind\":null,\"timedOut\":false,"
+                + "\"repairable\":false,\"reflectionRequired\":false,"
+                + "\"nextAction\":\"STOP\",\"message\":\"构建成功\","
+                + "\"errorSummary\":null,\"terminateToolLoop\":true,"
+                + "\"finalResponse\":\"项目已生成并构建成功。\"}";
+        when(writeTool.generateToolExecutedResult(
+                any(JSONObject.class), eq(writeResult)))
+                .thenReturn("已真实写入 src/App.vue");
+        when(buildTool.generateToolExecutedResult(
+                any(JSONObject.class), eq(buildResult)))
+                .thenReturn("第 1 次真实构建成功");
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        MemorySummaryService summary = mock(MemorySummaryService.class);
+        UserMemoryService preference = mock(UserMemoryService.class);
+        when(history.addAiMessageAndReturn(
+                anyLong(), any(), any(), any(), anyLong()))
+                .thenReturn(ChatHistory.builder().id(903L).build());
+        when(collapser.collapseLastTurn(anyLong(), any()))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(
+                        ToolMessageCollapser.CollapseStatus.COLLAPSED,
+                        List.of()));
+        VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
+                history, collapser, summary, preference,
+                mock(AiGeneratorServiceFactory.class),
+                new AppDataLifecycleFence(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()),
+                new FileToolBudgetGuard());
+        JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
+                toolManager, realFinalizer, cancellationCoordinator);
+        String writeExecuted = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "write-recovered")
+                .set("name", "writeFile")
+                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
+                .set("result", writeResult));
+        String buildExecuted = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "build-recovered")
+                .set("name", "buildProject")
+                .set("arguments", "{}")
+                .set("result", buildResult));
+        Flux<String> cleanedBusiness = Flux.defer(() -> {
+            context.publishToolProtocolRecovery(
+                    ToolProtocolRecoveryMessage.started());
+            return Flux.concat(
+                    Flux.just(JSONUtil.toJsonStr(
+                            new com.lyw.appgeneration.ai.model.message
+                                    .AiResponseMessage("可信前缀"))),
+                    Mono.fromRunnable(() ->
+                                    context.publishToolProtocolRecovery(
+                                            ToolProtocolRecoveryMessage
+                                                    .recovered()))
+                            .thenMany(Flux.just(
+                                    writeExecuted,
+                                    buildExecuted,
+                                    JSONUtil.toJsonStr(
+                                            new com.lyw.appgeneration.ai.model
+                                                    .message.AiResponseMessage(
+                                                    "纠正完成")))));
+        });
+
+        List<GenerationStreamEvent> events = context.mergeProgress(
+                realHandler.handle(cleanedBusiness, context))
+                .collectList().block();
+
+        assertEquals(List.of(
+                        ToolProtocolRecoveryMessage.Phase.STARTED,
+                        ToolProtocolRecoveryMessage.Phase.RECOVERED),
+                events.stream()
+                        .filter(GenerationStreamEvent.ToolProtocolRecovery.class
+                                ::isInstance)
+                        .map(GenerationStreamEvent.ToolProtocolRecovery.class
+                                ::cast)
+                        .map(event -> event.message().phase())
+                        .toList());
+        String clientPayload = events.stream().map(event -> switch (event) {
+            case GenerationStreamEvent.Content content -> content.text();
+            case GenerationStreamEvent.ToolProtocolRecovery recovery ->
+                    recovery.message().message();
+            case GenerationStreamEvent.TurnOutcome outcome ->
+                    outcome.message().getMessage();
+            case GenerationStreamEvent.ContextCompression ignored -> "";
+        }).reduce("", String::concat);
+        assertFalse(clientPayload.contains(pseudoToolText));
+        assertFalse(clientPayload.contains("不得泄漏的伪源码"));
+        assertFalse(clientPayload.contains(correctionPromptMarker));
+        assertTrue(clientPayload.contains("可信前缀"));
+        assertTrue(clientPayload.contains("纠正完成"));
+
+        ArgumentCaptor<String> display = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> memory = ArgumentCaptor.forClass(String.class);
+        verify(history).addAiMessageAndReturn(
+                eq(APP_ID), display.capture(), memory.capture(),
+                eq(ChatMemoryOutcome.SUCCEEDED), eq(USER_ID));
+        String expectedMemory = """
+                Vue 项目回合结果：成功
+                实际执行工具：writeFile、buildProject
+                实际变更文件：src/App.vue
+                真实构建次数：1""";
+        assertFalse(display.getValue().contains("不得泄漏的伪源码"));
+        assertFalse(display.getValue().contains(correctionPromptMarker));
+        assertEquals(expectedMemory, memory.getValue());
+        verify(collapser).collapseLastTurn(APP_ID, expectedMemory);
+        verify(summary).triggerSummarizationAsync(APP_ID);
+        verify(preference).triggerPreferenceExtractionAsync(
+                USER_ID, APP_ID, 903L);
     }
 
     @Test

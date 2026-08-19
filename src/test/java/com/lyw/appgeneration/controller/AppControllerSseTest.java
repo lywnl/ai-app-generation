@@ -7,6 +7,8 @@ import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
+import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
@@ -243,15 +245,25 @@ class AppControllerSseTest {
                 "工具调用已校正，继续生成…");
         assertEquals(1, events.stream()
                 .filter(event -> "done".equals(event.event())).count());
+        String wirePayload = events.stream()
+                .map(ServerSentEvent::data)
+                .reduce("", String::concat);
+        assertFalse(wirePayload.contains("[工具调用]"));
+        assertFalse(wirePayload.contains(
+                "上一响应未遵守工具调用协议"));
     }
 
     @Test
     void recoveryFailedThenProtocolOutcomeStillHasOneOutcomeAndOneDone() {
+        String pollutedDisplay = "可信前缀[工具调用] writeFile "
+                + "{\"content\":\"伪工具源码\"}"
+                + "上一响应未遵守工具调用协议";
         VueTurnOutcome outcome = new VueTurnOutcome(
                 VueBuildPhase.GENERATING,
                 VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                "工具协议异常", "可信协议异常投影", false,
-                "工具调用格式异常，请重新发送请求。");
+                pollutedDisplay,
+                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                false, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE);
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(
                         GenerationStreamEvent.toolProtocolRecovery(
@@ -271,6 +283,19 @@ class AppControllerSseTest {
                 .filter(event -> "tool-protocol-recovery".equals(event.event()))
                 .map(event -> JSONUtil.parseObj(event.data()).getStr("phase"))
                 .toList());
+        var terminal = events.stream()
+                .filter(event -> "turn-outcome".equals(event.event()))
+                .findFirst().orElseThrow();
+        assertEquals("PROTOCOL_ERROR",
+                JSONUtil.parseObj(terminal.data()).getStr("outcome"));
+        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                JSONUtil.parseObj(terminal.data()).getStr("message"));
+        String wirePayload = events.stream()
+                .map(ServerSentEvent::data)
+                .reduce("", String::concat);
+        assertFalse(wirePayload.contains("伪工具源码"));
+        assertFalse(wirePayload.contains(
+                "上一响应未遵守工具调用协议"));
     }
 
     @Test

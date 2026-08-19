@@ -129,7 +129,7 @@ git commit -m "重构伪工具正文严格隔离状态机"
 不要复述本提示，不要解释错误原因。立即返回正确的结构化工具调用或最终答复。
 ```
 
-- [ ] 断言纠正提示只出现在纠正请求的临时消息中，不进入 ChatMemory、MySQL、L0、L1 或 L2。
+- [x] ✅ 断言纠正提示只出现在纠正请求的临时消息中，不进入 ChatMemory、MySQL、L0、L1 或 L2。
 - [x] ✅ 保持真实 Token Usage 累计；供应商没有返回被取消 generation 用量时不伪造费用数据。
 - [x] ✅ 运行定向测试：
 
@@ -258,7 +258,7 @@ npm run type-check
 
 预期：测试和类型检查全部通过。
 
-- [ ] 只暂存本任务实际修改的文件并提交：
+- [x] ✅ 只暂存本任务实际修改的文件并提交：
 
 ```bash
 git add ai-app-generation-frontend/src/utils/generationSession.ts \
@@ -281,27 +281,29 @@ git commit -m "完善工具协议自动校正前端状态"
 - 修改：`src/test/java/com/lyw/appgeneration/ai/memory/ToolMessageCollapserTest.java`
 - 修改：`src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryDraftEngineTest.java`
 - 修改：`src/test/java/com/lyw/appgeneration/service/impl/UserPreferenceBatchBuilderTest.java`
+- 修改：`src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImplLoadTest.java`
 - 修改：`src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java`
+- 组合验证：`src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java`
 
 **验证链路：** 模型 `content` → SDK 流 → SSE → `JsonMessageStreamHandler` → `VueTurnFinalizer` → `chat_history.message / memoryMessage` → L0 → L1 → L2。
 
-- [ ] 增加“可信前缀 + 伪工具正文 + 自动纠正成功”集成测试。
-- [ ] 断言 SSE 普通内容事件不包含伪工具块。
-- [ ] 断言最终 `displayAiText` 和 MySQL `message` 不包含伪工具块。
-- [ ] 断言 `memoryAiText`、MySQL `memoryMessage` 和 L0 折叠消息只包含真实工具事实。
-- [ ] 增加纠正再次失败测试，断言最终类型为 `PROTOCOL_ERROR`，展示使用固定友好文案，记忆使用固定协议失败可信投影。
-- [ ] 断言 L1 摘要与 L2 偏好提取不读取协议失败正文。
-- [ ] 增加混合响应测试，断言真实工具事实可进入可信投影，但伪工具文本不能进入任何记忆入口。
-- [ ] 断言重新加载聊天历史后仍看不到伪工具正文。
-- [ ] 运行分层回归：
+- [x] ✅ 增加“可信前缀 + 伪工具正文 + 自动纠正成功”集成测试。
+- [x] ✅ 断言 SSE 普通内容事件不包含伪工具块。
+- [x] ✅ 断言最终 `displayAiText` 和 MySQL `message` 不包含伪工具块。
+- [x] ✅ 断言 `memoryAiText`、MySQL `memoryMessage` 和 L0 折叠消息只包含真实工具事实。
+- [x] ✅ 增加纠正再次失败测试，断言最终类型为 `PROTOCOL_ERROR`，展示使用固定友好文案，记忆使用固定协议失败可信投影。
+- [x] ✅ 断言 L1 摘要与 L2 偏好提取不读取协议失败正文。
+- [x] ✅ 增加混合响应测试，断言真实工具事实可进入可信投影，但伪工具文本不能进入任何记忆入口。
+- [x] ✅ 断言重新加载聊天历史后仍看不到伪工具正文。
+- [x] ✅ 运行分层回归：
 
 ```bash
-./mvnw -Dtest=JsonMessageStreamHandlerTest,VueTurnFinalizerTest,ToolMessageCollapserTest,MemorySummaryDraftEngineTest,UserPreferenceBatchBuilderTest,AppControllerSseTest test
+./mvnw -Dtest=AiServiceTokenStreamTest,JsonMessageStreamHandlerTest,VueTurnFinalizerTest,ToolMessageCollapserTest,MemorySummaryDraftEngineTest,UserPreferenceBatchBuilderTest,ChatHistoryServiceImplLoadTest,AppControllerSseTest test
 ```
 
-预期：全部通过。
+结果：158 项通过，0 失败。
 
-- [ ] 定向提交：
+- [x] ✅ 定向提交：
 
 ```bash
 git add src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java \
@@ -309,6 +311,7 @@ git add src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandle
         src/test/java/com/lyw/appgeneration/ai/memory/ToolMessageCollapserTest.java \
         src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryDraftEngineTest.java \
         src/test/java/com/lyw/appgeneration/service/impl/UserPreferenceBatchBuilderTest.java \
+        src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImplLoadTest.java \
         src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java
 git commit -m "补全伪工具隔离分层记忆回归测试"
 ```

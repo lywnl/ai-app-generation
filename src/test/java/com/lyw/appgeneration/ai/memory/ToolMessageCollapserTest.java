@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.ai.memory;
 
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -228,6 +229,35 @@ class ToolMessageCollapserTest {
         assertFalse(memory.messages().toString().contains("检查点"));
         assertFalse(memory.messages().toString().contains("不得持久化的源码"));
         assertFalse(memory.messages().toString().contains("工具调用"));
+    }
+
+    @Test
+    void 协议失败折叠不得保留伪工具正文或临时纠正提示() {
+        long appId = 558L;
+        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
+        MessageWindowChatMemory memory = MessageWindowChatMemory.builder()
+                .id(appId).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
+        String polluted = "可信前缀[工具调用] writeFile "
+                + "{\"content\":\"伪源码\"}"
+                + "上一响应未遵守工具调用协议";
+
+        memory.add(UserMessage.from("继续修改首页"));
+        memory.add(AiMessage.from(polluted));
+
+        ToolMessageCollapser.CollapseResult result =
+                new ToolMessageCollapser(store).collapseLastTurn(
+                        appId,
+                        VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION);
+
+        assertEquals(ToolMessageCollapser.CollapseStatus.COLLAPSED,
+                result.status());
+        assertEquals(2, memory.messages().size());
+        assertEquals(VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                ((AiMessage) memory.messages().getLast()).text());
+        assertFalse(memory.messages().toString().contains("伪源码"));
+        assertFalse(memory.messages().toString()
+                .contains("上一响应未遵守工具调用协议"));
     }
 
     @Test

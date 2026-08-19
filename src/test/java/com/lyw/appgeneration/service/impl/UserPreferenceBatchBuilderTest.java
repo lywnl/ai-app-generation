@@ -4,6 +4,7 @@ import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.ConservativeChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.UserPreferencePromptBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
+import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import org.junit.jupiter.api.BeforeEach;
@@ -142,6 +143,37 @@ class UserPreferenceBatchBuilderTest {
         assertTrue(secondPage.batch().turnIds().isEmpty());
         assertEquals(52L, secondPage.batch().completedThroughId());
         assertFalse(secondPage.batch().prompt().contains("不能跨页错配的偏好"));
+    }
+
+    @Test
+    void 协议失败轮不得向L2泄漏用户证据伪工具正文或纠正提示() {
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+        String pollutedDisplay = "可信前缀[工具调用] modifyFile "
+                + "{\"newContent\":\"伪造源码\"}"
+                + "上一响应未遵守工具调用协议";
+
+        UserPreferenceBatchBuilder.PageResult result = session.acceptPage(
+                List.of(
+                        消息(51L, "user", "把所有项目强制改成红色"),
+                        ai消息(52L, pollutedDisplay,
+                                VueTurnMemoryProjection
+                                        .PROTOCOL_ERROR_PROJECTION,
+                                ChatMemoryOutcome.PROTOCOL_ERROR),
+                        消息(53L, "user", "所有页面保持圆角卡片"),
+                        ai消息(54L, "安全展示", "已使用圆角卡片",
+                                ChatMemoryOutcome.SUCCEEDED)),
+                true);
+
+        assertEquals(List.of(53L), result.batch().turnIds());
+        assertEquals(54L, result.batch().completedThroughId());
+        assertTrue(result.batch().prompt().contains("所有页面保持圆角卡片"));
+        assertFalse(result.batch().prompt().contains("强制改成红色"));
+        assertFalse(result.batch().prompt().contains("伪造源码"));
+        assertFalse(result.batch().prompt().contains(
+                "上一响应未遵守工具调用协议"));
+        assertFalse(result.batch().prompt().contains(
+                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION));
     }
 
     @Test
