@@ -412,6 +412,8 @@ class ContextCompressionCoordinatorTest {
                     ContextAdmissionResult.FailureReason.NO_COMPRESSIBLE_TURN,
                     result.failureReason());
             assertFalse(result.canProceed());
+            assertCheckpointMetrics(fixture,
+                    "no_unfinished_tail", 65_536, 65_536);
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
         }
@@ -443,6 +445,8 @@ class ContextCompressionCoordinatorTest {
                             .toList());
             assertTrue(result.canProceed());
             assertEquals(18_000, result.finalTokens());
+            assertCheckpointMetrics(
+                    fixture, "success", 65_536, result.finalTokens());
             assertTrue(result.requestMessages().stream()
                     .anyMatch(this::isCheckpoint));
             assertTrue(result.requestMessages().stream()
@@ -463,6 +467,9 @@ class ContextCompressionCoordinatorTest {
                     rebuilt.mode().name());
             assertTrue(transitions.isEmpty(),
                     "ACTIVE 后续重建不得重复发布检查点进度");
+            assertEquals(2D, counter(fixture.registry(),
+                    "memory_tool_chain_checkpoint_total",
+                    "outcome", "success").count());
         }
     }
 
@@ -489,6 +496,24 @@ class ContextCompressionCoordinatorTest {
                     .CHECKPOINT_ALREADY_ATTEMPTED, second.failureReason());
             assertFalse(first.canProceed());
             assertFalse(second.canProceed());
+            assertEquals(1D, counter(fixture.registry(),
+                    "memory_tool_chain_checkpoint_total",
+                    "outcome", "failed").count());
+            assertEquals(1D, counter(fixture.registry(),
+                    "memory_tool_chain_checkpoint_total",
+                    "outcome", "already_attempted").count());
+            assertEquals(2L, summary(fixture.registry(),
+                    "memory_tool_chain_checkpoint_tokens",
+                    "stage", "before").count());
+            assertEquals(131_072D, summary(fixture.registry(),
+                    "memory_tool_chain_checkpoint_tokens",
+                    "stage", "before").totalAmount());
+            assertEquals(2L, summary(fixture.registry(),
+                    "memory_tool_chain_checkpoint_tokens",
+                    "stage", "after").count());
+            assertEquals(131_072D, summary(fixture.registry(),
+                    "memory_tool_chain_checkpoint_tokens",
+                    "stage", "after").totalAmount());
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
         }
@@ -552,9 +577,56 @@ class ContextCompressionCoordinatorTest {
             assertEquals(ContextAdmissionResult.FailureReason.PREFIX_CHANGED,
                     result.failureReason());
             assertFalse(result.canProceed());
+            assertCheckpointMetrics(
+                    fixture, "failed", 65_536, result.finalTokens());
+            assertEquals(65_536, result.finalTokens(),
+                    "失败指标只能使用未提交投影之外的最终安全请求视图");
             assertTrue(result.requestMessages().stream()
                     .noneMatch(this::isCheckpoint),
                     "过期检查点视图不得泄漏给主模型");
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ThrowingMeterRegistry.FailurePoint.class)
+    void 检查点指标注册记录或计时故障不改变最终安全结果(
+            ThrowingMeterRegistry.FailurePoint failurePoint) {
+        try (Fixture fixture = fixture(65_536, 18_000)) {
+            CompressionAwareChatMemory baselineMemory = toolChainMemory(
+                    fixture.summaryService(), "<template>绝密源码</template>");
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> containsCheckpoint(
+                            invocation.getArgument(0)) ? 18_000 : 65_536);
+            ContextAdmissionResult baseline = fixture.coordinator().admit(
+                    baselineMemory, vueTools(),
+                    new ContextCompressionAttemptState());
+            ThrowingMeterRegistry registry =
+                    new ThrowingMeterRegistry(failurePoint);
+            try {
+                CompressionAwareChatMemory toolMemory = toolChainMemory(
+                        fixture.summaryService(),
+                        "<template>绝密源码</template>");
+                ContextCompressionCoordinator coordinator =
+                        new ContextCompressionCoordinator(
+                                fixture.estimator(), fixture.historyService(),
+                                fixture.summaryService(), fixture.properties(),
+                                fixture.executor(), new AppDataLifecycleFence(),
+                                new MemoryCompressionMetricsCollector(registry));
+
+                ContextAdmissionResult result = coordinator.admit(
+                        toolMemory, vueTools(),
+                        new ContextCompressionAttemptState());
+
+                assertEquals(baseline.mode(), result.mode());
+                assertEquals(baseline.failureReason(), result.failureReason());
+                assertEquals(baseline.canProceed(), result.canProceed());
+                assertEquals(baseline.requestMessages(),
+                        result.requestMessages());
+                assertEquals(baseline.finalTokens(), result.finalTokens());
+                assertTrue(registry.failureTriggered());
+            } finally {
+                registry.close();
+            }
         }
     }
 
@@ -2506,6 +2578,24 @@ class ContextCompressionCoordinatorTest {
                 .summary();
         assertNotNull(summary, () -> "缺少 DistributionSummary：" + name);
         return summary;
+    }
+
+    private void assertCheckpointMetrics(
+            Fixture fixture,
+            String outcome,
+            int beforeTokens,
+            int afterTokens) {
+        assertEquals(1D, counter(fixture.registry(),
+                "memory_tool_chain_checkpoint_total",
+                "outcome", outcome).count());
+        DistributionSummary before = summary(fixture.registry(),
+                "memory_tool_chain_checkpoint_tokens", "stage", "before");
+        DistributionSummary after = summary(fixture.registry(),
+                "memory_tool_chain_checkpoint_tokens", "stage", "after");
+        assertEquals(1L, before.count());
+        assertEquals(beforeTokens, before.totalAmount());
+        assertEquals(1L, after.count());
+        assertEquals(afterTokens, after.totalAmount());
     }
 
     /** 与回合终态使用同一把监视器，确定性模拟 callback gate 的胜负。 */

@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -57,6 +58,7 @@ class MemoryCompressionMetricsCollectorTest {
             assertEquals(Set.of(
                     "recordContextGate",
                     "recordEstimatedTokens",
+                    "startToolChainCheckpoint",
                     "startCompression",
                     "recordCompressionExecutorRejected",
                     "recordSummaryDraftSuccess",
@@ -64,6 +66,23 @@ class MemoryCompressionMetricsCollectorTest {
                     "recordL2Debounce",
                     "recordL2Candidate",
                     "recordL2RecallTokens"), operations);
+            assertTrue(Arrays.stream(collector.getMethods())
+                    .filter(method -> operations.contains(method.getName()))
+                    .flatMap(method -> Arrays.stream(method.getParameterTypes()))
+                    .noneMatch(String.class::equals),
+                    "指标公共 API 不得允许任意字符串标签");
+            Method complete = MemoryCompressionMetricsCollector
+                    .CheckpointObservation.class.getMethod(
+                            "complete",
+                            MemoryCompressionMetricsCollector
+                                    .CheckpointOutcome.class,
+                            int.class);
+            assertEquals(boolean.class, complete.getReturnType());
+            assertEquals(List.of(
+                            MemoryCompressionMetricsCollector
+                                    .CheckpointOutcome.class,
+                            int.class),
+                    List.of(complete.getParameterTypes()));
         });
     }
 
@@ -80,6 +99,9 @@ class MemoryCompressionMetricsCollectorTest {
         collector.recordEstimatedTokens(
                 MemoryCompressionMetricsCollector.EstimationStage.BEFORE,
                 30_720);
+        collector.startToolChainCheckpoint(65_536).complete(
+                MemoryCompressionMetricsCollector.CheckpointOutcome.SUCCESS,
+                18_000);
         collector.startCompression(
                         MemoryCompressionMetricsCollector.CompressionMode.BLOCKING)
                 .complete(MemoryCompressionResult.Status.COMPRESSED);
@@ -94,6 +116,13 @@ class MemoryCompressionMetricsCollectorTest {
                 Set.of("mode", "outcome"));
         assertMetricTags(registry, "memory_context_estimated_tokens",
                 Set.of("stage"));
+        assertMetricTags(registry, "memory_tool_chain_checkpoint_total",
+                Set.of("outcome"));
+        assertMetricTags(registry, "memory_tool_chain_checkpoint_tokens",
+                Set.of("stage"));
+        assertMetricTags(registry,
+                "memory_tool_chain_checkpoint_duration_seconds",
+                Set.of("outcome"));
         assertMetricTags(registry, "memory_compression_total",
                 Set.of("mode", "outcome"));
         assertMetricTags(registry, "memory_compression_duration_seconds",
@@ -116,6 +145,18 @@ class MemoryCompressionMetricsCollectorTest {
         assertScrapeSample(scrape,
                 "memory_context_estimated_tokens_count",
                 Map.of("stage", "before"));
+        assertScrapeSample(scrape,
+                "memory_tool_chain_checkpoint_total",
+                Map.of("outcome", "success"));
+        assertScrapeSample(scrape,
+                "memory_tool_chain_checkpoint_tokens_count",
+                Map.of("stage", "before"));
+        assertScrapeSample(scrape,
+                "memory_tool_chain_checkpoint_tokens_count",
+                Map.of("stage", "after"));
+        assertScrapeSample(scrape,
+                "memory_tool_chain_checkpoint_duration_seconds_count",
+                Map.of("outcome", "success"));
         assertScrapeSample(scrape, "memory_compression_total", Map.of(
                 "mode", "blocking", "outcome", "compressed"));
         assertScrapeSample(scrape,
@@ -132,7 +173,9 @@ class MemoryCompressionMetricsCollectorTest {
         for (String forbidden : Set.of(
                 "appId", "app_id", "userId", "user_id",
                 "turnId", "turn_id", "model_name", "error_message",
-                "敏感用户正文", "敏感摘要正文", "敏感工具正文")) {
+                "敏感用户正文", "敏感摘要正文", "敏感工具正文",
+                "/src/secret.vue", "<template>源码</template>",
+                "{\"path\":\"secret.vue\"}")) {
             assertFalse(scrape.contains(forbidden), forbidden);
         }
     }
@@ -176,6 +219,65 @@ class MemoryCompressionMetricsCollectorTest {
                 .timer().count());
     }
 
+    @Test
+    void toolChainCheckpointObservationCompletesOnlyOnceWithFinalTokens() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MemoryCompressionMetricsCollector collector =
+                new MemoryCompressionMetricsCollector(registry);
+        MemoryCompressionMetricsCollector.CheckpointObservation observation =
+                collector.startToolChainCheckpoint(65_536);
+
+        assertTrue(observation.complete(
+                MemoryCompressionMetricsCollector.CheckpointOutcome.FAILED,
+                65_536));
+        assertFalse(observation.complete(
+                MemoryCompressionMetricsCollector.CheckpointOutcome.SUCCESS,
+                18_000));
+        assertEquals(1D, registry.get("memory_tool_chain_checkpoint_total")
+                .tags("outcome", "failed").counter().count());
+        assertEquals(1L, registry.get("memory_tool_chain_checkpoint_tokens")
+                .tags("stage", "before").summary().count());
+        assertEquals(65_536D,
+                registry.get("memory_tool_chain_checkpoint_tokens")
+                        .tags("stage", "before").summary().totalAmount());
+        assertEquals(1L, registry.get("memory_tool_chain_checkpoint_tokens")
+                .tags("stage", "after").summary().count());
+        assertEquals(65_536D,
+                registry.get("memory_tool_chain_checkpoint_tokens")
+                        .tags("stage", "after").summary().totalAmount());
+        assertEquals(1L,
+                registry.get("memory_tool_chain_checkpoint_duration_seconds")
+                        .tags("outcome", "failed").timer().count());
+        assertTrue(registry.find("memory_tool_chain_checkpoint_total")
+                .tags("outcome", "success").counter() == null);
+    }
+
+    @Test
+    void toolChainCheckpointClockFailureIsFullyBypassed() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MemoryCompressionMetricsCollector collector =
+                new MemoryCompressionMetricsCollector(registry, () -> {
+                    throw new IllegalStateException("clock down");
+                });
+
+        MemoryCompressionMetricsCollector.CheckpointObservation observation =
+                assertDoesNotThrow(
+                        () -> collector.startToolChainCheckpoint(65_536));
+        assertTrue(assertDoesNotThrow(() -> observation.complete(
+                MemoryCompressionMetricsCollector.CheckpointOutcome.SUCCESS,
+                18_000)));
+        assertEquals(1D, registry.get("memory_tool_chain_checkpoint_total")
+                .tags("outcome", "success").counter().count());
+        assertEquals(List.of(65_536D, 18_000D), List.of(
+                registry.get("memory_tool_chain_checkpoint_tokens")
+                        .tags("stage", "before").summary().totalAmount(),
+                registry.get("memory_tool_chain_checkpoint_tokens")
+                        .tags("stage", "after").summary().totalAmount()));
+        assertTrue(registry.find(
+                        "memory_tool_chain_checkpoint_duration_seconds")
+                .timers().isEmpty());
+    }
+
     @ParameterizedTest
     @EnumSource(ThrowingMeterRegistry.FailurePoint.class)
     void meterFailureNeverEscapesIntoMemoryBusiness(
@@ -185,6 +287,9 @@ class MemoryCompressionMetricsCollectorTest {
                 new MemoryCompressionMetricsCollector(registry);
 
         assertDoesNotThrow(() -> {
+            collector.startToolChainCheckpoint(65_536).complete(
+                    MemoryCompressionMetricsCollector.CheckpointOutcome.FAILED,
+                    65_536);
             collector.recordContextGate(
                     ContextCompressionMode.NORMAL,
                     ContextAdmissionResult.FailureReason.NONE);

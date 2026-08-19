@@ -412,6 +412,32 @@ public class ContextCompressionCoordinator {
             PreparedBlockingRequest blockingPreparation,
             Consumer<ContextAdmissionResult> transitionListener,
             AdmissionDeadline deadline) {
+        MemoryCompressionMetricsCollector.CheckpointObservation observation =
+                metricsCollector.startToolChainCheckpoint(
+                        currentRequest.estimatedTokens());
+        ContextAdmissionResult result = checkpointOrRejectObserved(
+                appId, memory, tools, transientMessages,
+                initialRequest, currentRequest, summarizeThroughId,
+                continuationGate, attemptState, blockingPreparation,
+                transitionListener, deadline);
+        observation.complete(
+                checkpointOutcome(result), result.finalTokens());
+        return result;
+    }
+
+    private ContextAdmissionResult checkpointOrRejectObserved(
+            long appId,
+            CompressionAwareChatMemory memory,
+            List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
+            RequestSnapshot initialRequest,
+            RequestSnapshot currentRequest,
+            long summarizeThroughId,
+            ContextContinuationGate continuationGate,
+            ContextCompressionAttemptState attemptState,
+            PreparedBlockingRequest blockingPreparation,
+            Consumer<ContextAdmissionResult> transitionListener,
+            AdmissionDeadline deadline) {
         ContextCompressionAttemptState.CheckpointClaim claim =
                 attemptState.tryEnterCheckpointMode();
         ContextCompressionAttemptState.EnterDecision enterDecision =
@@ -479,6 +505,27 @@ public class ContextCompressionCoordinator {
                     "生成工具链检查点依赖异常，type="
                             + exception.getClass().getSimpleName());
         }
+    }
+
+    private MemoryCompressionMetricsCollector.CheckpointOutcome checkpointOutcome(
+            ContextAdmissionResult result) {
+        if (result.failureReason()
+                == FailureReason.CHECKPOINT_ALREADY_ATTEMPTED) {
+            return MemoryCompressionMetricsCollector.CheckpointOutcome
+                    .ALREADY_ATTEMPTED;
+        }
+        if (result.failureReason() == FailureReason.NO_COMPRESSIBLE_TURN) {
+            return MemoryCompressionMetricsCollector.CheckpointOutcome
+                    .NO_UNFINISHED_TAIL;
+        }
+        if (result.canProceed()
+                && (result.mode() == ContextCompressionMode
+                .TOOL_CHAIN_CHECKPOINT_COMPLETED
+                || result.mode() == ContextCompressionMode
+                .TOOL_CHAIN_CHECKPOINT_REBUILT)) {
+            return MemoryCompressionMetricsCollector.CheckpointOutcome.SUCCESS;
+        }
+        return MemoryCompressionMetricsCollector.CheckpointOutcome.FAILED;
     }
 
     private CheckpointPreparation prepareCheckpointRequest(

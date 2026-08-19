@@ -171,6 +171,7 @@
 **文件：**
 
 - 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGate.java`
+- 修改 `src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinator.java`
 - 修改 `src/main/java/com/lyw/appgeneration/ai/model/message/ContextCompressionMessage.java`（只有协议/文案测试证明需要时才改）
 - 修改 `src/main/java/com/lyw/appgeneration/monitor/MemoryCompressionMetricsCollector.java`
 - 修改相关指标测试
@@ -183,9 +184,9 @@
 
 **TDD 步骤：**
 
-- [ ] 测试检查点成功、失败、重复尝试和无尾部场景的计数及前后 Token 值。
-- [ ] 测试 MeterRegistry 抛异常时门禁结果不改变，延续现有 `ThrowingMeterRegistry` 契约。
-- [ ] 提交：`增加64K检查点压缩观测与前端状态`。
+- [x] ✅ 测试检查点成功、失败、重复尝试和无尾部场景的计数及前后 Token 值。
+- [x] ✅ 测试 MeterRegistry 抛异常时门禁结果不改变，延续现有 `ThrowingMeterRegistry` 契约。
+- [x] ✅ 提交：`增加64K检查点压缩观测与前端状态`。
 
 ## 任务 6：回归分层记忆与正式回合折叠
 
