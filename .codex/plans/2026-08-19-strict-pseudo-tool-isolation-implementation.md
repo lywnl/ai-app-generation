@@ -10,15 +10,15 @@
 
 ## 全局约束
 
-- [ ] 只改造 Vue 在线生成链路，不改变 HTML、多文件生成及未安装恢复策略的通用调用。
-- [ ] 真实结构化工具调用、工具卡片和真实执行结果继续正常显示。
-- [ ] 伪工具正文不得进入 SSE、`chat_history.message`、`memoryMessage`、L0、L1、L2。
-- [ ] 前端不得增加伪工具正则识别；协议安全边界必须在后端完成。
-- [ ] 自动纠正按整个用户回合最多执行一次，不能形成无限重试。
-- [ ] 保持 `tool-protocol-recovery/v1` 的 `STARTED / RECOVERED / FAILED` SSE 契约不变。
-- [ ] 不增加数据库字段，不执行历史数据迁移。
-- [ ] 所有新增文本、计划、注释均使用 UTF-8 简体中文。
-- [ ] 保留现有 `.codex/sdd/progress.md` 和所有未跟踪诊断材料；禁止使用 `git add .`、`git add -A`，禁止未经允许推送远程。
+- [x] ✅ 只改造 Vue 在线生成链路，不改变 HTML、多文件生成及未安装恢复策略的通用调用。
+- [x] ✅ 真实结构化工具调用、工具卡片和真实执行结果继续正常显示。
+- [x] ✅ 伪工具正文不得进入 SSE、`chat_history.message`、`memoryMessage`、L0、L1、L2。
+- [x] ✅ 前端不得增加伪工具正则识别；协议安全边界必须在后端完成。
+- [x] ✅ 自动纠正按整个用户回合最多执行一次，不能形成无限重试。
+- [x] ✅ 保持 `tool-protocol-recovery/v1` 的 `STARTED / RECOVERED / FAILED` SSE 契约不变。
+- [x] ✅ 不增加数据库字段，不执行历史数据迁移。
+- [x] ✅ 所有新增文本、计划、注释均使用 UTF-8 简体中文。
+- [x] ✅ 保留现有 `.codex/sdd/progress.md` 和所有未跟踪诊断材料；禁止使用 `git add .`、`git add -A`，禁止未经允许推送远程。
 
 ---
 
@@ -320,19 +320,34 @@ git commit -m "补全伪工具隔离分层记忆回归测试"
 
 ## Task 8：全量验证、人工验收和最终提交检查
 
-- [ ] 运行后端全量测试：
+- [x] ✅ 运行后端全量测试：
 
 ```bash
 ./mvnw test
 ```
 
-- [ ] 运行后端构建：
+实际使用 Temurin JDK 25 执行：
+
+```bash
+JAVA_HOME="$PWD/.codex/runtime/temurin25/Contents/Home" \
+PATH="$PWD/.codex/runtime/temurin25/Contents/Home/bin:$PATH" \
+bash mvnw test
+```
+
+结果：最终新鲜全量运行 `1623` 项，`0` 失败、`0` 错误、`7` 跳过，
+`BUILD SUCCESS`。前一轮全量运行曾命中一个与本次修改无关的并发时序断言波动；
+该用例随后单独连续运行 `20` 次均通过，最终全量重跑恢复全绿。
+
+- [x] ✅ 运行后端构建：
 
 ```bash
 ./mvnw -DskipTests package
 ```
 
-- [ ] 运行前端全量测试、类型检查和生产构建：
+结果：`BUILD SUCCESS`。打包后的 Jar 再次核验仍包含正式阈值：异步
+`49152`、阻塞 `57344`、硬上限 `65536`。
+
+- [x] ✅ 运行前端全量测试、类型检查和生产构建：
 
 ```bash
 cd ai-app-generation-frontend
@@ -341,16 +356,38 @@ npm run type-check
 npm run build
 ```
 
-- [ ] 人工验证正常纯文本回答仍可流式显示。
-- [ ] 人工验证真实 `readFile`、`writeFile`、`modifyFile`、`buildProject` 工具卡和结果正常。
-- [ ] 人工验证单个伪工具块从未显示，随后出现恢复提示和纠正输出。
-- [ ] 人工验证两个相同伪工具块会提前取消异常 generation。
-- [ ] 人工验证两个不同伪工具块均不显示，流结束后自动纠正。
-- [ ] 人工验证伪工具正文后到达真实 `tool_calls` 时，伪内容不显示而真实工具正常执行。
-- [ ] 人工验证纠正后再次退化不会发起第三次请求。
-- [ ] 人工验证后端重启并加载历史后，伪工具内容不会从 MySQL 或 Redis 恢复。
-- [ ] 人工验证与 48K/56K/64K 上下文压缩及工具链续行兼容。
-- [ ] 检查工作树，只允许本计划涉及的代码和测试进入提交：
+结果：前端 `7` 个测试文件、`163/163` 项通过；`type-check` 通过，生产构建成功。
+仅保留既有单包体积超过 500 kB 的警告，无构建错误。
+
+- [x] ✅ 人工验证正常纯文本回答仍可流式显示。受控 SSE
+  `.codex/e2e/strict-plain-text.sse` 已收到两段普通正文；该场景没有构建终态，
+  因而最终业务终态是“未构建”的 `PROTOCOL_ERROR`，不是协议检测误判。浏览器正常
+  工具链场景最终 `SUCCEEDED`，截图见
+  `.codex/e2e/evidence/tool-protocol-normal.png`。
+- [x] ✅ 人工验证真实 `readFile`、`writeFile`、`modifyFile`、`buildProject` 工具卡和结果正常；
+  受控 SSE、浏览器截图及 `AiServiceTokenStreamTest` 覆盖真实工具执行与续调。
+- [x] ✅ 人工验证单个伪工具块从未显示，随后出现恢复提示和纠正输出；证据为
+  `strict-pseudo-recover-success.sse`、`tool-protocol-recovery-started.png`、
+  `tool-protocol-recovery-success.png`。
+- [x] ✅ 人工验证两个相同伪工具块会提前取消异常 generation；
+  `strict-pseudo-repeat.control.json` 记录只使用一次恢复额度，伪正文未进入前端，
+  后端定向测试覆盖 generation 取消。
+- [x] ✅ 人工验证两个不同伪工具块均不显示，流结束后自动纠正；证据为
+  `strict-pseudo-different.sse` 和对应控制记录。
+- [x] ✅ 人工验证伪工具正文后到达真实 `tool_calls` 时，伪内容不显示而真实工具正常执行；
+  `strict-mixed.sse`、`AiServiceTokenStreamTest` 和 `AiServiceStreamingResponseHandlerTest`
+  均断言可信前缀与真实工具请求保留。
+- [x] ✅ 人工验证纠正后再次退化不会发起第三次请求；
+  `strict-double-failure.control.json` 的请求数恰为 `2`，终态为 `PROTOCOL_ERROR`，
+  前端显示固定友好提示。
+- [x] ✅ 人工验证后端重启并加载历史后，伪工具内容不会从 MySQL 或 Redis 恢复；
+  `strict-cold-rebuild-mixed.control.json` 中冷重建请求的
+  `promptHasPseudoTool`、`promptHasPoisonedSuffix`、`promptHasRecoveryPrompt` 均为 `false`，
+  分层回归测试同时覆盖 MySQL、L0、L1、L2。
+- [x] ✅ 人工验证与 48K/56K/64K 上下文压缩及工具链续行兼容；E2E 使用临时缩小阈值
+  验证了异步/阻塞/硬上限三条路径，`strict-hard-tool-chain-retry-2.sse` 证明硬上限
+  检查点压缩后继续 `readDir → buildProject` 并成功结束，正式 Jar 阈值保持不变。
+- [x] ✅ 检查工作树，只允许本计划涉及的代码和测试进入提交：
 
 ```bash
 git status --short
@@ -358,7 +395,69 @@ git diff --check
 git log -8 --oneline
 ```
 
-- [ ] 最终验收标准：浏览器、SSE、MySQL、L0、L1、L2 六个位置均不存在本轮伪工具正文；真实结构化工具调用仍能执行、展示、持久化可信事实并继续工具循环。
+检查结果：`git diff --check` 无输出；本次最终提交只精确暂存计划和本计划涉及的
+实现/测试文件，`.codex/sdd/progress.md` 及其他诊断材料保留未暂存，未执行远程推送。
+
+- [x] ✅ 最终验收标准：浏览器、SSE、MySQL、L0、L1、L2 六个位置均不存在本轮伪工具正文；
+  真实结构化工具调用仍能执行、展示、持久化可信事实并继续工具循环。证据由浏览器
+  受控验收、strict E2E 控制记录以及 Task 7 分层记忆回归共同构成。
+
+### Task 8.1：最终审查修复与 fresh E2E 复验
+
+- [x] ✅ 修复前端可信正文检查点：direct 正文、节流 buffer 和 flush 后同步推进
+  `trustedContentCheckpoint`；`STARTED` 只清理尚未下发的候选，不回滚已确认正文。
+  定向前端回归为 `117` 项通过。
+- [x] ✅ 为 `AiServiceStreamingResponseHandler` 增加 generation 级 `65_536` 字符
+  响应跟踪上限，覆盖 partial、complete-only 和工具响应；超过上限统一进入
+  `RESOURCE_LIMIT_EXCEEDED`，避免响应缓存无限增长。
+- [x] ✅ 在完整响应边界显式处理 `null completeResponse` 或 `null aiMessage`，统一走
+  `StreamingResponseConsistencyException`；工具响应省略完整正文时使用累计可信 partial
+  重建 `AiMessage`。
+- [x] ✅ 补充后端契约测试：`AiServiceTokenStreamTest` 与
+  `AiServiceStreamingResponseHandlerTest` 覆盖响应边界；连同
+  `StreamingRequestControllerRecoveryTest`、`ToolLoopTerminationProtocolTest` 的高风险
+  回归共 `147/147` 项通过。前端 `generationSession.test.ts` 共 `117/117` 项通过，
+  前端全量共 `163/163` 项通过，类型检查通过。
+- [x] ✅ 使用测试专用 Jar 临时将阈值缩小为异步 `28_672`、阻塞 `30_720`、硬上限
+  `32_768`；测试完成后正式源码和 `application.yml` 已恢复为异步 `49_152`、阻塞
+  `57_344`、硬上限 `65_536`，`MemoryTokenProperties` 的正式严格校验未放宽。
+- [x] ✅ fresh 多轮压缩后伪工具复验：连续执行
+  `.codex/e2e/fresh-multiround-r1.control.json` 至 `r5.control.json`，其中
+  `R3 / R4 / R5` 均实际调用摘要模型完成压缩；随后
+  `.codex/e2e/fresh-async-pseudo-after-multiround.control.json` 记录只使用一次恢复额度，
+  对应 SSE 最终 `SUCCEEDED`。伪工具块 `[工具调用] readFile`、污染后缀和内部纠正提示
+  均未进入 SSE。
+- [x] ✅ fresh 异步压缩复验：
+  `.codex/e2e/fresh-async-pseudo-final-exact.sse` 与对应
+  `.control.json` 显示 `asyncGateDelta=1`、`asyncCompressionDelta=1`；压缩后
+  触发伪工具时只自动纠正一次，随后真实工具链成功；伪工具块
+  `[工具调用] readFile` 和污染后缀均未进入 SSE，真实中文工具卡正常保留。
+- [x] ✅ fresh 阻塞压缩复验：
+  `.codex/e2e/fresh-blocking-pseudo-final.sse` 与对应 `.control.json` 显示
+  `blockingGateDelta=1`、`blockingCompressionDelta=1`；压缩后伪工具自动纠正一次并
+  真实构建成功。
+- [x] ✅ fresh 硬上限工具链复验：
+  `.codex/e2e/fresh-hard-tool-chain-success.sse` 显示大文件写入后触发检查点压缩，
+  随后继续 `readDir → buildProject` 并以 `SUCCEEDED` 结束；控制记录确认请求带有
+  `checkpoint=true`，无伪工具提示词污染。
+- [x] ✅ fresh 二次退化熔断复验：
+  `.codex/e2e/fresh-double-failure.sse` 最多发送 `STARTED → FAILED`，控制记录流式
+  generation 恰为 `2`（初次请求 + 1 次纠正），没有第三次模型请求，终态为
+  `PROTOCOL_ERROR`。
+- [x] ✅ fresh 跨层脱敏检查：异步、阻塞、硬上限和二次失败应用的 MySQL 展示消息、
+  `memoryMessage`、Redis L0、L1 摘要均未发现伪工具块 `[工具调用] readFile`、
+  污染后缀或内部纠正提示；对应计数均为 `0`。
+
+### Task 8.2：最终代码审查
+
+- [x] ✅ 复核当前工作树相对 `d89af05` 的实现和测试 diff，确认 checkpoint、响应上限、
+  null complete、伪工具隔离和终态竞态均无 Critical/Important 问题。
+- [x] ✅ 根据审查结果完成 generation-aware 受控终止修复：当前代超限会取消同代底层
+  SDK handle；已被恢复撤销的旧 generation 迟到回调不能发布终态，也不能取消恢复代
+  handle。相关后端高风险回归 `147/147` 项通过。
+- [x] ✅ 更新最终验证：后端全量 `1623` 项、前端全量 `163` 项、正式 Jar 阈值
+  `49152/57344/65536`；fresh E2E 覆盖异步压缩、阻塞压缩、硬上限工具链续行和二次
+  退化熔断。最终代码提交为 `42cddcb 修复可信正文回滚与流式响应边界`。
 
 ## 兼容性和默认决策
 
