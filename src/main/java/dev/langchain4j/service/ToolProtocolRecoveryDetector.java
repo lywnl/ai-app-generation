@@ -14,25 +14,30 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * 在单个模型 generation 内增量识别连续重复的纯文本工具调用。
+ * 在单个模型 generation 内隔离普通正文中的伪工具调用。
  *
- * <p>首个完整候选会被隔离；只有紧随其后的规范指纹完全相同，才返回
- * {@link Duplicate}。任何无法确认的内容都会按原始顺序释放。</p>
+ * <p>明确的工具调用标记一旦出现，标记及其后的正文都不再可信。检测器只释放
+ * 标记之前的普通文本；重复候选和隔离上限会提前确认协议退化，其余候选在流结束
+ * 时统一确认，避免未知工具、坏 JSON 或残缺参数绕过隔离。</p>
  */
 public final class ToolProtocolRecoveryDetector {
 
     private static final String MARKER = "[工具调用]";
+    static final int QUARANTINE_LIMIT = 65_536;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .build();
 
     private final Set<String> registeredTools;
     private final StringBuilder pending = new StringBuilder();
-    private final StringBuilder separator = new StringBuilder();
+    private final StringBuilder quarantine = new StringBuilder();
 
-    private Candidate heldCandidate;
+    private String previousFingerprint;
+    private int quarantineScanOffset;
+    private boolean quarantining;
     private boolean structuredToolCallObserved;
-    private boolean duplicateDetected;
+    private boolean violationObservedBeforeStructuredToolCall;
+    private ViolationReason violationReason;
 
     public ToolProtocolRecoveryDetector(Set<String> registeredTools) {
         Objects.requireNonNull(registeredTools, "注册工具集合不能为空");
@@ -46,116 +51,137 @@ public final class ToolProtocolRecoveryDetector {
     /** 接收任意大小的正文分片。 */
     public Result accept(String chunk) {
         Objects.requireNonNull(chunk, "流式正文分片不能为空");
+        if (violationReason != null) {
+            return new Violation("", violationReason);
+        }
         if (chunk.isEmpty()) {
-            return duplicateDetected ? new Duplicate("")
-                    : pendingState();
+            return pendingState();
         }
-        if (structuredToolCallObserved) {
-            return new Text(chunk);
-        }
-        if (duplicateDetected) {
-            return new Duplicate("");
+        if (quarantining) {
+            return quarantine(chunk);
         }
         pending.append(chunk);
-        return drain();
+        return drainTrustedText();
     }
 
     /**
      * 通知检测器本 generation 已观察到真实结构化工具调用。
-     * 此后不再做正文协议判定，并立即释放此前隔离的候选。
+     * 真实工具调用不会让普通正文重新受信；混合响应中的伪工具正文仍须丢弃。
      */
     public Result observeStructuredToolCall() {
-        if (duplicateDetected) {
-            return new Duplicate("");
-        }
-        if (structuredToolCallObserved) {
-            return new Text("");
-        }
         structuredToolCallObserved = true;
-        String released = releaseAll();
+        if (violationReason != null) {
+            return new Violation("", violationReason);
+        }
+        return pendingState();
+    }
+
+    /** 当前 generation 是否已经收到真实结构化工具调用。 */
+    boolean hasObservedStructuredToolCall() {
+        return structuredToolCallObserved;
+    }
+
+    /** 当前 generation 的协议退化是否先于真实结构化工具调用被确认。 */
+    boolean hasViolationObservedBeforeStructuredToolCall() {
+        return violationObservedBeforeStructuredToolCall;
+    }
+
+    /** 流结束时释放普通文本，或确认仍被隔离的伪工具候选。 */
+    public Result finish() {
+        if (violationReason != null) {
+            return new Violation("", violationReason);
+        }
+        if (quarantining) {
+            quarantine.setLength(0);
+            if (structuredToolCallObserved) {
+                return new Text("");
+            }
+            confirmViolation(ViolationReason.STREAM_FINISHED);
+            return new Violation("", violationReason);
+        }
+        String released = pending.toString();
+        pending.setLength(0);
         return new Text(released);
     }
 
-    /** 流结束时原样释放所有未确认内容。 */
-    public Result finish() {
-        if (duplicateDetected) {
+    private Result drainTrustedText() {
+        int markerIndex = pending.indexOf(MARKER);
+        if (markerIndex >= 0) {
+            String trusted = pending.substring(0, markerIndex);
+            String quarantined = pending.substring(markerIndex);
             pending.setLength(0);
-            return new Text("");
+            quarantining = true;
+            Result result = quarantine(quarantined);
+            if (result instanceof Violation violation) {
+                return new Violation(trusted, violation.reason());
+            }
+            return trusted.isEmpty() ? pendingState() : new Text(trusted);
         }
-        return new Text(releaseAll());
+        int retainedPrefixLength = longestMarkerPrefixSuffix(pending);
+        int safeLength = pending.length() - retainedPrefixLength;
+        if (safeLength == 0) {
+            return pendingState();
+        }
+        String trusted = pending.substring(0, safeLength);
+        pending.delete(0, safeLength);
+        return new Text(trusted);
     }
 
-    private Result drain() {
-        StringBuilder output = new StringBuilder();
-        while (!pending.isEmpty()) {
-            int markerIndex = pending.indexOf(MARKER);
-            if (markerIndex < 0) {
-                drainWithoutCompleteMarker(output);
-                break;
-            }
-            if (markerIndex > 0) {
-                consumeOrdinaryPrefix(markerIndex, output);
-                continue;
-            }
+    private Result quarantine(String text) {
+        int remaining = QUARANTINE_LIMIT - quarantine.length();
+        int acceptedLength = Math.min(text.length(), remaining);
+        if (acceptedLength > 0) {
+            quarantine.append(text, 0, acceptedLength);
+        }
+        scanQuarantine();
+        if (violationReason == null
+                && quarantine.length() >= QUARANTINE_LIMIT) {
+            confirmViolation(ViolationReason.QUARANTINE_LIMIT);
+        }
+        if (violationReason != null) {
+            quarantine.setLength(0);
+            return new Violation("", violationReason);
+        }
+        return pendingState();
+    }
 
-            ParseResult parsed = parseCandidate(pending.toString());
+    private void scanQuarantine() {
+        while (quarantineScanOffset < quarantine.length()) {
+            int markerIndex = quarantine.indexOf(
+                    MARKER, quarantineScanOffset);
+            if (markerIndex < 0) {
+                quarantineScanOffset = Math.max(
+                        quarantineScanOffset,
+                        quarantine.length() - MARKER.length() + 1);
+                return;
+            }
+            ParseResult parsed = parseCandidate(
+                    quarantine.substring(markerIndex));
             if (parsed instanceof Incomplete) {
-                break;
+                return;
             }
             if (parsed instanceof Invalid) {
-                consumeOrdinaryPrefix(1, output);
+                quarantineScanOffset = markerIndex + MARKER.length();
                 continue;
             }
             Complete complete = (Complete) parsed;
-            pending.delete(0, complete.length());
-            if (acceptCandidate(complete.candidate(), output)) {
-                pending.setLength(0);
-                return new Duplicate(output.toString());
+            String fingerprint = complete.candidate().fingerprint();
+            if (fingerprint.equals(previousFingerprint)) {
+                confirmViolation(ViolationReason.DUPLICATE_BLOCK);
+                return;
             }
-        }
-        return output.isEmpty() ? pendingState() : new Text(output.toString());
-    }
-
-    private void drainWithoutCompleteMarker(StringBuilder output) {
-        int retainedPrefixLength = longestMarkerPrefixSuffix(pending);
-        int safeLength = pending.length() - retainedPrefixLength;
-        if (safeLength > 0) {
-            consumeOrdinaryPrefix(safeLength, output);
+            previousFingerprint = fingerprint;
+            quarantineScanOffset = markerIndex + complete.length();
         }
     }
 
-    private void consumeOrdinaryPrefix(int length, StringBuilder output) {
-        String ordinary = pending.substring(0, length);
-        pending.delete(0, length);
-        if (heldCandidate == null) {
-            output.append(ordinary);
+    private void confirmViolation(ViolationReason reason) {
+        if (violationReason != null) {
             return;
         }
-        if (isWhitespaceOnly(ordinary)) {
-            separator.append(ordinary);
-            return;
-        }
-        output.append(heldCandidate.raw()).append(separator).append(ordinary);
-        heldCandidate = null;
-        separator.setLength(0);
-    }
-
-    private boolean acceptCandidate(
-            Candidate candidate, StringBuilder output) {
-        if (heldCandidate == null) {
-            heldCandidate = candidate;
-            return false;
-        }
-        if (heldCandidate.fingerprint().equals(candidate.fingerprint())) {
-            heldCandidate = null;
-            separator.setLength(0);
-            duplicateDetected = true;
-            return true;
-        }
-        output.append(heldCandidate.raw()).append(separator);
-        heldCandidate = candidate;
-        separator.setLength(0);
-        return false;
+        violationObservedBeforeStructuredToolCall =
+                !structuredToolCallObserved;
+        violationReason = reason;
     }
 
     private ParseResult parseCandidate(String source) {
@@ -198,9 +224,8 @@ public final class ToolProtocolRecoveryDetector {
         if (canonicalJson == null) {
             return Invalid.INSTANCE;
         }
-        String raw = source.substring(0, jsonEnd);
         return new Complete(new Candidate(
-                raw, toolName + "\n" + canonicalJson), jsonEnd);
+                toolName + "\n" + canonicalJson), jsonEnd);
     }
 
     private int findJsonObjectEnd(String source, int objectStart) {
@@ -298,18 +323,6 @@ public final class ToolProtocolRecoveryDetector {
         return STRICT_JSON.writeValueAsString(value);
     }
 
-    private String releaseAll() {
-        StringBuilder released = new StringBuilder();
-        if (heldCandidate != null) {
-            released.append(heldCandidate.raw()).append(separator);
-        }
-        released.append(pending);
-        heldCandidate = null;
-        separator.setLength(0);
-        pending.setLength(0);
-        return released.toString();
-    }
-
     private Result pendingState() {
         return new Buffering();
     }
@@ -321,11 +334,6 @@ public final class ToolProtocolRecoveryDetector {
             index++;
         }
         return index;
-    }
-
-    private static boolean isWhitespaceOnly(String value) {
-        return !value.isEmpty() && value.codePoints()
-                .allMatch(Character::isWhitespace);
     }
 
     private static int longestMarkerPrefixSuffix(CharSequence value) {
@@ -346,7 +354,7 @@ public final class ToolProtocolRecoveryDetector {
         return 0;
     }
 
-    public sealed interface Result permits Text, Buffering, Duplicate {
+    public sealed interface Result permits Text, Buffering, Violation {
     }
 
     /** 可立即下发的可信普通文本。 */
@@ -361,12 +369,21 @@ public final class ToolProtocolRecoveryDetector {
     public record Buffering() implements Result {
     }
 
-    /** 已确认两个连续候选的规范指纹完全相同。 */
-    public record Duplicate(String text) implements Result {
+    /** 已确认当前 generation 的普通正文违反工具调用协议。 */
+    public record Violation(
+            String trustedText, ViolationReason reason) implements Result {
 
-        public Duplicate {
-            text = Objects.requireNonNull(text, "重复前可下发文本不能为空");
+        public Violation {
+            trustedText = Objects.requireNonNull(
+                    trustedText, "协议退化前可信文本不能为空");
+            reason = Objects.requireNonNull(reason, "协议退化原因不能为空");
         }
+    }
+
+    public enum ViolationReason {
+        DUPLICATE_BLOCK,
+        STREAM_FINISHED,
+        QUARANTINE_LIMIT
     }
 
     private sealed interface ParseResult
@@ -385,6 +402,6 @@ public final class ToolProtocolRecoveryDetector {
         INSTANCE
     }
 
-    private record Candidate(String raw, String fingerprint) {
+    private record Candidate(String fingerprint) {
     }
 }
