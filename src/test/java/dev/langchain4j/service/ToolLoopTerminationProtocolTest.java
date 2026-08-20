@@ -11,6 +11,7 @@ import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerm
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.BUILD_SUCCEEDED;
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.CANCELLED;
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.LOOP_LIMIT_EXCEEDED;
+import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.REPEATED_READ_LOOP;
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -20,6 +21,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolLoopTerminationProtocolTest {
+
+    @Test
+    void repeatedReadLoopRequiresNullFinalResponse() {
+        var termination = new ToolLoopTerminationProtocol
+                .ControlledTermination(REPEATED_READ_LOOP, null);
+
+        assertEquals(REPEATED_READ_LOOP, termination.reason());
+        assertNull(termination.finalResponse());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ToolLoopTerminationProtocol.ControlledTermination(
+                        REPEATED_READ_LOOP, "伪造的最终响应"));
+    }
 
     @Test
     void strictFileResourceLimitResultTerminatesButMessageSpoofDoesNot() {

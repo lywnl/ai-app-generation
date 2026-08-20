@@ -180,6 +180,7 @@ public final class ToolLoopTerminationProtocol {
         CANCELLED,
         PROTOCOL_ERROR,
         LOOP_LIMIT_EXCEEDED,
+        REPEATED_READ_LOOP,
         RESOURCE_LIMIT_EXCEEDED
     }
 
@@ -195,7 +196,8 @@ public final class ToolLoopTerminationProtocol {
                 case BUILD_SUCCEEDED -> SUCCESS_RESPONSE.equals(finalResponse);
                 case BUILD_FAILED -> FAILURE_RESPONSE.equals(finalResponse);
                 case EVALUATION_COMPLETED, CANCELLED, PROTOCOL_ERROR,
-                        LOOP_LIMIT_EXCEEDED, RESOURCE_LIMIT_EXCEEDED ->
+                        LOOP_LIMIT_EXCEEDED, REPEATED_READ_LOOP,
+                        RESOURCE_LIMIT_EXCEEDED ->
                         finalResponse == null;
             };
             if (!validFinalResponse) {

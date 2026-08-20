@@ -16,6 +16,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VueTurnMemoryProjectionTest {
 
     @Test
+    void 重复读取终止使用固定可信投影且不保存内部纠正提示() {
+        assertEquals(
+                "本轮发生重复读取循环，系统已安全停止。"
+                        + "已经落盘的文件修改会保留，"
+                        + "后续操作以当前工程文件为准。",
+                VueTurnMemoryProjection.REPEATED_READ_LOOP_PROJECTION);
+        assertFalse(VueTurnMemoryProjection.REPEATED_READ_LOOP_PROJECTION
+                .contains("禁止再次调用"));
+    }
+
+    @Test
     void 只从严格受信工具结果投影真实工具变更文件构建次数和终态() {
         VueToolExecutionFact write = parse("writeFile", fileResult(
                 "writeFile", "src/App.vue", true, null));

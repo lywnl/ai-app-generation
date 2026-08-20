@@ -89,6 +89,59 @@ class UnfinishedToolChainCheckpointProjectorTest {
     }
 
     @Test
+    void 检查点保留最新完整readDir调用及其真实结果() {
+        ToolExecutionRequest readFile = request(
+                "call-read-file", "readFile", "{\"path\":\"src/App.vue\"}");
+        ToolExecutionRequest readDir = request(
+                "call-read-dir", "readDir", "{\"path\":\"src\"}");
+        AiMessage latestReadCall = AiMessage.from(readDir);
+        ToolExecutionResultMessage latestReadResult =
+                ToolExecutionResultMessage.from(readDir,
+                        fileResult("readDir", "src", false,
+                                "[\"App.vue\",\"main.js\"]"));
+
+        ToolChainCheckpointResult result = projector.project(snapshot(List.of(
+                UserMessage.from("读取工程目录"),
+                AiMessage.from(readFile),
+                ToolExecutionResultMessage.from(readFile,
+                        fileResult("readFile", "src/App.vue", false, "旧源码")),
+                latestReadCall,
+                latestReadResult)), REGISTERED_TOOLS);
+
+        assertTrue(result.complete());
+        assertEquals(List.of(
+                        UserMessage.from("读取工程目录"),
+                        result.checkpointMessage().orElseThrow(),
+                        latestReadCall,
+                        latestReadResult),
+                result.requestMessages());
+    }
+
+    @Test
+    void 后续非读取批次使旧读取结果失效() {
+        ToolExecutionRequest read = request(
+                "call-read", "readFile", "{\"path\":\"src/App.vue\"}");
+        ToolExecutionRequest build = request(
+                "call-build", "buildProject", "{}");
+
+        ToolChainCheckpointResult result = projector.project(snapshot(List.of(
+                UserMessage.from("读取后执行构建"),
+                AiMessage.from(read),
+                ToolExecutionResultMessage.from(read,
+                        fileResult("readFile", "src/App.vue", false, "旧源码")),
+                AiMessage.from(build),
+                ToolExecutionResultMessage.from(build,
+                        buildFailure(1, false, "构建失败")))), REGISTERED_TOOLS);
+
+        assertTrue(result.complete());
+        assertTrue(result.latestReadBatch().isEmpty());
+        assertEquals(List.of(
+                        UserMessage.from("读取后执行构建"),
+                        result.checkpointMessage().orElseThrow()),
+                result.requestMessages());
+    }
+
+    @Test
     void 构建错误摘要只来自结构化枚举且不复用自由文本日志() {
         ToolExecutionRequest build = request(
                 "call-build", "buildProject", "{}");
@@ -212,7 +265,8 @@ class UnfinishedToolChainCheckpointProjectorTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new ToolChainCheckpointResult(
                         false, List.of(checkpoint), java.util.Optional.empty(),
-                        List.of(), ToolChainCheckpointResult.FailureReason.EMPTY_TAIL));
+                        List.of(), List.of(),
+                        ToolChainCheckpointResult.FailureReason.EMPTY_TAIL));
     }
 
     @Test

@@ -38,6 +38,10 @@ public class VueTurnFinalizer implements InitializingBean {
             "生成状态异常，系统已停止本次生成，请重新发起。";
     public static final String LOOP_LIMIT_MESSAGE =
             "生成步骤过多，系统已停止本次生成，请稍后重试。";
+    public static final String REPEATED_READ_LOOP_MESSAGE =
+            "检测到模型连续重复执行相同读取操作且没有产生新进展，"
+                    + "系统已安全停止本轮生成。已经完成的文件修改会保留，"
+                    + "请发送“继续完成并构建”后重试。";
     public static final String TIMEOUT_MESSAGE =
             "生成与构建超时，请稍后重试。";
     public static final String RESOURCE_LIMIT_MESSAGE =
@@ -51,6 +55,7 @@ public class VueTurnFinalizer implements InitializingBean {
             PROTOCOL_MESSAGE,
             SCOPE_PROTOCOL_MESSAGE,
             LOOP_LIMIT_MESSAGE,
+            REPEATED_READ_LOOP_MESSAGE,
             TIMEOUT_MESSAGE,
             RESOURCE_LIMIT_MESSAGE,
             CANCELLED_MESSAGE);

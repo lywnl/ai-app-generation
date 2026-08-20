@@ -13,6 +13,10 @@ public final class VueTurnMemoryProjection {
     public static final String PROTOCOL_ERROR_PROJECTION =
             "本轮发生工具协议异常，未完成真实工具执行或构建。"
                     + "不得复用本轮生成内容，后续操作以当前工程文件为准。";
+    public static final String REPEATED_READ_LOOP_PROJECTION =
+            "本轮发生重复读取循环，系统已安全停止。"
+                    + "已经落盘的文件修改会保留，"
+                    + "后续操作以当前工程文件为准。";
 
     private VueTurnMemoryProjection() {
     }

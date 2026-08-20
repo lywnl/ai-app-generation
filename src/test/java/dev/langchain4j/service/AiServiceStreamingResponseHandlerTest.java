@@ -629,6 +629,65 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void 连续相同可信读取第二次注入纠正提示第三次安全终止()
+            throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        PendingStreamingChatModel model = new PendingStreamingChatModel();
+        context.streamingChatModel = model;
+        ChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        AtomicReference<ModelRequestGate.Request> latestRequest =
+                new AtomicReference<>();
+        AtomicInteger terminationCalls = new AtomicInteger();
+        controller.onControlledTermination(ignored ->
+                terminationCalls.incrementAndGet());
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
+                request -> {
+                    latestRequest.set(request);
+                    return CompletableFuture.completedFuture(
+                            allowed(request.latestMemory().get().messages()));
+                })) {
+            ToolExecutionRequest first = readDir("read-1");
+            AiServiceStreamingResponseHandler firstHandler =
+                    readLoopHandler(context, memory, controller, gate);
+
+            firstHandler.onCompleteResponse(responseWithTools(first));
+            gate.awaitIdle();
+            assertEquals(1, model.chatInvocations);
+            assertTrue(latestRequest.get().transientMessages().isEmpty());
+
+            ToolExecutionRequest second = readDir("read-2");
+            model.lastHandler.onCompleteResponse(responseWithTools(second));
+            gate.awaitIdle();
+
+            assertEquals(2, model.chatInvocations);
+            assertEquals(1, latestRequest.get().transientMessages().size());
+            assertTrue(((dev.langchain4j.data.message.SystemMessage)
+                    latestRequest.get()
+                    .transientMessages().getFirst()).text()
+                    .contains("连续两次执行完全相同的读取操作"));
+            assertTrue(memory.messages().stream().noneMatch(message ->
+                    message instanceof dev.langchain4j.data.message.SystemMessage
+                            systemMessage
+                            && systemMessage.text().contains(
+                            "连续两次执行完全相同的读取操作")),
+                    "纠正提示只允许进入单次请求，不能写入 ChatMemory");
+
+            ToolExecutionRequest third = readDir("read-3");
+            model.lastHandler.onCompleteResponse(responseWithTools(third));
+            gate.awaitIdle();
+
+            assertEquals(2, model.chatInvocations,
+                    "第三次相同读取不得启动下一次模型请求");
+            assertEquals(1, terminationCalls.get());
+            assertEquals(ToolLoopTerminationProtocol
+                            .ControlledTerminationReason.REPEATED_READ_LOOP,
+                    controller.controlledTermination().reason());
+        }
+    }
+
+    @Test
     void 工具结果提交后终态抢占使批次完成失败且不得进入续调门禁()
             throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
@@ -2205,6 +2264,52 @@ class AiServiceStreamingResponseHandlerTest {
                 continuationGate);
     }
 
+    private static AiServiceStreamingResponseHandler readLoopHandler(
+            AiServiceContext context,
+            ChatMemory memory,
+            StreamingRequestController controller,
+            ModelRequestGate gate) {
+        return new AiServiceStreamingResponseHandler(
+                new NoopChatExecutor(), context, "mem-1",
+                partial -> { },
+                (index, toolRequest) -> { },
+                (index, toolRequest) -> { },
+                execution -> { },
+                response -> { },
+                error -> fail("不应触发普通错误", error),
+                memory,
+                new TokenUsage(),
+                List.<ToolSpecification>of(),
+                Map.of("readDir", (toolRequest, memoryId) ->
+                        repeatedReadResult()),
+                null,
+                "method-1",
+                controller,
+                ToolExecutionGuard.direct(),
+                controller.latestModelRequestGeneration(),
+                gate,
+                action -> {
+                    action.run();
+                    return true;
+                });
+    }
+
+    private static ToolExecutionRequest readDir(String id) {
+        return ToolExecutionRequest.builder()
+                .id(id)
+                .name("readDir")
+                .arguments("{\"path\":\"src\"}")
+                .build();
+    }
+
+    private static String repeatedReadResult() {
+        return "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"readDir\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src\",\"changed\":false,"
+                + "\"message\":\"目录读取成功\",\"failureReason\":null,"
+                + "\"content\":\"[\\\"App.vue\\\"]\"}";
+    }
+
     private static ModelRequestGate.Decision allowed(
             List<ChatMessage> messages) {
         return new ModelRequestGate.Decision(
@@ -2346,6 +2451,22 @@ class AiServiceStreamingResponseHandlerTest {
                             .build())
                     .build();
             handler.onCompleteResponse(terminal);
+        }
+    }
+
+    private static class PendingStreamingChatModel implements StreamingChatModel {
+
+        private int chatInvocations;
+        private dev.langchain4j.model.chat.response
+                .StreamingChatResponseHandler lastHandler;
+
+        @Override
+        public void doChat(
+                ChatRequest chatRequest,
+                dev.langchain4j.model.chat.response
+                        .StreamingChatResponseHandler handler) {
+            chatInvocations++;
+            lastHandler = handler;
         }
     }
 

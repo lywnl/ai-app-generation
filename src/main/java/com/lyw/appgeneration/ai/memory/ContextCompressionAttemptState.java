@@ -3,7 +3,7 @@ package com.lyw.appgeneration.ai.memory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** 同一用户回合共享的64K检查点模式状态。 */
+/** 同一用户回合共享的输入硬上限检查点模式状态。 */
 public final class ContextCompressionAttemptState {
 
     private final AtomicReference<Slot> slot =

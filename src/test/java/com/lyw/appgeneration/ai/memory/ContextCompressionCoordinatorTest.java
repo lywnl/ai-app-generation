@@ -28,6 +28,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -79,9 +80,9 @@ class ContextCompressionCoordinatorTest {
         assertEquals(12_288, properties.getL0RetainedTokens());
         assertEquals(3_072, properties.getL1MaxSummaryTokens());
         assertEquals(1_024, properties.getL2MaxRecallTokens());
-        assertEquals(49_152, properties.getAsyncCompressionThreshold());
-        assertEquals(57_344, properties.getBlockingCompressionThreshold());
-        assertEquals(65_536, properties.getHardInputLimit());
+        assertEquals(28_672, properties.getAsyncCompressionThreshold());
+        assertEquals(30_720, properties.getBlockingCompressionThreshold());
+        assertEquals(32_768, properties.getHardInputLimit());
         assertEquals(8_192, properties.getMaxOutputTokens());
         assertEquals(1.15D, properties.getEstimationSafetyFactor());
     }
@@ -123,7 +124,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void blockingAdmissionRecordsFinalGateAndActualTokenStages() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ContextAdmissionResult result = fixture.coordinator().admit(
                     fixture.memory(), List.of(), ignored -> { });
 
@@ -145,7 +146,7 @@ class ContextCompressionCoordinatorTest {
                     "memory_context_estimated_tokens",
                     "stage", "after");
             assertEquals(1L, before.count());
-            assertEquals(57_344D, before.totalAmount());
+            assertEquals(30_720D, before.totalAmount());
             assertEquals(1L, after.count());
             assertEquals(27_000D, after.totalAmount());
         }
@@ -153,7 +154,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 阻塞压缩只以真实记忆准备和写回临时消息仅留在最终请求快照() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             CompressionAwareChatMemory memory = org.mockito.Mockito.mock(
                     CompressionAwareChatMemory.class,
                     org.mockito.Mockito.withSettings()
@@ -252,7 +253,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 压缩后完整快照仍超硬上限时拒绝并保留临时消息尾部() {
-        try (Fixture fixture = fixture(57_344, 65_536)) {
+        try (Fixture fixture = fixture(30_720, 32_768)) {
             SystemMessage transientMessage =
                     SystemMessage.from("压缩后仍参与复检");
             org.mockito.ArgumentCaptor<List<ChatMessage>> messagesCaptor =
@@ -264,7 +265,7 @@ class ContextCompressionCoordinatorTest {
 
             assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED,
                     result.mode());
-            assertEquals(65_536, result.finalTokens());
+            assertEquals(32_768, result.finalTokens());
             assertEquals(transientMessage, result.requestMessages().getLast());
             verify(fixture.estimator(), org.mockito.Mockito.atLeast(2))
                     .estimateRequest(messagesCaptor.capture(), eq(List.of()));
@@ -341,7 +342,7 @@ class ContextCompressionCoordinatorTest {
             int compressedTokens,
             ContextCompressionMode expectedFinalMode,
             boolean canProceed) {
-        try (Fixture fixture = fixture(57_344, compressedTokens)) {
+        try (Fixture fixture = fixture(30_720, compressedTokens)) {
             List<ContextAdmissionResult> transitions = new ArrayList<>();
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -350,7 +351,7 @@ class ContextCompressionCoordinatorTest {
             assertEquals(1, transitions.size());
             assertEquals(ContextCompressionMode.BLOCKING_STARTED,
                     transitions.getFirst().mode());
-            assertEquals(57_344, transitions.getFirst().initialTokens());
+            assertEquals(30_720, transitions.getFirst().initialTokens());
             assertEquals(expectedFinalMode, result.mode());
             assertEquals(compressedTokens, result.finalTokens());
             assertEquals(canProceed, result.canProceed());
@@ -359,7 +360,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 阻塞阈值没有可压缩旧回合时允许当前请求继续() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             doReturn(6_000).when(fixture.estimator())
                     .estimateMessages(anyList());
 
@@ -370,7 +371,7 @@ class ContextCompressionCoordinatorTest {
             assertEquals(ContextAdmissionResult.FailureReason.NONE,
                     result.failureReason());
             assertTrue(result.canProceed());
-            assertEquals(57_344, result.finalTokens());
+            assertEquals(30_720, result.finalTokens());
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
         }
@@ -378,7 +379,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void asyncThresholdWithoutCompressibleOldTurnContinuesWithoutScheduling() {
-        try (Fixture fixture = fixture(49_152, 49_152)) {
+        try (Fixture fixture = fixture(28_672, 28_672)) {
             doReturn(6_000).when(fixture.estimator())
                     .estimateMessages(anyList());
 
@@ -399,7 +400,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void hardLimitWithoutCompressibleOldTurnIsRejected() {
-        try (Fixture fixture = fixture(65_536, 65_536)) {
+        try (Fixture fixture = fixture(32_768, 32_768)) {
             doReturn(6_000).when(fixture.estimator())
                     .estimateMessages(anyList());
 
@@ -413,22 +414,22 @@ class ContextCompressionCoordinatorTest {
                     result.failureReason());
             assertFalse(result.canProceed());
             assertCheckpointMetrics(fixture,
-                    "no_unfinished_tail", 65_536, 65_536);
+                    "no_unfinished_tail", 32_768, 32_768);
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
         }
     }
 
     @org.junit.jupiter.api.Test
-    void 六十四K完整工具链生成临时检查点且不改写Redis原始轨迹() {
-        try (Fixture fixture = fixture(65_536, 65_536)) {
+    void 输入硬上限完整工具链生成临时检查点且不改写Redis原始轨迹() {
+        try (Fixture fixture = fixture(32_768, 32_768)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "<template>绝密源码</template>");
             List<ChatMessage> original = toolMemory.completeTurnSnapshot()
                     .unfinishedTail();
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> containsCheckpoint(
-                            invocation.getArgument(0)) ? 18_000 : 65_536);
+                            invocation.getArgument(0)) ? 18_000 : 32_768);
             List<ContextAdmissionResult> transitions = new ArrayList<>();
             ContextCompressionAttemptState state =
                     new ContextCompressionAttemptState();
@@ -446,16 +447,16 @@ class ContextCompressionCoordinatorTest {
             assertTrue(result.canProceed());
             assertEquals(18_000, result.finalTokens());
             assertCheckpointMetrics(
-                    fixture, "success", 65_536, result.finalTokens());
+                    fixture, "success", 32_768, result.finalTokens());
             assertTrue(result.requestMessages().stream()
                     .anyMatch(this::isCheckpoint));
             assertTrue(result.requestMessages().stream()
-                    .noneMatch(ToolExecutionResultMessage.class::isInstance));
+                    .anyMatch(ToolExecutionResultMessage.class::isInstance));
             assertTrue(result.requestMessages().stream()
                     .filter(AiMessage.class::isInstance)
                     .map(AiMessage.class::cast)
-                    .noneMatch(AiMessage::hasToolExecutionRequests));
-            assertFalse(result.requestMessages().toString().contains("绝密源码"));
+                    .anyMatch(AiMessage::hasToolExecutionRequests));
+            assertTrue(result.requestMessages().toString().contains("绝密源码"));
             assertEquals(original, toolMemory.completeTurnSnapshot()
                     .unfinishedTail(), "请求级检查点不得改写底层L0/Redis轨迹");
 
@@ -474,14 +475,14 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void 六十四K检查点只存在于请求视图且L0完整快照逐项不变() {
-        try (Fixture fixture = fixture(65_536, 65_536)) {
+    void 输入硬上限检查点只存在于请求视图且L0完整快照逐项不变() {
+        try (Fixture fixture = fixture(32_768, 32_768)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "不得进入持久层的源码");
             List<ChatMessage> l0Before = List.copyOf(toolMemory.messages());
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> containsCheckpoint(
-                            invocation.getArgument(0)) ? 18_000 : 65_536);
+                            invocation.getArgument(0)) ? 18_000 : 32_768);
 
             ContextAdmissionResult result = fixture.coordinator().admit(
                     toolMemory, vueTools());
@@ -504,14 +505,14 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void 六十四K检查点后仍超限时安全失败且同状态不得递归重试() {
-        try (Fixture fixture = fixture(65_536, 65_536)) {
+    void 输入硬上限检查点后仍超限时安全失败且同状态不得递归重试() {
+        try (Fixture fixture = fixture(32_768, 32_768)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "超大源码");
             ContextCompressionAttemptState state =
                     new ContextCompressionAttemptState();
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
-                    .thenReturn(65_536);
+                    .thenReturn(32_768);
 
             ContextAdmissionResult first = fixture.coordinator().admit(
                     toolMemory, vueTools(), state);
@@ -535,13 +536,13 @@ class ContextCompressionCoordinatorTest {
             assertEquals(2L, summary(fixture.registry(),
                     "memory_tool_chain_checkpoint_tokens",
                     "stage", "before").count());
-            assertEquals(131_072D, summary(fixture.registry(),
+            assertEquals(65_536D, summary(fixture.registry(),
                     "memory_tool_chain_checkpoint_tokens",
                     "stage", "before").totalAmount());
             assertEquals(2L, summary(fixture.registry(),
                     "memory_tool_chain_checkpoint_tokens",
                     "stage", "after").count());
-            assertEquals(131_072D, summary(fixture.registry(),
+            assertEquals(65_536D, summary(fixture.registry(),
                     "memory_tool_chain_checkpoint_tokens",
                     "stage", "after").totalAmount());
             verify(fixture.summaryService(), never()).compressNow(
@@ -550,8 +551,67 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void 旧回合阻塞压缩后仍六十四K则继续生成检查点视图() {
-        try (Fixture fixture = fixture(65_536, 65_536)) {
+    void 最新readFile超预算时整批删除且不会产生孤立工具消息() {
+        try (Fixture fixture = fixture(32_768, 30_000)) {
+            CompressionAwareChatMemory toolMemory = toolChainMemory(
+                    fixture.summaryService(), "最新源码");
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> {
+                        List<ChatMessage> messages = invocation.getArgument(0);
+                        if (!containsCheckpoint(messages)) {
+                            return 32_768;
+                        }
+                        return messages.stream().anyMatch(
+                                ToolExecutionResultMessage.class::isInstance)
+                                ? 32_768 : 30_000;
+                    });
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    toolMemory, vueTools(), new ContextCompressionAttemptState());
+
+            assertEquals(ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED,
+                    result.mode());
+            assertFalse(result.requestMessages().stream()
+                    .anyMatch(ToolExecutionResultMessage.class::isInstance));
+            assertTrue(result.requestMessages().stream()
+                    .filter(AiMessage.class::isInstance)
+                    .map(AiMessage.class::cast)
+                    .noneMatch(AiMessage::hasToolExecutionRequests));
+            assertEquals(30_000, result.finalTokens());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 最新readDir超预算时类型化拒绝而不静默删除结果() {
+        try (Fixture fixture = fixture(32_768, 30_000)) {
+            CompressionAwareChatMemory toolMemory = readToolChainMemory(
+                    fixture.summaryService(), "readDir", "[\"App.vue\"]");
+            when(fixture.estimator().estimateRequest(anyList(), anyList()))
+                    .thenAnswer(invocation -> {
+                        List<ChatMessage> messages = invocation.getArgument(0);
+                        if (!containsCheckpoint(messages)) {
+                            return 32_768;
+                        }
+                        return messages.stream().anyMatch(
+                                ToolExecutionResultMessage.class::isInstance)
+                                ? 32_768 : 30_000;
+                    });
+
+            ContextAdmissionResult result = fixture.coordinator().admit(
+                    toolMemory, vueTools("readDir"),
+                    new ContextCompressionAttemptState());
+
+            assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                    result.mode());
+            assertEquals(ContextAdmissionResult.FailureReason
+                    .STILL_OVER_HARD_LIMIT, result.failureReason());
+            assertFalse(result.canProceed());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void 旧回合阻塞压缩后仍达输入硬上限则继续生成检查点视图() {
+        try (Fixture fixture = fixture(32_768, 32_768)) {
             CompressionAwareChatMemory mixedMemory = completedAndToolChainMemory(
                     fixture.summaryService(), "绝密源码");
             when(fixture.historyService().listRecentCompleteTurnBoundaries(7L, 1))
@@ -560,7 +620,7 @@ class ContextCompressionCoordinatorTest {
             doReturn(13_000).when(fixture.estimator()).estimateMessages(anyList());
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> containsCheckpoint(
-                            invocation.getArgument(0)) ? 19_000 : 65_536);
+                            invocation.getArgument(0)) ? 19_000 : 32_768);
 
             ContextAdmissionResult result = fixture.coordinator().admit(
                     mixedMemory, vueTools(), new ContextCompressionAttemptState());
@@ -586,7 +646,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点估算后活动记忆变化则拒绝过期请求视图() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             AtomicLong estimates = new AtomicLong();
@@ -596,7 +656,7 @@ class ContextCompressionCoordinatorTest {
                             toolMemory.add(UserMessage.from("并发追加的新指令"));
                             return 18_000;
                         }
-                        return 65_536;
+                        return 32_768;
                     });
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -608,8 +668,8 @@ class ContextCompressionCoordinatorTest {
                     result.failureReason());
             assertFalse(result.canProceed());
             assertCheckpointMetrics(
-                    fixture, "failed", 65_536, result.finalTokens());
-            assertEquals(65_536, result.finalTokens(),
+                    fixture, "failed", 32_768, result.finalTokens());
+            assertEquals(32_768, result.finalTokens(),
                     "失败指标只能使用未提交投影之外的最终安全请求视图");
             assertTrue(result.requestMessages().stream()
                     .noneMatch(this::isCheckpoint),
@@ -621,12 +681,12 @@ class ContextCompressionCoordinatorTest {
     @EnumSource(ThrowingMeterRegistry.FailurePoint.class)
     void 检查点指标注册记录或计时故障不改变最终安全结果(
             ThrowingMeterRegistry.FailurePoint failurePoint) {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory baselineMemory = toolChainMemory(
                     fixture.summaryService(), "<template>绝密源码</template>");
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> containsCheckpoint(
-                            invocation.getArgument(0)) ? 18_000 : 65_536);
+                            invocation.getArgument(0)) ? 18_000 : 32_768);
             ContextAdmissionResult baseline = fixture.coordinator().admit(
                     baselineMemory, vueTools(),
                     new ContextCompressionAttemptState());
@@ -662,7 +722,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点准备期间删除接管则不得放行() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             AppDataLifecycleFence lifecycleFence = new AppDataLifecycleFence();
@@ -682,7 +742,7 @@ class ContextCompressionCoordinatorTest {
                                     7L, Duration.ZERO));
                             return 18_000;
                         }
-                        return 65_536;
+                        return 32_768;
                     });
 
             ContextAdmissionResult result;
@@ -706,7 +766,7 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void 首次六十四K后即使原始尾部低于阈值仍重建检查点() {
+    void 首次达到输入硬上限后即使原始尾部低于阈值仍重建检查点() {
         try (Fixture fixture = fixture(18_000, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "首批源码");
@@ -720,7 +780,7 @@ class ContextCompressionCoordinatorTest {
                             return 18_000;
                         }
                         return rawEstimates.getAndIncrement() == 0L
-                                ? 65_536 : 30_000;
+                                ? 32_768 : 30_000;
                     });
 
             ContextAdmissionResult first = fixture.coordinator().admit(
@@ -742,14 +802,14 @@ class ContextCompressionCoordinatorTest {
                     result.mode());
             assertTrue(result.requestMessages().toString()
                     .contains("src/latest.vue"));
-            assertFalse(result.requestMessages().toString()
+            assertTrue(result.requestMessages().toString()
                     .contains("最新源码"));
             assertTrue(result.requestMessages().stream()
-                    .noneMatch(ToolExecutionResultMessage.class::isInstance));
+                    .anyMatch(ToolExecutionResultMessage.class::isInstance));
             assertTrue(result.requestMessages().stream()
                     .filter(AiMessage.class::isInstance)
                     .map(AiMessage.class::cast)
-                    .noneMatch(AiMessage::hasToolExecutionRequests));
+                    .anyMatch(AiMessage::hasToolExecutionRequests));
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
             verify(fixture.summaryService(), never())
@@ -810,8 +870,8 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void 六十四K孤立工具消息拒绝检查点且不返回部分请求视图() {
-        try (Fixture fixture = fixture(65_536, 65_536)) {
+    void 输入硬上限孤立工具消息拒绝检查点且不返回部分请求视图() {
+        try (Fixture fixture = fixture(32_768, 32_768)) {
             CompressionAwareChatMemory incomplete = incompleteToolChainMemory(
                     fixture.summaryService());
 
@@ -828,7 +888,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点提交前回合终止则不泄露临时视图() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             TestContinuationGate gate = new TestContinuationGate();
@@ -839,7 +899,7 @@ class ContextCompressionCoordinatorTest {
                             gate.revoke();
                             return 18_000;
                         }
-                        return 65_536;
+                        return 32_768;
                     });
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -856,14 +916,14 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点请求保留临时消息但不写入活动记忆() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             SystemMessage transientMessage =
                     SystemMessage.from("仅本次请求可见的临时约束");
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> containsCheckpoint(
-                            invocation.getArgument(0)) ? 18_000 : 65_536);
+                            invocation.getArgument(0)) ? 18_000 : 32_768);
 
             ContextAdmissionResult result = fixture.coordinator().admit(
                     toolMemory, vueTools(), List.of(transientMessage),
@@ -881,7 +941,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点开始监听器异常必须释放owner并返回类型化依赖失败() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             ContextCompressionAttemptState state =
@@ -907,7 +967,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void ACTIVE检查点最终提交门异常必须释放owner且不泄漏投影() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             ContextCompressionAttemptState state =
@@ -943,13 +1003,13 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点估算器异常必须释放owner且不泄漏投影() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             ContextCompressionAttemptState state =
                     new ContextCompressionAttemptState();
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
-                    .thenReturn(65_536)
+                    .thenReturn(32_768)
                     .thenThrow(new IllegalStateException("tokenizer down"));
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -970,7 +1030,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点投影估算越过绝对截止则超时且不泄漏投影() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             AtomicLong nanoTime = new AtomicLong();
@@ -981,7 +1041,7 @@ class ContextCompressionCoordinatorTest {
                             nanoTime.set(Duration.ofSeconds(61L).toNanos());
                             return 18_000;
                         }
-                        return 65_536;
+                        return 32_768;
                     });
             ContextCompressionCoordinator coordinator =
                     new ContextCompressionCoordinator(
@@ -1001,7 +1061,7 @@ class ContextCompressionCoordinatorTest {
             assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
                     result.failureReason());
             assertFalse(result.canProceed());
-            assertEquals(65_536, result.finalTokens());
+            assertEquals(32_768, result.finalTokens());
             assertTrue(result.requestMessages().stream()
                     .noneMatch(this::isCheckpoint));
             assertEquals(ContextCompressionAttemptState.EnterDecision
@@ -1012,7 +1072,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void 检查点最终提交门内越过截止则超时且不泄漏投影() {
-        try (Fixture fixture = fixture(65_536, 18_000)) {
+        try (Fixture fixture = fixture(32_768, 18_000)) {
             CompressionAwareChatMemory toolMemory = toolChainMemory(
                     fixture.summaryService(), "绝密源码");
             AtomicLong nanoTime = new AtomicLong();
@@ -1040,7 +1100,7 @@ class ContextCompressionCoordinatorTest {
             assertEquals(ContextAdmissionResult.FailureReason.TIMED_OUT,
                     result.failureReason());
             assertFalse(result.canProceed());
-            assertEquals(65_536, result.finalTokens());
+            assertEquals(32_768, result.finalTokens());
             assertTrue(result.requestMessages().stream()
                     .noneMatch(this::isCheckpoint));
             assertEquals(ContextCompressionAttemptState.EnterDecision
@@ -1051,7 +1111,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void l0AndMysqlTerminalAiMismatchReturnsTypedAlignmentFailure() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenReturn(List.of(
                     new ChatHistoryService.StableTurnBoundary(
@@ -1073,7 +1133,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void blockingPlanMysqlReadFailureIsDependencyFailure() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenThrow(new IllegalStateException("mysql down"));
 
@@ -1091,7 +1151,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void asyncZoneAlignmentFailureKeepsCurrentRequestAvailable() {
-        try (Fixture fixture = fixture(50_000, 50_000)) {
+        try (Fixture fixture = fixture(29_000, 29_000)) {
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenReturn(List.of(
                     new ChatHistoryService.StableTurnBoundary(
@@ -1103,8 +1163,8 @@ class ContextCompressionCoordinatorTest {
                     fixture.memory(), List.of());
 
             assertTrue(result.canProceed(),
-                    "异步压缩区间的后台准备失败不得阻断仍低于 56K 的当前请求");
-            assertEquals(50_000, result.finalTokens());
+                    "异步压缩区间的后台准备失败不得阻断仍低于阻塞阈值 的当前请求");
+            assertEquals(29_000, result.finalTokens());
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
         }
@@ -1112,7 +1172,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void asyncZoneDoesNotWaitForMysqlCompressionPlanning() throws Exception {
-        try (Fixture fixture = fixture(50_000, 47_000);
+        try (Fixture fixture = fixture(29_000, 27_000);
              ExecutorService admissionExecutor =
                      java.util.concurrent.Executors.newSingleThreadExecutor()) {
             CountDownLatch planningStarted = new CountDownLatch(1);
@@ -1157,7 +1217,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     @SuppressWarnings("unchecked")
     void rejectedAsyncPlanningNeverRunsOnAdmissionThread() {
-        try (Fixture fixture = fixture(50_000, 47_000)) {
+        try (Fixture fixture = fixture(29_000, 27_000)) {
             ExecutorService rejectingPlanningExecutor =
                     mock(ExecutorService.class);
             when(rejectingPlanningExecutor.submit(any(Runnable.class)))
@@ -1187,7 +1247,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void revokedTurnAfterAsyncPlanningReadNeverTriggersSummary()
             throws Exception {
-        try (Fixture fixture = fixture(50_000, 47_000)) {
+        try (Fixture fixture = fixture(29_000, 27_000)) {
             CountDownLatch planningStarted = new CountDownLatch(1);
             CountDownLatch releasePlanning = new CountDownLatch(1);
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
@@ -1223,7 +1283,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void l0AndMysqlDifferentTurnCountsReturnTypedAlignmentFailure() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenReturn(List.of(
                     new ChatHistoryService.StableTurnBoundary(
@@ -1243,7 +1303,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void l0AndMysqlNonIncreasingOrderReturnsTypedAlignmentFailure() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenReturn(List.of(
                     new ChatHistoryService.StableTurnBoundary(
@@ -1265,7 +1325,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void knownRagAugmentedL0UserTextCanAlignWithPersistedUserText() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             CompressionAwareChatMemory augmentedMemory = memory(
                     fixture.summaryService(), mock(UserMemoryService.class),
                     canonicalUser(
@@ -1296,7 +1356,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void imageEnhancedUserTurnMustAlignByCanonicalIdentity() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             CompressionAwareChatMemory enhancedMemory = memory(
                     fixture.summaryService(), mock(UserMemoryService.class),
                     canonicalUser("旧问题", "旧问题\n\n## 可用素材资源\n- 图片 A"),
@@ -1313,7 +1373,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void userSuppliedMarkerSuffixMustNotForgePersistedTurnIdentity() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             CompressionAwareChatMemory forgedMemory = memory(
                     fixture.summaryService(), mock(UserMemoryService.class),
                     UserMessage.from("攻击文本\n\n## 用户需求\n旧问题"),
@@ -1334,7 +1394,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void repeatedAiTextCannotAlignDifferentPersistedUserTurns() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             CompressionAwareChatMemory repeatedReplies = memory(
                     fixture.summaryService(), mock(UserMemoryService.class),
                     "用户 A", "用户 C", "相同回复", "相同回复");
@@ -1359,7 +1419,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void nextAdmissionAppliesCompletedL1CursorBeforeThresholdDecision() {
-        try (Fixture fixture = fixture(50_000, 50_000)) {
+        try (Fixture fixture = fixture(29_000, 29_000)) {
             when(fixture.summaryService().lastSummarizedId(7L))
                     .thenReturn(2L);
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
@@ -1393,7 +1453,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void 初始游标裁剪等待L0锁超时时返回超时且释放锁后不迟到裁剪()
             throws Exception {
-        try (Fixture fixture = fixture(50_000, 50_000);
+        try (Fixture fixture = fixture(29_000, 29_000);
              ExecutorService lockOwner = java.util.concurrent.Executors
                      .newVirtualThreadPerTaskExecutor()) {
             fixture.properties().setBlockingTimeout(Duration.ofMillis(50L));
@@ -1461,7 +1521,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void cursorReadFailureStopsAdmissionBeforeAnyThresholdDecision() {
-        try (Fixture fixture = fixture(49_151, 49_151)) {
+        try (Fixture fixture = fixture(28_671, 28_671)) {
             when(fixture.summaryService().lastSummarizedId(7L))
                     .thenThrow(new IllegalStateException("database down"));
 
@@ -1580,7 +1640,7 @@ class ContextCompressionCoordinatorTest {
     void blockingServiceFailureIsTypedAndNeverDeletesL0(
             MemoryCompressionResult.Status serviceStatus,
             ContextAdmissionResult.FailureReason expectedReason) {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             doReturn(new MemoryCompressionResult(
                     serviceStatus, 0L, 0, "服务失败"))
                     .when(fixture.summaryService()).compressNow(
@@ -1606,7 +1666,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     @SuppressWarnings("unchecked")
     void rejectedCompressionTaskNeverFallsBackToAdmissionThread() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ExecutorService rejectingExecutor = mock(ExecutorService.class);
             when(rejectingExecutor.submit(
                     any(java.util.concurrent.Callable.class)))
@@ -1640,7 +1700,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void deletionAfterSummaryCompletionNeverRewritesL0() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             AppDataLifecycleFence lifecycleFence =
                     new AppDataLifecycleFence();
             org.mockito.Mockito.doAnswer(invocation -> {
@@ -1680,7 +1740,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void deletionAlreadyTakingOverStopsBeforeBlockingStarted() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             AppDataLifecycleFence lifecycleFence =
                     new AppDataLifecycleFence();
             AppDataLifecycleFence.DeletePermit deletePermit =
@@ -1713,7 +1773,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void terminatedTurnBeforeAdmissionNeverStartsCompression() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             List<ContextAdmissionResult> transitions = new ArrayList<>();
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -1735,7 +1795,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void terminationWhileWaitingNeverReturnsLateCompletionOrTrimsL0() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             TestContinuationGate continuationGate =
                     new TestContinuationGate();
             org.mockito.Mockito.doAnswer(invocation -> {
@@ -1771,7 +1831,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void terminationDuringCursorReadNeverTrimsCompletedPrefix() {
-        try (Fixture fixture = fixture(50_000, 50_000)) {
+        try (Fixture fixture = fixture(29_000, 29_000)) {
             TestContinuationGate continuationGate =
                     new TestContinuationGate();
             when(fixture.summaryService().lastSummarizedId(7L))
@@ -1804,7 +1864,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     @SuppressWarnings("unchecked")
     void terminationWhileQueuedNeverStartsCompressionModel() throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ExecutorService queuedExecutor = mock(ExecutorService.class);
             Future<Object> future = mock(Future.class);
             AtomicReference<Callable<Object>> queuedTask =
@@ -1848,7 +1908,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     @SuppressWarnings("unchecked")
     void queueWaitConsumesWorkerAndCallerAbsoluteDeadline() throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ExecutorService queuedExecutor = mock(ExecutorService.class);
             Future<Object> future = mock(Future.class);
             AtomicReference<Callable<Object>> queuedTask =
@@ -1896,7 +1956,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     @SuppressWarnings("unchecked")
     void exhaustedQueueDeadlineCancelsBeforeWorkerStarts() throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ExecutorService queuedExecutor = mock(ExecutorService.class);
             Future<Object> future = mock(Future.class);
             AtomicLong nanoTime = new AtomicLong();
@@ -1931,7 +1991,7 @@ class ContextCompressionCoordinatorTest {
     @SuppressWarnings("unchecked")
     void completionAfterAbsoluteDeadlineNeverReturnsCompletedMode()
             throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ExecutorService queuedExecutor = mock(ExecutorService.class);
             Future<Object> future = mock(Future.class);
             AtomicReference<Callable<Object>> queuedTask =
@@ -1977,7 +2037,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void deadlineBeforeFinalPrefixCommitDoesNotTrimL0OrReturnCompletion() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             AtomicLong nanoTime = new AtomicLong();
             ContextContinuationGate continuationGate =
                     new DeadlineAdvancingGate(
@@ -2014,7 +2074,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void 阻塞最终裁剪等待L0锁超时时返回超时且删除不能越过writer许可()
             throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000);
+        try (Fixture fixture = fixture(30_720, 27_000);
              ExecutorService lockOwner = java.util.concurrent.Executors
                      .newVirtualThreadPerTaskExecutor();
              ExecutorService admissionExecutor = java.util.concurrent.Executors
@@ -2062,7 +2122,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void deadlineDuringFinalRequestEstimateNeverReturnsCompletedMode() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             AtomicLong nanoTime = new AtomicLong();
             AtomicLong estimationCount = new AtomicLong();
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
@@ -2071,7 +2131,7 @@ class ContextCompressionCoordinatorTest {
                             nanoTime.set(Duration.ofSeconds(61).toNanos());
                             return 27_000;
                         }
-                        return 57_344;
+                        return 30_720;
                     });
             ContextCompressionCoordinator coordinator =
                     new ContextCompressionCoordinator(
@@ -2096,7 +2156,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void strictSummaryBlankNeverTrimsL0() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.summaryService().getRequiredSummary(7L, 2L))
                     .thenReturn(" ");
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
@@ -2118,7 +2178,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void strictSummaryInvalidFormatNeverTrimsL0() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.summaryService().getRequiredSummary(7L, 2L))
                     .thenReturn("不是五段式摘要");
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
@@ -2139,7 +2199,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void strictSummaryReadExceptionNeverTrimsL0() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.summaryService().getRequiredSummary(7L, 2L))
                     .thenThrow(new IllegalStateException("database down"));
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
@@ -2162,9 +2222,9 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void finalRequestEstimateExceptionIsDependencyFailureNotPrefixChange() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
-                    .thenReturn(57_344)
+                    .thenReturn(30_720)
                     .thenThrow(new IllegalStateException("tokenizer down"));
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -2180,7 +2240,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void concurrentAppendBetweenPreparationAndCasReturnsPrefixChanged() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             AtomicLong estimates = new AtomicLong();
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> {
@@ -2188,7 +2248,7 @@ class ContextCompressionCoordinatorTest {
                             fixture.memory().add(UserMessage.from("并发新问题"));
                             return 27_000;
                         }
-                        return 57_344;
+                        return 30_720;
                     });
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -2207,7 +2267,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void deadlineCrossingDuringSuccessfulCasMustNotReturnFailureWithTrimmedL0() {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             AtomicLong now = new AtomicLong();
             ContextCompressionCoordinator coordinator =
                     new ContextCompressionCoordinator(
@@ -2235,7 +2295,7 @@ class ContextCompressionCoordinatorTest {
 
     @org.junit.jupiter.api.Test
     void strictMemoryReadTimeoutReturnsWithoutTrimmingL0() throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000);
+        try (Fixture fixture = fixture(30_720, 27_000);
              ExecutorService caller = java.util.concurrent.Executors
                      .newVirtualThreadPerTaskExecutor()) {
             fixture.properties().setBlockingTimeout(Duration.ofMillis(50));
@@ -2291,7 +2351,7 @@ class ContextCompressionCoordinatorTest {
     @SuppressWarnings("unchecked")
     void interruptedWaitCancelsFutureAndNeverReturnsCompletion()
             throws Exception {
-        try (Fixture fixture = fixture(57_344, 27_000)) {
+        try (Fixture fixture = fixture(30_720, 27_000)) {
             ExecutorService executor = mock(ExecutorService.class);
             Future<Object> future = mock(Future.class);
             when(executor.submit(any(Callable.class))).thenReturn(future);
@@ -2329,27 +2389,27 @@ class ContextCompressionCoordinatorTest {
 
     private static Stream<Arguments> exactThresholds() {
         return Stream.of(
-                Arguments.of(49_151, ContextCompressionMode.NORMAL,
+                Arguments.of(28_671, ContextCompressionMode.NORMAL,
                         false, false),
-                Arguments.of(49_152, ContextCompressionMode.ASYNC_SCHEDULED,
+                Arguments.of(28_672, ContextCompressionMode.ASYNC_SCHEDULED,
                         true, false),
-                Arguments.of(57_343, ContextCompressionMode.ASYNC_SCHEDULED,
+                Arguments.of(30_719, ContextCompressionMode.ASYNC_SCHEDULED,
                         true, false),
-                Arguments.of(57_344, ContextCompressionMode.BLOCKING_COMPLETED,
+                Arguments.of(30_720, ContextCompressionMode.BLOCKING_COMPLETED,
                         false, true),
-                Arguments.of(65_535, ContextCompressionMode.BLOCKING_COMPLETED,
+                Arguments.of(32_767, ContextCompressionMode.BLOCKING_COMPLETED,
                         false, true),
-                Arguments.of(65_536, ContextCompressionMode.BLOCKING_COMPLETED,
+                Arguments.of(32_768, ContextCompressionMode.BLOCKING_COMPLETED,
                         false, true));
     }
 
     private static Stream<Arguments> transientThresholds() {
         return Stream.of(
-                Arguments.of(49_152,
+                Arguments.of(28_672,
                         ContextCompressionMode.ASYNC_SCHEDULED),
-                Arguments.of(57_344,
+                Arguments.of(30_720,
                         ContextCompressionMode.BLOCKING_COMPLETED),
-                Arguments.of(65_536,
+                Arguments.of(32_768,
                         ContextCompressionMode.BLOCKING_COMPLETED));
     }
 
@@ -2361,7 +2421,7 @@ class ContextCompressionCoordinatorTest {
                         ContextCompressionMode.BLOCKING_COMPLETED, true),
                 Arguments.of(31_000,
                         ContextCompressionMode.BLOCKING_COMPLETED, true),
-                Arguments.of(65_536,
+                Arguments.of(32_768,
                         ContextCompressionMode.HARD_LIMIT_REJECTED, false));
     }
 
@@ -2494,6 +2554,21 @@ class ContextCompressionCoordinatorTest {
         return compressionMemory(delegate, summaryService);
     }
 
+    private CompressionAwareChatMemory readToolChainMemory(
+            MemorySummaryService summaryService,
+            String toolName,
+            String content) {
+        ToolExecutionRequest read = toolRequest(
+                "call-read", toolName, "{\"path\":\"src\"}");
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(7L).maxMessages(Integer.MAX_VALUE).build();
+        delegate.add(UserMessage.from("调整首页并完成构建"));
+        delegate.add(AiMessage.from(read));
+        delegate.add(ToolExecutionResultMessage.from(read,
+                fileResult(toolName, "src", false, content)));
+        return compressionMemory(delegate, summaryService);
+    }
+
     private CompressionAwareChatMemory completedAndToolChainMemory(
             MemorySummaryService summaryService, String source) {
         ToolExecutionRequest read = toolRequest(
@@ -2535,7 +2610,13 @@ class ContextCompressionCoordinatorTest {
     }
 
     private List<ToolSpecification> vueTools() {
-        return List.of(ToolSpecification.builder().name("readFile").build());
+        return vueTools("readFile");
+    }
+
+    private List<ToolSpecification> vueTools(String... toolNames) {
+        return Arrays.stream(toolNames)
+                .map(toolName -> ToolSpecification.builder().name(toolName).build())
+                .toList();
     }
 
     private String fileResult(

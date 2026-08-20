@@ -788,7 +788,7 @@ public class AiCodeGeneratorFacade {
         return switch (termination.reason()) {
             case BUILD_SUCCEEDED, BUILD_FAILED -> null;
             case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                    RESOURCE_LIMIT_EXCEEDED,
+                    REPEATED_READ_LOOP, RESOURCE_LIMIT_EXCEEDED,
                     EVALUATION_COMPLETED -> new OnlineControlledTerminationException(
                     termination.reason());
         };

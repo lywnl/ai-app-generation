@@ -41,6 +41,19 @@ public final class StreamingRequestController {
     private final List<RecoveryReadinessWaiter> recoveryReadinessWaiters =
             new ArrayList<>();
     private boolean recoveryReadinessDispatching;
+    private final RepeatedReadLoopGuard repeatedReadLoopGuard =
+            new RepeatedReadLoopGuard();
+
+    RepeatedReadLoopGuard.Action observeRepeatedRead(
+            dev.langchain4j.agent.tool.ToolExecutionRequest request,
+            String result) {
+        return repeatedReadLoopGuard.observe(request, result);
+    }
+
+    List<dev.langchain4j.data.message.ChatMessage>
+            claimRepeatedReadCorrection() {
+        return repeatedReadLoopGuard.claimTransientMessages();
+    }
 
     /**
      * 等待恢复来源代的旧回调与工具批次都完成，避免门禁读取到尚未配对的

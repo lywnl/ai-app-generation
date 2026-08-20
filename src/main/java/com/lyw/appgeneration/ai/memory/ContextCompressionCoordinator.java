@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
 
 import static com.lyw.appgeneration.ai.memory.ContextAdmissionResult.FailureReason;
 
-/** 统一编排48K异步压缩、56K阻塞压缩和64K工具链检查点。 */
+/** 统一编排异步压缩、阻塞压缩和输入硬上限工具链检查点。 */
 @Component
 public class ContextCompressionCoordinator {
 
@@ -554,7 +554,7 @@ public class ContextCompressionCoordinator {
         if (!snapshot.hasUnfinishedTail()) {
             return CheckpointPreparation.failed(
                     FailureReason.NO_COMPRESSIBLE_TURN,
-                    "当前请求达到64K，但没有可安全压缩的未完成工具链");
+                    "当前请求达到输入硬上限，但没有可安全压缩的未完成工具链");
         }
         ToolChainCheckpointResult projection = checkpointProjector.project(
                 snapshot, registeredToolNames(tools));
@@ -564,18 +564,18 @@ public class ContextCompressionCoordinator {
                     "未完成工具链不满足可信检查点协议，reason="
                             + projection.failureReason().name());
         }
-        List<ChatMessage> projectedMessages = replaceUnfinishedTail(
+        List<ChatMessage> baseProjectedMessages = replaceUnfinishedTail(
                 currentMessages, snapshot.unfinishedTail(),
-                projection.requestMessages());
+                projection.messagesWithoutLatestReadBatch());
         if (deadline.remainingNanos() <= 0L) {
             return CheckpointPreparation.failed(
                     FailureReason.TIMED_OUT,
                     "生成工具链检查点投影时超过截止时间");
         }
-        RequestSnapshot projectedRequest;
+        RequestSnapshot baseProjectedRequest;
         try {
-            projectedRequest = requestSnapshot(
-                    projectedMessages, tools, transientMessages);
+            baseProjectedRequest = requestSnapshot(
+                    baseProjectedMessages, tools, transientMessages);
         } catch (RuntimeException exception) {
             return CheckpointPreparation.failed(
                     FailureReason.DEPENDENCY_FAILED,
@@ -586,15 +586,37 @@ public class ContextCompressionCoordinator {
                     FailureReason.TIMED_OUT,
                     "估算工具链检查点请求时超过截止时间");
         }
-        metricsCollector.recordEstimatedTokens(
-                MemoryCompressionMetricsCollector.EstimationStage.AFTER,
-                projectedRequest.estimatedTokens());
-        if (projectedRequest.estimatedTokens()
+        if (baseProjectedRequest.estimatedTokens()
                 >= properties.getHardInputLimit()) {
             return CheckpointPreparation.failed(
                     FailureReason.STILL_OVER_HARD_LIMIT,
-                    "工具链检查点压缩后仍达到64K输入硬上限");
+                    "工具链检查点压缩后仍达到输入硬上限");
         }
+        RequestSnapshot projectedRequest = baseProjectedRequest;
+        if (!projection.latestReadBatch().isEmpty()) {
+            List<ChatMessage> withLatestReadMessages = replaceUnfinishedTail(
+                    currentMessages, snapshot.unfinishedTail(),
+                    projection.requestMessages());
+            try {
+                RequestSnapshot withLatestReadRequest = requestSnapshot(
+                        withLatestReadMessages, tools, transientMessages);
+                if (withLatestReadRequest.estimatedTokens()
+                        < properties.getHardInputLimit()) {
+                    projectedRequest = withLatestReadRequest;
+                } else if (projection.latestReadBatchContainsReadDir()) {
+                    return CheckpointPreparation.failed(
+                            FailureReason.STILL_OVER_HARD_LIMIT,
+                            "最新readDir完整结果无法在输入硬上限内保留");
+                }
+            } catch (RuntimeException exception) {
+                return CheckpointPreparation.failed(
+                        FailureReason.DEPENDENCY_FAILED,
+                        "估算最新读取批次失败");
+            }
+        }
+        metricsCollector.recordEstimatedTokens(
+                MemoryCompressionMetricsCollector.EstimationStage.AFTER,
+                projectedRequest.estimatedTokens());
         return CheckpointPreparation.completed(
                 projectedRequest, currentMessages);
     }

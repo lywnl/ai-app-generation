@@ -330,10 +330,11 @@ class JsonMessageStreamHandlerTest {
 
     @Test
     void canonicalLimitStopsBroadcastAndPersistsOnlyResourceLimitOutcome() {
+        int canonicalLimit = VueTurnFinalizer.terminalReserveCodePoints() + 16;
         FileToolBudgetGuard guard = new FileToolBudgetGuard();
         guard.setMaxSingleFileCodePoints(8);
         guard.setMaxCumulativeMutationCodePoints(16);
-        guard.setMaxCanonicalAiTextCodePoints(64);
+        guard.setMaxCanonicalAiTextCodePoints(canonicalLimit);
         guard.setMaxReadFileCodePoints(8);
         guard.setMaxReadDirCodePoints(8);
         VueTurnContext context = VueTurnContext.testing(
@@ -347,11 +348,11 @@ class JsonMessageStreamHandlerTest {
             assertTrue(requested.displayAiText().endsWith(
                     JsonMessageStreamHandler.RESOURCE_LIMIT_MESSAGE));
             assertTrue(FileToolBudgetGuard.codePointCount(
-                    requested.displayAiText()) <= 64);
+                    requested.displayAiText()) <= canonicalLimit);
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
-        String oversized = "A".repeat(80);
+        String oversized = "A".repeat(canonicalLimit + 16);
         List<GenerationStreamEvent> output = handler.handle(Flux.just(
                         "{\"type\":\"ai_response\",\"data\":\""
                                 + oversized + "\"}"), context)
@@ -362,7 +363,8 @@ class JsonMessageStreamHandlerTest {
                 .map(JsonMessageStreamHandlerTest::contentText)
                 .reduce("", String::concat);
         assertFalse(visible.contains(oversized));
-        assertTrue(FileToolBudgetGuard.codePointCount(visible) < 64);
+        assertTrue(FileToolBudgetGuard.codePointCount(visible)
+                < canonicalLimit);
         assertEquals(ToolLoopTerminationProtocol.ControlledTerminationReason
                         .RESOURCE_LIMIT_EXCEEDED,
                 context.controlledTermination().orElseThrow().reason());
@@ -638,6 +640,38 @@ class JsonMessageStreamHandlerTest {
         assertEquals(1, output.size());
         VueTurnOutcome outcome = outcomeOf(output.getFirst());
         assertEquals(JsonMessageStreamHandler.LOOP_LIMIT_MESSAGE,
+                outcome.clientMessage());
+    }
+
+    @Test
+    void repeatedReadLoopUsesFriendlyMessageAndTrustedProjection() {
+        VueTurnContext context = context(
+                "turn-repeated-read", VueBuildPhase.GENERATING);
+        context.recordControlledTermination(new ToolLoopTerminationProtocol
+                .ControlledTermination(ToolLoopTerminationProtocol
+                .ControlledTerminationReason.REPEATED_READ_LOOP, null));
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnFinalizer.REPEATED_READ_LOOP_MESSAGE,
+                    requested.displayAiText());
+            assertEquals(VueTurnMemoryProjection
+                            .REPEATED_READ_LOOP_PROJECTION,
+                    requested.memoryAiText());
+            assertFalse(requested.memoryAiText().contains("禁止再次调用"));
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        List<GenerationStreamEvent> output = handler.handle(
+                Flux.error(new AiCodeGeneratorFacade
+                        .OnlineControlledTerminationException(
+                        ToolLoopTerminationProtocol.ControlledTerminationReason
+                                .REPEATED_READ_LOOP)), context)
+                .collectList().block();
+
+        VueTurnOutcome outcome = outcomeOf(output.getFirst());
+        assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                outcome.outcome());
+        assertEquals(VueTurnFinalizer.REPEATED_READ_LOOP_MESSAGE,
                 outcome.clientMessage());
     }
 

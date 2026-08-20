@@ -43,7 +43,8 @@ public final class UnfinishedToolChainCheckpointProjector {
         SystemMessage checkpoint = SystemMessage.from(
                 renderCheckpoint(projection.facts()));
         return ToolChainCheckpointResult.completed(
-                userRequest.message(), checkpoint, projection.facts());
+                userRequest.message(), checkpoint, projection.facts(),
+                projection.latestReadBatch());
     }
 
     private Set<String> copyRegisteredTools(Set<String> registeredToolNames) {
@@ -81,6 +82,9 @@ public final class UnfinishedToolChainCheckpointProjector {
         Map<String, ToolExecutionRequest> calls = new LinkedHashMap<>();
         Set<String> completedIds = new LinkedHashSet<>();
         List<VueToolExecutionFact> facts = new ArrayList<>();
+        List<ChatMessage> latestReadBatch = List.of();
+        List<ChatMessage> currentReadBatch = List.of();
+        Set<String> currentReadIds = Set.of();
         for (ChatMessage message : messages) {
             ToolChainCheckpointResult.FailureReason failure = message instanceof AiMessage ai
                     ? observeCalls(ai, registeredTools, calls, completedIds)
@@ -90,12 +94,40 @@ public final class UnfinishedToolChainCheckpointProjector {
             if (failure != ToolChainCheckpointResult.FailureReason.NONE) {
                 return FactProjection.failed(failure);
             }
+            if (message instanceof AiMessage aiMessage) {
+                latestReadBatch = List.of();
+                currentReadIds = readBatchCallIds(aiMessage);
+                currentReadBatch = currentReadIds.isEmpty()
+                        ? List.of() : new ArrayList<>(List.of(aiMessage));
+            } else if (!currentReadBatch.isEmpty()
+                    && message instanceof ToolExecutionResultMessage result
+                    && currentReadIds.contains(result.id())) {
+                currentReadBatch.add(result);
+                if (currentReadBatch.size() == currentReadIds.size() + 1) {
+                    latestReadBatch = List.copyOf(currentReadBatch);
+                }
+            }
         }
         if (calls.isEmpty() || completedIds.size() != calls.size()) {
             return FactProjection.failed(
                     ToolChainCheckpointResult.FailureReason.ORPHAN_TOOL_CALL);
         }
-        return FactProjection.completed(facts);
+        return FactProjection.completed(facts, latestReadBatch);
+    }
+
+    private Set<String> readBatchCallIds(AiMessage message) {
+        if (!message.hasToolExecutionRequests()) {
+            return Set.of();
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        for (ToolExecutionRequest request : message.toolExecutionRequests()) {
+            if (!("readFile".equals(request.name())
+                    || "readDir".equals(request.name()))
+                    || !ids.add(request.id())) {
+                return Set.of();
+            }
+        }
+        return Set.copyOf(ids);
     }
 
     private ToolChainCheckpointResult.FailureReason observeCalls(
@@ -285,20 +317,24 @@ public final class UnfinishedToolChainCheckpointProjector {
     private record FactProjection(
             boolean complete,
             List<VueToolExecutionFact> facts,
+            List<ChatMessage> latestReadBatch,
             ToolChainCheckpointResult.FailureReason failureReason) {
 
         private FactProjection {
             facts = List.copyOf(facts);
+            latestReadBatch = List.copyOf(latestReadBatch);
         }
 
-        private static FactProjection completed(List<VueToolExecutionFact> facts) {
-            return new FactProjection(true, facts,
+        private static FactProjection completed(
+                List<VueToolExecutionFact> facts,
+                List<ChatMessage> latestReadBatch) {
+            return new FactProjection(true, facts, latestReadBatch,
                     ToolChainCheckpointResult.FailureReason.NONE);
         }
 
         private static FactProjection failed(
                 ToolChainCheckpointResult.FailureReason reason) {
-            return new FactProjection(false, List.of(), reason);
+            return new FactProjection(false, List.of(), List.of(), reason);
         }
     }
 }

@@ -787,6 +787,27 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 skipRemainderReason =
                         "受控跳过：本批次已有工具触发终止";
                 dispatchTermination = true;
+                continue;
+            }
+            RepeatedReadLoopGuard.Action readLoopAction =
+                    requestController.observeRepeatedRead(
+                            normalizedRequest,
+                            guardedExecution.toolResult());
+            if (readLoopAction == RepeatedReadLoopGuard.Action.TERMINATE) {
+                ToolLoopTerminationProtocol.ControlledTermination
+                        readLoopTermination =
+                        new ToolLoopTerminationProtocol.ControlledTermination(
+                                ToolLoopTerminationProtocol
+                                        .ControlledTerminationReason
+                                        .REPEATED_READ_LOOP,
+                                null);
+                if (requestController.claimControlledTermination(
+                        requestGeneration, readLoopTermination)) {
+                    claimedTermination = readLoopTermination;
+                    skipRemainderReason =
+                            "受控跳过：模型连续重复相同读取操作";
+                    dispatchTermination = true;
+                }
             }
         }
 
@@ -985,6 +1006,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private void submitNextModelRequest(ChatResponse completeResponse) {
         TokenUsage accumulatedUsage = TokenUsage.sum(
                 tokenUsage, completeResponse.metadata().tokenUsage());
+        List<ChatMessage> transientMessages =
+                requestController.claimRepeatedReadCorrection();
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -992,19 +1015,27 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        List.of(),
+                        transientMessages,
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.continuation(
                         requestGeneration,
                         gateRequest,
-                        () -> messagesToSend(memoryId),
+                        () -> messagesToSendWithTransient(
+                                memoryId, transientMessages),
                         this::notifyError,
                         (messages, generation) -> startModelRequest(
                                 messages,
                                 accumulatedUsage,
                                 generation,
                                 false)));
+    }
+
+    private List<ChatMessage> messagesToSendWithTransient(
+            Object memId, List<ChatMessage> transientMessages) {
+        List<ChatMessage> messages = new ArrayList<>(messagesToSend(memId));
+        messages.addAll(transientMessages);
+        return List.copyOf(messages);
     }
 
     private Runnable startModelRequest(

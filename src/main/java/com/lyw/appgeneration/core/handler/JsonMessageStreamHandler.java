@@ -220,6 +220,17 @@ public final class JsonMessageStreamHandler {
                     stripUntrustedControlledTerminal(prefix),
                     facts, LOOP_LIMIT_MESSAGE, false);
         }
+        if (reason == ControlledTerminationReason.REPEATED_READ_LOOP) {
+            return new VueTurnOutcome(
+                    phase,
+                    VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                    appendTerminalText(
+                            stripUntrustedControlledTerminal(prefix),
+                            VueTurnFinalizer.REPEATED_READ_LOOP_MESSAGE),
+                    VueTurnMemoryProjection.REPEATED_READ_LOOP_PROJECTION,
+                    false,
+                    VueTurnFinalizer.REPEATED_READ_LOOP_MESSAGE);
+        }
         if (reason == ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix),
