@@ -16,9 +16,9 @@ public class MemoryTokenProperties implements InitializingBean {
     private static final int REQUIRED_L0_RETAINED_TOKENS = 12_288;
     public static final int L1_MAX_SUMMARY_TOKENS = 3_072;
     private static final int REQUIRED_L2_MAX_RECALL_TOKENS = 1_024;
-    private static final int REQUIRED_ASYNC_COMPRESSION_THRESHOLD = 28_672;
-    private static final int REQUIRED_BLOCKING_COMPRESSION_THRESHOLD = 30_720;
-    private static final int REQUIRED_HARD_INPUT_LIMIT = 32_768;
+    private static final int REQUIRED_ASYNC_COMPRESSION_THRESHOLD = 49_152;
+    private static final int REQUIRED_BLOCKING_COMPRESSION_THRESHOLD = 57_344;
+    private static final int REQUIRED_HARD_INPUT_LIMIT = 65_536;
     private static final int REQUIRED_MAX_OUTPUT_TOKENS = 8_192;
     private static final int REQUIRED_MINIMUM_MODEL_CONTEXT_WINDOW = 73_728;
     private static final Duration REQUIRED_BLOCKING_TIMEOUT =

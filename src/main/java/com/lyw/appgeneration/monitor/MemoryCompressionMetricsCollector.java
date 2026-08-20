@@ -2,6 +2,7 @@ package com.lyw.appgeneration.monitor;
 
 import com.lyw.appgeneration.ai.memory.ContextAdmissionResult;
 import com.lyw.appgeneration.ai.memory.ContextCompressionMode;
+import com.lyw.appgeneration.ai.memory.ToolChainCheckpointResult;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -61,6 +62,12 @@ public final class MemoryCompressionMetricsCollector {
     public CheckpointObservation startToolChainCheckpoint(int beforeTokens) {
         return new CheckpointObservation(
                 this, beforeTokens, currentNanosOrUnavailable());
+    }
+
+    public void recordToolChainCheckpointFailure(
+            ToolChainCheckpointResult.FailureReason reason) {
+        safely(() -> counter("memory_tool_chain_checkpoint_failure_total",
+                "reason", tag(reason)).increment());
     }
 
     public void recordCompressionExecutorRejected(CompressionMode mode) {

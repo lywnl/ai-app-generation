@@ -8,6 +8,7 @@ import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.ChatMessage;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
 import static com.lyw.appgeneration.ai.memory.ContextAdmissionResult.FailureReason;
 
 /** 统一编排异步压缩、阻塞压缩和输入硬上限工具链检查点。 */
+@Slf4j
 @Component
 public class ContextCompressionCoordinator {
 
@@ -474,7 +476,7 @@ public class ContextCompressionCoordinator {
                         summarizeThroughId, appId);
             }
             CheckpointPreparation preparation = prepareCheckpointRequest(
-                    memory, tools, transientMessages,
+                    appId, memory, tools, transientMessages,
                     blockingPreparation, deadline);
             if (!preparation.complete()) {
                 attemptState.markCheckpointFailed(claim);
@@ -529,6 +531,7 @@ public class ContextCompressionCoordinator {
     }
 
     private CheckpointPreparation prepareCheckpointRequest(
+            long appId,
             CompressionAwareChatMemory memory,
             List<ToolSpecification> tools,
             List<ChatMessage> transientMessages,
@@ -559,6 +562,12 @@ public class ContextCompressionCoordinator {
         ToolChainCheckpointResult projection = checkpointProjector.project(
                 snapshot, registeredToolNames(tools));
         if (!projection.complete()) {
+            metricsCollector.recordToolChainCheckpointFailure(
+                    projection.failureReason());
+            log.warn("未完成工具链检查点校验失败,appId={},reason={},"
+                            + "tailMessageCount={}",
+                    appId, projection.failureReason(),
+                    snapshot.unfinishedTail().size());
             return CheckpointPreparation.failed(
                     FailureReason.INVALID_TOOL_CHAIN_CHECKPOINT,
                     "未完成工具链不满足可信检查点协议，reason="

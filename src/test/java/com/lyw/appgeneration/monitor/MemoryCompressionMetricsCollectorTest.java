@@ -2,6 +2,7 @@ package com.lyw.appgeneration.monitor;
 
 import com.lyw.appgeneration.ai.memory.ContextAdmissionResult;
 import com.lyw.appgeneration.ai.memory.ContextCompressionMode;
+import com.lyw.appgeneration.ai.memory.ToolChainCheckpointResult;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -58,6 +59,7 @@ class MemoryCompressionMetricsCollectorTest {
             assertEquals(Set.of(
                     "recordContextGate",
                     "recordEstimatedTokens",
+                    "recordToolChainCheckpointFailure",
                     "startToolChainCheckpoint",
                     "startCompression",
                     "recordCompressionExecutorRejected",
@@ -102,6 +104,8 @@ class MemoryCompressionMetricsCollectorTest {
         collector.startToolChainCheckpoint(65_536).complete(
                 MemoryCompressionMetricsCollector.CheckpointOutcome.SUCCESS,
                 18_000);
+        collector.recordToolChainCheckpointFailure(
+                ToolChainCheckpointResult.FailureReason.DUPLICATE_TOOL_CALL);
         collector.startCompression(
                         MemoryCompressionMetricsCollector.CompressionMode.BLOCKING)
                 .complete(MemoryCompressionResult.Status.COMPRESSED);
@@ -118,6 +122,9 @@ class MemoryCompressionMetricsCollectorTest {
                 Set.of("stage"));
         assertMetricTags(registry, "memory_tool_chain_checkpoint_total",
                 Set.of("outcome"));
+        assertMetricTags(registry,
+                "memory_tool_chain_checkpoint_failure_total",
+                Set.of("reason"));
         assertMetricTags(registry, "memory_tool_chain_checkpoint_tokens",
                 Set.of("stage"));
         assertMetricTags(registry,
@@ -148,6 +155,9 @@ class MemoryCompressionMetricsCollectorTest {
         assertScrapeSample(scrape,
                 "memory_tool_chain_checkpoint_total",
                 Map.of("outcome", "success"));
+        assertScrapeSample(scrape,
+                "memory_tool_chain_checkpoint_failure_total",
+                Map.of("reason", "duplicate_tool_call"));
         assertScrapeSample(scrape,
                 "memory_tool_chain_checkpoint_tokens_count",
                 Map.of("stage", "before"));

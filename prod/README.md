@@ -156,17 +156,17 @@ ai.memory.token:
   l0-retained-tokens: 12288
   l1-max-summary-tokens: 3072
   l2-max-recall-tokens: 1024
-  async-compression-threshold: 28672
-  blocking-compression-threshold: 30720
-  hard-input-limit: 32768
+  async-compression-threshold: 49152
+  blocking-compression-threshold: 57344
+  hard-input-limit: 65536
   max-output-tokens: 8192
-  minimum-model-context-window: 40960
+  minimum-model-context-window: 73728
   blocking-timeout: 60s
   l2-debounce: 30s
   estimation-safety-factor: 1.15
 ```
 
-- 主模型供应商声明和实际配置的上下文窗口都必须至少为 `40960 Token`，不能只看应用中的阈值配置。
+- 主模型供应商声明和实际配置的上下文窗口都必须至少为 `73728 Token`，不能只看应用中的阈值配置。
 - 有界 L1/L2 与同步压缩线程池必须使用 `AbortPolicy`；不得切回静默 `DiscardPolicy` 或在请求线程执行 60 秒压缩。
 - L0 最终裁剪通过 Redis Lua 跨实例 CAS 提交，并使用 Redis `TIME` 在快照比较前和实际写入前检查绝对截止。后端 JVM 主机与 Redis 主机必须启用并通过 NTP/chrony 等时钟同步健康检查；任一主机时间未同步时不得发布，否则 60 秒截止可能提前或延后生效。
 - Redis ACL 至少允许 L0 使用脚本入口 `EVAL`，并允许脚本内调用 `TIME`、`GET`、`SETEX`、`SET`、`DEL`。当前 `prod/redis/users.acl` 的 `admin +@all` 已覆盖这些命令；未来收紧权限时必须在非生产 Redis 以部署账号实际执行一次完整 L0 CAS 探针，不能只验证 `PING`。
@@ -181,14 +181,14 @@ ai.memory.token:
 2. 在生产 MySQL 8.0.40 执行 migration，并立即核对字段、默认值、NULL 数、旧数据迁移数量和索引；不通过则停止，不部署应用。
 3. 部署前端，验证旧后端下普通生成仍可用，未知事件门禁和既有唯一终态没有回归。
 4. 部署后端；检查 `/api/actuator/health`、启动日志和 Prometheus 抓取。启动校验、数据库映射或缓存初始化出现异常时立即回滚后端包。
-5. 只开放小流量，实际核对：28K 当前请求不被阻塞、30K 显示“正在压缩上下文，请稍候…”、COMPLETED 后恢复原文案、32K 复检拒绝不调用模型、控制事件不进入聊天正文。
+5. 只开放小流量，实际核对：48K 当前请求不被阻塞、56K 显示“正在压缩上下文，请稍候…”、COMPLETED 后恢复原文案、64K 触发未完成工具链检查点或类型化拒绝、控制事件不进入聊天正文。
 6. 至少观察一个完整小流量窗口，再决定是否扩大流量。
 
 ### 6.5 观测与扩大/停止条件
 
 必须同时观察：
 
-- `memory_context_gate_total{mode,outcome}`：28K/30K/32K 门禁分布与失败原因。
+- `memory_context_gate_total{mode,outcome}`：48K/56K/64K 门禁分布与失败原因。
 - `memory_compression_total{mode,outcome}`、`memory_compression_duration_seconds{mode,outcome}`：真实压缩成功率、超时/模型失败和 P95。
 - `memory_token_estimation_ratio{model_family}`：实际输入 Token / 估算 Token，判断是否低估。
 - `memory_summary_tokens`、`memory_summary_reduce_rounds`：摘要是否稳定收敛到 3K。
@@ -197,7 +197,7 @@ ai.memory.token:
 
 默认保守扩大条件：连续 30 分钟没有数据丢失、游标误推进、删除后复活或 SSE 协议错误；阻塞压缩 P95 小于 55 秒；超时占阻塞压缩尝试低于 1%；`memory_token_estimation_ratio` 的 P99 不大于 1。项目已有更严格 SLO 时，以更严格值为准。
 
-出现以下任一情况立即停止扩大并回滚应用版本：任何数据/游标/缓存正确性异常；压缩 P95 达到或超过 60 秒；估算比值持续大于 1；32K 拒绝率突增且无法由真实超长输入解释；前端把控制事件写入正文或产生 `protocol_error`；监控或日志泄露敏感正文。数据库结构默认保留，不能把应用回滚升级为自动删列。
+出现以下任一情况立即停止扩大并回滚应用版本：任何数据/游标/缓存正确性异常；压缩 P95 达到或超过 60 秒；估算比值持续大于 1；64K 拒绝率突增且无法由真实超长输入解释；前端把控制事件写入正文或产生 `protocol_error`；监控或日志泄露敏感正文。数据库结构默认保留，不能把应用回滚升级为自动删列。
 
 ## 7. 非破坏性回滚
 

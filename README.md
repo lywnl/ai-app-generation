@@ -309,7 +309,7 @@ ai-app-generation/
 │   │   └── memory/                             # 分层对话记忆（L0/L1/L2）
 │   │       ├── LayeredChatMemory.java          # 按 L2 → L1 → L0 拼装最终模型上下文
 │   │       ├── TokenAwareChatMemory.java       # 按完整回合原子维护 12K L0
-│   │       ├── ContextCompressionCoordinator.java # 28K/30K/32K 压缩状态机
+│   │       ├── ContextCompressionCoordinator.java # 48K/56K/64K 压缩状态机
 │   │       ├── ContextCompressionModelRequestGate.java # 首次请求与工具续调统一门禁
 │   │       ├── MemorySummaryPromptBuilder.java # L1 五段摘要 Prompt
 │   │       └── UserPreferencePromptBuilder.java # L2 偏好抽取 Prompt
@@ -350,7 +350,7 @@ ai-app-generation/
 │   │   ├── RedisChatMemoryStoreConfig          # L0 对话记忆 Redis 存储
 │   │   ├── MemorySummarizationExecutorConfig   # L1 后台摘要有界线程池
 │   │   ├── UserMemoryExtractionExecutorConfig  # L2 偏好抽取独立有界线程池
-│   │   ├── ContextCompressionExecutorConfig    # 30K 同步压缩独立有界线程池
+│   │   ├── ContextCompressionExecutorConfig    # 56K 同步压缩独立有界线程池
 │   │   ├── ModelRequestGateExecutorConfig      # 模型门禁受管虚拟线程执行器
 │   │   ├── UserMemoryDebounceExecutorConfig    # L2 30 秒防抖调度器
 │   │   ├── UserMemoryRecoverySchedulerConfig   # L2 唯一全局恢复调度器
@@ -549,7 +549,7 @@ data:
 - 原始请求体在 Jackson 反序列化前受 **262,144 字节**硬上限保护；反序列化后的用户消息再受 **32,000 Unicode code point** 业务上限保护
 - 默认 `message` 事件用 `{"d": "片段"}` 包装；工具消息也走该正文通道
 - 命名事件只允许 `heartbeat`、`context-compression`、`business-error`、`turn-outcome`、`done`；未知命名事件属于协议错误，不能退化为聊天正文
-- 30K 同步压缩使用受信 `context-compression/v1` 控制事件：`STARTED` 展示“正在压缩上下文，请稍候…”，`COMPLETED` 后恢复原加载文案；控制事件只更新页面状态，不进入 AI 正文
+- 56K 同步压缩使用受信 `context-compression/v1` 控制事件：`STARTED` 展示“正在压缩上下文，请稍候…”，`COMPLETED` 后恢复原加载文案；控制事件只更新页面状态，不进入 AI 正文
 - `turn-outcome` 是已提交 Vue 回合的唯一业务终态，随后发送唯一 `done`；`done` 只表示 SSE 传输正常收尾，不表示业务成功
 - `business-error` 只承载正文或工具语义事件开始前的安全错误，包括同步预检和普通生成的首次模型门禁拒绝，并以 `done` 结束；已提交 Vue 回合仍使用唯一 `turn-outcome`，工具续调用门禁拒绝也不得伪装成首次拒绝
 - 前端只有在 `turn-outcome.outcome=SUCCEEDED` 且收到 `done` 后刷新预览；失败、取消、超时、系统错误和协议错误都保留旧预览
@@ -560,7 +560,7 @@ data:
 
 **核心模块**：`LayeredChatMemory`、`TokenAwareChatMemory`、`ContextCompressionCoordinator`、`ContextCompressionModelRequestGate`、`MemorySummaryService`、`UserMemoryService`。
 
-项目按最终 `ChatRequest` 的 **Token** 管理上下文。统一估算器覆盖系统提示、L2、L1、L0、当前用户消息、RAG/图片增强、工具定义、工具参数/结果和协议开销，并乘 `1.15` 安全系数。32K 是输入预算，不包含最大 8K 输出，因此主模型真实上下文窗口必须至少为 `32768 + 8192 = 40960 Token`。
+项目按最终 `ChatRequest` 的 **Token** 管理上下文。统一估算器覆盖系统提示、L2、L1、L0、当前用户消息、RAG/图片增强、工具定义、工具参数/结果和协议开销，并乘 `1.15` 安全系数。64K 是输入预算，不包含最大 8K 输出，因此主模型真实上下文窗口必须至少为 `65536 + 8192 = 73728 Token`。
 
 ```text
 LayeredChatMemory.messages()：
@@ -576,21 +576,21 @@ LayeredChatMemory.messages()：
 
 **统一模型请求门禁**
 
-首次模型请求和每次工具续调用都经过同一个 `ModelRequestGate`，避免首轮安全但工具结果把下一次请求推爆。每次判定先冻结一份不可变消息快照，`Decision.messages` 与 `estimatedInputTokens` 始终来自这同一份快照：28K 非阻塞路径继续发送已审核原快照；30K/32K 同步路径则在压缩后重新读取、重新冻结并重新估算活动 `ChatMemory`，不会继续发送代理创建时保存的旧消息快照，也不会拿旧 Token 结论放行新消息。
+首次模型请求和每次工具续调用都经过同一个 `ModelRequestGate`，避免首轮安全但工具结果把下一次请求推爆。每次判定先冻结一份不可变消息快照，`Decision.messages` 与 `estimatedInputTokens` 始终来自这同一份快照：48K 非阻塞路径继续发送已审核原快照；56K/64K 同步路径则在压缩后重新读取、重新冻结并重新估算活动 `ChatMemory`，不会继续发送代理创建时保存的旧消息快照，也不会拿旧 Token 结论放行新消息。
 
 | 压缩前输入估算 | 动作 | 当前模型调用 |
 | :--- | :--- | :--- |
-| `< 28672` | 正常通过 | 立即开始 |
-| `28672..30719` | 提交 App 级 single-flight 异步压缩 | 本次继续使用已审核快照，不等待后台任务 |
-| `30720..32767` | 专用执行器同步压缩，最长等待 60 秒 | 先发 `STARTED`，复检通过后发 `COMPLETED` 并继续 |
-| `>= 32768` | 有稳定旧回合时先尝试同步压缩 | 复检仍 `>=32768` 时硬拒绝，模型调用次数为 0 |
+| `< 49152` | 正常通过 | 立即开始 |
+| `49152..57343` | 提交 App 级 single-flight 异步压缩 | 本次继续使用已审核快照，不等待后台任务 |
+| `57344..65535` | 专用执行器同步压缩，最长等待 60 秒 | 先发 `STARTED`，复检通过后发 `COMPLETED` 并继续 |
+| `>= 65536` | 有稳定旧回合时先尝试同步压缩 | 无稳定旧回合时尝试工具链检查点；复检仍 `>=65536` 时拒绝 |
 
 **L0 · 12K 完整回合热窗口**
 
 - `MessageWindowChatMemory` 保留 Redis store 和 tool 对一致性能力，但在线窗口硬限改为 `Integer.MAX_VALUE`；真正的裁剪由 `TokenAwareChatMemory` 按完整回合处理。
 - 压缩时从最新稳定 `USER → AI` 回合向前累计，保留不超过 `12288 Token` 的完整回合；下一个回合会越界时整轮进入 L1 候选，不拆分 User/AI，也不留下孤立 tool 消息。
-- L1 成功落库后才通过 Redis Lua 比较并替换任务启动时确认的旧完整前缀；两个后端连接并发裁剪同一 L0 快照时，跨实例 CAS 只能有一个提交成功。摘要失败、游标对齐失败、截止到期或前缀竞争都保留原始 L0。当前未完成工具回合无论多大都不裁剪，由 30K/32K 门禁决定能否继续请求模型。
-- 冷启动只回填 `lastSummarizedId` 之后尚未摘要的稳定回合，并按完整回合读取到 30K 阻塞阈值；全部历史不足 30K 时完整回填，不再按固定消息条数截断。
+- L1 成功落库后才通过 Redis Lua 比较并替换任务启动时确认的旧完整前缀；两个后端连接并发裁剪同一 L0 快照时，跨实例 CAS 只能有一个提交成功。摘要失败、游标对齐失败、截止到期或前缀竞争都保留原始 L0。当前未完成工具回合无论多大都不裁剪，由 56K/64K 门禁决定能否继续请求模型。
+- 冷启动只回填 `lastSummarizedId` 之后尚未摘要的稳定回合，并按完整回合读取到 56K 阻塞阈值；全部历史不足 56K 时完整回填，不再按固定消息条数截断。
 - Vue 终态仍把本轮原始 AI/tool 尾部折叠为稳定 `canonicalAiText`；可信文件变更、构建日志和读取正文边界保持不变。
 
 **L1 · 唯一 3K 硬上限滚动摘要**
@@ -598,7 +598,7 @@ LayeredChatMemory.messages()：
 - 只处理被 L0 淘汰的稳定完整回合，继续使用五段结构：应用目标与定位、用户偏好与硬约束、已否决方案、关键设计决策与理由、当前进度速览。
 - `3072 Token` 是唯一摘要上限。模型首次输出超限时，reducer 只压缩现有摘要且不得引入新事实；每轮重新估算，在截止时间内持续压缩，禁止字符串截断伪造达标。
 - 只有最终摘要 `<=3072` 时，才原子更新 `summary`、`summaryTokens`、`lastSummarizedId` 和失败状态并刷新 Redis。空输出、模型失败、超时或仍超限时，旧摘要和旧游标保持不变，MySQL `chat_history` 原文永不删除。
-- 后台失败使用数据库 `failCount + nextRetryTime` 做可恢复指数退避：5 秒起步、最高 5 分钟，不存在“三次失败后永久停更”。30K 同步门禁可绕过后台退避，但仍受 single-flight、删除栅栏和 60 秒截止约束。
+- 后台失败使用数据库 `failCount + nextRetryTime` 做可恢复指数退避：5 秒起步、最高 5 分钟，不存在“三次失败后永久停更”。56K 同步门禁可绕过后台退避，但仍受 single-flight、删除栅栏和 60 秒截止约束。
 
 **L2 · 30 秒防抖、证据状态机和 1K 召回**
 
@@ -613,7 +613,7 @@ LayeredChatMemory.messages()：
 
 **并发、降级与可观测性**
 
-- L1 后台摘要、L2 偏好抽取、30K 压缩和模型门禁等待分别使用独立执行器；L2 还使用禁用 SDK 重试、显式 60 秒超时的专用模型。L2 模型网络等待不持有应用 writer permit，删除可先完成，迟到模型结果会被丢弃。所有有界池使用 `AbortPolicy` 暴露拒绝，由调用方保留可恢复状态，禁止静默 `DiscardPolicy`。
+- L1 后台摘要、L2 偏好抽取、56K 压缩和模型门禁等待分别使用独立执行器；L2 还使用禁用 SDK 重试、显式 60 秒超时的专用模型。L2 模型网络等待不持有应用 writer permit，删除可先完成，迟到模型结果会被丢弃。所有有界池使用 `AbortPolicy` 暴露拒绝，由调用方保留可恢复状态，禁止静默 `DiscardPolicy`。
 - L0 Lua 使用 Redis `TIME` 在比较前和写入前检查绝对截止，生产环境必须保持后端 JVM 主机与 Redis 主机的 wall-clock 同步；Redis ACL 至少允许脚本入口 `EVAL` 及脚本内的 `TIME/GET/SETEX/SET/DEL`。L0 的跨实例 CAS 只解决最终裁剪竞争，不代表 L1/L2 single-flight、缓存失效、游标推进和删除栅栏已经支持多实例。
 - 浏览器取消、应用删除和唯一终态通过同一个原子 continuation gate 竞争；迟到压缩不得启动模型、发布控制帧、复活 Redis/Caffeine 或重新写入已删除数据。
 - `context-compression/v1` 只负责前端状态：STARTED 时左右区域显示“正在压缩上下文，请稍候…”，COMPLETED 后恢复原加载文案，控制事件不会进入聊天正文。
