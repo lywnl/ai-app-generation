@@ -43,3 +43,7 @@ tmp
 prod/artifacts/backend/
 /logs/
 /prod/.env
+
+/.codex/
+/.claude/
+/.m2repo/
