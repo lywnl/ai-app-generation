@@ -107,7 +107,7 @@ docker compose --env-file .env -f docker-compose.yml logs -f backend
 ## 5. 说明
 
 - 后端镜像内包含 `chromium + chromedriver`，满足截图服务。
-- 后端镜像内全局安装 `@mermaid-js/mermaid-cli`，命令为 `mmdc`。
+- 后端镜像保留 Node.js、npm 及 npm registry 配置，支持 Vue 工程构建；同时保留 Chromium + chromedriver，满足截图服务。
 - 服务器部署时不再依赖项目根目录源码，只依赖 `prod` 本目录文件。
 
 ## 6. Token 分层记忆 V3 上线前人工门禁

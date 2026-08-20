@@ -12,12 +12,7 @@
 - 来源：Undraw 插画库
 - 示例：抽象插画、概念图解等
 
-### 3. 架构图 (diagramTasks)
-- 用途：展示系统架构、流程图等技术图表
-- 来源：通过 Mermaid 代码生成
-- 示例：系统架构图、流程图、组织结构图等
-
-### 4. Logo图片 (logoTasks)
+### 3. Logo图片 (logoTasks)
 - 用途：品牌标识、图标等
 - 来源：AI 生成
 - 示例：公司Logo、产品图标等
@@ -45,12 +40,6 @@
       "query": "插画关键词"
     }
   ],
-  "diagramTasks": [
-    {
-      "mermaidCode": "mermaid图表代码",
-      "description": "图表用途描述"
-    }
-  ],
   "logoTasks": [
     {
       "description": "Logo设计描述，如名称、行业、风格等"
@@ -62,5 +51,4 @@
 注意：
 - 如果某种类型的图片不需要，对应数组可以为空
 - 每个任务的 description 要说明图片的具体用途和位置
-- mermaidCode 要是有效的 Mermaid 语法代码
 - 关键词要使用中文或英文，选择搜索效果最好的语言

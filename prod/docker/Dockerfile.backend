@@ -51,8 +51,7 @@ ENV WEBDRIVER_CHROME_DRIVER=/usr/bin/chromedriver
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
-RUN npm config set registry ${NPM_REGISTRY} \
-    && npm install -g @mermaid-js/mermaid-cli
+RUN npm config set registry ${NPM_REGISTRY}
 
 COPY artifacts/backend/app.jar /app/app.jar
 

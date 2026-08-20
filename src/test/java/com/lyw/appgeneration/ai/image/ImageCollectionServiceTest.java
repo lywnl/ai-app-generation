@@ -5,7 +5,6 @@ import com.lyw.appgeneration.ai.image.model.ImageCollectionPlan;
 import com.lyw.appgeneration.ai.image.model.ImageResource;
 import com.lyw.appgeneration.ai.image.tools.ImageSearchTool;
 import com.lyw.appgeneration.ai.image.tools.LogoGeneratorTool;
-import com.lyw.appgeneration.ai.image.tools.MermaidDiagramTool;
 import com.lyw.appgeneration.ai.image.tools.UndrawIllustrationTool;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,7 +30,6 @@ class ImageCollectionServiceTest {
     @Mock private ImageCollectionPlanService planService;
     @Mock private ImageSearchTool imageSearchTool;
     @Mock private UndrawIllustrationTool undrawIllustrationTool;
-    @Mock private MermaidDiagramTool mermaidDiagramTool;
     @Mock private LogoGeneratorTool logoGeneratorTool;
 
     private ExecutorService executor;
@@ -44,7 +42,6 @@ class ImageCollectionServiceTest {
                 planService,
                 imageSearchTool,
                 undrawIllustrationTool,
-                mermaidDiagramTool,
                 logoGeneratorTool,
                 executor,
                 new ImageCollectionPromptBuilder(),
@@ -84,7 +81,7 @@ class ImageCollectionServiceTest {
         String result = service.enhancePrompt("博客网站");
 
         assertEquals("博客网站", result);
-        verifyNoInteractions(imageSearchTool, undrawIllustrationTool, mermaidDiagramTool, logoGeneratorTool);
+        verifyNoInteractions(imageSearchTool, undrawIllustrationTool, logoGeneratorTool);
     }
 
     @Test

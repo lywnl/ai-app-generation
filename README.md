@@ -41,7 +41,7 @@
 | RAG 检索增强 | PgVector 向量检索 + DashScope `text-embedding-v4` + `gte-rerank-v2` 二次重排 |
 | Agent 工具调用 | 工具注册层提供 5 个文件工具、`buildProject`、`exit`；在线 Vue 使用“5 个文件工具 + `buildProject`”显式白名单，离线首次生成评测使用“5 个文件工具 + `exit`” |
 | 受控 ReAct 构建修复 | Vue 生成、真实构建和最多两个失败处理阶段位于同一 SSE 回合；最多执行 3 次真实构建，任意一次成功或第三次失败后由后端强制结束 |
-| 图片采集 Agent | 首条消息自动调度 `Pexels 图片搜索` + `阿里 wan2.2 Logo 生成` + `Mermaid 流程图` + `unDraw 插画` 4 类工具，并行收集封面/Logo/插图素材 |
+| 图片采集 Agent | 首条消息自动调度 `Pexels 图片搜索` + `阿里 wan2.2 Logo 生成` + `unDraw 插画` 3 类工具，并行收集封面/Logo/插图素材 |
 | 流式 SSE | Reactor `Flux<ServerSentEvent>` + 自定义工具调用流解析器（字符级状态机） |
 | Prompt 安全护栏 | 注解 `@PromptSafetyCheck` + AOP 切面 + LangChain4j `InputGuardrail` 双重拦截 |
 | 一键部署 | `deployKey` 标识 + Nginx 静态托管，生成产物即时可访问 |
@@ -100,7 +100,7 @@ MySQL    Redis    PgVector  COS
 User Prompt
    │
    ▼
-[Prompt 安全护栏] ─► [AI 智能路由：Qwen-Turbo] ─► [图片采集 Agent (并行 4 工具)]
+[Prompt 安全护栏] ─► [AI 智能路由：Qwen-Turbo] ─► [图片采集 Agent (并行 3 工具)]
                                                         │
                                                         ▼
                               [RAG 检索 → Rerank → 拼接片段]
@@ -292,13 +292,12 @@ ai-app-generation/
 │   │   │   └── ExitTool                        # AI 主动退出循环
 │   │   ├── image/                              # 图片采集 Agent
 │   │   │   ├── ImageCollectionService.java     # 入口：增强 Prompt
-│   │   │   ├── ImageCollectionPlanService.java # 编排器：解析 4 类工具的并行计划
+│   │   │   ├── ImageCollectionPlanService.java # 编排器：解析 3 类工具的并行计划
 │   │   │   ├── ImageCollectionPromptBuilder.java
 │   │   │   ├── ImageCollectionExecutorConfig.java  # 自定义线程池
 │   │   │   ├── tools/
 │   │   │   │   ├── ImageSearchTool.java        # Pexels 搜索
 │   │   │   │   ├── LogoGeneratorTool.java      # 阿里 wan2.2 文生图
-│   │   │   │   ├── MermaidDiagramTool.java     # mmdc CLI 渲染流程图
 │   │   │   │   └── UndrawIllustrationTool.java # unDraw 插画
 │   │   │   └── model/                          # ImageCategoryEnum / ImageCollectionPlan / ImageResource
 │   │   ├── guardrail/                          # Prompt 安全护栏
@@ -386,7 +385,7 @@ ai-app-generation/
 ├── prod/                               # 生产部署目录（独立可发布）
 │   ├── docker-compose.yml              # 7 容器编排
 │   ├── docker/
-│   │   ├── Dockerfile.backend          # 后端镜像（含 Chromium / mermaid-cli）
+│   │   ├── Dockerfile.backend          # 后端镜像（含 Chromium / Node.js）
 │   │   ├── Dockerfile.nginx
 │   │   └── Dockerfile.postgres
 │   ├── nginx/nginx.conf
@@ -498,13 +497,12 @@ Vue 工程不能用一次性 chat 生成（结构复杂、文件多），改用 
 
 **模块**：`ai/image/`
 
-仅在 **首条消息** 触发（`isFirstMessage = true`），通过自定义线程池 `ImageCollectionExecutorConfig` 并行调度 4 类工具：
+仅在 **首条消息** 触发（`isFirstMessage = true`），通过自定义线程池 `ImageCollectionExecutorConfig` 并行调度 3 类工具：
 
 | 工具 | 数据源 | 用途 |
 | :--- | :--- | :--- |
 | `ImageSearchTool` | Pexels API | 真实场景照片（背景/产品图） |
 | `LogoGeneratorTool` | 阿里 DashScope `wan2.2-t2i-flash` | 文生图，定制 Logo |
-| `MermaidDiagramTool` | mermaid-cli (`mmdc`) | 流程图 / 架构图渲染 |
 | `UndrawIllustrationTool` | unDraw | SVG 风格插画 |
 
 收集结果会被拼接到原 prompt，让大模型在生成代码时能直接引用真实素材 URL。
@@ -893,7 +891,7 @@ clamp_min(sum(rate(generation_sse_publisher_terminations_total[15m])), 1e-9)
 - [x] AI 智能路由
 - [x] RAG 模板检索 + Rerank
 - [x] 流式 SSE + 工具调用流解析
-- [x] 图片采集 Agent（4 工具并行）
+- [x] 图片采集 Agent（3 工具并行）
 - [x] Prompt 安全护栏
 - [x] 分层对话记忆（L0 Redis 热窗口 / L1 App 级摘要 / L2 跨 App 用户偏好）
 - [x] 一键部署 + 代码下载

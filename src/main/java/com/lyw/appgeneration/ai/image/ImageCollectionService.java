@@ -5,7 +5,6 @@ import com.lyw.appgeneration.ai.image.model.ImageCollectionPlan;
 import com.lyw.appgeneration.ai.image.model.ImageResource;
 import com.lyw.appgeneration.ai.image.tools.ImageSearchTool;
 import com.lyw.appgeneration.ai.image.tools.LogoGeneratorTool;
-import com.lyw.appgeneration.ai.image.tools.MermaidDiagramTool;
 import com.lyw.appgeneration.ai.image.tools.UndrawIllustrationTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,7 +31,6 @@ public class ImageCollectionService {
     private final ImageCollectionPlanService planService;
     private final ImageSearchTool imageSearchTool;
     private final UndrawIllustrationTool undrawIllustrationTool;
-    private final MermaidDiagramTool mermaidDiagramTool;
     private final LogoGeneratorTool logoGeneratorTool;
     private final ExecutorService executor;
     private final ImageCollectionPromptBuilder promptBuilder;
@@ -42,7 +40,6 @@ public class ImageCollectionService {
             ImageCollectionPlanService planService,
             ImageSearchTool imageSearchTool,
             UndrawIllustrationTool undrawIllustrationTool,
-            MermaidDiagramTool mermaidDiagramTool,
             LogoGeneratorTool logoGeneratorTool,
             @Qualifier("imageCollectionExecutor") ExecutorService executor,
             ImageCollectionPromptBuilder promptBuilder,
@@ -51,7 +48,6 @@ public class ImageCollectionService {
         this.planService = planService;
         this.imageSearchTool = imageSearchTool;
         this.undrawIllustrationTool = undrawIllustrationTool;
-        this.mermaidDiagramTool = mermaidDiagramTool;
         this.logoGeneratorTool = logoGeneratorTool;
         this.executor = executor;
         this.promptBuilder = promptBuilder;
@@ -70,8 +66,6 @@ public class ImageCollectionService {
                     imageSearchTool.searchContentImages(t.query()), futures);
             addFutures(plan.getIllustrationTasks(), t ->
                     undrawIllustrationTool.searchIllustrations(t.query()), futures);
-            addFutures(plan.getDiagramTasks(), t ->
-                    mermaidDiagramTool.generateMermaidDiagram(t.mermaidCode(), t.description()), futures);
             addFutures(plan.getLogoTasks(), t ->
                     logoGeneratorTool.generateLogos(t.description()), futures);
 
