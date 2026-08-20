@@ -42,3 +42,4 @@ tmp
 
 prod/artifacts/backend/
 /logs/
+/prod/.env

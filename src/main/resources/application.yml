@@ -17,7 +17,7 @@ spring:
     # 依赖 I/O 上限必须短于 L1 60 秒总截止，避免迟到 worker 长期占满压缩池。
     url: jdbc:mysql://127.0.0.1:3406/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=30000
     username: root
-    password: lyw666
+    password: ${INFRA_SHARED_PASSWORD}
     hikari:
       connection-timeout: 30000   # 从连接池获取连接的最大等待时间（毫秒）
       max-lifetime: 1800000       # 连接在池中的最大存活时间（毫秒）
@@ -28,7 +28,7 @@ spring:
       port: 6379
       database: 0
       username: default
-      password: lyw666
+      password: ${INFRA_SHARED_PASSWORD}
       ttl: 3600
       connect-timeout: 3s
       timeout: 3s
@@ -134,7 +134,7 @@ rag:
     port: 5432
     database: ai_codegen_rag
     user: admin
-    password: lyw666
+    password: ${INFRA_SHARED_PASSWORD}
   embedding:
     # 走 DashScope OpenAI 兼容端点,复用 dashscope.api-key
     base-url: https://dashscope.aliyuncs.com/compatible-mode/v1

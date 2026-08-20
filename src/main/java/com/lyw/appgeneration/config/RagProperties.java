@@ -57,7 +57,7 @@ public class RagProperties {
         private int port = 5432;
         private String database = "ai_codegen_rag";
         private String user = "admin";
-        private String password = "lyw666";
+        private String password;
     }
 
     @Data

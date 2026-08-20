@@ -34,7 +34,6 @@ class DeploymentRuntimeConfigTest {
         String compose = readProjectFile("prod/docker-compose.yml");
         String nginx = readProjectFile("prod/nginx/nginx.conf");
         String dockerfile = readProjectFile("prod/docker/Dockerfile.nginx");
-        String env = readProjectFile("prod/.env");
         String envExample = readProjectFile("prod/.env.example");
 
         assertTrue(compose.contains("- \"80:80\""));
@@ -47,7 +46,6 @@ class DeploymentRuntimeConfigTest {
                 .map(String::strip)
                 .filter(line -> line.startsWith("EXPOSE "))
                 .toList());
-        assertFalse(env.contains("NGINX_HOST_PORT"));
         assertFalse(envExample.contains("NGINX_HOST_PORT"));
     }
 
@@ -55,7 +53,6 @@ class DeploymentRuntimeConfigTest {
     void 生产部署URL只能由后端新环境变量提供() throws IOException {
         List<String> runtimeFiles = List.of(
                 "prod/docker-compose.yml",
-                "prod/.env",
                 "prod/.env.example",
                 "prod/build-artifacts.ps1");
 

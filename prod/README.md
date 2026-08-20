@@ -29,22 +29,35 @@
 ```bash
 cd /opt/ai-app-generation/prod
 cp .env.example .env
+chmod 600 .env
 ```
+
+`.env` 只保存在服务器本地，已被 Git 忽略，不要提交或上传到代码仓库。
 
 编辑 `.env`，必须显式填写部署产物的外部访问基地址，例如：
 
 ```env
 APP_CODE_DEPLOY_BASE_URL=http://your-domain.example
+INFRA_SHARED_PASSWORD=请填写新的随机强密码
+MYSQL_USER=admin
+REDIS_USERNAME=admin
+PG_USER=admin
+GRAFANA_ADMIN_USER=admin
 ```
 
 该值只能包含协议、主机和可选端口，不能包含业务路径；部署访问路径由后端统一追加。
 
-默认账号密码（已预置）：
+基础设施统一密码：
 
-- MySQL：`admin / lyw666`（root 密码 `lyw666`）
-- Redis（ACL）：`admin / lyw666`
-- PostgreSQL：`admin / lyw666`
-- Grafana：`admin / lyw666`
+- 在 `.env` 中填写 `INFRA_SHARED_PASSWORD`。
+- MySQL、Redis、PostgreSQL、Grafana 和后端连接统一使用该值。
+- 建议使用新的随机强密码；仓库历史中的旧口令不应继续复用。
+- 密码只能使用字母、数字、点、下划线和短横线，建议生成足够长的随机值。
+- Redis ACL 由 `redis/start-redis.sh` 在容器启动时生成，仓库不保存明文 ACL。
+
+注意：Redis 会在每次容器启动时应用新密码；MySQL、PostgreSQL 和 Grafana
+只在首次初始化数据卷时读取初始化密码。已有数据卷切换密码前，必须先在各服务内
+修改现有账号密码，再更新 `.env` 并重启；不能通过删除数据卷来“同步密码”。
 
 如果暂时不填 API Key，请保留这些键且值为空：
 
@@ -169,7 +182,7 @@ ai.memory.token:
 - 主模型供应商声明和实际配置的上下文窗口都必须至少为 `73728 Token`，不能只看应用中的阈值配置。
 - 有界 L1/L2 与同步压缩线程池必须使用 `AbortPolicy`；不得切回静默 `DiscardPolicy` 或在请求线程执行 60 秒压缩。
 - L0 最终裁剪通过 Redis Lua 跨实例 CAS 提交，并使用 Redis `TIME` 在快照比较前和实际写入前检查绝对截止。后端 JVM 主机与 Redis 主机必须启用并通过 NTP/chrony 等时钟同步健康检查；任一主机时间未同步时不得发布，否则 60 秒截止可能提前或延后生效。
-- Redis ACL 至少允许 L0 使用脚本入口 `EVAL`，并允许脚本内调用 `TIME`、`GET`、`SETEX`、`SET`、`DEL`。当前 `prod/redis/users.acl` 的 `admin +@all` 已覆盖这些命令；未来收紧权限时必须在非生产 Redis 以部署账号实际执行一次完整 L0 CAS 探针，不能只验证 `PING`。
+- Redis ACL 至少允许 L0 使用脚本入口 `EVAL`，并允许脚本内调用 `TIME`、`GET`、`SETEX`、`SET`、`DEL`。当前 `prod/redis/start-redis.sh` 生成的 `admin +@all` 已覆盖这些命令；未来收紧权限时必须在非生产 Redis 以部署账号实际执行一次完整 L0 CAS 探针，不能只验证 `PING`。
 - L0 的跨实例 CAS 只解决最终裁剪同一快照的竞争。当前版本的 L1/L2 single-flight、app/user 一致性锁、缓存失效、游标推进和删除栅栏仍以单个后端进程为边界，因此整体仍只支持 **单后端实例**。横向扩容前必须为这些剩余边界补齐分布式原子协议或事务 outbox/租约等等价方案；未完成时不得直接部署多个后端副本。
 - 新前端兼容旧后端；旧前端不认识新后端的 `context-compression` 命名事件。因此数据库迁移完成后，发布顺序固定为：**先前端，后后端**。
 

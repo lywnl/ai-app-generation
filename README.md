@@ -218,15 +218,19 @@ $env:COS_HOST="https://xxx.cos.ap-beijing.myqcloud.com"
 $env:TEN_SERCET_ID="xxx"
 $env:TEN_SECRET_KEY="xxx"
 $env:APP_CODE_DEPLOY_BASE_URL="http://localhost"
+$env:INFRA_SHARED_PASSWORD="请填写本地统一基础设施密码"
 ```
 
 Linux / macOS 当前终端可执行：
 
 ```bash
 export APP_CODE_DEPLOY_BASE_URL="http://localhost"
+export INFRA_SHARED_PASSWORD="请填写本地统一基础设施密码"
 ```
 
 `APP_CODE_DEPLOY_BASE_URL` 是必填项，表示部署产物经 Nginx 暴露后的源站地址，只能包含协议、主机和可选端口，不能包含业务路径。本地 Nginx 固定使用 80 端口，因此不得追加其他端口。
+
+`INFRA_SHARED_PASSWORD` 也是必填项，本地 MySQL、Redis 和 pgvector 必须使用相同的密码值；请只在当前终端或本地未跟踪的环境文件中设置。
 
 > **安全要求**：数据库、Redis、PgVector、COS 和模型密钥必须通过环境变量或秘密管理平台注入。不要在受版本控制的配置、README、命令历史或日志中保存秘密字面量；已暴露的凭据需要轮换，不能只修改配置文本。
 
@@ -389,7 +393,7 @@ ai-app-generation/
 │   │   ├── Dockerfile.nginx
 │   │   └── Dockerfile.postgres
 │   ├── nginx/nginx.conf
-│   ├── redis/users.acl                 # Redis ACL
+│   ├── redis/start-redis.sh            # 根据环境变量生成 Redis ACL 并启动
 │   ├── postgres/init/                  # pgvector 初始化
 │   ├── prometheus/prometheus.yml
 │   ├── grafana/                        # 数据源、仪表盘自动 provision
@@ -692,6 +696,7 @@ rag:
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}   # 默认读取项目根目录，可用环境变量覆盖
   ingest.enabled: false                            # 模板入库开关（手动触发）
   pgvector: { host: localhost, port: 5432, database: ai_codegen_rag }
+  # 数据库、Redis 和 pgvector 密码统一从 INFRA_SHARED_PASSWORD 注入
   embedding: { model-name: text-embedding-v4, dimension: 1024 }
   retrieval: { top-k: 3, min-score: 0.30 }
   rerank: { enabled: true, model-name: gte-rerank-v2, top-n: 10 }
@@ -728,7 +733,7 @@ Vue 业务层使用 30 分钟绝对截止，Spring 的 30 分 45 秒用于终态
 # 3. 服务器进入 prod 目录
 cd /opt/ai-app-generation/prod
 cp .env.example .env
-# 编辑 .env 填入 API Key、数据库密码
+# 编辑 .env，填写 INFRA_SHARED_PASSWORD、用户和 API Key
 
 # 4. 一键启动
 docker compose --env-file .env up -d

@@ -38,18 +38,19 @@ services:
       SERVER_PORT: 9025
       SERVER_SERVLET_CONTEXT_PATH: /api
       APP_CODE_DEPLOY_BASE_URL: ${APP_CODE_DEPLOY_BASE_URL}
+      INFRA_SHARED_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=30000
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATASOURCE_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_USERNAME: ${REDIS_USERNAME}
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      SPRING_DATA_REDIS_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       RAG_PGVECTOR_HOST: pg
       RAG_PGVECTOR_PORT: 5432
       RAG_PGVECTOR_DATABASE: ai_codegen_rag
       RAG_PGVECTOR_USER: ${PG_USER}
-      RAG_PGVECTOR_PASSWORD: ${PG_PASSWORD}
+      RAG_PGVECTOR_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}
       RAG_TEMPLATES_DIR: /app/embed_text
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
@@ -84,15 +85,15 @@ services:
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
       TZ: Asia/Shanghai
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       MYSQL_DATABASE: ai_app_generation
       MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
     volumes:
       - mysql_data:/var/lib/mysql
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -uroot -p${MYSQL_ROOT_PASSWORD}"]
+      test: ["CMD-SHELL", "MYSQL_PWD=$${MYSQL_ROOT_PASSWORD} mysqladmin ping -uroot --silent"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -103,12 +104,15 @@ services:
     image: redis:7.0.15
     container_name: ai-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--aclfile", "/usr/local/etc/redis/users.acl"]
+    environment:
+      REDIS_USERNAME: ${REDIS_USERNAME:?REDIS_USERNAME不能为空}
+      INFRA_SHARED_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+    command: ["/usr/local/bin/start-redis.sh"]
     volumes:
       - redis_data:/data
-      - ./redis/users.acl:/usr/local/etc/redis/users.acl:ro
+      - ./redis/start-redis.sh:/usr/local/bin/start-redis.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --user ${REDIS_USERNAME} -a ${REDIS_PASSWORD} ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$${INFRA_SHARED_PASSWORD} redis-cli --user $${REDIS_USERNAME} ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -123,7 +127,7 @@ services:
       TZ: Asia/Shanghai
       POSTGRES_DB: ai_codegen_rag
       POSTGRES_USER: ${PG_USER}
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./postgres/init/01-enable-pgvector.sql:/docker-entrypoint-initdb.d/01-enable-pgvector.sql:ro
@@ -158,7 +162,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SECURITY_ADMIN_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana

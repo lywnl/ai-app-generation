@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: ai_codegen_rag
       POSTGRES_USER: admin
-      POSTGRES_PASSWORD: lyw666
+      POSTGRES_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
     ports:
       - "5432:5432"
     volumes:
