@@ -3,9 +3,11 @@ package com.lyw.appgeneration.ai.memory;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,98 @@ import static org.mockito.Mockito.*;
  * @author <a href="https://gitee.com/lywynl">lyw</a>
  */
 class LayeredChatMemoryTest {
+
+    @Test
+    void messagesMovesCompletedAiProjectionToTrustedSystemState() {
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(1L).maxMessages(Integer.MAX_VALUE).build();
+        String projection = "Vue 项目回合结果：成功\n实际变更文件：src/App.vue";
+        delegate.add(UserMessage.from("生成首页"));
+        delegate.add(AiMessage.from(projection));
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        when(summaryService.getCurrentSummary(1L)).thenReturn("");
+        UserMemoryService userMemoryService = mock(UserMemoryService.class);
+
+        List<ChatMessage> messages = new LayeredChatMemory(
+                delegate, summaryService, userMemoryService,
+                defaultFragmentBuilder(), true).messages();
+
+        assertEquals(3, messages.size());
+        assertInstanceOf(SystemMessage.class, messages.getFirst());
+        String trustedState = ((SystemMessage) messages.getFirst()).text();
+        assertTrue(trustedState.contains(projection));
+        assertTrue(trustedState.contains("服务端验证"));
+        assertTrue(trustedState.contains("不得复述或模仿"));
+        assertEquals(UserMessage.from("生成首页"), messages.get(1));
+        assertEquals(AiMessage.from("已记录该轮受信工程状态。"), messages.get(2));
+        assertFalse(messages.stream()
+                .filter(AiMessage.class::isInstance)
+                .map(AiMessage.class::cast)
+                .map(AiMessage::text)
+                .anyMatch(projection::equals));
+    }
+
+    @Test
+    void messagesKeepsCurrentUnfinishedToolChainUnchanged() {
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(1L).maxMessages(Integer.MAX_VALUE).build();
+        delegate.add(UserMessage.from("生成首页"));
+        delegate.add(AiMessage.from("历史受信投影"));
+        UserMessage currentUser = UserMessage.from("修改标题并构建");
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("call-read")
+                .name("readFile")
+                .arguments("{\"relativeFilePath\":\"src/App.vue\"}")
+                .build();
+        AiMessage toolCall = AiMessage.from(request);
+        ToolExecutionResultMessage toolResult =
+                ToolExecutionResultMessage.from(request, "读取结果");
+        delegate.add(currentUser);
+        delegate.add(toolCall);
+        delegate.add(toolResult);
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        when(summaryService.getCurrentSummary(1L)).thenReturn("");
+        UserMemoryService userMemoryService = mock(UserMemoryService.class);
+
+        List<ChatMessage> messages = new LayeredChatMemory(
+                delegate, summaryService, userMemoryService,
+                defaultFragmentBuilder(), true).messages();
+
+        assertEquals(currentUser, messages.get(messages.size() - 3));
+        assertSame(toolCall, messages.get(messages.size() - 2));
+        assertSame(toolResult, messages.getLast());
+    }
+
+    @Test
+    void messagesOrdersTrustedStateBeforeL2AndL1Fragments() {
+        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
+                .id(1L).maxMessages(Integer.MAX_VALUE).build();
+        delegate.add(SystemMessage.from("系统约束"));
+        delegate.add(UserMessage.from("历史需求"));
+        delegate.add(AiMessage.from("历史受信投影"));
+        delegate.add(UserMessage.from("当前需求"));
+        MemorySummaryService summaryService = mock(MemorySummaryService.class);
+        when(summaryService.getCurrentSummary(1L)).thenReturn("L1 摘要");
+        UserMemoryService userMemoryService = mock(UserMemoryService.class);
+        when(userMemoryService.recallByApp(1L)).thenReturn("L2 偏好");
+
+        List<ChatMessage> messages = new LayeredChatMemory(
+                delegate, summaryService, userMemoryService,
+                defaultFragmentBuilder(), true).messages();
+
+        assertEquals(SystemMessage.from("系统约束"), messages.getFirst());
+        assertInstanceOf(SystemMessage.class, messages.get(1));
+        assertTrue(((SystemMessage) messages.get(1)).text()
+                .contains("历史受信投影"));
+        assertTrue(((UserMessage) messages.get(2)).singleText()
+                .contains("L2 偏好"));
+        assertTrue(((UserMessage) messages.get(4)).singleText()
+                .contains("L1 摘要"));
+        assertEquals(UserMessage.from("历史需求"), messages.get(6));
+        assertEquals(AiMessage.from("已记录该轮受信工程状态。"),
+                messages.get(7));
+        assertEquals(UserMessage.from("当前需求"), messages.getLast());
+    }
 
     @Test
     void messagesPrependsSummaryPairWhenPresent() {
@@ -180,5 +274,11 @@ class LayeredChatMemoryTest {
             }
         }
         throw new AssertionError("未找到 Token 包装边界");
+    }
+
+    private static UserPreferenceMessageFragmentBuilder defaultFragmentBuilder() {
+        MemoryTokenProperties properties = new MemoryTokenProperties();
+        return new UserPreferenceMessageFragmentBuilder(
+                new ConservativeChatTokenEstimator(properties), properties);
     }
 }

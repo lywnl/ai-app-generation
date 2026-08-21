@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
+import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
@@ -25,6 +26,13 @@ public final class TurnProgressChannel {
     synchronized boolean publish(ToolProtocolRecoveryMessage message) {
         Objects.requireNonNull(message, "工具协议恢复进度不能为空");
         return publishEvent(GenerationStreamEvent.toolProtocolRecovery(message));
+    }
+
+    synchronized boolean publish(
+            IncompleteToolChainRecoveryMessage message) {
+        Objects.requireNonNull(message, "未完成工具链恢复进度不能为空");
+        return publishEvent(
+                GenerationStreamEvent.incompleteToolChainRecovery(message));
     }
 
     private boolean publishEvent(GenerationStreamEvent event) {

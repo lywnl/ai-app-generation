@@ -67,7 +67,11 @@ export type ContextCompressionState = 'idle' | 'compressing'
 
 export type ToolProtocolRecoveryState = 'idle' | 'recovering'
 
+export type IncompleteToolChainRecoveryState = 'idle' | 'recovering'
+
 type ToolProtocolRecoveryPhase = 'idle' | 'recovering' | 'recovered' | 'failed'
+
+type IncompleteToolChainRecoveryPhase = 'idle' | 'recovering' | 'recovered' | 'failed'
 
 export type GenerationOutcome =
   | 'pending'
@@ -77,6 +81,7 @@ export type GenerationOutcome =
   | 'timed_out'
   | 'system_error'
   | 'protocol_error'
+  | 'incomplete_tool_chain'
 
 export interface GenerationSessionSnapshot {
   appId: string
@@ -86,6 +91,7 @@ export interface GenerationSessionSnapshot {
   outcome: GenerationOutcome
   contextCompression: ContextCompressionState
   toolProtocolRecovery: ToolProtocolRecoveryState
+  incompleteToolChainRecovery: IncompleteToolChainRecoveryState
   errorMessage?: string
   toolCalls: Map<string, ToolCallView>
 }
@@ -99,10 +105,14 @@ export function shouldRefreshGenerationPreview(
 export function getGenerationStatusText(
   contextCompression: ContextCompressionState,
   toolProtocolRecovery: ToolProtocolRecoveryState,
+  incompleteToolChainRecovery: IncompleteToolChainRecoveryState,
   fallback: string,
 ): string {
   if (contextCompression === 'compressing') {
     return '正在压缩上下文，请稍候…'
+  }
+  if (incompleteToolChainRecovery === 'recovering') {
+    return '正在继续未完成的构建流程，请稍候…'
   }
   if (toolProtocolRecovery === 'recovering') {
     return '正在校正工具调用，请稍候…'
@@ -114,12 +124,14 @@ export function shouldShowGenerationStatus(
   loading: boolean,
   contextCompression: ContextCompressionState,
   toolProtocolRecovery: ToolProtocolRecoveryState,
+  incompleteToolChainRecovery: IncompleteToolChainRecoveryState,
   hasVisibleOutput: boolean,
 ): boolean {
   return (
     loading &&
     (contextCompression === 'compressing' ||
       toolProtocolRecovery === 'recovering' ||
+      incompleteToolChainRecovery === 'recovering' ||
       !hasVisibleOutput)
   )
 }
@@ -150,6 +162,7 @@ interface SessionState {
   awaitingDone: boolean
   doneSeen: boolean
   toolProtocolRecoveryPhase: ToolProtocolRecoveryPhase
+  incompleteToolChainRecoveryPhase: IncompleteToolChainRecoveryPhase
   trustedContentCheckpoint: string
 }
 
@@ -179,6 +192,7 @@ function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
     outcome: 'pending',
     contextCompression: 'idle',
     toolProtocolRecovery: 'idle',
+    incompleteToolChainRecovery: 'idle',
     toolCalls: new Map(),
   }
 }
@@ -216,6 +230,7 @@ function getOrCreateSession(appId: string): SessionState {
     awaitingDone: false,
     doneSeen: false,
     toolProtocolRecoveryPhase: 'idle',
+    incompleteToolChainRecoveryPhase: 'idle',
     trustedContentCheckpoint: '',
   }
   sessions.set(appId, created)
@@ -273,6 +288,20 @@ function hideToolProtocolRecovery(session: SessionState): boolean {
   return true
 }
 
+function hideIncompleteToolChainRecovery(session: SessionState): boolean {
+  if (session.snapshot.incompleteToolChainRecovery === 'idle') {
+    return false
+  }
+  session.snapshot.incompleteToolChainRecovery = 'idle'
+  return true
+}
+
+function hideRecoveryStatuses(session: SessionState): boolean {
+  const toolProtocolHidden = hideToolProtocolRecovery(session)
+  const incompleteToolChainHidden = hideIncompleteToolChainRecovery(session)
+  return toolProtocolHidden || incompleteToolChainHidden
+}
+
 function queueDelta(appId: string, requestId: number, chunk: string): void {
   if (!chunk) {
     return
@@ -282,13 +311,13 @@ function queueDelta(appId: string, requestId: number, chunk: string): void {
     return
   }
   if (session.renderMode === 'direct') {
-    hideToolProtocolRecovery(session)
+    hideRecoveryStatuses(session)
     session.snapshot.content += chunk
     session.trustedContentCheckpoint = session.snapshot.content
     emit(appId, 'delta', requestId)
     return
   }
-  if (hideToolProtocolRecovery(session)) {
+  if (hideRecoveryStatuses(session)) {
     emit(appId, 'delta', requestId)
   }
   session.buffer += chunk
@@ -324,6 +353,7 @@ function finishSession(
   session.snapshot.status = nextStatus
   session.snapshot.contextCompression = 'idle'
   session.snapshot.toolProtocolRecovery = 'idle'
+  session.snapshot.incompleteToolChainRecovery = 'idle'
   session.snapshot.errorMessage = errorMessage
   session.snapshot.outcome = outcome
   stopSessionStream(session)
@@ -347,6 +377,7 @@ function markDone(appId: string, requestId: number): void {
   session.snapshot.loading = false
   session.snapshot.contextCompression = 'idle'
   session.snapshot.toolProtocolRecovery = 'idle'
+  session.snapshot.incompleteToolChainRecovery = 'idle'
   if (session.snapshot.status === 'streaming') {
     session.snapshot.status = 'done'
     if (!session.expectVueTurnOutcome && session.snapshot.outcome === 'pending') {
@@ -447,7 +478,7 @@ function handleToolRequest(appId: string, requestId: number, payload: JsonRecord
   const id = toStringValue(payload.id) || ''
   const name = toStringValue(payload.name)
   const view = ensureToolCall(session, id, name)
-  hideToolProtocolRecovery(session)
+  hideRecoveryStatuses(session)
   view.status = 'streaming'
   mergeToolArguments(view, parseArgumentObject(payload.arguments))
   emit(appId, 'delta', requestId)
@@ -463,7 +494,7 @@ function handleToolArgument(appId: string, requestId: number, payload: JsonRecor
   const key = toStringValue(payload.key)
   const value = toStringValue(payload.value)
   const view = ensureToolCall(session, id, name)
-  hideToolProtocolRecovery(session)
+  hideRecoveryStatuses(session)
   view.status = 'streaming'
   if (key && value !== undefined && isVisibleToolArgument(view.name, key)) {
     view.args[key] = value
@@ -481,7 +512,7 @@ function handleToolArgumentDelta(appId: string, requestId: number, payload: Json
   const key = toStringValue(payload.key)
   const delta = toStringValue(payload.delta) || ''
   const view = ensureToolCall(session, id, name)
-  hideToolProtocolRecovery(session)
+  hideRecoveryStatuses(session)
   view.status = 'streaming'
   if (key && isVisibleToolArgument(view.name, key)) {
     const oldValue = typeof view.args[key] === 'string' ? (view.args[key] as string) : ''
@@ -498,7 +529,7 @@ function handleToolExecuted(appId: string, requestId: number, payload: JsonRecor
   const id = toStringValue(payload.id) || ''
   const name = toStringValue(payload.name)
   const view = ensureToolCall(session, id, name)
-  hideToolProtocolRecovery(session)
+  hideRecoveryStatuses(session)
   mergeToolArguments(view, parseArgumentObject(payload.arguments))
   const result = sanitizeToolResult(view.name, toStringValue(payload.result))
   if (result !== undefined) {
@@ -594,6 +625,7 @@ const OUTCOME_MAP: Record<string, Exclude<GenerationOutcome, 'pending'>> = {
   TIMED_OUT: 'timed_out',
   SYSTEM_ERROR: 'system_error',
   PROTOCOL_ERROR: 'protocol_error',
+  INCOMPLETE_TOOL_CHAIN: 'incomplete_tool_chain',
 }
 
 function markProtocolError(appId: string, requestId: number, message: string): void {
@@ -610,6 +642,65 @@ const TOOL_PROTOCOL_RECOVERY_MESSAGES = {
   RECOVERED: '工具调用已校正，继续生成…',
   FAILED: '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
 } as const
+
+const INCOMPLETE_TOOL_CHAIN_RECOVERY_MESSAGES = {
+  STARTED: '正在继续未完成的构建流程，请稍候…',
+  RECOVERED: '未完成的构建流程已恢复，继续生成…',
+  FAILED: '模型未能继续完成真实工具执行和构建，本轮已安全停止。',
+} as const
+
+function handleIncompleteToolChainRecovery(
+  appId: string,
+  requestId: number,
+  data: string,
+): void {
+  const session = getActiveSession(appId, requestId)
+  if (!session || session.snapshot.status !== 'streaming') {
+    return
+  }
+  const payload = tryParseJson(data)
+  const phase = payload?.phase
+  const validPhase = phase === 'STARTED' || phase === 'RECOVERED' || phase === 'FAILED'
+  const payloadFields = payload ? Object.keys(payload).sort() : []
+  const exactFields =
+    payload !== undefined &&
+    !Array.isArray(payload) &&
+    payloadFields.length === 3 &&
+    payloadFields[0] === 'message' &&
+    payloadFields[1] === 'phase' &&
+    payloadFields[2] === 'protocol'
+  const expectedMessage = validPhase
+    ? INCOMPLETE_TOOL_CHAIN_RECOVERY_MESSAGES[
+        phase as keyof typeof INCOMPLETE_TOOL_CHAIN_RECOVERY_MESSAGES
+      ]
+    : undefined
+  const currentPhase = session.incompleteToolChainRecoveryPhase
+  const validTransition =
+    (phase === 'STARTED' && currentPhase === 'idle') ||
+    (phase === 'RECOVERED' && currentPhase === 'recovering') ||
+    (phase === 'FAILED' && (currentPhase === 'recovering' || currentPhase === 'recovered'))
+  if (
+    !exactFields ||
+    payload?.protocol !== 'incomplete-tool-chain-recovery/v1' ||
+    !validPhase ||
+    payload.message !== expectedMessage ||
+    !validTransition
+  ) {
+    markProtocolError(appId, requestId, '未完成工具链恢复协议不合法')
+    return
+  }
+  if (phase === 'STARTED') {
+    session.snapshot.incompleteToolChainRecovery = 'recovering'
+    session.incompleteToolChainRecoveryPhase = 'recovering'
+  } else if (phase === 'RECOVERED') {
+    session.snapshot.incompleteToolChainRecovery = 'idle'
+    session.incompleteToolChainRecoveryPhase = 'recovered'
+  } else {
+    session.snapshot.incompleteToolChainRecovery = 'idle'
+    session.incompleteToolChainRecoveryPhase = 'failed'
+  }
+  emit(appId, 'delta', requestId)
+}
 
 function handleToolProtocolRecovery(appId: string, requestId: number, data: string): void {
   const session = getActiveSession(appId, requestId)
@@ -792,6 +883,10 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
     handleToolProtocolRecovery(appId, requestId, data)
     return
   }
+  if (eventName === 'incomplete-tool-chain-recovery') {
+    handleIncompleteToolChainRecovery(appId, requestId, data)
+    return
+  }
   if (eventName === 'turn-outcome') {
     handleTurnOutcome(appId, requestId, data)
     return
@@ -967,6 +1062,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.awaitingDone = false
   session.doneSeen = false
   session.toolProtocolRecoveryPhase = 'idle'
+  session.incompleteToolChainRecoveryPhase = 'idle'
   session.trustedContentCheckpoint = ''
   session.snapshot = {
     appId,
@@ -976,6 +1072,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
     outcome: 'pending',
     contextCompression: 'idle',
     toolProtocolRecovery: 'idle',
+    incompleteToolChainRecovery: 'idle',
     toolCalls: new Map(),
   }
   emit(appId, 'delta', requestId)

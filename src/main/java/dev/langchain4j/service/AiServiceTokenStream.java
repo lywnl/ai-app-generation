@@ -57,6 +57,8 @@ public class AiServiceTokenStream implements TokenStream {
     private ModelRequestGate modelRequestGate;
     private ModelRequestGate.ContinuationGate continuationGate;
     private ToolProtocolRecoveryCoordinator recoveryCoordinator;
+    private IncompleteToolChainRecoveryCoordinator
+            incompleteRecoveryCoordinator;
     private GenerationAwareModelRequestOrchestrator requestOrchestrator;
 
     private int onPartialResponseInvoked;
@@ -181,6 +183,16 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream incompleteToolChainRecoveryPolicy(
+            IncompleteToolChainRecoveryPolicy policy) {
+        this.incompleteRecoveryCoordinator =
+                new IncompleteToolChainRecoveryCoordinator(
+                        ensureNotNull(policy,
+                                "incompleteToolChainRecoveryPolicy"));
+        return this;
+    }
+
+    @Override
     public TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         requestController.onControlledTermination(handler);
@@ -265,6 +277,7 @@ public class AiServiceTokenStream implements TokenStream {
                 modelRequestGate,
                 continuationGate,
                 recoveryCoordinator,
+                incompleteRecoveryCoordinator,
                 compressionAttemptState);
 
         if (contentsHandler != null && retrievedContents != null) {

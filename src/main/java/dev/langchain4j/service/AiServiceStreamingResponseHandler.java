@@ -72,13 +72,18 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final ModelRequestGate modelRequestGate;
     private final ModelRequestGate.ContinuationGate continuationGate;
     private final ToolProtocolRecoveryCoordinator recoveryCoordinator;
+    private final IncompleteToolChainRecoveryCoordinator
+            incompleteRecoveryCoordinator;
     private final ContextCompressionAttemptState compressionAttemptState;
     private final ToolProtocolRecoveryDetector recoveryDetector;
     private final boolean recoveryGeneration;
+    private final boolean incompleteRecoveryGeneration;
     private final GenerationAwareModelRequestOrchestrator requestOrchestrator;
     private final Object recoveryDetectionMonitor = new Object();
     private final StringBuilder observedResponseText = new StringBuilder();
     private final StringBuilder trustedResponseText = new StringBuilder();
+    private int deliveredTrustedResponseChars;
+    private boolean structuredToolCallObserved;
     private int streamedResponseChars;
     private final Set<String> completedToolRequestIds =
             ConcurrentHashMap.newKeySet();
@@ -105,7 +110,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, new StreamingRequestController(),
                 ToolExecutionGuard.direct(), 0L, null, null, null, false,
-                null, new ContextCompressionAttemptState());
+                null, null, false, new ContextCompressionAttemptState());
     }
 
     AiServiceStreamingResponseHandler(
@@ -132,7 +137,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController, toolExecutionGuard,
                 requestController.latestModelRequestGeneration(), null, null,
-                null, false, null, new ContextCompressionAttemptState());
+                null, false, null, null, false,
+                new ContextCompressionAttemptState());
     }
 
     AiServiceStreamingResponseHandler(
@@ -161,7 +167,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, null, null, null, false,
-                null, new ContextCompressionAttemptState());
+                null, null, false, new ContextCompressionAttemptState());
     }
 
     AiServiceStreamingResponseHandler(
@@ -193,7 +199,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, null, false, null,
-                new ContextCompressionAttemptState());
+                null, false, new ContextCompressionAttemptState());
     }
 
     AiServiceStreamingResponseHandler(
@@ -226,7 +232,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator,
-                new ContextCompressionAttemptState());
+                null, new ContextCompressionAttemptState());
     }
 
     AiServiceStreamingResponseHandler(
@@ -259,7 +265,43 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
+                continuationGate, recoveryCoordinator, null,
+                compressionAttemptState);
+    }
+
+    AiServiceStreamingResponseHandler(
+            ChatExecutor chatExecutor,
+            AiServiceContext context,
+            Object memoryId,
+            Consumer<String> partialResponseHandler,
+            BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler,
+            BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler,
+            Consumer<ToolExecution> toolExecutionHandler,
+            Consumer<ChatResponse> completeResponseHandler,
+            Consumer<Throwable> errorHandler,
+            ChatMemory temporaryMemory,
+            TokenUsage tokenUsage,
+            List<ToolSpecification> toolSpecifications,
+            Map<String, ToolExecutor> toolExecutors,
+            GuardrailRequestParams commonGuardrailParams,
+            Object methodKey,
+            StreamingRequestController requestController,
+            ToolExecutionGuard toolExecutionGuard,
+            long requestGeneration,
+            ModelRequestGate modelRequestGate,
+            ModelRequestGate.ContinuationGate continuationGate,
+            ToolProtocolRecoveryCoordinator recoveryCoordinator,
+            IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
+            ContextCompressionAttemptState compressionAttemptState) {
+        this(chatExecutor, context, memoryId, partialResponseHandler,
+                partialToolExecutionRequestHandler,
+                completeToolExecutionRequestHandler,
+                toolExecutionHandler, completeResponseHandler, errorHandler,
+                temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
+                commonGuardrailParams, methodKey, requestController,
+                toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator, false, null,
+                incompleteRecoveryCoordinator, false,
                 compressionAttemptState);
     }
 
@@ -287,6 +329,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             ToolProtocolRecoveryCoordinator recoveryCoordinator,
             boolean recoveryGeneration,
             GenerationAwareModelRequestOrchestrator requestOrchestrator,
+            IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
+            boolean incompleteRecoveryGeneration,
             ContextCompressionAttemptState compressionAttemptState) {
         this.chatExecutor = ensureNotNull(chatExecutor, "chatExecutor");
         this.context = ensureNotNull(context, "context");
@@ -317,11 +361,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         this.modelRequestGate = modelRequestGate;
         this.continuationGate = continuationGate;
         this.recoveryCoordinator = recoveryCoordinator;
+        this.incompleteRecoveryCoordinator = incompleteRecoveryCoordinator;
         this.compressionAttemptState = ensureNotNull(
                 compressionAttemptState, "上下文压缩尝试状态不能为空");
         this.recoveryDetector = recoveryCoordinator == null
                 ? null : recoveryCoordinator.newDetector();
         this.recoveryGeneration = recoveryGeneration;
+        this.incompleteRecoveryGeneration = incompleteRecoveryGeneration;
         this.requestOrchestrator = requestOrchestrator == null
                 ? new GenerationAwareModelRequestOrchestrator(
                         requestController, modelRequestGate, continuationGate)
@@ -401,11 +447,34 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         synchronized (recoveryDetectionMonitor) {
             trustedResponseText.append(text);
         }
-        if (hasOutputGuardrails) {
-            responseBuffer.add(text);
-        } else {
-            partialResponseHandler.accept(text);
+        deliverAvailableTrustedOutput();
+    }
+
+    private void deliverAvailableTrustedOutput() {
+        String pending;
+        synchronized (recoveryDetectionMonitor) {
+            if (shouldQuarantineTrustedOutput()) {
+                return;
+            }
+            pending = trustedResponseText.substring(
+                    deliveredTrustedResponseChars);
+            deliveredTrustedResponseChars = trustedResponseText.length();
         }
+        if (pending.isEmpty()) {
+            return;
+        }
+        if (hasOutputGuardrails) {
+            responseBuffer.add(pending);
+        } else {
+            partialResponseHandler.accept(pending);
+        }
+    }
+
+    private boolean shouldQuarantineTrustedOutput() {
+        return incompleteRecoveryCoordinator != null
+                && !structuredToolCallObserved
+                && incompleteRecoveryCoordinator
+                .shouldQuarantineOrdinaryText();
     }
 
     private void markRecoveredBeforeTrustedOutput() {
@@ -478,6 +547,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void observeStructuredToolCall() {
+        synchronized (recoveryDetectionMonitor) {
+            structuredToolCallObserved = true;
+        }
+        if (incompleteRecoveryGeneration
+                && incompleteRecoveryCoordinator != null) {
+            incompleteRecoveryCoordinator.recovered();
+        }
+        deliverAvailableTrustedOutput();
         if (recoveryDetector == null) {
             return;
         }
@@ -496,6 +573,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     @Override
     public void onCompleteResponse(ChatResponse completeResponse) {
         AtomicBoolean recoveryPrepared = new AtomicBoolean();
+        AtomicBoolean incompleteRecoveryPrepared = new AtomicBoolean();
         AtomicReference<ChatResponse> continuationResponse =
                 new AtomicReference<>();
         try (var callback = requestController.enterCallback(
@@ -506,10 +584,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             processCompleteResponse(
                     completeResponse,
                     recoveryPrepared,
+                    incompleteRecoveryPrepared,
                     continuationResponse);
         }
         if (recoveryPrepared.get()) {
             prepareRecoveryRequest(TokenUsage.sum(
+                    tokenUsage, completeResponse.metadata().tokenUsage()));
+        } else if (incompleteRecoveryPrepared.get()) {
+            prepareIncompleteRecoveryRequest(TokenUsage.sum(
                     tokenUsage, completeResponse.metadata().tokenUsage()));
         } else if (continuationResponse.get() != null) {
             submitNextModelRequest(continuationResponse.get());
@@ -519,6 +601,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private void processCompleteResponse(
             ChatResponse completeResponse,
             AtomicBoolean recoveryPrepared,
+            AtomicBoolean incompleteRecoveryPrepared,
             AtomicReference<ChatResponse> continuationResponse) {
         if (!requestController.isCurrentGeneration(requestGeneration)) {
             return;
@@ -537,7 +620,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     aiMessage.text(), recoveryPrepared)) {
                 return;
             }
+            if (!handleIncompleteOrdinaryCompletion(
+                    incompleteRecoveryPrepared)) {
+                return;
+            }
             markRecoveredBeforeTrustedOutput();
+            markIncompleteRecoveredBeforeTrustedOutput();
+            deliverAvailableTrustedOutput();
             completeOrdinaryResponse(completeResponse, aiMessage);
             return;
         }
@@ -579,6 +668,60 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         executeCommittedToolBatch(
                 requests, batchTicket, completeResponse,
                 continuationResponse);
+    }
+
+    private boolean handleIncompleteOrdinaryCompletion(
+            AtomicBoolean recoveryPrepared) {
+        if (incompleteRecoveryCoordinator == null) {
+            return true;
+        }
+        IncompleteToolChainRecoveryCoordinator.CompletionAction action =
+                incompleteRecoveryCoordinator.claimOrdinaryCompletion(
+                        requestGeneration);
+        if (action == IncompleteToolChainRecoveryCoordinator
+                .CompletionAction.COMPLETE) {
+            return true;
+        }
+        if (action == IncompleteToolChainRecoveryCoordinator
+                .CompletionAction.IGNORE) {
+            return false;
+        }
+        if (action == IncompleteToolChainRecoveryCoordinator
+                .CompletionAction.FAIL) {
+            failIncompleteToolChain();
+            return false;
+        }
+        StreamingRequestController.GenerationCancellation cancellation =
+                requestController.cancelGenerationForRecovery(
+                        requestGeneration);
+        if (cancellation != StreamingRequestController
+                .GenerationCancellation.CANCELLED) {
+            incompleteRecoveryCoordinator.releaseRecoveryReservation();
+            return false;
+        }
+        incompleteRecoveryCoordinator.recoveryStarted();
+        recoveryPrepared.set(true);
+        return false;
+    }
+
+    private void failIncompleteToolChain() {
+        ToolLoopTerminationProtocol.ControlledTermination termination =
+                new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol.ControlledTerminationReason
+                                .INCOMPLETE_TOOL_CHAIN,
+                        null);
+        if (requestController.claimControlledTermination(
+                requestGeneration, termination)) {
+            incompleteRecoveryCoordinator.failForIncompleteCompletion();
+            requestController.dispatchClaimedTermination();
+        }
+    }
+
+    private void markIncompleteRecoveredBeforeTrustedOutput() {
+        if (incompleteRecoveryGeneration
+                && incompleteRecoveryCoordinator != null) {
+            incompleteRecoveryCoordinator.recovered();
+        }
     }
 
     private AiMessage sanitizedToolMessage(AiMessage original) {
@@ -995,7 +1138,36 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 messages,
                                 accumulatedUsage,
                                 generation,
-                                true)));
+                                true,
+                                incompleteRecoveryGeneration)));
+    }
+
+    private void prepareIncompleteRecoveryRequest(
+            TokenUsage accumulatedUsage) {
+        ModelRequestGate.Request gateRequest = modelRequestGate == null
+                ? null
+                : new ModelRequestGate.Request(
+                        memoryId,
+                        this::getMemory,
+                        toolSpecifications,
+                        continuationGate,
+                        incompleteRecoveryCoordinator.transientMessages(),
+                        compressionAttemptState);
+        requestOrchestrator.submit(
+                GenerationAwareModelRequestOrchestrator.recovery(
+                        requestGeneration,
+                        gateRequest,
+                        () -> messagesToSend(memoryId),
+                        incompleteRecoveryCoordinator::failIfRecovering,
+                        this::notifyIncompleteRecoveryFailure,
+                        (messages, generation) -> startModelRequest(
+                                messages, accumulatedUsage, generation,
+                                false, true)));
+    }
+
+    private void notifyIncompleteRecoveryFailure(Throwable failure) {
+        incompleteRecoveryCoordinator.failIfRecovering();
+        notifyError(failure);
     }
 
     private void notifyRecoveryFailure(Throwable failure) {
@@ -1028,6 +1200,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 messages,
                                 accumulatedUsage,
                                 generation,
+                                false,
                                 false)));
     }
 
@@ -1042,20 +1215,23 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             List<ChatMessage> requestMessages,
             TokenUsage accumulatedUsage,
             long nextGeneration,
-            boolean recoveryGeneration) {
+            boolean recoveryGeneration,
+            boolean incompleteRecoveryGeneration) {
         ChatRequest chatRequest = ChatRequest.builder()
                 .messages(requestMessages)
                 .toolSpecifications(toolSpecifications)
                 .build();
         AiServiceStreamingResponseHandler child = childHandler(
-                accumulatedUsage, nextGeneration, recoveryGeneration);
+                accumulatedUsage, nextGeneration, recoveryGeneration,
+                incompleteRecoveryGeneration);
         return () -> context.streamingChatModel.chat(chatRequest, child);
     }
 
     private AiServiceStreamingResponseHandler childHandler(
             TokenUsage accumulatedUsage,
             long nextGeneration,
-            boolean recoveryGeneration) {
+            boolean recoveryGeneration,
+            boolean incompleteRecoveryGeneration) {
         return new AiServiceStreamingResponseHandler(
                 chatExecutor,
                 context,
@@ -1080,6 +1256,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 recoveryCoordinator,
                 recoveryGeneration,
                 requestOrchestrator,
+                incompleteRecoveryCoordinator,
+                incompleteRecoveryGeneration,
                 compressionAttemptState);
     }
 
@@ -1184,6 +1362,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             }
             if (recoveryGeneration && recoveryCoordinator != null) {
                 recoveryCoordinator.failIfRecovering();
+            }
+            if (incompleteRecoveryGeneration
+                    && incompleteRecoveryCoordinator != null) {
+                incompleteRecoveryCoordinator.failIfRecovering();
             }
             notifyError(error);
         }

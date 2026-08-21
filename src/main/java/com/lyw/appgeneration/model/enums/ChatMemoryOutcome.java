@@ -10,6 +10,7 @@ public enum ChatMemoryOutcome {
     TIMED_OUT,
     SYSTEM_ERROR,
     PROTOCOL_ERROR,
+    INCOMPLETE_TOOL_CHAIN,
     LEGACY_IMPORTED,
     LEGACY_UNVERIFIED
 }

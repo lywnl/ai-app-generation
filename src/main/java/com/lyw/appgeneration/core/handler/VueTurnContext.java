@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
+import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
@@ -488,6 +489,11 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     public void publishToolProtocolRecovery(
             ToolProtocolRecoveryMessage message) {
+        progressChannel.publish(message);
+    }
+
+    public void publishIncompleteToolChainRecovery(
+            IncompleteToolChainRecoveryMessage message) {
         progressChannel.publish(message);
     }
 

@@ -10,6 +10,7 @@ import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
+import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentDeltaMessage;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
@@ -20,6 +21,7 @@ import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.tools.ToolStreamingSpec;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.parser.CodeParserExecutor;
+import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
@@ -34,6 +36,7 @@ import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.ModelRequestGate;
+import dev.langchain4j.service.IncompleteToolChainRecoveryPolicy;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -294,7 +297,42 @@ public class AiCodeGeneratorFacade {
                 phase -> turnContext.tryRunCallback(() ->
                         turnContext.publishToolProtocolRecovery(
                                 recoveryMessage(phase)))));
+        tokenStream.incompleteToolChainRecoveryPolicy(
+                new IncompleteToolChainRecoveryPolicy(
+                        () -> incompleteBuildState(turnContext.phase()),
+                        phase -> turnContext.tryRunCallback(() ->
+                                turnContext.publishIncompleteToolChainRecovery(
+                                        incompleteRecoveryMessage(phase)))));
         return processOnlineTokenStream(tokenStream, turnContext);
+    }
+
+    private IncompleteToolChainRecoveryPolicy.BuildState incompleteBuildState(
+            VueBuildPhase phase) {
+        return switch (phase) {
+            case GENERATING -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.GENERATING;
+            case REPAIRING -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.REPAIRING;
+            case RETRYING -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.RETRYING;
+            case FINAL_DIAGNOSIS -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.FINAL_DIAGNOSIS;
+            case SUCCEEDED -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.SUCCEEDED;
+            case FAILED -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.FAILED;
+            case CANCELLED -> IncompleteToolChainRecoveryPolicy
+                    .BuildState.CANCELLED;
+        };
+    }
+
+    private IncompleteToolChainRecoveryMessage incompleteRecoveryMessage(
+            IncompleteToolChainRecoveryPolicy.RecoveryPhase phase) {
+        return switch (phase) {
+            case STARTED -> IncompleteToolChainRecoveryMessage.started();
+            case RECOVERED -> IncompleteToolChainRecoveryMessage.recovered();
+            case FAILED -> IncompleteToolChainRecoveryMessage.failed();
+        };
     }
 
     private com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage
@@ -788,7 +826,8 @@ public class AiCodeGeneratorFacade {
         return switch (termination.reason()) {
             case BUILD_SUCCEEDED, BUILD_FAILED -> null;
             case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                    REPEATED_READ_LOOP, RESOURCE_LIMIT_EXCEEDED,
+                    REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN,
+                    RESOURCE_LIMIT_EXCEEDED,
                     EVALUATION_COMPLETED -> new OnlineControlledTerminationException(
                     termination.reason());
         };

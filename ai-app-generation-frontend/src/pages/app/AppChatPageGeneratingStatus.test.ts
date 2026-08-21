@@ -26,12 +26,14 @@ describe('代码生成阶段提示文案', () => {
     snapshot.loading,
     snapshot.contextCompression,
     snapshot.toolProtocolRecovery,
+    snapshot.incompleteToolChainRecovery,
     hasVisibleOutput,
   )`,
     )
     expect(pageSource).not.toContain('aiMessage.loading = snapshot.loading\n')
     expect(pageSource).toContain('snapshot.contextCompression')
     expect(pageSource).toContain('snapshot.toolProtocolRecovery')
+    expect(pageSource).toContain('snapshot.incompleteToolChainRecovery')
     expect(pageSource).not.toContain(':content="generationStatusText"')
   })
 
@@ -43,6 +45,9 @@ describe('代码生成阶段提示文案', () => {
     )
     expect(pageSource).toContain(
       'toolProtocolRecovery.value = snapshot.toolProtocolRecovery',
+    )
+    expect(pageSource).toContain(
+      'incompleteToolChainRecovery.value = snapshot.incompleteToolChainRecovery',
     )
     expect(pageSource).toContain(
       'aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery',

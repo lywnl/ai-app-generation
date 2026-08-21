@@ -17,8 +17,19 @@ public final class CompressionAwareChatMemory extends LayeredChatMemory {
             MemorySummaryService summaryService,
             UserMemoryService userMemoryService,
             UserPreferenceMessageFragmentBuilder l2FragmentBuilder) {
+        this(l0Memory, summaryService, userMemoryService, l2FragmentBuilder,
+                false);
+    }
+
+    public CompressionAwareChatMemory(
+            TokenAwareChatMemory l0Memory,
+            MemorySummaryService summaryService,
+            UserMemoryService userMemoryService,
+            UserPreferenceMessageFragmentBuilder l2FragmentBuilder,
+            boolean isolateTrustedAiProjection) {
         super(Objects.requireNonNull(l0Memory, "L0 记忆不能为空"),
-                summaryService, userMemoryService, l2FragmentBuilder);
+                summaryService, userMemoryService, l2FragmentBuilder,
+                isolateTrustedAiProjection);
         this.snapshotParser = new ConversationTurnSnapshotParser();
     }
 

@@ -239,6 +239,8 @@ class JsonMessageStreamHandlerTest {
             case GenerationStreamEvent.TurnOutcome outcome ->
                     outcome.message().getMessage();
             case GenerationStreamEvent.ContextCompression ignored -> "";
+            case GenerationStreamEvent.IncompleteToolChainRecovery recovery ->
+                    recovery.message().message();
         }).reduce("", String::concat);
         assertFalse(clientPayload.contains(pseudoToolText));
         assertFalse(clientPayload.contains("不得泄漏的伪源码"));
@@ -252,10 +254,13 @@ class JsonMessageStreamHandlerTest {
                 eq(APP_ID), display.capture(), memory.capture(),
                 eq(ChatMemoryOutcome.SUCCEEDED), eq(USER_ID));
         String expectedMemory = """
-                Vue 项目回合结果：成功
+                服务端工程状态
+                回合终态：成功
                 实际执行工具：writeFile、buildProject
                 实际变更文件：src/App.vue
-                真实构建次数：1""";
+                构建状态：成功
+                构建尝试次数：1
+                后续操作以当前磁盘文件为准。""";
         assertFalse(display.getValue().contains("不得泄漏的伪源码"));
         assertFalse(display.getValue().contains(correctionPromptMarker));
         assertEquals(expectedMemory, memory.getValue());
@@ -449,10 +454,13 @@ class JsonMessageStreamHandlerTest {
         JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
                 toolManager, realFinalizer, cancellationCoordinator);
         String expectedMemory = """
-                Vue 项目回合结果：成功
+                服务端工程状态
+                回合终态：成功
                 实际执行工具：writeFile、buildProject
                 实际变更文件：src/App.vue
-                真实构建次数：1""";
+                构建状态：成功
+                构建尝试次数：1
+                后续操作以当前磁盘文件为准。""";
         String writeExecuted = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
                 .set("id", "write-1")
@@ -524,10 +532,13 @@ class JsonMessageStreamHandlerTest {
         JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
                 toolManager, realFinalizer, cancellationCoordinator);
         String expectedMemory = """
-                Vue 项目回合结果：系统错误
+                服务端工程状态
+                回合终态：系统错误
                 实际执行工具：writeFile
                 实际变更文件：src/App.vue
-                真实构建次数：0""";
+                构建状态：未达到终态
+                构建尝试次数：0
+                后续操作以当前磁盘文件为准。""";
         String executed = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
                 .set("id", "write-display-failure")

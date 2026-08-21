@@ -224,7 +224,8 @@ public class AiGeneratorServiceFactory {
                 : VueBuildRepairMetricsCollector.MemoryResult.SUCCEEDED, codeGenType);
         return new CompressionAwareChatMemory(
                 tokenAwareMemory, memorySummaryService, userMemoryService,
-                userPreferenceMessageFragmentBuilder);
+                userPreferenceMessageFragmentBuilder,
+                codeGenType == CodeGenTypeEnum.VUE_PROJECT);
     }
 
     private synchronized AtomicChatMemoryStore l0Store() {

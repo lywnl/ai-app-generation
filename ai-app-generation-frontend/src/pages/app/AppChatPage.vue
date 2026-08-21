@@ -169,6 +169,7 @@
                     getGenerationStatusText(
                       message.contextCompression || 'idle',
                       message.toolProtocolRecovery || 'idle',
+                      message.incompleteToolChainRecovery || 'idle',
                       'AI 正在思考...',
                     )
                   }}</span>
@@ -298,6 +299,7 @@
               getGenerationStatusText(
                 contextCompression,
                 toolProtocolRecovery,
+                incompleteToolChainRecovery,
                 '正在生成网站...',
               )
             }}</p>
@@ -350,6 +352,7 @@ import {
   type GenerationOutcome,
   type ContextCompressionState,
   type ToolProtocolRecoveryState,
+  type IncompleteToolChainRecoveryState,
   startGenerationSession,
   subscribeGenerationSession,
   getGenerationSessionSnapshot,
@@ -423,6 +426,7 @@ interface Message {
   loading?: boolean
   contextCompression?: ContextCompressionState
   toolProtocolRecovery?: ToolProtocolRecoveryState
+  incompleteToolChainRecovery?: IncompleteToolChainRecoveryState
   createTime?: string
   /** tool call id → 当前调用参数视图;保持插入顺序用 Map */
   toolCalls?: Map<string, ToolCallView>
@@ -437,6 +441,8 @@ const sessionMessageIndex = ref<number | null>(null)
 const detachSession = ref<null | (() => void)>(null)
 const contextCompression = ref<ContextCompressionState>('idle')
 const toolProtocolRecovery = ref<ToolProtocolRecoveryState>('idle')
+const incompleteToolChainRecovery =
+  ref<IncompleteToolChainRecoveryState>('idle')
 
 // 外层消息容器智能吸底状态:用户上滑取消吸底,滑回接近底部(距底 ≤ 32px)恢复吸底。
 // 阈值 32 不是宽容,是流式场景下 scrollHeight 持续增长的兜底 —— 1px 在抖动中不可达。
@@ -607,6 +613,7 @@ const fetchAppInfo = async () => {
 const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   contextCompression.value = snapshot.contextCompression
   toolProtocolRecovery.value = snapshot.toolProtocolRecovery
+  incompleteToolChainRecovery.value = snapshot.incompleteToolChainRecovery
   const idx = sessionMessageIndex.value
   if (idx === null || !messages.value[idx]) {
     return
@@ -616,11 +623,13 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.toolCalls = new Map(snapshot.toolCalls)
   aiMessage.contextCompression = snapshot.contextCompression
   aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery
+  aiMessage.incompleteToolChainRecovery = snapshot.incompleteToolChainRecovery
   const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
   aiMessage.loading = shouldShowGenerationStatus(
     snapshot.loading,
     snapshot.contextCompression,
     snapshot.toolProtocolRecovery,
+    snapshot.incompleteToolChainRecovery,
     hasVisibleOutput,
   )
   isGenerating.value = snapshot.status === 'streaming'
@@ -653,6 +662,7 @@ const outcomeMessage = (outcome: GenerationOutcome, fallback?: string) => {
     timed_out: '生成超时，请重试',
     system_error: '系统异常，请稍后重试',
     protocol_error: '生成协议异常，请重试',
+    incomplete_tool_chain: '真实工具执行和构建未完成，请继续重试',
   }
   return messages[outcome] || '生成失败，请重试'
 }

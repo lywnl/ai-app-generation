@@ -33,15 +33,27 @@ public class LayeredChatMemory implements ChatMemory {
     private final MemorySummaryService summaryService;
     private final UserMemoryService userMemoryService;
     private final UserPreferenceMessageFragmentBuilder l2FragmentBuilder;
+    private final boolean isolateTrustedAiProjection;
+    private final TrustedTurnRequestViewProjector requestViewProjector;
     private final Long appId;
 
     public LayeredChatMemory(ChatMemory delegate, MemorySummaryService summaryService,
                              UserMemoryService userMemoryService,
                              UserPreferenceMessageFragmentBuilder l2FragmentBuilder) {
+        this(delegate, summaryService, userMemoryService, l2FragmentBuilder,
+                false);
+    }
+
+    public LayeredChatMemory(ChatMemory delegate, MemorySummaryService summaryService,
+                             UserMemoryService userMemoryService,
+                             UserPreferenceMessageFragmentBuilder l2FragmentBuilder,
+                             boolean isolateTrustedAiProjection) {
         this.delegate = delegate;
         this.summaryService = summaryService;
         this.userMemoryService = userMemoryService;
         this.l2FragmentBuilder = l2FragmentBuilder;
+        this.isolateTrustedAiProjection = isolateTrustedAiProjection;
+        this.requestViewProjector = new TrustedTurnRequestViewProjector();
         this.appId = (Long) delegate.id();
     }
 
@@ -77,8 +89,18 @@ public class LayeredChatMemory implements ChatMemory {
     @Override
     public List<ChatMessage> messages() {
         List<ChatMessage> base = delegate.messages();
-        List<ChatMessage> result = new ArrayList<>(base.size() + 4);
-        int memoryStart = appendLeadingSystemMessages(base, result);
+        return layeredRequestView(base, null);
+    }
+
+    private List<ChatMessage> layeredRequestView(
+            List<ChatMessage> base, String requiredSummary) {
+        TrustedTurnRequestViewProjector.ProjectedView projected =
+                projectRequestView(base);
+        List<ChatMessage> result = new ArrayList<>(base.size() + 5);
+        result.addAll(projected.leadingMessages());
+        if (projected.trustedState() != null) {
+            result.add(projected.trustedState());
+        }
 
         // L2 跨 app 用户偏好(独立降级:空则不加)
         String prefs = userMemoryService.recallByApp(appId);
@@ -87,13 +109,25 @@ public class LayeredChatMemory implements ChatMemory {
         }
 
         // L1 本 app 摘要(独立降级)
-        String summary = summaryService.getCurrentSummary(appId);
+        String summary = requiredSummary == null
+                ? summaryService.getCurrentSummary(appId) : requiredSummary;
         if (StrUtil.isNotBlank(summary)) {
             appendL1(result, summary);
         }
 
-        result.addAll(base.subList(memoryStart, base.size())); // L0
+        result.addAll(projected.conversationMessages());
         return result;
+    }
+
+    private TrustedTurnRequestViewProjector.ProjectedView projectRequestView(
+            List<ChatMessage> base) {
+        if (isolateTrustedAiProjection) {
+            return requestViewProjector.project(base);
+        }
+        int leadingCount = leadingSystemMessageCount(base);
+        return new TrustedTurnRequestViewProjector.ProjectedView(
+                base.subList(0, leadingCount), null,
+                base.subList(leadingCount, base.size()));
     }
 
     PreparedLayeredMessages prepareMessagesAfterCompletedPrefix(
@@ -102,14 +136,8 @@ public class LayeredChatMemory implements ChatMemory {
         List<ChatMessage> base = List.copyOf(delegate.messages());
         List<ChatMessage> retained = withoutCompletedPrefix(
                 base, expectedPrefix);
-        List<ChatMessage> result = new ArrayList<>(retained.size() + 4);
-        int memoryStart = appendLeadingSystemMessages(retained, result);
-        String prefs = userMemoryService.recallByApp(appId);
-        if (StrUtil.isNotBlank(prefs)) {
-            appendL2(result, prefs);
-        }
-        appendL1(result, requiredSummary);
-        result.addAll(retained.subList(memoryStart, retained.size()));
+        List<ChatMessage> result = layeredRequestView(
+                retained, requiredSummary);
         return new PreparedLayeredMessages(base, retained, result);
     }
 
@@ -151,12 +179,10 @@ public class LayeredChatMemory implements ChatMemory {
         result.add(AiMessage.from(L1_ACK));
     }
 
-    private int appendLeadingSystemMessages(
-            List<ChatMessage> base, List<ChatMessage> result) {
+    private int leadingSystemMessageCount(List<ChatMessage> base) {
         int index = 0;
         while (index < base.size()
                 && base.get(index) instanceof SystemMessage) {
-            result.add(base.get(index));
             index++;
         }
         return index;

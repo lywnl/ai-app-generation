@@ -22,6 +22,7 @@ import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -41,6 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
@@ -253,17 +255,27 @@ class AiGeneratorServiceFactoryTest {
         CompressionAwareChatMemory memory = factory.createOnlineChatMemory(
                 7L, CodeGenTypeEnum.VUE_PROJECT);
 
-        assertEquals(List.of("把首页按钮改为蓝色",
-                        "已修改 src/App.vue，构建成功。"),
-                memory.messages().stream().map(message ->
-                        message instanceof UserMessage userMessage
-                                ? userMessage.singleText()
-                                : ((AiMessage) message).text()).toList());
+        List<ChatMessage> requestView = memory.messages();
+        assertEquals(3, requestView.size());
+        SystemMessage trustedState = assertInstanceOf(
+                SystemMessage.class, requestView.getFirst());
+        assertTrue(trustedState.text().contains(
+                "已修改 src/App.vue，构建成功。"));
+        assertTrue(trustedState.text().contains("服务端验证"));
+        assertTrue(trustedState.text().contains("不得复述或模仿"));
+        assertEquals(UserMessage.from("把首页按钮改为蓝色"),
+                requestView.get(1));
+        assertEquals(AiMessage.from("已记录该轮受信工程状态。"),
+                requestView.get(2));
         ArgumentCaptor<List<ChatMessage>> estimated = ArgumentCaptor.forClass(
                 List.class);
         verify(estimator).estimateMessages(estimated.capture());
-        assertEquals(memory.messages(), estimated.getValue());
-        String recoveredText = memory.messages().toString();
+        assertEquals(List.of(
+                        UserMessage.from("把首页按钮改为蓝色"),
+                        AiMessage.from("已修改 src/App.vue，构建成功。")),
+                estimated.getValue(),
+                "冷启动装载量按原始 L0 完整回合估算，请求前再做角色隔离");
+        String recoveredText = requestView.toString();
         assertFalse(recoveredText.contains("检查点"));
         assertFalse(recoveredText.contains("不得回填的源码"));
         assertFalse(recoveredText.contains("伪工具轨迹"));

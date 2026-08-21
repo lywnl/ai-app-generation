@@ -2,6 +2,7 @@ package com.lyw.appgeneration.controller;
 
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
@@ -251,6 +252,33 @@ class AppControllerSseTest {
         assertFalse(wirePayload.contains("[工具调用]"));
         assertFalse(wirePayload.contains(
                 "上一响应未遵守工具调用协议"));
+    }
+
+    @Test
+    void 未完成工具链续行使用独立受信Sse协议且不泄漏隐藏提示() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.just(
+                        GenerationStreamEvent.incompleteToolChainRecovery(
+                                IncompleteToolChainRecoveryMessage.started()),
+                        GenerationStreamEvent.incompleteToolChainRecovery(
+                                IncompleteToolChainRecoveryMessage.recovered()),
+                        GenerationStreamEvent.content("可信正文")));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertIncompleteRecoveryEvent(events.get(0), "STARTED",
+                "正在继续未完成的构建流程，请稍候…");
+        assertIncompleteRecoveryEvent(events.get(1), "RECOVERED",
+                "未完成的构建流程已恢复，继续生成…");
+        assertEquals("可信正文",
+                JSONUtil.parseObj(events.get(2).data()).getStr("d"));
+        assertEquals("done", events.get(3).event());
+        String wirePayload = events.stream()
+                .map(ServerSentEvent::data)
+                .reduce("", String::concat);
+        assertFalse(wirePayload.contains("当前 Vue 工具回合尚未达到"));
+        assertFalse(wirePayload.contains("不得复述或模仿"));
     }
 
     @Test
@@ -643,6 +671,17 @@ class AppControllerSseTest {
         assertEquals(phase, data.getStr("phase"));
         assertEquals(message, data.getStr("message"));
         assertEquals(3, data.size(), "恢复控制帧只能暴露受信协议字段");
+    }
+
+    private void assertIncompleteRecoveryEvent(
+            ServerSentEvent<String> event, String phase, String message) {
+        assertEquals("incomplete-tool-chain-recovery", event.event());
+        var data = JSONUtil.parseObj(event.data());
+        assertEquals("incomplete-tool-chain-recovery/v1",
+                data.getStr("protocol"));
+        assertEquals(phase, data.getStr("phase"));
+        assertEquals(message, data.getStr("message"));
+        assertEquals(3, data.size(), "续行控制帧只能暴露受信协议字段");
     }
 
     private AppChatGenerateRequest requestBody() {

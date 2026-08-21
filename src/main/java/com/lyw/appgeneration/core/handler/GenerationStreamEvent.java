@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 
@@ -35,6 +36,15 @@ public sealed interface GenerationStreamEvent {
         }
     }
 
+    record IncompleteToolChainRecovery(
+            IncompleteToolChainRecoveryMessage message)
+            implements GenerationStreamEvent {
+        public IncompleteToolChainRecovery {
+            Objects.requireNonNull(message,
+                    "未完成工具链恢复控制消息不能为空");
+        }
+    }
+
     static Content content(String text) {
         return new Content(text);
     }
@@ -52,5 +62,10 @@ public sealed interface GenerationStreamEvent {
     static ToolProtocolRecovery toolProtocolRecovery(
             ToolProtocolRecoveryMessage message) {
         return new ToolProtocolRecovery(message);
+    }
+
+    static IncompleteToolChainRecovery incompleteToolChainRecovery(
+            IncompleteToolChainRecoveryMessage message) {
+        return new IncompleteToolChainRecovery(message);
     }
 }

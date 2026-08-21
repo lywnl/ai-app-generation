@@ -55,13 +55,17 @@ class TurnOutcomeMessageTest {
 
         assertEquals(java.util.Set.of(
                 "Content", "TurnOutcome", "ContextCompression",
-                "ToolProtocolRecovery"), nestedTypes);
+                "ToolProtocolRecovery", "IncompleteToolChainRecovery"),
+                nestedTypes);
         assertNotNull(GenerationStreamEvent.class.getMethod(
                 "turnOutcome", VueTurnOutcome.class));
         assertNotNull(GenerationStreamEvent.class.getMethod(
                 "contextCompression", ContextCompressionMessage.class));
         assertNotNull(GenerationStreamEvent.class.getMethod(
                 "toolProtocolRecovery", ToolProtocolRecoveryMessage.class));
+        assertNotNull(GenerationStreamEvent.class.getMethod(
+                "incompleteToolChainRecovery",
+                IncompleteToolChainRecoveryMessage.class));
     }
 
     @Test

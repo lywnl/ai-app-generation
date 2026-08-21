@@ -8,6 +8,7 @@ import java.util.List;
 
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.SUCCEEDED;
+import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.INCOMPLETE_TOOL_CHAIN;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -44,10 +45,13 @@ class VueTurnMemoryProjectionTest {
                         firstBuild, finalBuild), SUCCEEDED);
 
         assertEquals("""
-                Vue 项目回合结果：成功
+                服务端工程状态
+                回合终态：成功
                 实际执行工具：writeFile、readFile、modifyFile、buildProject
                 实际变更文件：src/App.vue、src/components/Hero.vue
-                真实构建次数：2""", projection);
+                构建状态：成功
+                构建尝试次数：2
+                后续操作以当前磁盘文件为准。""", projection);
         assertFalse(projection.contains("绝密读取正文"));
         assertFalse(projection.contains("oldContent"));
         assertFalse(projection.contains("[工具调用]"));
@@ -84,16 +88,37 @@ class VueTurnMemoryProjectionTest {
     }
 
     @Test
-    void 协议错误始终使用固定投影且不携带此前事实() {
+    void 协议错误隔离模型正文但保留此前真实落盘事实() {
         VueToolExecutionFact write = parse("writeFile", fileResult(
                 "writeFile", "src/App.vue", true, null));
 
-        assertEquals(VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
-                VueTurnMemoryProjection.project(List.of(write), PROTOCOL_ERROR));
-        assertFalse(VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION
-                .contains("src/App.vue"));
+        String projection = VueTurnMemoryProjection.project(
+                List.of(write), PROTOCOL_ERROR);
+
+        assertTrue(projection.startsWith(
+                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION));
+        assertTrue(projection.contains("回合终态：工具协议异常"));
+        assertTrue(projection.contains("实际执行工具：writeFile"));
+        assertTrue(projection.contains("实际变更文件：src/App.vue"));
+        assertTrue(projection.contains("构建状态：未达到终态"));
         assertEquals(ChatMemoryOutcome.PROTOCOL_ERROR,
                 VueTurnMemoryProjection.memoryOutcome(PROTOCOL_ERROR));
+    }
+
+    @Test
+    void 未完成工具链使用独立终态并保留可信工具事实() {
+        VueToolExecutionFact write = parse("writeFile", fileResult(
+                "writeFile", "src/App.vue", true, null));
+
+        String projection = VueTurnMemoryProjection.project(
+                List.of(write), INCOMPLETE_TOOL_CHAIN);
+
+        assertTrue(projection.contains("回合终态：工具链未完成"));
+        assertTrue(projection.contains("实际执行工具：writeFile"));
+        assertTrue(projection.contains("实际变更文件：src/App.vue"));
+        assertTrue(projection.contains("构建状态：未达到终态"));
+        assertEquals(ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN,
+                VueTurnMemoryProjection.memoryOutcome(INCOMPLETE_TOOL_CHAIN));
     }
 
     @Test

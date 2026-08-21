@@ -66,6 +66,237 @@ class AiServiceTokenStreamTest {
             {"path":"src/App.vue"}""";
 
     @Test
+    void 未完成工具链普通总结必须隔离并自动续行一次() throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        List<IncompleteToolChainRecoveryPolicy.RecoveryPhase> phases =
+                new CopyOnWriteArrayList<>();
+        List<ModelRequestGate.Request> gateRequests =
+                new CopyOnWriteArrayList<>();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        AtomicReference<IncompleteToolChainRecoveryPolicy.BuildState> state =
+                new AtomicReference<>(
+                        IncompleteToolChainRecoveryPolicy.BuildState.GENERATING);
+        try (ManagedModelRequestGate gate = allowingGate(gateRequests)) {
+            recoveryService(model, memory).chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .incompleteToolChainRecoveryPolicy(
+                            new IncompleteToolChainRecoveryPolicy(
+                                    state::get, phases::add))
+                    .onPartialResponse(partials::add)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "未完成工具链首次续行不应报错", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onPartialResponse("Vue 项目回合结果：成功");
+            model.handler(0).onCompleteResponse(response(
+                    "Vue 项目回合结果：成功",
+                    new TokenUsage(2, 3, 5)));
+
+            assertTrue(model.awaitCalls(2));
+            gate.awaitIdle();
+            assertTrue(partials.isEmpty(), "提前总结不得下发前端");
+            assertFalse(containsAiText(
+                    memory.messages(), "Vue 项目回合结果：成功"));
+            assertEquals(List.of(
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.STARTED),
+                    phases);
+            assertEquals(1, gateRequests.get(1).transientMessages().size());
+            String instruction = ((SystemMessage) gateRequests.get(1)
+                    .transientMessages().getFirst()).text();
+            assertTrue(instruction.contains("尚未达到受信构建终态"));
+            assertTrue(instruction.contains("单独调用 buildProject"));
+            assertTrue(instruction.contains("不得复述"));
+            assertFalse(memory.messages().contains(
+                    gateRequests.get(1).transientMessages().getFirst()));
+        }
+    }
+
+    @Test
+    void 未完成工具链续行返回真实工具调用必须发布恢复阶段() throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicInteger toolCalls = new AtomicInteger();
+        List<IncompleteToolChainRecoveryPolicy.RecoveryPhase> phases =
+                new CopyOnWriteArrayList<>();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new RecoveryTools(toolCalls))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .incompleteToolChainRecoveryPolicy(
+                            new IncompleteToolChainRecoveryPolicy(
+                                    () -> IncompleteToolChainRecoveryPolicy
+                                            .BuildState.GENERATING,
+                                    phases::add))
+                    .onPartialResponse(ignored -> { })
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "真实工具调用应恢复未完成工具链", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onCompleteResponse(response(
+                    "提前总结", new TokenUsage(2, 3, 5)));
+            assertTrue(model.awaitCalls(2));
+            ToolExecutionRequest request = ToolExecutionRequest.builder()
+                    .id("incomplete-recovery-write")
+                    .name("writeFile")
+                    .arguments("{}")
+                    .build();
+            model.handler(1).onCompleteResponse(toolResponse(request));
+            assertTrue(model.awaitCalls(3));
+            gate.awaitIdle();
+
+            assertEquals(1, toolCalls.get());
+            assertEquals(List.of(
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.STARTED,
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.RECOVERED),
+                    phases);
+        }
+    }
+
+    @Test
+    void 未完成工具链续行经过伪工具校正后必须同时闭合两种恢复状态()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicInteger toolCalls = new AtomicInteger();
+        List<IncompleteToolChainRecoveryPolicy.RecoveryPhase>
+                incompletePhases = new CopyOnWriteArrayList<>();
+        List<ToolProtocolRecoveryPolicy.Phase> protocolPhases =
+                new CopyOnWriteArrayList<>();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new RecoveryTools(toolCalls))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .toolProtocolRecoveryPolicy(
+                            recoveryPolicy(protocolPhases))
+                    .incompleteToolChainRecoveryPolicy(
+                            new IncompleteToolChainRecoveryPolicy(
+                                    () -> IncompleteToolChainRecoveryPolicy
+                                            .BuildState.GENERATING,
+                                    incompletePhases::add))
+                    .onPartialResponse(ignored -> { })
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "嵌套恢复应继续执行真实工具", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onCompleteResponse(response(
+                    "提前总结", new TokenUsage(2, 3, 5)));
+            assertTrue(model.awaitCalls(2));
+            model.handler(1).onPartialResponse(DUPLICATE_PSEUDO_TOOL);
+            assertTrue(model.awaitCalls(3));
+            ToolExecutionRequest request = ToolExecutionRequest.builder()
+                    .id("nested-recovery-write")
+                    .name("writeFile")
+                    .arguments("{}")
+                    .build();
+            model.handler(2).onCompleteResponse(toolResponse(request));
+            gate.awaitIdle();
+
+            assertEquals(1, toolCalls.get());
+            assertEquals(List.of(
+                    ToolProtocolRecoveryPolicy.Phase.STARTED,
+                    ToolProtocolRecoveryPolicy.Phase.RECOVERED),
+                    protocolPhases);
+            assertEquals(List.of(
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.STARTED,
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.RECOVERED),
+                    incompletePhases);
+        }
+    }
+
+    @Test
+    void 未完成工具链第二次提前结束必须独立熔断() throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        List<IncompleteToolChainRecoveryPolicy.RecoveryPhase> phases =
+                new CopyOnWriteArrayList<>();
+        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
+                terminal = new AtomicReference<>();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            recoveryService(model, memory).chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .incompleteToolChainRecoveryPolicy(
+                            new IncompleteToolChainRecoveryPolicy(
+                                    () -> IncompleteToolChainRecoveryPolicy
+                                            .BuildState.GENERATING,
+                                    phases::add))
+                    .onPartialResponse(ignored -> { })
+                    .onControlledTermination(terminal::set)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "二次提前结束应走受控终态", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+            model.handler(0).onCompleteResponse(response(
+                    "第一次提前总结", new TokenUsage(2, 3, 5)));
+            assertTrue(model.awaitCalls(2));
+
+            model.handler(1).onCompleteResponse(response(
+                    "第二次提前总结", new TokenUsage(3, 4, 7)));
+            gate.awaitIdle();
+
+            assertEquals(2, model.callCount());
+            assertEquals(List.of(
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.STARTED,
+                    IncompleteToolChainRecoveryPolicy.RecoveryPhase.FAILED),
+                    phases);
+            assertEquals(ToolLoopTerminationProtocol
+                            .ControlledTerminationReason.INCOMPLETE_TOOL_CHAIN,
+                    terminal.get().reason());
+            assertFalse(containsAiText(memory.messages(), "第一次提前总结"));
+            assertFalse(containsAiText(memory.messages(), "第二次提前总结"));
+        }
+    }
+
+    @Test
+    void 已达到构建终态时普通响应保持原行为() throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicReference<ChatResponse> completed = new AtomicReference<>();
+        List<String> partials = new CopyOnWriteArrayList<>();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            recoveryService(model, memory).chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .incompleteToolChainRecoveryPolicy(
+                            new IncompleteToolChainRecoveryPolicy(
+                                    () -> IncompleteToolChainRecoveryPolicy
+                                            .BuildState.SUCCEEDED,
+                                    ignored -> { }))
+                    .onPartialResponse(partials::add)
+                    .onCompleteResponse(completed::set)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "构建终态普通响应不应报错", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+            model.handler(0).onPartialResponse("构建完成");
+            model.handler(0).onCompleteResponse(response(
+                    "构建完成", new TokenUsage(2, 3, 5)));
+            gate.awaitIdle();
+
+            assertEquals(List.of("构建完成"), partials);
+            assertEquals("构建完成", completed.get().aiMessage().text());
+            assertTrue(containsAiText(memory.messages(), "构建完成"));
+            assertEquals(1, model.callCount());
+        }
+    }
+
+    @Test
     void 首次重复认领必须原子绑定来源代且合并同代并发确认() {
         ToolProtocolRecoveryCoordinator coordinator =
                 new ToolProtocolRecoveryCoordinator(

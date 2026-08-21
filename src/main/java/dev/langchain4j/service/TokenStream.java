@@ -38,6 +38,12 @@ public interface TokenStream {
         return this;
     }
 
+    /** 为 Vue 在线回合安装未完成工具链的一次自动续行策略。 */
+    default TokenStream incompleteToolChainRecoveryPolicy(
+            IncompleteToolChainRecoveryPolicy policy) {
+        return this;
+    }
+
     default TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         return this;

@@ -236,7 +236,7 @@ class VueTurnFinalizerTest {
                 eq(APP_ID), eq(VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE),
                 anyString(), eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
         verify(collapser).collapseLastTurn(
-                eq(APP_ID), contains("Vue 项目回合结果：系统错误"));
+                eq(APP_ID), contains("回合终态：系统错误"));
         verify(history, never()).addAiMessageAndReturn(
                 eq(APP_ID), eq(oversized), anyString(), any(), eq(USER_ID));
     }
@@ -251,6 +251,9 @@ class VueTurnFinalizerTest {
                 "生成状态异常，系统已停止本次生成，请重新发起。",
                 "生成步骤过多，系统已停止本次生成，请稍后重试。",
                 "检测到模型连续重复执行相同读取操作且没有产生新进展，"
+                        + "系统已安全停止本轮生成。已经完成的文件修改会保留，"
+                        + "请发送“继续完成并构建”后重试。",
+                "模型自动续行后仍未完成真实工具执行和构建，"
                         + "系统已安全停止本轮生成。已经完成的文件修改会保留，"
                         + "请发送“继续完成并构建”后重试。",
                 "生成与构建超时，请稍后重试。",

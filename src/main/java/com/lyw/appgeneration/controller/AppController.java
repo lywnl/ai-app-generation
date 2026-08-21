@@ -174,6 +174,8 @@ public class AppController {
                         turnEvent.message().getOutcome()) {
                     case PROTOCOL_ERROR ->
                             AppLifecycleMetricsCollector.SseProtocolResult.PROTOCOL_ERROR;
+                    case INCOMPLETE_TOOL_CHAIN ->
+                            AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR;
                     case SYSTEM_ERROR ->
                             AppLifecycleMetricsCollector.SseProtocolResult.SYSTEM_ERROR;
                     default -> null;
@@ -234,6 +236,18 @@ public class AppController {
                     "message", recovery.message());
             return ServerSentEvent.<String>builder()
                     .event("tool-protocol-recovery")
+                    .data(JSONUtil.toJsonStr(data))
+                    .build();
+        }
+        if (event instanceof GenerationStreamEvent.IncompleteToolChainRecovery
+                recoveryEvent) {
+            var recovery = recoveryEvent.message();
+            Map<String, Object> data = Map.of(
+                    "protocol", recovery.protocol(),
+                    "phase", recovery.phase().name(),
+                    "message", recovery.message());
+            return ServerSentEvent.<String>builder()
+                    .event("incomplete-tool-chain-recovery")
                     .data(JSONUtil.toJsonStr(data))
                     .build();
         }

@@ -365,7 +365,8 @@ class AiCodeGeneratorFacadeTest {
     @ParameterizedTest
     @EnumSource(value = ToolLoopTerminationProtocol.ControlledTerminationReason.class,
             names = {"CANCELLED", "PROTOCOL_ERROR", "LOOP_LIMIT_EXCEEDED",
-                    "REPEATED_READ_LOOP", "RESOURCE_LIMIT_EXCEEDED",
+                    "REPEATED_READ_LOOP", "INCOMPLETE_TOOL_CHAIN",
+                    "RESOURCE_LIMIT_EXCEEDED",
                     "EVALUATION_COMPLETED"})
     void onlineNonSuccessfulControlledTerminationFailsFlux(
             ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
@@ -1111,7 +1112,8 @@ class AiCodeGeneratorFacadeTest {
                 case BUILD_FAILED ->
                         "抱歉，系统遇到了一些问题，请您稍后重试修复";
                 case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                        REPEATED_READ_LOOP, RESOURCE_LIMIT_EXCEEDED,
+                        REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN,
+                        RESOURCE_LIMIT_EXCEEDED,
                         EVALUATION_COMPLETED -> null;
             };
         }

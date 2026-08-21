@@ -38,6 +38,7 @@ public record VueTurnOutcome(
         CANCELLED,
         TIMED_OUT,
         SYSTEM_ERROR,
-        PROTOCOL_ERROR
+        PROTOCOL_ERROR,
+        INCOMPLETE_TOOL_CHAIN
     }
 }

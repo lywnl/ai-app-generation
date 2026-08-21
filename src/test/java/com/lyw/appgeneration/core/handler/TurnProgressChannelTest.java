@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
@@ -71,6 +72,30 @@ class TurnProgressChannelTest {
                         ((GenerationStreamEvent.ToolProtocolRecovery) event)
                                 .message().phase()))
                 .expectNext(GenerationStreamEvent.content("正文"))
+                .verifyComplete();
+    }
+
+    @Test
+    void 未完成工具链续行事件必须独立合流且保持顺序() {
+        TurnProgressChannel channel = new TurnProgressChannel();
+        Flux<GenerationStreamEvent> business = Flux.defer(() -> {
+            assertTrue(channel.publish(
+                    IncompleteToolChainRecoveryMessage.started()));
+            assertTrue(channel.publish(
+                    IncompleteToolChainRecoveryMessage.recovered()));
+            return Flux.just(GenerationStreamEvent.content("可信正文"));
+        });
+
+        StepVerifier.create(channel.mergeWith(business))
+                .assertNext(event -> assertEquals(
+                        IncompleteToolChainRecoveryMessage.Phase.STARTED,
+                        ((GenerationStreamEvent.IncompleteToolChainRecovery)
+                                event).message().phase()))
+                .assertNext(event -> assertEquals(
+                        IncompleteToolChainRecoveryMessage.Phase.RECOVERED,
+                        ((GenerationStreamEvent.IncompleteToolChainRecovery)
+                                event).message().phase()))
+                .expectNext(GenerationStreamEvent.content("可信正文"))
                 .verifyComplete();
     }
 

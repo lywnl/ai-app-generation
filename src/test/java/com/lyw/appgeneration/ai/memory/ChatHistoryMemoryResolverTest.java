@@ -62,7 +62,7 @@ class ChatHistoryMemoryResolverTest {
     }
 
     @Test
-    void 长期偏好门只排除协议错误旧Vue和不完整AI行() {
+    void 长期偏好门排除协议错误未完成工具链旧Vue和不完整AI行() {
         assertFalse(resolver.isEligibleForLongTermPreference(
                 history("用户原话", "user", null, null)));
         assertFalse(resolver.isEligibleForLongTermPreference(
@@ -73,6 +73,9 @@ class ChatHistoryMemoryResolverTest {
         assertFalse(resolver.isEligibleForLongTermPreference(
                 history("展示", "ai", "协议异常投影",
                         ChatMemoryOutcome.PROTOCOL_ERROR)));
+        assertFalse(resolver.isEligibleForLongTermPreference(
+                history("展示", "ai", "工具链未完成投影",
+                        ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN)));
         assertFalse(resolver.isEligibleForLongTermPreference(
                 history("展示", "ai", "旧 Vue 保守投影",
                         ChatMemoryOutcome.LEGACY_UNVERIFIED)));

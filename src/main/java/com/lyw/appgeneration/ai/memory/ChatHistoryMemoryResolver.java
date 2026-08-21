@@ -47,6 +47,7 @@ public class ChatHistoryMemoryResolver {
         ChatMemoryOutcome outcome = aiHistory.getMemoryOutcome();
         return outcome != null
                 && outcome != ChatMemoryOutcome.PROTOCOL_ERROR
+                && outcome != ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN
                 && outcome != ChatMemoryOutcome.LEGACY_UNVERIFIED;
     }
 }

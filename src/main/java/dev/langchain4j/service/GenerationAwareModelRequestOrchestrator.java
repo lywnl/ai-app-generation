@@ -100,7 +100,7 @@ final class GenerationAwareModelRequestOrchestrator {
     private void submitWithoutGate(Submission submission) {
         if (submission.gateRequired()) {
             failSource(submission, new IllegalStateException(
-                    "工具协议恢复必须安装模型请求门禁"));
+                    "模型恢复请求必须安装模型请求门禁"));
             return;
         }
         List<ChatMessage> messages;

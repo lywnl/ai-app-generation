@@ -177,6 +177,28 @@ class UserPreferenceBatchBuilderTest {
     }
 
     @Test
+    void 未完成工具链回合不得进入L2且后续成功回合仍可提取() {
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+
+        UserPreferenceBatchBuilder.PageResult result = session.acceptPage(
+                List.of(
+                        消息(55L, "user", "不得记住的未完成需求"),
+                        ai消息(56L, "提前总结", "工具链未完成投影",
+                                ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN),
+                        消息(57L, "user", "所有页面使用紧凑布局"),
+                        ai消息(58L, "安全展示", "已应用紧凑布局",
+                                ChatMemoryOutcome.SUCCEEDED)),
+                true);
+
+        assertEquals(List.of(57L), result.batch().turnIds());
+        assertEquals(58L, result.batch().completedThroughId());
+        assertFalse(result.batch().prompt().contains("未完成需求"));
+        assertFalse(result.batch().prompt().contains("工具链未完成投影"));
+        assertTrue(result.batch().prompt().contains("所有页面使用紧凑布局"));
+    }
+
+    @Test
     void L2不得把缺失投影的展示工具轨迹作为偏好证据() {
         UserPreferenceBatchBuilder.Session session =
                 batchBuilder.start(0L, "");

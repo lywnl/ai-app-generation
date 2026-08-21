@@ -95,6 +95,26 @@ function toolProtocolRecoveryEvent(
   )
 }
 
+function incompleteToolChainRecoveryEvent(
+  phase: 'STARTED' | 'RECOVERED' | 'FAILED',
+  override: Record<string, unknown> = {},
+): string {
+  const messages = {
+    STARTED: '正在继续未完成的构建流程，请稍候…',
+    RECOVERED: '未完成的构建流程已恢复，继续生成…',
+    FAILED: '模型未能继续完成真实工具执行和构建，本轮已安全停止。',
+  } as const
+  return event(
+    'incomplete-tool-chain-recovery',
+    JSON.stringify({
+      protocol: 'incomplete-tool-chain-recovery/v1',
+      phase,
+      message: messages[phase],
+      ...override,
+    }),
+  )
+}
+
 async function runSession(chunks: string[], expectVueTurnOutcome = true) {
   const appId = `app-${appIds.size + 1}`
   appIds.add(appId)
@@ -130,9 +150,9 @@ describe('generationSession Vue SSE 状态机', () => {
     '%s 时状态区可见性符合最高优先级',
     (_name, compression, recovery, hasVisibleOutput, expected) => {
       expect(
-        shouldShowGenerationStatus(true, compression, recovery, hasVisibleOutput),
+        shouldShowGenerationStatus(true, compression, recovery, 'idle', hasVisibleOutput),
       ).toBe(expected)
-      expect(getGenerationStatusText(compression, recovery, 'AI 正在思考...')).toBe(
+      expect(getGenerationStatusText(compression, recovery, 'idle', 'AI 正在思考...')).toBe(
         compression === 'compressing'
           ? '正在压缩上下文，请稍候…'
           : recovery === 'recovering'
@@ -141,6 +161,94 @@ describe('generationSession Vue SSE 状态机', () => {
       )
     },
   )
+
+  it('未完成工具链恢复使用独立状态且新可信输出会隐藏提示', async () => {
+    const appId = 'incomplete-tool-chain-recovery'
+    appIds.add(appId)
+    const observed: Array<{ recovery: string; content: string }> = []
+    subscribeGenerationSession(appId, (snapshot) => {
+      observed.push({
+        recovery: snapshot.incompleteToolChainRecovery,
+        content: snapshot.content,
+      })
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          incompleteToolChainRecoveryEvent('STARTED'),
+          messageEvent({
+            type: 'tool_request',
+            id: 'recovered-tool',
+            name: 'writeFile',
+            arguments: '{}',
+          }),
+          incompleteToolChainRecoveryEvent('RECOVERED'),
+          outcomeEvent('SUCCEEDED', true),
+          event('done'),
+        ]),
+      ),
+    )
+
+    startGenerationSession({
+      appId,
+      userMessage: '生成页面',
+      baseURL: 'http://localhost/api',
+      renderMode: 'direct',
+      expectVueTurnOutcome: true,
+    })
+
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(observed).toContainEqual({ recovery: 'recovering', content: '' })
+    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+      incompleteToolChainRecovery: 'idle',
+      outcome: 'succeeded',
+    })
+  })
+
+  it.each([
+    ['RECOVERED 乱序', incompleteToolChainRecoveryEvent('RECOVERED')],
+    ['FAILED 乱序', incompleteToolChainRecoveryEvent('FAILED')],
+    [
+      '重复 STARTED',
+      incompleteToolChainRecoveryEvent('STARTED') +
+        incompleteToolChainRecoveryEvent('STARTED'),
+    ],
+    [
+      '错误协议',
+      incompleteToolChainRecoveryEvent('STARTED', {
+        protocol: 'incomplete-tool-chain-recovery/v2',
+      }),
+    ],
+    [
+      '额外字段',
+      incompleteToolChainRecoveryEvent('STARTED', { internalReason: 'secret' }),
+    ],
+  ])('%s 的未完成工具链控制帧必须以 protocol_error 失败关闭', async (_name, invalidEvent) => {
+    const snapshot = await runSession([invalidEvent, event('done')])
+
+    expect(snapshot).toMatchObject({
+      status: 'error',
+      outcome: 'protocol_error',
+      content: '',
+      incompleteToolChainRecovery: 'idle',
+    })
+  })
+
+  it('未完成工具链失败终态映射为独立前端结果', async () => {
+    const snapshot = await runSession([
+      incompleteToolChainRecoveryEvent('STARTED'),
+      incompleteToolChainRecoveryEvent('FAILED'),
+      outcomeEvent('INCOMPLETE_TOOL_CHAIN'),
+      event('done'),
+    ])
+
+    expect(snapshot).toMatchObject({
+      status: 'done',
+      outcome: 'incomplete_tool_chain',
+      incompleteToolChainRecovery: 'idle',
+    })
+  })
 
   it('默认恢复状态为 idle 且正常正文流不受影响', async () => {
     const snapshot = await runSession([
@@ -579,9 +687,16 @@ describe('generationSession Vue SSE 状态机', () => {
     if (typeof candidate !== 'function') {
       return
     }
-    expect(candidate('compressing', 'recovering', 'fallback')).toBe('正在压缩上下文，请稍候…')
-    expect(candidate('idle', 'recovering', 'fallback')).toBe('正在校正工具调用，请稍候…')
-    expect(candidate('idle', 'idle', 'fallback')).toBe('fallback')
+    expect(candidate('compressing', 'recovering', 'recovering', 'fallback')).toBe(
+      '正在压缩上下文，请稍候…',
+    )
+    expect(candidate('idle', 'recovering', 'recovering', 'fallback')).toBe(
+      '正在继续未完成的构建流程，请稍候…',
+    )
+    expect(candidate('idle', 'recovering', 'idle', 'fallback')).toBe(
+      '正在校正工具调用，请稍候…',
+    )
+    expect(candidate('idle', 'idle', 'idle', 'fallback')).toBe('fallback')
   })
 
   it('压缩开始和完成只切换状态且不污染正文或监听事件类型', async () => {
