@@ -16,6 +16,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -24,14 +25,14 @@ import java.util.Set;
 final class RepeatedReadLoopGuard {
 
     static final String CORRECTION_INSTRUCTION = """
-            检测到你已经连续两次执行完全相同的读取操作，
-            工具、参数和返回结果均未发生变化，因此没有获得新信息。
+            检测到你正在再次读取本轮已经成功读取且内容未变化的路径，
+            即使中间读取过其他文件，这次重复读取仍然没有获得新信息。
 
             请立即调整执行方向：
-            1. 禁止再次调用相同工具和相同参数。
+            1. 禁止再次读取本轮已经成功读取的路径。
             2. 使用已有读取结果继续完成用户任务。
-            3. 如需更多信息，请读取明确的其他文件路径。
-            4. 如已掌握足够信息，请直接修改文件并执行真实构建。
+            3. 只读取与用户要求直接相关且尚未读取的最少文件。
+            4. 立即开始修改；完成修改后执行真实构建。
             5. 不要复述或解释本提示。
 
             请继续执行用户原始任务。""";
@@ -39,37 +40,30 @@ final class RepeatedReadLoopGuard {
     private static final Set<String> READ_TOOLS = Set.of("readFile", "readDir");
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private String previousFingerprint;
-    private int consecutiveCount;
+    private final Set<String> observedReadFingerprints = new HashSet<>();
     private boolean correctionPending;
+    private boolean correctionIssued;
 
     synchronized Action observe(ToolExecutionRequest request, String rawResult) {
         Objects.requireNonNull(request, "工具调用不能为空");
         if (!READ_TOOLS.contains(request.name())) {
-            reset();
+            resetAfterTrustedProgress(request, rawResult);
             return Action.CONTINUE;
         }
         String fingerprint = trustedFingerprint(request, rawResult);
         if (fingerprint == null) {
-            reset();
             return Action.CONTINUE;
         }
-        if (fingerprint.equals(previousFingerprint)) {
-            consecutiveCount++;
-        } else {
-            previousFingerprint = fingerprint;
-            consecutiveCount = 1;
-            correctionPending = false;
+        if (observedReadFingerprints.add(fingerprint)) {
+            return Action.CONTINUE;
         }
-        if (consecutiveCount >= 3) {
+        if (correctionIssued) {
             correctionPending = false;
             return Action.TERMINATE;
         }
-        if (consecutiveCount == 2) {
-            correctionPending = true;
-            return Action.CORRECT_NEXT_REQUEST;
-        }
-        return Action.CONTINUE;
+        correctionIssued = true;
+        correctionPending = true;
+        return Action.CORRECT_NEXT_REQUEST;
     }
 
     synchronized List<ChatMessage> claimTransientMessages() {
@@ -137,10 +131,30 @@ final class RepeatedReadLoopGuard {
         }
     }
 
+    private void resetAfterTrustedProgress(
+            ToolExecutionRequest request, String rawResult) {
+        VueToolExecutionFact.parse(request.name(), rawResult)
+                .filter(this::isProgress)
+                .ifPresent(ignored -> reset());
+    }
+
+    private boolean isProgress(VueToolExecutionFact fact) {
+        if (fact.changedRelativePath() != null) {
+            return true;
+        }
+        if (!"buildProject".equals(fact.toolName())) {
+            return false;
+        }
+        return switch (fact.status()) {
+            case SUCCEEDED, FAILED, TIMED_OUT -> true;
+            case NO_CHANGE, REJECTED, NOT_FOUND, CANCELLED, IN_PROGRESS -> false;
+        };
+    }
+
     private void reset() {
-        previousFingerprint = null;
-        consecutiveCount = 0;
+        observedReadFingerprints.clear();
         correctionPending = false;
+        correctionIssued = false;
     }
 
     enum Action {

@@ -25,6 +25,11 @@ public interface TokenStream {
         return this;
     }
 
+    /** 为当前流的首次模型请求设置一次性强制结构化工具调用策略。 */
+    default TokenStream initialToolChoiceRequired(boolean required) {
+        return this;
+    }
+
     /** 为在线模型请求安装统一异步门禁和本轮真实原子回调门。 */
     default TokenStream modelRequestGate(
             ModelRequestGate gate,

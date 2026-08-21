@@ -110,6 +110,30 @@ class VueProjectSystemPromptTest {
                 "旧单行协议必须删除，避免出现两套重复表述");
     }
 
+    @Test
+    void onlinePrompt区分只读问答与工程变更回合() throws IOException {
+        String prompt = readPrompt(PROMPT_RESOURCE);
+
+        assertTrue(prompt.contains("查询、解释、分析类请求（只读模式）"));
+        assertTrue(prompt.contains("禁止调用 `writeFile`、`modifyFile`、`deleteFile`"));
+        assertTrue(prompt.contains("不要求调用 `buildProject`"));
+        assertTrue(prompt.contains("创建、修改、删除、修复类请求（工程变更模式）"));
+        assertTrue(prompt.contains("真实文件变更完成后必须调用 `buildProject`"));
+        assertTrue(prompt.contains("普通正文不得输出伪工具调用代码"));
+    }
+
+    @Test
+    void onlinePromptLimitsModificationReadsToTheSmallestRelevantScope()
+            throws IOException {
+        String prompt = readPrompt(PROMPT_RESOURCE);
+
+        assertTrue(prompt.contains("只有目标路径未知时才调用一次【目录读取工具】"));
+        assertTrue(prompt.contains("只读取与用户要求直接相关的最少文件"));
+        assertTrue(prompt.contains("禁止为了全面了解项目而遍历所有页面和组件"));
+        assertTrue(prompt.contains("不得再次读取本轮已经成功读取且内容未变化的路径"));
+        assertFalse(prompt.contains("首先使用【目录读取工具】了解当前项目结构"));
+    }
+
     private String readPrompt() throws IOException {
         return readPrompt(PROMPT_RESOURCE);
     }

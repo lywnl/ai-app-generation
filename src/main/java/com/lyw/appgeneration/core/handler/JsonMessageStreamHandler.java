@@ -83,10 +83,13 @@ public final class JsonMessageStreamHandler {
                             TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
             List<VueToolExecutionFact> facts = new CopyOnWriteArrayList<>();
+            FileToolBudgetGuard.CanonicalAccumulator answerMemory =
+                    context.budgetSession().newCanonicalAccumulator();
             AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
-                                    chunk, display, facts, seenToolIds, context))
+                                    chunk, display, facts, answerMemory,
+                                    seenToolIds, context))
                     .filter(StrUtil::isNotEmpty)
                     .map(GenerationStreamEvent::content);
             AtomicBoolean deadlineReached = new AtomicBoolean();
@@ -108,7 +111,8 @@ public final class JsonMessageStreamHandler {
                         return deadlineReached.get()
                                 ? finalizeTimeout(context, display.content(), facts)
                                 : finalizeSignal(
-                                        context, display.content(), facts, null);
+                                        context, display.content(), facts,
+                                        answerMemory.content(), null);
                     }));
             Flux<GenerationStreamEvent> guardedNormalFlow = normalFlow
                     .onErrorResume(error -> {
@@ -124,7 +128,8 @@ public final class JsonMessageStreamHandler {
                                     ? Flux.empty() : Flux.error(error);
                         }
                         return finalizeSignal(
-                                context, display.content(), facts, error);
+                                context, display.content(), facts,
+                                answerMemory.content(), error);
                     });
             Flux<GenerationStreamEvent> deleteFlow = deleteTakeover
                     .flatMapMany(request -> cancellationCoordinator
@@ -176,6 +181,7 @@ public final class JsonMessageStreamHandler {
             VueTurnContext context,
             String displayPrefix,
             List<VueToolExecutionFact> facts,
+            String answerMemory,
             Throwable error) {
         VueTurnContext.TerminalTrigger trigger = error == null
                 ? VueTurnContext.TerminalTrigger.COMPLETED
@@ -184,7 +190,7 @@ public final class JsonMessageStreamHandler {
             return Flux.empty();
         }
         VueTurnOutcome requested = resolveOutcome(
-                context, displayPrefix, facts, error);
+                context, displayPrefix, facts, answerMemory, error);
         VueTurnFinalizer.FinalizationResult result =
                 finalizer.finalizeOnce(context, requested);
         GenerationStreamEvent event = GenerationStreamEvent.turnOutcome(
@@ -196,6 +202,7 @@ public final class JsonMessageStreamHandler {
             VueTurnContext context,
             String prefix,
             List<VueToolExecutionFact> facts,
+            String answerMemory,
             Throwable error) {
         ControlledTerminationReason reason = context.controlledTermination()
                 .map(termination -> termination.reason()).orElse(null);
@@ -204,6 +211,18 @@ public final class JsonMessageStreamHandler {
                 && phase == VueBuildPhase.SUCCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
                     prefix, facts, SUCCESS_MESSAGE, true);
+        }
+        if (reason == null && error == null && !context.requiresBuild()
+                && facts.stream().noneMatch(fact ->
+                fact.changedRelativePath() != null)
+                && answerMemory != null && !answerMemory.isBlank()) {
+            return new VueTurnOutcome(
+                    phase,
+                    VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                    prefix,
+                    answerMemory,
+                    false,
+                    "已回答");
         }
         if (reason == ControlledTerminationReason.BUILD_FAILED
                 && phase == VueBuildPhase.FAILED) {
@@ -307,6 +326,7 @@ public final class JsonMessageStreamHandler {
             String chunk,
             FileToolBudgetGuard.CanonicalAccumulator display,
             List<VueToolExecutionFact> facts,
+            FileToolBudgetGuard.CanonicalAccumulator answerMemory,
             Set<String> seenToolIds, VueTurnContext context) {
         StreamMessage streamMessage = JSONUtil.toBean(chunk, StreamMessage.class);
         StreamMessageTypeEnum type = StreamMessageTypeEnum.getEnumByValue(
@@ -319,6 +339,7 @@ public final class JsonMessageStreamHandler {
             case AI_RESPONSE -> {
                 String data = JSONUtil.toBean(chunk, AiResponseMessage.class).getData();
                 FileToolBudgetGuard.AppendDecision decision = display.append(data);
+                answerMemory.append(decision.acceptedPrefix());
                 recordResourceLimit(context, decision);
                 yield decision.resourceLimitExceeded()
                         ? resourceLimitAfter(decision.acceptedPrefix())

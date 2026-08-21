@@ -88,6 +88,10 @@ public class AiModelMonitorListener implements ChatModelListener {
         AiModelMetricsCollector.ErrorType errorType =
                 AiModelMetricsCollector.ErrorType.fromThrowable(
                         errorContext.error());
+        log.warn("AI 模型请求失败，modelFamily={}，errorType={}，"
+                        + "exceptionType={}",
+                modelFamily, errorType,
+                exceptionType(errorContext.error()));
         safeRecord(() -> aiModelMetricsCollector.recordRequest(
                 modelFamily,
                 AiModelMetricsCollector.RequestStatus.ERROR));
@@ -97,6 +101,10 @@ public class AiModelMonitorListener implements ChatModelListener {
                 observation,
                 modelFamily,
                 AiModelMetricsCollector.ResponseOutcome.ERROR);
+    }
+
+    private String exceptionType(Throwable error) {
+        return error == null ? "null" : error.getClass().getSimpleName();
     }
 
     private Integer estimateRequestTokens(ChatRequest chatRequest) {

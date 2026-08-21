@@ -105,6 +105,52 @@ public class ToolMessageCollapser {
         }
     }
 
+    /**
+     * 删除最后一条用户消息及其后的全部工具链尾部。
+     *
+     * <p>未完成工具链没有可供后续模型信任的稳定 AI 结果；保留用户消息会形成
+     * 孤立尾部，追加下一轮用户消息后又会破坏角色交替，因此必须整轮删除。</p>
+     */
+    public CollapseResult discardLastTurn(long appId) {
+        try {
+            return store.withMemoryLock(appId, () -> {
+                List<ChatMessage> raw = store.getMessages(appId);
+                if (raw.isEmpty()) {
+                    return new CollapseResult(
+                            CollapseStatus.NO_MESSAGES, List.of());
+                }
+                int lastUser = lastUserIndex(raw);
+                if (lastUser < 0) {
+                    return new CollapseResult(
+                            CollapseStatus.NO_USER_BOUNDARY, raw);
+                }
+                List<ChatMessage> retained = List.copyOf(
+                        raw.subList(0, lastUser));
+                if (!store.replaceMessagesIfMatches(
+                        appId, raw, retained)) {
+                    return new CollapseResult(
+                            CollapseStatus.STORE_FAILED, raw);
+                }
+                return new CollapseResult(
+                        CollapseStatus.COLLAPSED, retained);
+            });
+        } catch (Exception exception) {
+            log.warn("L0 未完成工具链整轮删除失败,appId={},errorType={}",
+                    appId, exception.getClass().getSimpleName());
+            return new CollapseResult(
+                    CollapseStatus.STORE_FAILED, List.of());
+        }
+    }
+
+    private int lastUserIndex(List<ChatMessage> messages) {
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            if (messages.get(index) instanceof UserMessage) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     public enum CollapseStatus {
         COLLAPSED,
         NO_MESSAGES,

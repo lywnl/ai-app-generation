@@ -241,6 +241,45 @@ class MemorySummaryDraftEngineTest {
         }
     }
 
+    @Test
+    @DisplayName("未完成工具链整轮不得进入 L1 摘要")
+    void 未完成工具链不得进入摘要() {
+        ChatHistoryService chatHistoryService = mock(ChatHistoryService.class);
+        ChatModel model = mock(ChatModel.class);
+        ChatTokenEstimator tokenEstimator = mock(ChatTokenEstimator.class);
+        when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
+                .thenReturn(List.of(
+                        message(1L, "user", "不得进入摘要的未完成需求"),
+                        projectedAi(2L, "未完成展示", "工具链未完成投影",
+                                ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN),
+                        message(3L, "user", "保留的正常需求"),
+                        projectedAi(4L, "正常展示", "构建成功。",
+                                ChatMemoryOutcome.SUCCEEDED)));
+        when(model.chat(anyString())).thenReturn(SUMMARY);
+        when(tokenEstimator.estimateText(anyString())).thenAnswer(invocation ->
+                invocation.<String>getArgument(0).isEmpty() ? 0 : 100);
+        ExecutorService modelExecutor = Executors.newSingleThreadExecutor();
+        try {
+            MemorySummaryDraftEngine engine = new MemorySummaryDraftEngine(
+                    chatHistoryService, model, modelExecutor,
+                    tokenEstimator, new MemoryTokenProperties());
+
+            MemorySummaryDraftEngine.DraftResult result = engine.buildDraft(
+                    1L, 4L, null, Long.MAX_VALUE);
+
+            assertNull(result.failureStatus());
+            ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(
+                    String.class);
+            verify(model).chat(prompt.capture());
+            assertFalse(prompt.getValue().contains("未完成需求"));
+            assertFalse(prompt.getValue().contains("工具链未完成投影"));
+            assertTrue(prompt.getValue().contains("保留的正常需求"));
+            assertTrue(prompt.getValue().contains("构建成功。"));
+        } finally {
+            modelExecutor.shutdownNow();
+        }
+    }
+
     @ParameterizedTest(name = "成功草稿实际调用 reducer {0} 次")
     @MethodSource("successfulReducerCases")
     void reportsActualReducerRoundsForSuccessfulDraft(

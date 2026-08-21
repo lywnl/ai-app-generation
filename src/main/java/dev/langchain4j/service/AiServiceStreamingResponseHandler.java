@@ -13,7 +13,9 @@ import dev.langchain4j.guardrail.OutputGuardrailRequest;
 import dev.langchain4j.internal.ToolArgumentsJsonNormalizer;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.chat.response.StreamingRequestHandle;
 import dev.langchain4j.model.output.TokenUsage;
@@ -620,6 +622,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     aiMessage.text(), recoveryPrepared)) {
                 return;
             }
+            observeIncompleteOrdinaryCompletion(completeResponse, aiMessage);
             if (!handleIncompleteOrdinaryCompletion(
                     incompleteRecoveryPrepared)) {
                 return;
@@ -702,6 +705,27 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         incompleteRecoveryCoordinator.recoveryStarted();
         recoveryPrepared.set(true);
         return false;
+    }
+
+    private void observeIncompleteOrdinaryCompletion(
+            ChatResponse response, AiMessage aiMessage) {
+        if (incompleteRecoveryCoordinator == null
+                || !incompleteRecoveryCoordinator
+                .shouldQuarantineOrdinaryText()) {
+            return;
+        }
+        ChatResponseMetadata metadata = response.metadata();
+        TokenUsage usage = metadata == null ? null : metadata.tokenUsage();
+        LOG.info("Incomplete tool chain returned ordinary text: memoryId={}, "
+                        + "generation={}, recovery={}, textChars={}, "
+                        + "finishReason={}, inputTokens={}, outputTokens={}",
+                memoryId,
+                requestGeneration,
+                incompleteRecoveryGeneration,
+                Objects.toString(aiMessage.text(), "").length(),
+                metadata == null ? null : metadata.finishReason(),
+                usage == null ? null : usage.inputTokenCount(),
+                usage == null ? null : usage.outputTokenCount());
     }
 
     private void failIncompleteToolChain() {
@@ -1217,14 +1241,24 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             long nextGeneration,
             boolean recoveryGeneration,
             boolean incompleteRecoveryGeneration) {
-        ChatRequest chatRequest = ChatRequest.builder()
+        ChatRequest.Builder requestBuilder = ChatRequest.builder()
                 .messages(requestMessages)
-                .toolSpecifications(toolSpecifications)
-                .build();
+                .toolSpecifications(toolSpecifications);
+        if (shouldRequireToolCall(incompleteRecoveryGeneration)) {
+            requestBuilder.toolChoice(ToolChoice.REQUIRED);
+        }
+        ChatRequest chatRequest = requestBuilder.build();
         AiServiceStreamingResponseHandler child = childHandler(
                 accumulatedUsage, nextGeneration, recoveryGeneration,
                 incompleteRecoveryGeneration);
         return () -> context.streamingChatModel.chat(chatRequest, child);
+    }
+
+    private boolean shouldRequireToolCall(
+            boolean nextIncompleteRecoveryGeneration) {
+        return nextIncompleteRecoveryGeneration
+                && incompleteRecoveryCoordinator != null
+                && incompleteRecoveryCoordinator.shouldQuarantineOrdinaryText();
     }
 
     private AiServiceStreamingResponseHandler childHandler(

@@ -261,6 +261,57 @@ class ToolMessageCollapserTest {
     }
 
     @Test
+    void 未完成工具链必须从L0删除整轮用户与工具尾部() {
+        long appId = 559L;
+        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
+        MessageWindowChatMemory memory = MessageWindowChatMemory.builder()
+                .id(appId).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
+        ToolExecutionRequest request = req("未完成工具", "readFile");
+        memory.add(UserMessage.from("上一轮成功需求"));
+        memory.add(AiMessage.from("上一轮成功投影"));
+        memory.add(UserMessage.from("本轮未完成需求"));
+        memory.add(AiMessage.from(request));
+        memory.add(ToolExecutionResultMessage.from(request, "冗长源码"));
+
+        ToolMessageCollapser.CollapseResult result =
+                new ToolMessageCollapser(store).discardLastTurn(appId);
+
+        assertEquals(ToolMessageCollapser.CollapseStatus.COLLAPSED,
+                result.status());
+        assertEquals(List.of("上一轮成功需求", "上一轮成功投影"),
+                messageTexts(result.messages()));
+        assertEquals(result.messages(), memory.messages());
+    }
+
+    @Test
+    void 首轮未完成工具链删除后L0应为空() {
+        long appId = 560L;
+        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
+        MessageWindowChatMemory memory = MessageWindowChatMemory.builder()
+                .id(appId).chatMemoryStore(store)
+                .maxMessages(Integer.MAX_VALUE).build();
+        memory.add(UserMessage.from("首轮未完成需求"));
+
+        ToolMessageCollapser.CollapseResult result =
+                new ToolMessageCollapser(store).discardLastTurn(appId);
+
+        assertEquals(ToolMessageCollapser.CollapseStatus.COLLAPSED,
+                result.status());
+        assertTrue(result.messages().isEmpty());
+        assertTrue(memory.messages().isEmpty());
+    }
+
+    private List<String> messageTexts(List<ChatMessage> messages) {
+        return messages.stream().map(message -> {
+            if (message instanceof UserMessage userMessage) {
+                return userMessage.singleText();
+            }
+            return ((AiMessage) message).text();
+        }).toList();
+    }
+
+    @Test
     void collapseDistinguishesEmptyBoundaryAndStoreFailure() {
         long appId = 557L;
         ChatMemoryStore store = mock(ChatMemoryStore.class);

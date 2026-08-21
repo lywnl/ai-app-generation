@@ -75,6 +75,7 @@ type IncompleteToolChainRecoveryPhase = 'idle' | 'recovering' | 'recovered' | 'f
 
 export type GenerationOutcome =
   | 'pending'
+  | 'answered'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
@@ -619,6 +620,7 @@ function handleMessageData(appId: string, requestId: number, data: string): void
 }
 
 const OUTCOME_MAP: Record<string, Exclude<GenerationOutcome, 'pending'>> = {
+  ANSWERED: 'answered',
   SUCCEEDED: 'succeeded',
   FAILED: 'failed',
   CANCELLED: 'cancelled',

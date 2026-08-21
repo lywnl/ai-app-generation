@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.COLLAPSED;
+import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.INCOMPLETE_TOOL_CHAIN;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR;
 
 /** 同一回合唯一允许执行稳定终态持久化与记忆副作用的组件。 */
@@ -120,7 +121,8 @@ public class VueTurnFinalizer implements InitializingBean {
     public FinalizationResult finalizeOnce(
             VueTurnContext context, VueTurnOutcome requestedOutcome) {
         VueTurnContext.TerminalTrigger fallbackTrigger =
-                requestedOutcome.outcome()
+                requestedOutcome.outcome() == VueTurnOutcome.TurnOutcomeType.ANSWERED
+                        || requestedOutcome.outcome()
                         == VueTurnOutcome.TurnOutcomeType.SUCCEEDED
                         ? VueTurnContext.TerminalTrigger.COMPLETED
                         : VueTurnContext.TerminalTrigger.FAILED;
@@ -232,8 +234,7 @@ public class VueTurnFinalizer implements InitializingBean {
         }
 
         ToolMessageCollapser.CollapseResult collapse =
-                toolMessageCollapser.collapseLastTurn(
-                        context.appId(), requestedOutcome.memoryAiText());
+                synchronizeL0(context, requestedOutcome);
         recordCollapse(collapse.status());
         if (collapse.status() != COLLAPSED) {
             log.warn("Vue 回合 L0 未稳定同步,appId={},turnId={},stage={}",
@@ -241,8 +242,20 @@ public class VueTurnFinalizer implements InitializingBean {
             invalidateUnstableMemory(context);
             return new FinalizationResult(requestedOutcome, true);
         }
+        if (requestedOutcome.outcome() == INCOMPLETE_TOOL_CHAIN) {
+            return new FinalizationResult(requestedOutcome, true);
+        }
         triggerStableMemoryHooks(context, saved.getId());
         return new FinalizationResult(requestedOutcome, true);
+    }
+
+    private ToolMessageCollapser.CollapseResult synchronizeL0(
+            VueTurnContext context, VueTurnOutcome outcome) {
+        if (outcome.outcome() == INCOMPLETE_TOOL_CHAIN) {
+            return toolMessageCollapser.discardLastTurn(context.appId());
+        }
+        return toolMessageCollapser.collapseLastTurn(
+                context.appId(), outcome.memoryAiText());
     }
 
     private void triggerStableMemoryHooks(

@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -14,11 +15,21 @@ public final class IncompleteToolChainRecoveryPolicy {
             IncompleteToolChainRecoveryPolicy.class);
 
     private final Supplier<BuildState> buildStateSupplier;
+    private final BooleanSupplier requiresBuildSupplier;
     private final Consumer<RecoveryPhase> phaseListener;
 
     public IncompleteToolChainRecoveryPolicy(
             Supplier<BuildState> buildStateSupplier,
             Consumer<RecoveryPhase> phaseListener) {
+        this(() -> true, buildStateSupplier, phaseListener);
+    }
+
+    public IncompleteToolChainRecoveryPolicy(
+            BooleanSupplier requiresBuildSupplier,
+            Supplier<BuildState> buildStateSupplier,
+            Consumer<RecoveryPhase> phaseListener) {
+        this.requiresBuildSupplier = Objects.requireNonNull(
+                requiresBuildSupplier, "构建义务读取器不能为空");
         this.buildStateSupplier = Objects.requireNonNull(
                 buildStateSupplier, "构建状态读取器不能为空");
         this.phaseListener = Objects.requireNonNull(
@@ -31,7 +42,8 @@ public final class IncompleteToolChainRecoveryPolicy {
     }
 
     boolean requiresContinuation() {
-        return currentBuildState().requiresContinuation();
+        return requiresBuildSupplier.getAsBoolean()
+                && currentBuildState().requiresContinuation();
     }
 
     void publish(RecoveryPhase phase) {

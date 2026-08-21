@@ -657,6 +657,7 @@ const outcomeMessage = (outcome: GenerationOutcome, fallback?: string) => {
     return fallback
   }
   const messages: Partial<Record<GenerationOutcome, string>> = {
+    answered: '',
     failed: '生成失败，请根据构建信息重试',
     cancelled: '生成已取消',
     timed_out: '生成超时，请重试',
@@ -681,7 +682,7 @@ const attachSessionListener = (targetAppId: string) => {
       return
     }
     if (eventType === 'done') {
-      if (snapshot.outcome !== 'succeeded') {
+      if (snapshot.outcome !== 'succeeded' && snapshot.outcome !== 'answered') {
         message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))
       }
       finalizeGeneration(snapshot)

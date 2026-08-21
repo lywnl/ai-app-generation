@@ -4,6 +4,7 @@ package com.lyw.appgeneration.model.enums;
  * AI 回合记忆投影的可信结果类型。
  */
 public enum ChatMemoryOutcome {
+    ANSWERED,
     SUCCEEDED,
     FAILED,
     CANCELLED,

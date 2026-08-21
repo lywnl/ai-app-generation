@@ -120,6 +120,61 @@ class VueTurnContextTest {
     }
 
     @Test
+    void 只读回合不要求构建或首轮工具调用() {
+        VueTurnContext context = VueTurnContext.testing(
+                7L, 9L, "turn-read-only", VueBuildPhase.GENERATING,
+                VueTurnMode.READ_ONLY);
+
+        assertEquals(VueTurnMode.READ_ONLY, context.turnMode());
+        assertFalse(context.requiresBuild());
+        assertFalse(context.requiresInitialToolCall());
+    }
+
+    @Test
+    void 变更回合首轮要求工具并承担构建义务() {
+        VueTurnContext context = VueTurnContext.testing(
+                7L, 9L, "turn-mutation", VueBuildPhase.GENERATING,
+                VueTurnMode.MUTATION_REQUIRED);
+
+        assertEquals(VueTurnMode.MUTATION_REQUIRED, context.turnMode());
+        assertTrue(context.requiresBuild());
+        assertTrue(context.requiresInitialToolCall());
+    }
+
+    @Test
+    void 回合模式只能初始化一次() {
+        VueTurnContext context = VueTurnContext.testing(
+                7L, 9L, "turn-mode-once", VueBuildPhase.GENERATING,
+                VueTurnMode.READ_ONLY);
+
+        assertThrows(IllegalStateException.class,
+                () -> context.initializeMode(VueTurnMode.MUTATION_REQUIRED));
+    }
+
+    @Test
+    void 未初始化模式不得提交用户消息() {
+        String turnId = "turn-mode-required";
+        var operation = new com.lyw.appgeneration.core.concurrency
+                .AppOperationLeaseManager().acquire(
+                7L,
+                com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager
+                        .AppOperationType.GENERATE,
+                turnId);
+        var vueLease = new com.lyw.appgeneration.core.builder
+                .VueBuildSessionManager().open(operation, 9L, turnId);
+        var admission = new VueTurnAdmissionController(
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()))
+                .tryAcquire().orElseThrow();
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, vueLease, admission,
+                new FileToolBudgetGuard().newSession(), true);
+
+        assertThrows(IllegalStateException.class,
+                () -> context.commitUser(() -> true));
+        context.closeResources();
+    }
+
+    @Test
     void 资源关闭失败仍必须继续释放后续资源和全局许可() {
         List<String> closed = new ArrayList<>();
         IllegalStateException takeoverFailure =

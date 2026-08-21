@@ -19,6 +19,7 @@ import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnMode;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
 import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
 import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
@@ -55,6 +56,7 @@ import com.lyw.appgeneration.service.AppDeletionFileService;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.VueTurnModeRouter;
 import com.lyw.appgeneration.service.ProjectDownloadService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -169,6 +171,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private AiCodeGenTypeRoutingServiceFactory aiCodeGenTypeRoutingServiceFactory;
+
+    @Resource
+    private VueTurnModeRouter vueTurnModeRouter;
 
     @Override
     public AppVO getAppVO(App app) {
@@ -449,7 +454,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             VueTurnContext context = new VueTurnContext(
                     appId, userId, turnId, operationLease, vueLease,
                     admissionPermit,
-                    fileToolBudgetGuard.newSession());
+                    fileToolBudgetGuard.newSession(), true);
             admissionPermit = null;
             operationLease = null;
             vueLease = null;
@@ -484,6 +489,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         var generatorService = context.callPreparation(
                 () -> aiCodeGeneratorFacade.prepareVueGenerator(appId));
+        var mode = context.callPreparation(
+                () -> vueTurnModeRouter.route(message, hasHistory));
+        context.initializeMode(mode);
         VueTurnContext.UserCommitResult commitResult = context.commitUser(() ->
                 chatHistoryService.addChatMessage(
                         appId, message,

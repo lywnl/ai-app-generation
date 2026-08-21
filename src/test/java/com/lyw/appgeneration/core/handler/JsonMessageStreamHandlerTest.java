@@ -103,6 +103,67 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
+    void 只读普通回答进入ANSWERED且记忆只保留可信正文() {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-answered", VueBuildPhase.GENERATING,
+                VueTurnMode.READ_ONLY);
+        context.commitUser(() -> true);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                    requested.outcome());
+            assertEquals("当前布局使用卡片式结构。", requested.memoryAiText());
+            assertFalse(requested.shouldRefreshPreview());
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(
+                "{\"type\":\"ai_response\",\"data\":\"当前布局使用卡片式结构。\"}"),
+                context).collectList().block();
+
+        assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                outcomeOf(output.getLast()).outcome());
+    }
+
+    @Test
+    void 只读回合读取文件后仍以普通答案结束不要求构建() {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-answered-read", VueBuildPhase.GENERATING,
+                VueTurnMode.READ_ONLY);
+        context.commitUser(() -> true);
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool("readFile")).thenReturn(tool);
+        String result = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"readFile\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
+                + "\"message\":\"已读取\",\"failureReason\":null,"
+                + "\"content\":null}";
+        when(tool.generateToolExecutedResult(any(JSONObject.class), eq(result)))
+                .thenReturn("已读取 src/App.vue");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                    requested.outcome());
+            assertEquals("首页使用 Vue 组件。", requested.memoryAiText());
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        String toolEvent = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "read-1")
+                .set("name", "readFile")
+                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
+                .set("result", result));
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(
+                toolEvent,
+                "{\"type\":\"ai_response\",\"data\":\"首页使用 Vue 组件。\"}"),
+                context).collectList().block();
+
+        assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                outcomeOf(output.getLast()).outcome());
+    }
+
+    @Test
     void 恢复控制事件不经过Json正文处理也不进入展示或记忆投影() {
         VueTurnContext context = context(
                 "trusted-progress-isolated", VueBuildPhase.GENERATING);
@@ -1134,7 +1195,8 @@ class JsonMessageStreamHandlerTest {
 
     private VueTurnContext context(String turnId, VueBuildPhase phase) {
         VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, turnId, phase);
+                APP_ID, USER_ID, turnId, phase,
+                VueTurnMode.MUTATION_REQUIRED);
         context.commitUser(() -> true);
         return context;
     }

@@ -61,6 +61,8 @@ public final class VueTurnContext implements ContextContinuationGate {
             new AtomicReference<>();
     private final AtomicReference<TurnState> turnState =
             new AtomicReference<>(TurnState.active());
+    private final AtomicReference<VueTurnMode> turnMode =
+            new AtomicReference<>();
     private final CompletableFuture<VueTurnFinalizer.FinalizationResult> finalization =
             new CompletableFuture<>();
     private final Object finalizationObserverLock = new Object();
@@ -89,6 +91,7 @@ public final class VueTurnContext implements ContextContinuationGate {
                 System::nanoTime, budgetSession);
         VueBuildSnapshot snapshot = lease.snapshot();
         validateIdentity(appId, userId, turnId, operationLease, snapshot);
+        initializeMode(VueTurnMode.READ_ONLY);
     }
 
     public VueTurnContext(long appId, long userId, String turnId,
@@ -102,6 +105,27 @@ public final class VueTurnContext implements ContextContinuationGate {
                 System::nanoTime, budgetSession);
         VueBuildSnapshot snapshot = lease.snapshot();
         validateIdentity(appId, userId, turnId, operationLease, snapshot);
+        initializeMode(VueTurnMode.READ_ONLY);
+    }
+
+    /**
+     * 生产回合专用构造器。延迟初始化模式，确保用户消息提交前已经完成分类。
+     */
+    public VueTurnContext(long appId, long userId, String turnId,
+            AppOperationLease operationLease, VueBuildLease lease,
+            AdmissionPermit admissionPermit,
+            FileToolBudgetGuard.Session budgetSession,
+            boolean deferModeInitialization) {
+        this(appId, userId, turnId, operationLease, lease,
+                Objects.requireNonNull(admissionPermit,
+                        "Vue 回合准入许可不能为空"),
+                null, false, operationLease.startedAtNanos(), TURN_DEADLINE,
+                System::nanoTime, budgetSession);
+        VueBuildSnapshot snapshot = lease.snapshot();
+        validateIdentity(appId, userId, turnId, operationLease, snapshot);
+        if (!deferModeInitialization) {
+            initializeMode(VueTurnMode.READ_ONLY);
+        }
     }
 
     private VueTurnContext(long appId, long userId, String turnId,
@@ -139,39 +163,73 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase) {
-        return new VueTurnContext(appId, userId, turnId, null, null, null,
-                Objects.requireNonNull(phase), false,
-                System.nanoTime(), TURN_DEADLINE, System::nanoTime,
-                new FileToolBudgetGuard().newSession());
+        return testing(appId, userId, turnId, phase,
+                VueTurnMode.READ_ONLY);
     }
 
     static VueTurnContext testing(
             long appId, long userId, String turnId,
             VueBuildPhase phase, boolean timedOut) {
-        return new VueTurnContext(appId, userId, turnId, null, null, null,
-                Objects.requireNonNull(phase), timedOut,
-                System.nanoTime(), TURN_DEADLINE, System::nanoTime,
-                new FileToolBudgetGuard().newSession());
+        return testing(appId, userId, turnId, phase, timedOut,
+                VueTurnMode.READ_ONLY);
     }
 
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase,
             Duration deadlineDuration, LongSupplier nanoTicker) {
+        return testing(appId, userId, turnId, phase, deadlineDuration,
+                nanoTicker, VueTurnMode.READ_ONLY);
+    }
+
+    static VueTurnContext testing(
+            long appId, long userId, String turnId, VueBuildPhase phase,
+            VueTurnMode mode) {
+        LongSupplier ticker = System::nanoTime;
+        VueTurnContext context = new VueTurnContext(appId, userId, turnId,
+                null, null, null, Objects.requireNonNull(phase), false,
+                ticker.getAsLong(), TURN_DEADLINE, ticker,
+                new FileToolBudgetGuard().newSession());
+        context.initializeMode(mode);
+        return context;
+    }
+
+    static VueTurnContext testing(
+            long appId, long userId, String turnId, VueBuildPhase phase,
+            boolean timedOut, VueTurnMode mode) {
+        LongSupplier ticker = System::nanoTime;
+        VueTurnContext context = new VueTurnContext(appId, userId, turnId,
+                null, null, null, Objects.requireNonNull(phase), timedOut,
+                ticker.getAsLong(), TURN_DEADLINE, ticker,
+                new FileToolBudgetGuard().newSession());
+        context.initializeMode(mode);
+        return context;
+    }
+
+    static VueTurnContext testing(
+            long appId, long userId, String turnId, VueBuildPhase phase,
+            Duration deadlineDuration, LongSupplier nanoTicker,
+            VueTurnMode mode) {
         LongSupplier ticker = Objects.requireNonNull(nanoTicker);
         long startedAt = ticker.getAsLong();
-        return new VueTurnContext(appId, userId, turnId, null, null, null,
+        VueTurnContext context = new VueTurnContext(appId, userId, turnId,
+                null, null, null,
                 Objects.requireNonNull(phase), false,
                 startedAt, deadlineDuration, ticker,
                 new FileToolBudgetGuard().newSession());
+        context.initializeMode(mode);
+        return context;
     }
 
     static VueTurnContext testing(
             long appId, long userId, String turnId, VueBuildPhase phase,
             FileToolBudgetGuard.Session budgetSession) {
-        return new VueTurnContext(appId, userId, turnId, null, null, null,
+        VueTurnContext context = new VueTurnContext(appId, userId, turnId,
+                null, null, null,
                 Objects.requireNonNull(phase), false,
                 System.nanoTime(), TURN_DEADLINE, System::nanoTime,
                 budgetSession);
+        context.initializeMode(VueTurnMode.READ_ONLY);
+        return context;
     }
 
     private static void validateIdentity(
@@ -210,8 +268,40 @@ public final class VueTurnContext implements ContextContinuationGate {
                 0L, deadlineNanos - nanoTicker.getAsLong()));
     }
 
+    /** 在用户消息提交前设置一次本回合执行契约。 */
+    public void initializeMode(VueTurnMode mode) {
+        VueTurnMode checkedMode = Objects.requireNonNull(mode,
+                "Vue 回合模式不能为空");
+        if (!this.turnMode.compareAndSet(null, checkedMode)) {
+            throw new IllegalStateException("Vue 回合模式已经初始化");
+        }
+    }
+
+    /** 返回已经初始化的回合模式。 */
+    public VueTurnMode turnMode() {
+        VueTurnMode mode = turnMode.get();
+        if (mode == null) {
+            throw new IllegalStateException("Vue 回合模式尚未初始化");
+        }
+        return mode;
+    }
+
+    /** 只读回合在真实写工具成功落盘后自动升级为构建义务。 */
+    public boolean requiresBuild() {
+        VueTurnMode mode = turnMode();
+        long mutationRevision = lease == null
+                ? 0L : lease.snapshot().mutationRevision();
+        return mode == VueTurnMode.MUTATION_REQUIRED || mutationRevision > 0L;
+    }
+
+    /** 只有工程变更回合的首次模型请求需要强制结构化工具调用。 */
+    public boolean requiresInitialToolCall() {
+        return turnMode() == VueTurnMode.MUTATION_REQUIRED;
+    }
+
     public UserCommitResult commitUser(BooleanSupplier persistUser) {
         Objects.requireNonNull(persistUser, "用户消息持久化动作不能为空");
+        turnMode();
         commitGate.lock();
         try {
             if (userCommitState == UserCommitState.PRE_COMMIT_TERMINATED) {

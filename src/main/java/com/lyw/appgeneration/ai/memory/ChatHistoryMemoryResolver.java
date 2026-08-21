@@ -28,7 +28,9 @@ public class ChatHistoryMemoryResolver {
         if (!ChatHistoryMessageTypeEnum.AI.getValue()
                 .equals(history.getMessageType())
                 || StrUtil.isBlank(history.getMemoryMessage())
-                || history.getMemoryOutcome() == null) {
+                || history.getMemoryOutcome() == null
+                || history.getMemoryOutcome()
+                == ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN) {
             return Optional.empty();
         }
         return Optional.of(history.getMemoryMessage());

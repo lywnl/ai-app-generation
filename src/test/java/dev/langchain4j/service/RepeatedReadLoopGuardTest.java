@@ -29,7 +29,7 @@ class RepeatedReadLoopGuardTest {
         assertEquals(1, correction.size());
         assertTrue(correction.getFirst() instanceof SystemMessage);
         assertTrue(((SystemMessage) correction.getFirst()).text()
-                .contains("连续两次执行完全相同的读取操作"));
+                .contains("再次读取本轮已经成功读取且内容未变化的路径"));
         assertTrue(guard.claimTransientMessages().isEmpty());
 
         assertEquals(RepeatedReadLoopGuard.Action.TERMINATE,
@@ -38,19 +38,31 @@ class RepeatedReadLoopGuardTest {
     }
 
     @Test
-    @DisplayName("参数或可信结果变化会重置连续读取计数")
-    void changedArgumentsOrResultResetsSequence() {
+    @DisplayName("穿插其他读取时再次读取相同内容仍先纠正再终止")
+    void repeatedReadAcrossOtherReadsStillEscalatesWithoutProgress() {
         RepeatedReadLoopGuard guard = new RepeatedReadLoopGuard();
 
-        guard.observe(readDir("call-1", "{\"path\":\"src\"}"),
-                readDirResult("src", "[\"App.vue\"]"));
+        ToolExecutionRequest first = readDir(
+                "call-1", "{\"path\":\"src/views\"}");
+        String firstResult = readDirResult(
+                "src/views", "[\"Home.vue\"]");
+        ToolExecutionRequest second = readDir(
+                "call-2", "{\"path\":\"src/components\"}");
+        String secondResult = readDirResult(
+                "src/components", "[\"NavBar.vue\"]");
+
         assertEquals(RepeatedReadLoopGuard.Action.CONTINUE,
-                guard.observe(readDir("call-2", "{\"path\":\"src\"}"),
-                        readDirResult("src", "[\"App.vue\",\"main.js\"]")));
+                guard.observe(first, firstResult));
         assertEquals(RepeatedReadLoopGuard.Action.CONTINUE,
+                guard.observe(second, secondResult));
+        assertEquals(RepeatedReadLoopGuard.Action.CORRECT_NEXT_REQUEST,
                 guard.observe(readDir("call-3", "{\"path\":\"src/views\"}"),
-                        readDirResult("src/views", "[\"Home.vue\"]")));
-        assertTrue(guard.claimTransientMessages().isEmpty());
+                        firstResult));
+        assertTrue(((SystemMessage) guard.claimTransientMessages().getFirst())
+                .text().contains("本轮已经成功读取"));
+        assertEquals(RepeatedReadLoopGuard.Action.TERMINATE,
+                guard.observe(readDir("call-4", "{\"path\":\"src/components\"}"),
+                        secondResult));
     }
 
     @Test
@@ -86,17 +98,40 @@ class RepeatedReadLoopGuardTest {
     }
 
     @Test
-    @DisplayName("中间出现其他工具时即使失败也会打断连续读取")
-    void interveningDifferentToolBreaksSequenceEvenWhenItFails() {
+    @DisplayName("失败写入不算工程进展且不能绕过重复读取熔断")
+    void failedMutationDoesNotResetReadProgress() {
         RepeatedReadLoopGuard guard = new RepeatedReadLoopGuard();
 
         guard.observe(readDir("call-1", "{\"path\":\"src\"}"),
                 readDirResult("src", "[\"App.vue\"]"));
         guard.observe(writeFile("write-1"), failedMutationResult());
 
-        assertEquals(RepeatedReadLoopGuard.Action.CONTINUE,
+        assertEquals(RepeatedReadLoopGuard.Action.CORRECT_NEXT_REQUEST,
                 guard.observe(readDir("call-2", "{\"path\":\"src\"}"),
                         readDirResult("src", "[\"App.vue\"]")));
+        assertEquals(1, guard.claimTransientMessages().size());
+    }
+
+    @Test
+    @DisplayName("构建终态会重置读取状态并允许基于构建结果重新读取")
+    void terminalBuildResultResetsReadProgress() {
+        assertTerminalBuildResetsReadProgress(buildSuccessResult());
+        assertTerminalBuildResetsReadProgress(buildFailureResult());
+    }
+
+    private void assertTerminalBuildResetsReadProgress(String buildResult) {
+        RepeatedReadLoopGuard guard = new RepeatedReadLoopGuard();
+        String readResult = readDirResult("src", "[\"App.vue\"]");
+
+        guard.observe(readDir("call-1", "{\"path\":\"src\"}"), readResult);
+        guard.observe(readDir("call-2", "{\"path\":\"src\"}"), readResult);
+        assertEquals(1, guard.claimTransientMessages().size());
+
+        assertEquals(RepeatedReadLoopGuard.Action.CONTINUE,
+                guard.observe(buildProject("build-1"), buildResult));
+        assertEquals(RepeatedReadLoopGuard.Action.CONTINUE,
+                guard.observe(readDir("call-3", "{\"path\":\"src\"}"),
+                        readResult));
         assertTrue(guard.claimTransientMessages().isEmpty());
     }
 
@@ -113,6 +148,14 @@ class RepeatedReadLoopGuardTest {
                 .id(id)
                 .name("writeFile")
                 .arguments("{\"relativeFilePath\":\"src/App.vue\",\"content\":\"x\"}")
+                .build();
+    }
+
+    private ToolExecutionRequest buildProject(String id) {
+        return ToolExecutionRequest.builder()
+                .id(id)
+                .name("buildProject")
+                .arguments("{}")
                 .build();
     }
 
@@ -138,5 +181,28 @@ class RepeatedReadLoopGuardTest {
                 + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
                 + "\"message\":\"文件写入失败\",\"failureReason\":null,"
                 + "\"content\":null}";
+    }
+
+    private String buildSuccessResult() {
+        return "{\"protocol\":\"vue-build-tool/v1\","
+                + "\"invocationStatus\":\"COMPLETED\",\"success\":true,"
+                + "\"attempt\":1,\"maxAttempts\":3,"
+                + "\"stage\":\"SUCCESS\",\"failureKind\":null,"
+                + "\"timedOut\":false,\"repairable\":false,"
+                + "\"reflectionRequired\":false,\"nextAction\":\"STOP\","
+                + "\"message\":\"构建成功\",\"errorSummary\":null,"
+                + "\"terminateToolLoop\":true,"
+                + "\"finalResponse\":\"项目已生成并构建成功。\"}";
+    }
+
+    private String buildFailureResult() {
+        return "{\"protocol\":\"vue-build-tool/v1\","
+                + "\"invocationStatus\":\"COMPLETED\",\"success\":false,"
+                + "\"attempt\":1,\"maxAttempts\":3,"
+                + "\"stage\":\"NPM_BUILD\",\"failureKind\":\"CODE\","
+                + "\"timedOut\":false,\"repairable\":true,"
+                + "\"reflectionRequired\":false,\"nextAction\":\"REPAIR\","
+                + "\"message\":\"构建失败\",\"errorSummary\":\"语法错误\","
+                + "\"terminateToolLoop\":false,\"finalResponse\":null}";
     }
 }

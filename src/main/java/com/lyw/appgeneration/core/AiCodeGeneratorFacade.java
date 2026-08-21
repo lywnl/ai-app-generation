@@ -291,6 +291,8 @@ public class AiCodeGeneratorFacade {
                 userMessage,
                 () -> generatorService.generateVueProjectCodeStream(
                         appId, request));
+        tokenStream.initialToolChoiceRequired(
+                turnContext.requiresInitialToolCall());
         tokenStream.modelRequestGate(modelRequestGate, turnContext);
         tokenStream.toolProtocolRecoveryPolicy(new ToolProtocolRecoveryPolicy(
                 Set.copyOf(VueToolNames.ONLINE),
@@ -299,6 +301,7 @@ public class AiCodeGeneratorFacade {
                                 recoveryMessage(phase)))));
         tokenStream.incompleteToolChainRecoveryPolicy(
                 new IncompleteToolChainRecoveryPolicy(
+                        turnContext::requiresBuild,
                         () -> incompleteBuildState(turnContext.phase()),
                         phase -> turnContext.tryRunCallback(() ->
                                 turnContext.publishIncompleteToolChainRecovery(

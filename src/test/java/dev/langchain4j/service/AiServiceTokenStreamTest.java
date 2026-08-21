@@ -11,6 +11,7 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.ChatResponseMetadata;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
@@ -96,6 +97,11 @@ class AiServiceTokenStreamTest {
 
             assertTrue(model.awaitCalls(2));
             gate.awaitIdle();
+            assertFalse(model.request(0).toolChoice() == ToolChoice.REQUIRED,
+                    "初始请求不能强制工具调用");
+            assertEquals(ToolChoice.REQUIRED,
+                    model.request(1).toolChoice(),
+                    "未完成工具链自动续行必须在协议层强制工具调用");
             assertTrue(partials.isEmpty(), "提前总结不得下发前端");
             assertFalse(containsAiText(
                     memory.messages(), "Vue 项目回合结果：成功"));
@@ -153,11 +159,68 @@ class AiServiceTokenStreamTest {
             assertTrue(model.awaitCalls(3));
             gate.awaitIdle();
 
+            assertEquals(ToolChoice.REQUIRED,
+                    model.request(1).toolChoice());
+            assertFalse(model.request(2).toolChoice() == ToolChoice.REQUIRED,
+                    "首个真实结构化工具调用后必须恢复 AUTO，避免模型被困在工具模式");
             assertEquals(1, toolCalls.get());
             assertEquals(List.of(
                     IncompleteToolChainRecoveryPolicy.RecoveryPhase.STARTED,
                     IncompleteToolChainRecoveryPolicy.RecoveryPhase.RECOVERED),
                     phases);
+        }
+    }
+
+    @Test
+    void 未完成工具链真实构建终态后必须恢复自动选择并允许最终答复()
+            throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        AtomicReference<IncompleteToolChainRecoveryPolicy.BuildState> state =
+                new AtomicReference<>(
+                        IncompleteToolChainRecoveryPolicy.BuildState.GENERATING);
+        AtomicReference<ChatResponse> completed = new AtomicReference<>();
+        try (ManagedModelRequestGate gate = allowingGate(
+                new CopyOnWriteArrayList<>())) {
+            RecoveryAiService service = AiServices.builder(
+                            RecoveryAiService.class)
+                    .streamingChatModel(model)
+                    .chatMemoryProvider(ignored -> memory)
+                    .tools(new TerminalRecoveryTools(state))
+                    .build();
+            service.chat(7L, "本轮问题")
+                    .modelRequestGate(gate, directContinuation())
+                    .incompleteToolChainRecoveryPolicy(
+                            new IncompleteToolChainRecoveryPolicy(
+                                    state::get, ignored -> { }))
+                    .onPartialResponse(ignored -> { })
+                    .onCompleteResponse(completed::set)
+                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                            "构建终态后应允许普通最终答复", error))
+                    .start();
+            assertTrue(model.awaitCalls(1));
+
+            model.handler(0).onCompleteResponse(response(
+                    "提前总结", new TokenUsage(2, 3, 5)));
+            assertTrue(model.awaitCalls(2));
+            ToolExecutionRequest request = ToolExecutionRequest.builder()
+                    .id("incomplete-recovery-build")
+                    .name("buildProject")
+                    .arguments("{}")
+                    .build();
+            model.handler(1).onCompleteResponse(toolResponse(request));
+            assertTrue(model.awaitCalls(3));
+
+            assertEquals(ToolChoice.REQUIRED,
+                    model.request(1).toolChoice());
+            assertFalse(model.request(2).toolChoice() == ToolChoice.REQUIRED,
+                    "真实构建进入终态后必须恢复 AUTO，避免被迫继续调用工具");
+            model.handler(2).onCompleteResponse(response(
+                    "项目构建完成", new TokenUsage(2, 3, 5)));
+            gate.awaitIdle();
+
+            assertEquals("项目构建完成",
+                    completed.get().aiMessage().text());
         }
     }
 
@@ -2070,6 +2133,34 @@ class AiServiceTokenStreamTest {
         assertEquals(0, modelCalls.get());
     }
 
+    @Test
+    void 初始工具选择策略只影响首个模型请求() throws Exception {
+        MutableChatMemory memory = memoryWithQuestion();
+        RecordingRecoveryModel model = new RecordingRecoveryModel();
+        RecoveryAiService service = recoveryService(model, memory);
+
+        service.chat(7L, "本轮问题")
+                .initialToolChoiceRequired(true)
+                .onPartialResponse(ignored -> { })
+                .onError(error -> org.junit.jupiter.api.Assertions.fail(
+                        "首轮工具选择测试不应报错", error))
+                .start();
+
+        assertTrue(model.awaitCalls(1));
+        assertEquals(ToolChoice.REQUIRED, model.request(0).toolChoice());
+    }
+
+    @Test
+    void 只读回合的未完成工具链策略不会自动续行() {
+        IncompleteToolChainRecoveryPolicy policy =
+                new IncompleteToolChainRecoveryPolicy(
+                        () -> false,
+                        () -> IncompleteToolChainRecoveryPolicy.BuildState.GENERATING,
+                        ignored -> { });
+
+        assertFalse(policy.requiresContinuation());
+    }
+
     private RecoveryAiService recoveryService(
             RecordingRecoveryModel model, ChatMemory memory) {
         return AiServices.builder(RecoveryAiService.class)
@@ -2287,6 +2378,24 @@ class AiServiceTokenStreamTest {
         public String writeFile() {
             calls.incrementAndGet();
             return "写入成功";
+        }
+    }
+
+    static final class TerminalRecoveryTools {
+
+        private final AtomicReference<IncompleteToolChainRecoveryPolicy
+                .BuildState> state;
+
+        private TerminalRecoveryTools(
+                AtomicReference<IncompleteToolChainRecoveryPolicy
+                        .BuildState> state) {
+            this.state = state;
+        }
+
+        @dev.langchain4j.agent.tool.Tool("构建项目")
+        public String buildProject() {
+            state.set(IncompleteToolChainRecoveryPolicy.BuildState.SUCCEEDED);
+            return "构建成功";
         }
     }
 

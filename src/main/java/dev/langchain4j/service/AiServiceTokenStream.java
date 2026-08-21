@@ -10,6 +10,7 @@ import dev.langchain4j.guardrail.GuardrailRequestParams;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.rag.content.Content;
@@ -60,6 +61,7 @@ public class AiServiceTokenStream implements TokenStream {
     private IncompleteToolChainRecoveryCoordinator
             incompleteRecoveryCoordinator;
     private GenerationAwareModelRequestOrchestrator requestOrchestrator;
+    private boolean initialToolChoiceRequired;
 
     private int onPartialResponseInvoked;
     private int onCompleteResponseInvoked;
@@ -148,6 +150,12 @@ public class AiServiceTokenStream implements TokenStream {
     @Override
     public TokenStream toolExecutionGuard(ToolExecutionGuard guard) {
         this.toolExecutionGuard = ensureNotNull(guard, "toolExecutionGuard");
+        return this;
+    }
+
+    @Override
+    public TokenStream initialToolChoiceRequired(boolean required) {
+        this.initialToolChoiceRequired = required;
         return this;
     }
 
@@ -245,10 +253,13 @@ public class AiServiceTokenStream implements TokenStream {
             ChatMemory temporaryMemory,
             long requestGeneration,
             ContextCompressionAttemptState compressionAttemptState) {
-        ChatRequest chatRequest = ChatRequest.builder()
+        ChatRequest.Builder requestBuilder = ChatRequest.builder()
                 .messages(requestMessages)
-                .toolSpecifications(toolSpecifications)
-                .build();
+                .toolSpecifications(toolSpecifications);
+        if (initialToolChoiceRequired) {
+            requestBuilder.toolChoice(ToolChoice.REQUIRED);
+        }
+        ChatRequest chatRequest = requestBuilder.build();
 
         ChatExecutor chatExecutor = ChatExecutor.builder(context.streamingChatModel)
                 .errorHandler(errorHandler)

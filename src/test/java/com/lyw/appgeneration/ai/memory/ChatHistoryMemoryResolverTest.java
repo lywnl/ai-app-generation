@@ -36,6 +36,19 @@ class ChatHistoryMemoryResolverTest {
     }
 
     @Test
+    void ANSWERED只读回答可以进入模型上下文和稳定记忆() {
+        ChatHistory history = history(
+                "前端展示中的工具卡片",
+                "ai",
+                "当前布局使用卡片式结构。",
+                ChatMemoryOutcome.ANSWERED);
+
+        assertEquals(Optional.of("当前布局使用卡片式结构。"),
+                resolver.resolveModelText(history));
+        assertTrue(resolver.isEligibleForLongTermPreference(history));
+    }
+
+    @Test
     void AI投影为空时绝不回退展示文本() {
         ChatHistory missingProjection = history(
                 "不得进入模型的展示文本", "ai", null,
@@ -49,6 +62,17 @@ class ChatHistoryMemoryResolverTest {
         assertTrue(resolver.resolveModelText(missingProjection).isEmpty());
         assertTrue(resolver.resolveModelText(blankProjection).isEmpty());
         assertTrue(resolver.resolveModelText(missingOutcome).isEmpty());
+    }
+
+    @Test
+    void 未完成工具链整轮不得进入模型记忆() {
+        ChatHistory history = history(
+                "模型自动续行后仍未完成",
+                "ai",
+                "工具链未完成投影",
+                ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN);
+
+        assertTrue(resolver.resolveModelText(history).isEmpty());
     }
 
     @Test

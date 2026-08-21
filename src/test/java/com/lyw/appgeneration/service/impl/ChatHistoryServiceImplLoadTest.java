@@ -236,6 +236,26 @@ class ChatHistoryServiceImplLoadTest {
     }
 
     @Test
+    void 后端重启不得恢复未完成工具链整轮() {
+        ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
+        doReturn(List.of(
+                projectedAi(4L, "正常展示", "构建成功。",
+                        ChatMemoryOutcome.SUCCEEDED),
+                message(3L, "保留正常需求", "user"),
+                projectedAi(2L, "未完成展示", "工具链未完成投影",
+                        ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN),
+                message(1L, "丢弃未完成需求", "user")))
+                .when(service).list(any(QueryWrapper.class));
+        var memory = MessageWindowChatMemory.withMaxMessages(20);
+
+        var result = service.loadChatHistoryToMemory(7L, memory, 4);
+
+        assertEquals(HistoryLoadStatus.LOADED, result.status());
+        assertEquals(List.of("保留正常需求", "构建成功。"),
+                messageTexts(memory.messages()));
+    }
+
+    @Test
     void loadsNewestCompleteTurnsUntilThresholdWithoutSplittingOlderTurn() {
         ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
         doReturn(List.of(

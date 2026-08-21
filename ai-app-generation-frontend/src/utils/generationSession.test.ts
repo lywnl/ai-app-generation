@@ -884,12 +884,24 @@ describe('generationSession Vue SSE 状态机', () => {
   })
 
   it.each([
+    ['done + answered', 'done', 'answered', false],
     ['done + succeeded', 'done', 'succeeded', true],
     ['streaming + succeeded', 'streaming', 'succeeded', false],
     ['done + failed', 'done', 'failed', false],
     ['error + succeeded', 'error', 'succeeded', false],
   ] as const)('%s 的预览刷新判断为 %s', (_name, status, outcome, expected) => {
     expect(shouldRefreshGenerationPreview({ status, outcome })).toBe(expected)
+  })
+
+  it('ANSWERED 业务终态正常结束且不刷新预览', async () => {
+    const snapshot = await runSession([outcomeEvent('ANSWERED'), event('done')])
+
+    expect(snapshot).toMatchObject({
+      status: 'done',
+      outcome: 'answered',
+      loading: false,
+    })
+    expect(shouldRefreshGenerationPreview(snapshot!)).toBe(false)
   })
 
   it('兼容 CRLF、跨 chunk、heartbeat 和无尾随空行', async () => {
@@ -1201,6 +1213,7 @@ describe('generationSession Vue SSE 状态机', () => {
   })
 
   it.each([
+    ['ANSWERED', 'answered'],
     ['FAILED', 'failed'],
     ['CANCELLED', 'cancelled'],
     ['TIMED_OUT', 'timed_out'],

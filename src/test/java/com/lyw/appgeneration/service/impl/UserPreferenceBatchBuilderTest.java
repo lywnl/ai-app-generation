@@ -146,6 +146,23 @@ class UserPreferenceBatchBuilderTest {
     }
 
     @Test
+    void ANSWERED回合允许进入L2但只携带用户原话证据() {
+        UserPreferenceBatchBuilder.Session session =
+                batchBuilder.start(0L, "");
+
+        UserPreferenceBatchBuilder.PageResult result = session.acceptPage(
+                List.of(
+                        消息(61L, "user", "以后回答简洁一点"),
+                        ai消息(62L, "当前布局使用卡片式结构", "当前布局使用卡片式结构",
+                                ChatMemoryOutcome.ANSWERED)),
+                true);
+
+        assertEquals(List.of(61L), result.batch().turnIds());
+        assertTrue(result.batch().prompt().contains("以后回答简洁一点"));
+        assertFalse(result.batch().prompt().contains("卡片式结构"));
+    }
+
+    @Test
     void 协议失败轮不得向L2泄漏用户证据伪工具正文或纠正提示() {
         UserPreferenceBatchBuilder.Session session =
                 batchBuilder.start(0L, "");

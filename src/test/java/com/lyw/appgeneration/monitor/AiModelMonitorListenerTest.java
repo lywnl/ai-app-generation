@@ -161,6 +161,41 @@ class AiModelMonitorListenerTest {
     }
 
     @Test
+    void onErrorLogsOnlyFixedErrorTypeAndExceptionClass() {
+        AiModelMonitorListener listener = newListener();
+        Map<Object, Object> attributes = new HashMap<>();
+        ChatRequest request = request("deepseek-chat", "敏感用户正文");
+        when(tokenEstimator.estimateRequest(anyList(), anyList()))
+                .thenReturn(100);
+        listener.onRequest(requestContext(request, attributes));
+        ChatModelErrorContext errorContext =
+                org.mockito.Mockito.mock(ChatModelErrorContext.class);
+        when(errorContext.attributes()).thenReturn(attributes);
+        when(errorContext.error()).thenReturn(
+                new java.io.IOException("敏感网络异常正文"));
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                AiModelMonitorListener.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            listener.onError(errorContext);
+        } finally {
+            logger.detachAppender(appender);
+        }
+        List<String> messages = appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+
+        assertTrue(messages.stream().anyMatch(message ->
+                message.contains("errorType=NETWORK")
+                        && message.contains("exceptionType=IOException")));
+        assertFalse(messages.stream().anyMatch(message ->
+                message.contains("敏感网络异常正文")
+                        || message.contains("敏感用户正文")));
+    }
+
+    @Test
     void legacyStringAttributesWithWrongTypesCannotEscapeCallbacks() {
         AiModelMonitorListener listener = newListener();
         Map<Object, Object> attributes = new HashMap<>();

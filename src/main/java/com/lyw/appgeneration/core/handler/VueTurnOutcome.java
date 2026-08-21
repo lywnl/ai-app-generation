@@ -33,6 +33,7 @@ public record VueTurnOutcome(
     }
 
     public enum TurnOutcomeType {
+        ANSWERED,
         SUCCEEDED,
         FAILED,
         CANCELLED,

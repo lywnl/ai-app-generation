@@ -666,12 +666,12 @@ class AiServiceStreamingResponseHandlerTest {
             assertTrue(((dev.langchain4j.data.message.SystemMessage)
                     latestRequest.get()
                     .transientMessages().getFirst()).text()
-                    .contains("连续两次执行完全相同的读取操作"));
+                    .contains("再次读取本轮已经成功读取且内容未变化的路径"));
             assertTrue(memory.messages().stream().noneMatch(message ->
                     message instanceof dev.langchain4j.data.message.SystemMessage
                             systemMessage
                             && systemMessage.text().contains(
-                            "连续两次执行完全相同的读取操作")),
+                            "再次读取本轮已经成功读取且内容未变化的路径")),
                     "纠正提示只允许进入单次请求，不能写入 ChatMemory");
 
             ToolExecutionRequest third = readDir("read-3");

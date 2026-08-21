@@ -75,6 +75,8 @@ class VueTurnFinalizerTest {
     @Test
     void stableOutcomesPersistCanonicalTextOnceAndTriggerMemoryOnce() {
         for (VueTurnOutcome outcome : java.util.List.of(
+                outcome(VueBuildPhase.GENERATING, ANSWERED,
+                        "当前布局使用卡片式结构。", false),
                 outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED, "项目已生成并构建成功。", true),
                 outcome(VueBuildPhase.FAILED, FAILED, "抱歉，系统遇到了一些问题，请您稍后重试修复", false),
                 outcome(VueBuildPhase.GENERATING, SYSTEM_ERROR, "生成过程中遇到系统异常，请稍后重试。", false),
@@ -155,6 +157,30 @@ class VueTurnFinalizerTest {
                 ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
         verify(collapser).collapseLastTurn(
                 APP_ID, VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION);
+    }
+
+    @Test
+    void 未完成工具链保留Mysql展示但从L0丢弃整轮且不触发稳定记忆() {
+        VueTurnOutcome requested = outcome(
+                VueBuildPhase.GENERATING, INCOMPLETE_TOOL_CHAIN,
+                VueTurnFinalizer.INCOMPLETE_TOOL_CHAIN_MESSAGE, false);
+        when(collapser.discardLastTurn(APP_ID))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(
+                        COLLAPSED, List.of()));
+
+        VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
+                VueTurnContext.testing(APP_ID, USER_ID,
+                        "turn-incomplete-tool-chain",
+                        VueBuildPhase.GENERATING),
+                requested);
+
+        assertTrue(result.persisted());
+        verify(history).addAiMessageAndReturn(
+                APP_ID, requested.displayAiText(), requested.memoryAiText(),
+                ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN, USER_ID);
+        verify(collapser).discardLastTurn(APP_ID);
+        verify(collapser, never()).collapseLastTurn(anyLong(), anyString());
+        verifyNoInteractions(summary, preference);
     }
 
     @Test

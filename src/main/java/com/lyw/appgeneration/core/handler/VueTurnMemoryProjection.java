@@ -58,6 +58,7 @@ public final class VueTurnMemoryProjection {
     public static ChatMemoryOutcome memoryOutcome(
             VueTurnOutcome.TurnOutcomeType outcome) {
         return switch (outcome) {
+            case ANSWERED -> ChatMemoryOutcome.ANSWERED;
             case SUCCEEDED -> ChatMemoryOutcome.SUCCEEDED;
             case FAILED -> ChatMemoryOutcome.FAILED;
             case CANCELLED -> ChatMemoryOutcome.CANCELLED;
@@ -71,6 +72,7 @@ public final class VueTurnMemoryProjection {
 
     private static String outcomeText(VueTurnOutcome.TurnOutcomeType outcome) {
         return switch (outcome) {
+            case ANSWERED -> "已回答";
             case SUCCEEDED -> "成功";
             case FAILED -> "失败";
             case CANCELLED -> "已取消";

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR;
+import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.ANSWERED;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.SUCCEEDED;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.INCOMPLETE_TOOL_CHAIN;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,6 +26,12 @@ class VueTurnMemoryProjectionTest {
                 VueTurnMemoryProjection.REPEATED_READ_LOOP_PROJECTION);
         assertFalse(VueTurnMemoryProjection.REPEATED_READ_LOOP_PROJECTION
                 .contains("禁止再次调用"));
+    }
+
+    @Test
+    void ANSWERED映射为只读稳定记忆结果() {
+        assertEquals(ChatMemoryOutcome.ANSWERED,
+                VueTurnMemoryProjection.memoryOutcome(ANSWERED));
     }
 
     @Test
