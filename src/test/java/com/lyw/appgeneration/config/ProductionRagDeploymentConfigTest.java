@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ProductionRagDeploymentConfigTest {
 
     private static final String HYBRID_ENABLED_LINE =
-            "RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}";
+            "RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-true}";
 
     @Test
     void mysql服务位于backend之前时仍能定位Hybrid开关() {
@@ -27,7 +27,7 @@ class ProductionRagDeploymentConfigTest {
                     image: mysql:8.0
                   backend:
                     environment:
-                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}
+                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-true}
                 """;
 
         assertHybridEnabledInBackendEnvironment(compose);
@@ -39,10 +39,10 @@ class ProductionRagDeploymentConfigTest {
                 services:
                   backend:
                     environment:
-                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}
+                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-true}
                   worker:
                     environment:
-                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}
+                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-true}
                 """;
 
         assertThrows(AssertionError.class,
@@ -55,7 +55,7 @@ class ProductionRagDeploymentConfigTest {
                 services:
                   backend:
                     labels:
-                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}
+                      RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-true}
                 """;
 
         assertThrows(AssertionError.class,
@@ -63,29 +63,32 @@ class ProductionRagDeploymentConfigTest {
     }
 
     @Test
-    void 生产Hybrid开关默认关闭且仅在三项真实门禁通过后按顺序开启() throws IOException {
+    void 生产Hybrid开关默认开启并保留显式回退能力() throws IOException {
         String compose = readProductionFile("docker-compose.yml");
         String environmentExample = readProductionFile(".env.example");
         String readme = readProductionFile("README.md");
 
         assertHybridEnabledInBackendEnvironment(compose);
-        assertEquals(List.of("RAG_HYBRID_ENABLED=false"),
+        assertEquals(List.of("RAG_HYBRID_ENABLED=true"),
                 matchingLines(environmentExample, "RAG_HYBRID_ENABLED"));
 
+        int defaultEnabled = readme.indexOf("`RAG_HYBRID_ENABLED` 默认值为 `true`");
         int ingestion = readme.indexOf("正式 23 条摄取并物理核验通过");
         int retrieval = readme.indexOf("30 条真实检索达标");
         int generation = readme.indexOf("十条首次生成 10/10");
-        int enable = readme.indexOf("RAG_HYBRID_ENABLED=true");
-        int restart = readme.indexOf("重启 backend");
+        int upgrade = readme.indexOf("从默认关闭版本升级");
+        int migration = readme.indexOf("改为 `RAG_HYBRID_ENABLED=true` 或删除该行");
+        int fallback = readme.indexOf("`RAG_HYBRID_ENABLED=false`");
 
-        assertTrue(ingestion >= 0, "README 必须要求正式摄取与物理核验通过");
+        assertTrue(defaultEnabled >= 0, "README 必须说明 Hybrid 默认开启");
+        assertTrue(ingestion > defaultEnabled, "README 必须记录默认开启所依据的正式门禁");
         assertTrue(retrieval > ingestion, "真实检索必须在正式摄取之后达标");
         assertTrue(generation > retrieval, "十条首次生成必须在真实检索之后达到 10/10");
-        assertTrue(enable > generation, "只能在三项真实成绩之后设置开关为 true");
-        assertTrue(restart > enable, "设置开关后必须重启 backend");
-        assertTrue(readme.contains("任一步失败都保持 `RAG_HYBRID_ENABLED=false`。"));
-        assertTrue(readme.contains("默认 Maven、离线协议探针、五骨架策展构建都不能替代"
-                + "以上三项真实成绩，也不得据此开启 Hybrid。"));
+        assertTrue(upgrade > generation, "README 必须提醒存量部署迁移旧的显式开关值");
+        assertTrue(migration > upgrade, "README 必须说明如何启用存量部署的 Hybrid");
+        assertTrue(fallback > migration, "README 必须在升级说明后提供显式回退方式");
+        assertTrue(readme.contains("恢复 Dense-only"));
+        assertTrue(readme.contains("重启 backend"));
     }
 
     @Test

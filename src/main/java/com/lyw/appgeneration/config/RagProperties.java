@@ -23,7 +23,7 @@ public class RagProperties {
     /** 摄取开关 */
     private Ingest ingest = new Ingest();
 
-    /** Vue 混合检索灰度开关 */
+    /** Vue 混合检索策略开关 */
     private Hybrid hybrid = new Hybrid();
 
     /** Milvus 连接配置 */
@@ -48,7 +48,7 @@ public class RagProperties {
 
     @Data
     public static class Hybrid {
-        private boolean enabled = false;
+        private boolean enabled = true;
     }
 
     @Data

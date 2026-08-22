@@ -698,6 +698,7 @@ langchain4j:
 
 rag:
   enabled: true
+  hybrid: { enabled: true }                         # 默认使用 BM25 + Milvus + RRF + Rerank
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}   # 默认读取项目根目录，可用环境变量覆盖
   ingest.enabled: false                            # 模板入库开关（手动触发）
   milvus: { host: localhost, port: 19530, database: default, username: root }
@@ -716,6 +717,9 @@ ai:
       max-read-file-code-points: 128000
       max-read-dir-code-points: 20000
 ```
+
+Vue Hybrid 检索默认开启。需要临时绕过 BM25、RRF 或 Rerank 时，可设置
+`RAG_HYBRID_ENABLED=false` 并重启后端，恢复仅使用 Milvus 的 Dense-only 召回。
 
 Vue 业务层使用 30 分钟绝对截止，Spring 的 30 分 45 秒用于终态收尾；生产 Nginx 对精确生成路径设置 `client_max_body_size 272k`，读写超时均为 31 分钟。三层顺序必须保持“业务 < Spring < Nginx”，不能把 Reactor 空闲超时当作绝对回合时限。
 

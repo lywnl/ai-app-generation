@@ -124,7 +124,7 @@ dashscope:
 rag:
   enabled: true
   hybrid:
-    enabled: false
+    enabled: ${RAG_HYBRID_ENABLED:true}
   # 模板库根目录(文件系统路径,非 classpath)
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}
   ingest:

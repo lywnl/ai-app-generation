@@ -11,8 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RagPropertiesTest {
 
     @Test
-    void hybridRetrievalIsDisabledByDefault() {
-        assertFalse(new RagProperties().getHybrid().isEnabled());
+    void hybridRetrievalIsEnabledByDefault() {
+        assertTrue(new RagProperties().getHybrid().isEnabled());
     }
 
     @Test
@@ -26,10 +26,10 @@ class RagPropertiesTest {
     }
 
     @Test
-    void applicationYamlExplicitlyKeepsHybridDisabled() throws IOException {
+    void applicationYamlExplicitlyEnablesHybridByDefault() throws IOException {
         try (var input = getClass().getResourceAsStream("/application.yml")) {
             String yaml = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-            assertTrue(yaml.matches("(?s).*rag:\\s.*hybrid:\\s+enabled:\\s+false.*"));
+            assertTrue(yaml.contains("hybrid:\n    enabled: ${RAG_HYBRID_ENABLED:true}"));
         }
     }
 

@@ -87,21 +87,24 @@ docker compose --env-file .env -f docker-compose.yml up -d milvus-etcd milvus-mi
 docker compose --env-file .env -f docker-compose.yml ps milvus-etcd milvus-minio milvus
 ```
 
-### 启用 Vue Hybrid 检索（默认关闭）
+### Vue Hybrid 检索（默认开启）
 
-`RAG_HYBRID_ENABLED` 默认值为 `false`。仅当以下真实门禁严格依次完成后，才允许开启：
+`RAG_HYBRID_ENABLED` 默认值为 `true`。默认开启的依据是以下真实门禁已经严格依次通过：
 
 1. 正式 23 条摄取并物理核验通过。
 2. 30 条真实检索达标。
 3. 十条首次生成 10/10。
-4. 在 `.env` 设置 `RAG_HYBRID_ENABLED=true`。
-5. 重启 backend：
 
-   ```bash
-   docker compose --env-file .env -f docker-compose.yml up -d --force-recreate backend
-   ```
+从默认关闭版本升级时，已有服务器的 `.env` 可能仍显式保留旧值。若要启用 Hybrid，
+请将该配置改为 `RAG_HYBRID_ENABLED=true` 或删除该行，然后重启 backend；Compose 的
+新默认值不会覆盖 `.env` 中已存在的 `false`。
 
-任一步失败都保持 `RAG_HYBRID_ENABLED=false`。默认 Maven、离线协议探针、五骨架策展构建都不能替代以上三项真实成绩，也不得据此开启 Hybrid。
+发生延迟、Rerank 外部依赖或召回质量异常时，在 `.env` 设置
+`RAG_HYBRID_ENABLED=false`，然后重启 backend，恢复 Dense-only：
+
+```bash
+docker compose --env-file .env -f docker-compose.yml up -d --force-recreate backend
+```
 
 Milvus 说明：
 
