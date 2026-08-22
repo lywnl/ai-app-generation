@@ -28,7 +28,7 @@ class VueIngestionReportTest {
 
         assertTrue(notExecuted.contains("状态：未执行"));
         assertTrue(failed.contains("状态：未通过"));
-        assertTrue(notExecuted.contains("目标：PGVector/templates_vue"));
+        assertTrue(notExecuted.contains("目标：Milvus/templates_vue"));
         assertFalse(failed.contains("目录版本："));
         assertTrue(passed.contains("状态：通过"));
         assertTrue(passed.contains("当前版本行数：23/23"));
@@ -50,7 +50,7 @@ class VueIngestionReportTest {
                         targetSecret, catalogSecret))
                 .renderMarkdown();
         String notExecuted = VueIngestionReport.notExecuted(
-                List.of("PGVector 端口不可达: <template>源码</template>:5432"))
+                List.of("Milvus 端口不可达: <template>源码</template>:19530"))
                 .renderMarkdown();
 
         assertFalse(failed.contains("database-secret"));

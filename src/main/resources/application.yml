@@ -129,12 +129,12 @@ rag:
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}
   ingest:
     enabled: false            # 只在策展变化时手动改 true 跑一次
-  pgvector:
-    host: localhost
-    port: 5432
-    database: ai_codegen_rag
-    user: admin
-    password: ${INFRA_SHARED_PASSWORD}
+  milvus:
+    host: ${RAG_MILVUS_HOST:localhost}
+    port: ${RAG_MILVUS_PORT:19530}
+    database: ${RAG_MILVUS_DATABASE:default}
+    username: ${RAG_MILVUS_USERNAME:root}
+    password: ${RAG_MILVUS_PASSWORD:${INFRA_SHARED_PASSWORD}}
   embedding:
     # 走 DashScope OpenAI 兼容端点,复用 dashscope.api-key
     base-url: https://dashscope.aliyuncs.com/compatible-mode/v1

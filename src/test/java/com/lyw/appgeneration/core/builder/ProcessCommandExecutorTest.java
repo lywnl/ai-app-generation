@@ -31,7 +31,7 @@ class ProcessCommandExecutorTest {
     private static final List<String> SECRET_VARIABLES = List.of(
             "DASHSCOPE_API_KEY",
             "DEEPSEEK_API_KEY",
-            "RAG_PGVECTOR_PASSWORD",
+            "RAG_MILVUS_PASSWORD",
             "SPRING_DATASOURCE_PASSWORD");
 
     @TempDir

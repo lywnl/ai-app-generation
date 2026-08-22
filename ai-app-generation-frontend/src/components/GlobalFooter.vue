@@ -32,7 +32,7 @@
         <ul class="footer-list">
           <li>Spring Boot 3.5 · LangChain4j</li>
           <li>Vue 3.5 · Ant Design Vue</li>
-          <li>DeepSeek · Qwen · pgvector</li>
+          <li>DeepSeek · Qwen · Milvus</li>
         </ul>
       </div>
 

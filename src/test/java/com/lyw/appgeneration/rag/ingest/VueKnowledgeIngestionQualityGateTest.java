@@ -3,11 +3,12 @@ package com.lyw.appgeneration.rag.ingest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestor;
+import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
+import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -40,12 +41,13 @@ class VueKnowledgeIngestionQualityGateTest {
     private static final String EMBEDDING_MODEL = "text-embedding-v4";
     private static final int EMBEDDING_DIMENSION = 1024;
     private static final Duration EMBEDDING_TIMEOUT = Duration.ofSeconds(10);
+    private MilvusEmbeddingStoreFactory liveStoreFactory;
 
     @Test
-    void 摄取门禁将专用PGVector密码传给存储与核验器() throws Exception {
+    void 摄取门禁将专用Milvus密码传给存储与核验器() throws Exception {
         Map<String, String> variables = Map.of(
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
-                "RAG_PGVECTOR_PASSWORD", "pg-secret");
+                "RAG_MILVUS_PASSWORD", "milvus-secret");
         VueIngestionExpectedSnapshot expected = expectedSnapshot();
         AtomicReference<String> storePassword = new AtomicReference<>();
         AtomicReference<String> verifierPassword = new AtomicReference<>();
@@ -54,7 +56,7 @@ class VueKnowledgeIngestionQualityGateTest {
                 expected, readyEnvironment().target(), variables, new IngestionDependencies() {
                     @Override
                     public EmbeddingStore<TextSegment> createStore(
-                        VuePgVectorTarget target,
+                        VueMilvusTarget target,
                         String password) {
                         storePassword.set(password);
                         return null;
@@ -69,7 +71,7 @@ class VueKnowledgeIngestionQualityGateTest {
                     @Override
                     public VueIngestionVerification verify(
                             VueIngestionExpectedSnapshot snapshot,
-                            VuePgVectorTarget target,
+                            VueMilvusTarget target,
                             String password) {
                         verifierPassword.set(password);
                         return new VueIngestionVerification(
@@ -78,42 +80,46 @@ class VueKnowledgeIngestionQualityGateTest {
                 });
 
         assertTrue(report.passed());
-        assertEquals("pg-secret", storePassword.get());
-        assertEquals("pg-secret", verifierPassword.get());
+        assertEquals("milvus-secret", storePassword.get());
+        assertEquals("milvus-secret", verifierPassword.get());
     }
 
     @Test
     void 环境显式就绪时摄取并核验真实Vue知识() throws Exception {
         Map<String, String> variables = Map.copyOf(System.getenv());
         VueIngestionEnvironment environment = VueIngestionEnvironment.inspect(variables);
-        run(environment, execution -> {
-            TemplateCatalog catalog = new TemplateCatalog(DATASET_ROOT, OBJECT_MAPPER);
-            VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
-            execution.setExpected(expected);
-            return executeIngestion(expected, environment.target(), variables, new IngestionDependencies() {
-                @Override
-                public EmbeddingStore<TextSegment> createStore(
-                        VuePgVectorTarget target,
-                        String password) {
-                    return createVueStore(target, password);
-                }
+        try {
+            run(environment, execution -> {
+                TemplateCatalog catalog = new TemplateCatalog(DATASET_ROOT, OBJECT_MAPPER);
+                VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
+                execution.setExpected(expected);
+                return executeIngestion(expected, environment.target(), variables, new IngestionDependencies() {
+                    @Override
+                    public EmbeddingStore<TextSegment> createStore(
+                            VueMilvusTarget target,
+                            String password) {
+                        return createVueStore(target, password);
+                    }
 
-                @Override
-                public VueKnowledgeIngestor.IngestResult ingest(EmbeddingStore<TextSegment> store) {
-                    EmbeddingModel model = createEmbeddingModel(variables.get("DASHSCOPE_API_KEY"));
-                    return new VueKnowledgeIngestor(model, OBJECT_MAPPER).ingest(DATASET_ROOT, store);
-                }
+                    @Override
+                    public VueKnowledgeIngestor.IngestResult ingest(EmbeddingStore<TextSegment> store) {
+                        EmbeddingModel model = createEmbeddingModel(variables.get("DASHSCOPE_API_KEY"));
+                        return new VueKnowledgeIngestor(model, OBJECT_MAPPER).ingest(DATASET_ROOT, store);
+                    }
 
-                @Override
-                public VueIngestionVerification verify(
-                        VueIngestionExpectedSnapshot snapshot,
-                        VuePgVectorTarget target,
-                        String password) {
-                    return new VuePgVectorIngestionVerifier(OBJECT_MAPPER)
-                            .verify(snapshot, target, password);
-                }
-            });
-        }, this::writeReport);
+                    @Override
+                    public VueIngestionVerification verify(
+                            VueIngestionExpectedSnapshot snapshot,
+                            VueMilvusTarget target,
+                            String password) {
+                        return new VueMilvusIngestionVerifier(OBJECT_MAPPER)
+                                .verify(snapshot, target, password);
+                    }
+                });
+            }, this::writeReport);
+        } finally {
+            closeLiveStoreFactory();
+        }
     }
 
     @Test
@@ -220,7 +226,7 @@ class VueKnowledgeIngestionQualityGateTest {
         VueIngestionEnvironment disabled = new VueIngestionEnvironment(
                 false,
                 List.of("RAG_VUE_INGEST 未设置为 true"),
-                new VuePgVectorTarget("127.0.0.1", 5432, "ai_codegen_rag", "admin"));
+                new VueMilvusTarget("127.0.0.1", 19530, "default", "root"));
 
         run(disabled, execution -> {
             actionExecuted.set(true);
@@ -238,7 +244,7 @@ class VueKnowledgeIngestionQualityGateTest {
         VueIngestionEnvironment disabled = new VueIngestionEnvironment(
                 false,
                 List.of("RAG_VUE_INGEST 未设置为 true"),
-                new VuePgVectorTarget("127.0.0.1", 5432, "ai_codegen_rag", "admin"));
+                new VueMilvusTarget("127.0.0.1", 19530, "default", "root"));
 
         IOException thrown = assertThrows(IOException.class,
                 () -> run(disabled, execution -> {
@@ -318,23 +324,23 @@ class VueKnowledgeIngestionQualityGateTest {
 
     private static VueIngestionEnvironment readyEnvironment() {
         return new VueIngestionEnvironment(
-                true, List.of(), new VuePgVectorTarget("127.0.0.1", 5432, "ai_codegen_rag", "admin"));
+                true, List.of(), new VueMilvusTarget("127.0.0.1", 19530, "default", "root"));
     }
 
     private static VueIngestionExpectedSnapshot expectedSnapshot() {
         return VueIngestionExpectedSnapshot.from(new TemplateCatalog(DATASET_ROOT, OBJECT_MAPPER));
     }
 
-    private static String pgVectorPassword(Map<String, String> environment) {
-        return environment.get("RAG_PGVECTOR_PASSWORD");
+    private static String milvusPassword(Map<String, String> environment) {
+        return environment.get("RAG_MILVUS_PASSWORD");
     }
 
     static VueIngestionReport executeIngestion(
             VueIngestionExpectedSnapshot expected,
-            VuePgVectorTarget target,
+            VueMilvusTarget target,
             Map<String, String> variables,
             IngestionDependencies dependencies) {
-        String password = pgVectorPassword(variables);
+        String password = milvusPassword(variables);
         EmbeddingStore<TextSegment> store = dependencies.createStore(target, password);
         VueKnowledgeIngestor.IngestResult result = dependencies.ingest(store);
         assertEquals(expected.catalogVersion(), result.catalogVersion());
@@ -348,13 +354,13 @@ class VueKnowledgeIngestionQualityGateTest {
 
     interface IngestionDependencies {
 
-        EmbeddingStore<TextSegment> createStore(VuePgVectorTarget target, String password);
+        EmbeddingStore<TextSegment> createStore(VueMilvusTarget target, String password);
 
         VueKnowledgeIngestor.IngestResult ingest(EmbeddingStore<TextSegment> store);
 
         VueIngestionVerification verify(
                 VueIngestionExpectedSnapshot expected,
-                VuePgVectorTarget target,
+                VueMilvusTarget target,
                 String password);
     }
 
@@ -396,19 +402,23 @@ class VueKnowledgeIngestionQualityGateTest {
     }
 
     private EmbeddingStore<TextSegment> createVueStore(
-            VuePgVectorTarget target,
+            VueMilvusTarget target,
             String password) {
-        return PgVectorEmbeddingStore.builder()
-                .host(target.host())
-                .port(target.port())
-                .database(target.database())
-                .user(target.user())
-                .password(password)
-                .table("templates_vue")
-                .dimension(EMBEDDING_DIMENSION)
-                .createTable(true)
-                .useIndex(false)
-                .build();
+        com.lyw.appgeneration.config.RagProperties properties = new com.lyw.appgeneration.config.RagProperties();
+        properties.getMilvus().setHost(target.host());
+        properties.getMilvus().setPort(target.port());
+        properties.getMilvus().setDatabase(target.database());
+        properties.getMilvus().setUsername(target.username());
+        properties.getMilvus().setPassword(password);
+        liveStoreFactory = new MilvusEmbeddingStoreFactory(properties, new MilvusCollectionSchemaVerifier());
+        return liveStoreFactory.create("templates_vue");
+    }
+
+    private void closeLiveStoreFactory() {
+        if (liveStoreFactory != null) {
+            liveStoreFactory.close();
+            liveStoreFactory = null;
+        }
     }
 
     private void writeReport(VueIngestionReport report) throws IOException {

@@ -24,18 +24,18 @@ class VueEvaluationEnvironmentTest {
         assertFalse(disabled.ready());
         assertTrue(disabled.reasons().contains("RAG_EVAL 未设置为 true"));
         assertFalse(missing.ready());
-        assertTrue(missing.reasons().stream().anyMatch(reason -> reason.contains("RAG_PGVECTOR_PASSWORD")));
+        assertTrue(missing.reasons().stream().anyMatch(reason -> reason.contains("RAG_MILVUS_PASSWORD")));
         assertTrue(disabledProbe.calls == 0);
         assertTrue(missingProbe.calls == 0);
     }
 
     @Test
-    void requiresReachablePgvectorAfterRequiredVariablesExist() {
+    void requiresReachableMilvusAfterRequiredVariablesExist() {
         Map<String, String> environment = Map.of(
                 "RAG_EVAL", "true",
                 "DASHSCOPE_API_KEY", "secret-not-rendered",
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
-                "RAG_PGVECTOR_PASSWORD", "pg-secret");
+                "RAG_MILVUS_PASSWORD", "milvus-secret");
 
         VueEvaluationEnvironment unreachable = VueEvaluationEnvironment.inspect(
                 environment, new CountingPortProbe(false));
@@ -43,13 +43,13 @@ class VueEvaluationEnvironmentTest {
                 environment, new CountingPortProbe(true));
 
         assertFalse(unreachable.ready());
-        assertTrue(unreachable.reasons().stream().anyMatch(reason -> reason.contains("PGVector")));
+        assertTrue(unreachable.reasons().stream().anyMatch(reason -> reason.contains("Milvus")));
         assertTrue(ready.ready());
         assertTrue(ready.reasons().isEmpty());
         assertFalse(unreachable.toString().contains("secret-not-rendered"));
         assertFalse(ready.toString().contains("secret-not-rendered"));
         assertFalse(unreachable.toString().contains("mysql-secret"));
-        assertFalse(ready.toString().contains("pg-secret"));
+        assertFalse(ready.toString().contains("milvus-secret"));
     }
 
     private static final class CountingPortProbe implements VueEvaluationEnvironment.PortProbe {

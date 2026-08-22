@@ -38,7 +38,7 @@
 | :--- | :--- |
 | 三种代码生成模式 | `HTML` 单文件 / `MULTI_FILE` 多文件 / `VUE_PROJECT` Vue 工程 |
 | AI 智能路由 | 由 Qwen-Turbo 自动判断需求适合的生成模式 |
-| RAG 检索增强 | PgVector 向量检索 + DashScope `text-embedding-v4` + `gte-rerank-v2` 二次重排 |
+| RAG 检索增强 | Milvus 向量检索 + DashScope `text-embedding-v4` + `gte-rerank-v2` 二次重排 |
 | Agent 工具调用 | 工具注册层提供 5 个文件工具、`buildProject`、`exit`；在线 Vue 使用“5 个文件工具 + `buildProject`”显式白名单，离线首次生成评测使用“5 个文件工具 + `exit`” |
 | 受控 ReAct 构建修复 | Vue 生成、真实构建和最多两个失败处理阶段位于同一 SSE 回合；最多执行 3 次真实构建，任意一次成功或第三次失败后由后端强制结束 |
 | 图片采集 Agent | 首条消息自动调度 `Pexels 图片搜索` + `阿里 wan2.2 Logo 生成` + `unDraw 插画` 3 类工具，并行收集封面/Logo/插图素材 |
@@ -72,7 +72,7 @@
 │ │  AppService (业务编排)       │ │
 │ │  ├─ AiCodeGenTypeRouting   │──── Qwen-Turbo（路由分类）
 │ │  ├─ AiCodeGeneratorFacade  │
-│ │  │   ├─ RAG Retrieval      │──── PgVector + Rerank
+│ │  │   ├─ RAG Retrieval      │──── Milvus + Rerank
 │ │  │   ├─ Image Collection   │──── DashScope + Pexels（并行 Agent）
 │ │  │   └─ Code Generator     │──── DeepSeek-V4-Flash（主生成）
 │ │  ├─ ScreenshotService      │──── Selenium + Chromium
@@ -85,8 +85,8 @@
 └─┬────────┬────────┬────────┬──┘
   │        │        │        │
   ▼        ▼        ▼        ▼
-MySQL    Redis    PgVector  COS
-(业务)   (Session) (RAG)    (封面截图)
+MySQL    Redis    Milvus   COS
+(业务)   (Session) (RAG)   (封面截图)
 
 ┌────────────────────────────┐    ┌──────────────────────────────────┐
 │  Prometheus (port 9090)    │ ─► │  Grafana (port 3000)             │
@@ -128,11 +128,11 @@ User Prompt
 | 类别 | 选型 | 版本 |
 | :--- | :--- | :--- |
 | 语言 / 框架 | Java / Spring Boot | 25 / 3.5.4 |
-| AI 编排 | LangChain4j (含 OpenAI Starter / Reactor / PgVector) | 1.1.0 |
+| AI 编排 | LangChain4j（含 OpenAI Starter / Reactor / Milvus） | 1.1.0 |
 | Agent 工作流 | LangGraph4j | 1.6.0-rc2 |
 | AI 模型 | DeepSeek（主生成）+ 阿里 DashScope（路由 / Embedding / Rerank / 文生图） | - |
 | ORM | MyBatis-Flex（含 codegen） | 1.11.0 |
-| 数据库 | MySQL 8.0.40 + PostgreSQL 16 (pgvector) | - |
+| 数据库 | MySQL 8.0.40 + Milvus 2.5.9 | - |
 | 缓存 / Session | Redis 7.0.15 + Redisson + Spring Session + Caffeine | - |
 | API 文档 | Knife4j (OpenAPI 3) | 4.4.0 |
 | 网页截图 | Selenium + WebDriverManager | 4.33.0 / 6.1.0 |
@@ -161,7 +161,7 @@ User Prompt
 | 容器化 | Docker + Docker Compose |
 | 反向代理 | Nginx |
 | 监控可视化 | Prometheus + Grafana |
-| 数据库迁移 | Flyway 风格 SQL（`V1__hnsw_index.sql` 等） |
+| 数据库迁移 | MySQL 手工审计 SQL（`sql/migrations/`） |
 
 ---
 
@@ -176,7 +176,7 @@ User Prompt
 | Node.js | 20 LTS+ | 前端构建 |
 | MySQL | 8.0+ | 端口默认 `3406`（可改） |
 | Redis | 7.0+ | 端口 `6379`，需开启 ACL |
-| PostgreSQL | 16 + pgvector | 端口 `5432`，库 `ai_codegen_rag` |
+| Milvus | 2.5.9 | 本地端口 `19530`，数据库 `default`，用户 `root` |
 
 ### 必需的 API Key
 
@@ -202,9 +202,13 @@ cd ai-app-generation
 # MySQL：执行 sql/schema.sql
 mysql -u root -p < sql/schema.sql
 
-# PostgreSQL：启用 pgvector 扩展
-psql -U admin -d ai_codegen_rag -f prod/postgres/init/01-enable-pgvector.sql
+# Milvus：本地 Docker 启动（MinIO 密码至少 8 位）
+INFRA_SHARED_PASSWORD="请填写本地统一基础设施密码" \
+MILVUS_MINIO_PASSWORD="请填写至少8位的MinIO随机强密码" \
+docker compose -f docker/milvus.yml up -d
 ```
+
+`INFRA_SHARED_PASSWORD` 只会在全新的 `milvus_etcd_data` 元数据卷中初始化 Milvus `root` 密码。已有数据卷需要变更密码时，必须先在 Milvus 内修改 `root` 密码，再更新环境变量并重启服务；不要通过删除数据卷改密，否则会丢失 Collection 元数据。
 
 ### 3. 配置环境变量
 
@@ -219,6 +223,7 @@ $env:TEN_SERCET_ID="xxx"
 $env:TEN_SECRET_KEY="xxx"
 $env:APP_CODE_DEPLOY_BASE_URL="http://localhost"
 $env:INFRA_SHARED_PASSWORD="请填写本地统一基础设施密码"
+$env:MILVUS_MINIO_PASSWORD="请填写至少8位的MinIO随机强密码"
 ```
 
 Linux / macOS 当前终端可执行：
@@ -226,13 +231,16 @@ Linux / macOS 当前终端可执行：
 ```bash
 export APP_CODE_DEPLOY_BASE_URL="http://localhost"
 export INFRA_SHARED_PASSWORD="请填写本地统一基础设施密码"
+export MILVUS_MINIO_PASSWORD="请填写至少8位的MinIO随机强密码"
 ```
 
 `APP_CODE_DEPLOY_BASE_URL` 是必填项，表示部署产物经 Nginx 暴露后的源站地址，只能包含协议、主机和可选端口，不能包含业务路径。本地 Nginx 固定使用 80 端口，因此不得追加其他端口。
 
-`INFRA_SHARED_PASSWORD` 也是必填项，本地 MySQL、Redis 和 pgvector 必须使用相同的密码值；请只在当前终端或本地未跟踪的环境文件中设置。
+`INFRA_SHARED_PASSWORD` 也是必填项，本地 MySQL、Redis 和 Milvus root 使用该密码；Milvus 内部 MinIO 单独使用至少 8 位的 `MILVUS_MINIO_PASSWORD`。请只在当前终端或本地未跟踪的环境文件中设置。
 
-> **安全要求**：数据库、Redis、PgVector、COS 和模型密钥必须通过环境变量或秘密管理平台注入。不要在受版本控制的配置、README、命令历史或日志中保存秘密字面量；已暴露的凭据需要轮换，不能只修改配置文本。
+本地与生产 Compose 都固定设置 `QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX=-1`，仅取消 Milvus 默认的单 Collection Flush QPS 上限，以支持稳定 ID 每次 upsert 后立即 flush；其他配额和写入保护仍沿用 Milvus 2.5.9 默认值。不要通过删除 flush、固定等待或吞掉限流异常来绕过该约束。
+
+> **安全要求**：数据库、Redis、Milvus、MinIO、COS 和模型密钥必须通过环境变量或秘密管理平台注入。不要在受版本控制的配置、README、命令历史或日志中保存秘密字面量；已暴露的凭据需要轮换，不能只修改配置文本。
 
 ### 4. 启动后端
 
@@ -378,8 +386,7 @@ ai-app-generation/
 │   └── utils/SpringContextUtil / CacheKeyUtils
 │
 ├── src/main/resources/
-│   ├── application.yml                 # 主配置（DeepSeek / Qwen / Redis / MySQL / RAG）
-│   └── db/migration/V1__hnsw_index.sql # PgVector HNSW 索引
+│   └── application.yml                 # 主配置（DeepSeek / Qwen / Redis / MySQL / Milvus RAG）
 │
 ├── embed_text/                         # RAG 模板库（30+ 已策展模板）
 │   ├── html/                           # 纯 HTML 模板（landing-hero / pricing-table / ...）
@@ -387,14 +394,12 @@ ai-app-generation/
 │   └── vue-project/                    # Vue 工程模板（login-form / dashboard / ...）
 │
 ├── prod/                               # 生产部署目录（独立可发布）
-│   ├── docker-compose.yml              # 7 容器编排
+│   ├── docker-compose.yml              # 9 服务容器编排
 │   ├── docker/
 │   │   ├── Dockerfile.backend          # 后端镜像（含 Chromium / Node.js）
-│   │   ├── Dockerfile.nginx
-│   │   └── Dockerfile.postgres
+│   │   └── Dockerfile.nginx
 │   ├── nginx/nginx.conf
 │   ├── redis/start-redis.sh            # 根据环境变量生成 Redis ACL 并启动
-│   ├── postgres/init/                  # pgvector 初始化
 │   ├── prometheus/prometheus.yml
 │   ├── grafana/                        # 数据源、仪表盘自动 provision
 │   ├── sql/schema.sql
@@ -440,7 +445,7 @@ ai-app-generation/
 用户 prompt ──► [Embedding: text-embedding-v4 (1024 维)]
                        │
                        ▼
-              [PgVector HNSW 召回 top-K=10] (RagRetrievalService)
+              [Milvus FLAT/COSINE 召回 top-K=10] (RagRetrievalService)
                        │
                        ▼
               [gte-rerank-v2 重排 → top-K=3] (RagRerankService)
@@ -638,10 +643,10 @@ LayeredChatMemory.messages()：
 
 > **记忆存储分工**：L0 窗口本身存于 **Redis**（`MessageWindowChatMemory`）；Vue 每轮原始可见 User 与折叠后的 `canonicalAiText` 同时写入 MySQL `chat_history`，作为刷新回放和 L0 冷重建的稳定来源。L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:v2:{userId}`，TTL 1h）堵住工具循环内的高频读；旧 `mem:pref:{userId}` 只在失效清理时兼容删除，不再作为召回事实源。
 
-**PostgreSQL 向量库** `ai_codegen_rag`：
+**Milvus 向量库** `default`：
 
-- pgvector 1024 维向量列
-- HNSW 索引（`V1__hnsw_index.sql`），近邻检索 O(log n)
+- 三个独立 Collection：`templates_html`、`templates_multi`、`templates_vue`
+- 1024 维 FloatVector，使用 `COSINE` 度量、`FLAT` 索引和 `STRONG` 一致性
 
 ---
 
@@ -695,8 +700,8 @@ rag:
   enabled: true
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}   # 默认读取项目根目录，可用环境变量覆盖
   ingest.enabled: false                            # 模板入库开关（手动触发）
-  pgvector: { host: localhost, port: 5432, database: ai_codegen_rag }
-  # 数据库、Redis 和 pgvector 密码统一从 INFRA_SHARED_PASSWORD 注入
+  milvus: { host: localhost, port: 19530, database: default, username: root }
+  # Milvus root 密码默认从 INFRA_SHARED_PASSWORD 注入
   embedding: { model-name: text-embedding-v4, dimension: 1024 }
   retrieval: { top-k: 3, min-score: 0.30 }
   rerank: { enabled: true, model-name: gte-rerank-v2, top-n: 10 }
@@ -747,7 +752,7 @@ docker compose --env-file .env up -d
 | Backend | 9025 | `${BACKEND_HOST_PORT}` 9025 | Spring Boot API |
 | MySQL | 3306 | - | 业务数据 |
 | Redis | 6379 | - | Session / 缓存 |
-| PostgreSQL | 5432 | - | RAG 向量库 |
+| Milvus | 19530 | - | RAG 向量库（生产不发布宿主端口） |
 | Prometheus | 9090 | `${PROMETHEUS_HOST_PORT}` 9090 | 指标采集 |
 | Grafana | 3000 | `${GRAFANA_HOST_PORT}` 3000 | 可视化看板 |
 
@@ -940,7 +945,7 @@ clamp_min(sum(rate(generation_sse_publisher_terminations_total[15m])), 1e-9)
 - [MyBatis-Flex](https://mybatis-flex.com/) · 优雅的 ORM
 - [Vue.js](https://vuejs.org/) · 渐进式前端框架
 - [Ant Design Vue](https://antdv.com/) · 企业级 UI 组件
-- [pgvector](https://github.com/pgvector/pgvector) · PostgreSQL 向量扩展
+- [Milvus](https://milvus.io/) · 云原生向量数据库
 - [DeepSeek](https://www.deepseek.com/) · 高性价比代码生成模型
 - [阿里云 DashScope](https://dashscope.aliyun.com/) · 通义千问 / Embedding / Rerank
 - [Hutool](https://hutool.cn/) · Java 工具集

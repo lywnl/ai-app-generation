@@ -23,7 +23,7 @@ class VueIngestionEnvironmentTest {
         assertFalse(disabled.ready());
         assertTrue(disabled.reasons().contains("RAG_VUE_INGEST 未设置为 true"));
         assertFalse(missing.ready());
-        assertTrue(missing.reasons().contains("缺少环境变量 RAG_PGVECTOR_PASSWORD"));
+        assertTrue(missing.reasons().contains("缺少环境变量 RAG_MILVUS_PASSWORD"));
         assertEquals(0, disabledProbe.calls);
         assertEquals(0, missingProbe.calls);
         assertFalse(disabled.toString().contains("dashscope-secret"));
@@ -36,22 +36,21 @@ class VueIngestionEnvironmentTest {
                 "RAG_VUE_INGEST", "true",
                 "DASHSCOPE_API_KEY", "dashscope-secret",
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
-                "RAG_PGVECTOR_PASSWORD", "pg-secret",
-                "RAG_PGVECTOR_HOST", "db.internal",
-                "RAG_PGVECTOR_PORT", "15432",
-                "RAG_PGVECTOR_DATABASE", "rag_test",
-                "RAG_PGVECTOR_USER", "rag_user");
+                "RAG_MILVUS_PASSWORD", "milvus-secret",
+                "RAG_MILVUS_HOST", "milvus.internal",
+                "RAG_MILVUS_PORT", "19531",
+                "RAG_MILVUS_DATABASE", "rag_test",
+                "RAG_MILVUS_USERNAME", "rag_user");
 
         VueIngestionEnvironment result = VueIngestionEnvironment.inspect(
                 environment, (host, port) -> true);
 
         assertTrue(result.ready());
-        assertEquals("jdbc:postgresql://db.internal:15432/rag_test", result.target().jdbcUrl());
-        assertEquals("db.internal:15432/rag_test", result.target().displayName());
-        assertEquals("rag_user", result.target().user());
+        assertEquals("milvus.internal:19531/rag_test", result.target().displayName());
+        assertEquals("rag_user", result.target().username());
         assertFalse(result.toString().contains("dashscope-secret"));
         assertFalse(result.toString().contains("mysql-secret"));
-        assertFalse(result.toString().contains("pg-secret"));
+        assertFalse(result.toString().contains("milvus-secret"));
     }
 
     private static final class CountingPortProbe implements VueIngestionEnvironment.PortProbe {

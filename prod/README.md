@@ -41,23 +41,29 @@ APP_CODE_DEPLOY_BASE_URL=http://your-domain.example
 INFRA_SHARED_PASSWORD=请填写新的随机强密码
 MYSQL_USER=admin
 REDIS_USERNAME=admin
-PG_USER=admin
+MILVUS_MINIO_PASSWORD=请填写至少8位的MinIO随机强密码
 GRAFANA_ADMIN_USER=admin
 ```
 
 该值只能包含协议、主机和可选端口，不能包含业务路径；部署访问路径由后端统一追加。
 
-基础设施统一密码：
+基础设施密码：
 
 - 在 `.env` 中填写 `INFRA_SHARED_PASSWORD`。
-- MySQL、Redis、PostgreSQL、Grafana 和后端连接统一使用该值。
+- MySQL、Redis、Milvus root、Grafana 和后端连接统一使用该值。
+- MinIO 使用独立的 `MILVUS_MINIO_PASSWORD`，不能复用当前长度不足 8 的共享密码；该密码至少为 8 个字符。
+- MinIO 用户固定为 `minioadmin`，仅供 Milvus 内部对象存储使用，不对公网暴露。
 - 建议使用新的随机强密码；仓库历史中的旧口令不应继续复用。
 - 密码只能使用字母、数字、点、下划线和短横线，建议生成足够长的随机值。
 - Redis ACL 由 `redis/start-redis.sh` 在容器启动时生成，仓库不保存明文 ACL。
 
-注意：Redis 会在每次容器启动时应用新密码；MySQL、PostgreSQL 和 Grafana
+注意：Redis 会在每次容器启动时应用新密码；MySQL、Milvus root 和 Grafana
 只在首次初始化数据卷时读取初始化密码。已有数据卷切换密码前，必须先在各服务内
 修改现有账号密码，再更新 `.env` 并重启；不能通过删除数据卷来“同步密码”。
+
+Milvus root 初始密码仅在全新的 etcd 元数据中生效。已有 `milvus_etcd_data` 卷改密时，
+必须先在 Milvus 内完成 root 密码修改，再更新 `.env` 中的 `INFRA_SHARED_PASSWORD`。
+旧 PG 数据卷在迁移验收完成前只读保留，验收后先备份，再由人工删除；应用不会再连接旧卷。
 
 如果暂时不填 API Key，请保留这些键且值为空：
 
@@ -75,6 +81,10 @@ PEXELS_API_KEY=
 ```bash
 docker compose --env-file .env -f docker-compose.yml build
 docker compose --env-file .env -f docker-compose.yml up -d
+
+# 单独启动并检查 RAG 向量基础设施
+docker compose --env-file .env -f docker-compose.yml up -d milvus-etcd milvus-minio milvus
+docker compose --env-file .env -f docker-compose.yml ps milvus-etcd milvus-minio milvus
 ```
 
 ### 启用 Vue Hybrid 检索（默认关闭）
@@ -91,16 +101,17 @@ docker compose --env-file .env -f docker-compose.yml up -d
    docker compose --env-file .env -f docker-compose.yml up -d --force-recreate backend
    ```
 
-任一步失败都保持 `RAG_HYBRID_ENABLED=false`。默认 Maven、PGVector 协议探针、五骨架策展构建都不能替代以上三项真实成绩，也不得据此开启 Hybrid。
+任一步失败都保持 `RAG_HYBRID_ENABLED=false`。默认 Maven、离线协议探针、五骨架策展构建都不能替代以上三项真实成绩，也不得据此开启 Hybrid。
 
-PostgreSQL 说明：
+Milvus 说明：
 
-- 当前已改为直接使用 `pgvector/pgvector:pg16` 镜像
-- 不再在本地编译 pgvector（避免慢速 `apt + git + make`）
-- 若你已提前拉取镜像，可直接启动：
+- 服务端固定使用 `milvusdb/milvus:v2.5.9`，依赖 etcd `v3.5.18` 与固定版本 MinIO。
+- 生产环境不发布 Milvus、etcd 或 MinIO 宿主端口；后端通过 `ai_net` 内部 DNS 连接 `milvus`。
+- Compose 固定设置 `QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX=-1`，仅取消单 Collection Flush QPS 上限，以支持稳定 ID 每次 upsert 后立即 flush；其他配额与保护保持 Milvus 默认值。
+- 如需仅启动 RAG 向量基础设施：
 
 ```bash
-docker compose --env-file .env -f docker-compose.yml up -d pg
+docker compose --env-file .env -f docker-compose.yml up -d milvus-etcd milvus-minio milvus
 ```
 
 ## 4. 常用检查
@@ -125,7 +136,7 @@ docker compose --env-file .env -f docker-compose.yml logs -f backend
 
 ## 6. Token 分层记忆 V3 上线前人工门禁
 
-本节只定义上线检查、停止条件和非破坏性回滚流程。`prod/sql/migrations/2026-08-15-token-layered-memory-v3.sql` 不会被 `V1__hnsw_index.sql` 或应用启动自动执行；真实生产备份、migration、部署、回滚和删列都必须由具备权限的人员另行审批后操作。
+本节只定义上线检查、停止条件和非破坏性回滚流程。`prod/sql/migrations/2026-08-15-token-layered-memory-v3.sql` 不会由应用启动自动执行；真实生产备份、migration、部署、回滚和删列都必须由具备权限的人员另行审批后操作。
 
 ### 6.1 发布前置条件
 

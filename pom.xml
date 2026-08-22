@@ -111,11 +111,16 @@
             <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
             <version>1.1.0-beta7</version>
         </dependency>
-        <!-- RAG: PGVector 向量存储 -->
+        <!-- RAG: Milvus 向量存储 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-pgvector</artifactId>
+            <artifactId>langchain4j-milvus</artifactId>
             <version>1.1.0-beta7</version>
+        </dependency>
+        <dependency>
+            <groupId>io.milvus</groupId>
+            <artifactId>milvus-sdk-java</artifactId>
+            <version>2.5.9</version>
         </dependency>
         <dependency>
             <groupId>org.apache.lucene</groupId>
@@ -132,12 +137,6 @@
             <artifactId>lucene-analysis-smartcn</artifactId>
             <version>10.5.0</version>
         </dependency>
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
         <dependency>
             <groupId>cn.hutool</groupId>
             <artifactId>hutool-all</artifactId>
@@ -201,7 +200,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <!-- 本地数据库连接不得继承 macOS 系统代理，避免 PG JDBC 误走 SOCKS。 -->
+                    <!-- 本地基础设施连接不得继承 macOS 系统代理，避免内网连接误走 SOCKS。 -->
                     <jvmArguments>
                         -Djava.net.useSystemProxies=false
                         -Dhttp.proxyHost=

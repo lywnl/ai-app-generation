@@ -28,7 +28,7 @@ import java.util.stream.Stream;
 
 /**
  * 模板摄取服务:从 {@link RagProperties#getTemplatesDir()} 根目录下的子目录
- * (html / multi-file / vue-project)扫描 *.json,做 embedding 后存入 PGVector
+ * （html / multi-file / vue-project）扫描 *.json，生成 embedding 后存入 Milvus。
  * <p>
  * 仅在 rag.ingest.enabled=true 时实例化。日常运行保持 false,
  * 只在你新增/修改模板后临时改 true 重启一次,跑完即关。

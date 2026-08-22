@@ -26,8 +26,8 @@ public class RagProperties {
     /** Vue 混合检索灰度开关 */
     private Hybrid hybrid = new Hybrid();
 
-    /** PGVector 连接配置 */
-    private PgVector pgvector = new PgVector();
+    /** Milvus 连接配置 */
+    private Milvus milvus = new Milvus();
 
     /** Embedding 模型配置 */
     private Embedding embedding = new Embedding();
@@ -52,11 +52,11 @@ public class RagProperties {
     }
 
     @Data
-    public static class PgVector {
+    public static class Milvus {
         private String host = "localhost";
-        private int port = 5432;
-        private String database = "ai_codegen_rag";
-        private String user = "admin";
+        private int port = 19530;
+        private String database = "default";
+        private String username = "root";
         private String password;
     }
 

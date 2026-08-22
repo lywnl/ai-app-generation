@@ -23,7 +23,7 @@ import java.util.Map;
  * RAG 检索服务:按生成类型选择向量表,召回 → (可选)rerank 精排 → 取 topK
  *
  * 核心设计:
- * 1. 向量召回彻底失败(embedding / pgvector 异常)→ 返回空,主生成链路无 RAG 增强
+ * 1. 向量召回彻底失败（embedding / Milvus 异常）→ 返回空，主生成链路无 RAG 增强
  * 2. Rerank 失败 → 降级为原向量 score 排序取 topK,保留向量召回能力
  * 3. 候选数 ≤ topK 时跳过 rerank(无意义),节省一次 HTTP
  *

@@ -1,7 +1,7 @@
 package com.lyw.appgeneration.rag.vue;
 
 import com.lyw.appgeneration.rag.ingest.VueIngestionVerification;
-import com.lyw.appgeneration.rag.ingest.VuePgVectorTarget;
+import com.lyw.appgeneration.rag.ingest.VueMilvusTarget;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -127,23 +127,23 @@ class VueRetrievalIngestionPrerequisiteTest {
     @Test
     void 规范化目标同时用于核验和评测配置() {
         assertTargetMapping(Map.of(
-                "RAG_PGVECTOR_HOST", "",
-                "RAG_PGVECTOR_DATABASE", "",
-                "RAG_PGVECTOR_USER", "",
-                "RAG_PGVECTOR_PORT", "0"));
-        assertTargetMapping(Map.of("RAG_PGVECTOR_PORT", "70000"));
-        assertTargetMapping(Map.of("RAG_PGVECTOR_PORT", "非法端口"));
+                "RAG_MILVUS_HOST", "",
+                "RAG_MILVUS_DATABASE", "",
+                "RAG_MILVUS_USERNAME", "",
+                "RAG_MILVUS_PORT", "0"));
+        assertTargetMapping(Map.of("RAG_MILVUS_PORT", "70000"));
+        assertTargetMapping(Map.of("RAG_MILVUS_PORT", "非法端口"));
     }
 
     private void assertTargetMapping(Map<String, String> variables) {
-        VuePgVectorTarget target = VuePgVectorTarget.from(variables);
+        VueMilvusTarget target = VueMilvusTarget.from(variables);
         var properties = VueRetrievalQualityGateRunner.evaluationProperties(
                 target, "password");
 
-        assertEquals(target.host(), properties.getPgvector().getHost());
-        assertEquals(target.port(), properties.getPgvector().getPort());
-        assertEquals(target.database(), properties.getPgvector().getDatabase());
-        assertEquals(target.user(), properties.getPgvector().getUser());
-        assertEquals("password", properties.getPgvector().getPassword());
+        assertEquals(target.host(), properties.getMilvus().getHost());
+        assertEquals(target.port(), properties.getMilvus().getPort());
+        assertEquals(target.database(), properties.getMilvus().getDatabase());
+        assertEquals(target.username(), properties.getMilvus().getUsername());
+        assertEquals("password", properties.getMilvus().getPassword());
     }
 }

@@ -15,9 +15,9 @@ public final class RagConstants {
     }
 
     /**
-     * 每种代码生成类型对应的 PGVector 表名与模板子目录名
+     * 每种代码生成类型对应的 Milvus Collection 名称
      */
-    public static final Map<CodeGenTypeEnum, String> TYPE_TO_TABLE = Map.of(
+    public static final Map<CodeGenTypeEnum, String> TYPE_TO_COLLECTION = Map.of(
             CodeGenTypeEnum.HTML, "templates_html",
             CodeGenTypeEnum.MULTI_FILE, "templates_multi",
             CodeGenTypeEnum.VUE_PROJECT, "templates_vue"

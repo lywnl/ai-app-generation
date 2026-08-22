@@ -408,8 +408,6 @@ WHERE table_schema = DATABASE()
 ORDER BY table_name, index_name, seq_in_index;
 
 -- 默认回滚：仅回滚应用版本并保留这些兼容新列，旧版本不写新列仍可插入。
--- src/main/resources/db/migration/V1__hnsw_index.sql 不会自动迁移 MySQL，
--- 本次 MySQL 升级只以当前脚本的执行和验收结果为准。
 --
 -- 破坏性手工回滚参考（禁止自动执行）：先导出新增列内容并确认无新版本流量。
 -- ALTER TABLE app_memory_summary DROP COLUMN nextRetryTime;

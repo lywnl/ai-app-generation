@@ -30,7 +30,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pg:
+      milvus:
         condition: service_healthy
     environment:
       TZ: Asia/Shanghai
@@ -46,11 +46,11 @@ services:
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_USERNAME: ${REDIS_USERNAME}
       SPRING_DATA_REDIS_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
-      RAG_PGVECTOR_HOST: pg
-      RAG_PGVECTOR_PORT: 5432
-      RAG_PGVECTOR_DATABASE: ai_codegen_rag
-      RAG_PGVECTOR_USER: ${PG_USER}
-      RAG_PGVECTOR_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      RAG_MILVUS_HOST: milvus
+      RAG_MILVUS_PORT: 19530
+      RAG_MILVUS_DATABASE: default
+      RAG_MILVUS_USERNAME: root
+      RAG_MILVUS_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-false}
       RAG_TEMPLATES_DIR: /app/embed_text
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
@@ -119,23 +119,73 @@ services:
     networks:
       - ai_net
 
-  pg:
-    image: pgvector/pgvector:pg16
-    container_name: ai-pg
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    container_name: ai-milvus-etcd
     restart: unless-stopped
     environment:
-      TZ: Asia/Shanghai
-      POSTGRES_DB: ai_codegen_rag
-      POSTGRES_USER: ${PG_USER}
-      POSTGRES_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: 1000
+      ETCD_QUOTA_BACKEND_BYTES: 4294967296
+      ETCD_SNAPSHOT_COUNT: 50000
+    command: >-
+      etcd -advertise-client-urls=http://milvus-etcd:2379
+      -listen-client-urls http://0.0.0.0:2379
+      --data-dir /etcd
     volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./postgres/init/01-enable-pgvector.sql:/docker-entrypoint-initdb.d/01-enable-pgvector.sql:ro
+      - milvus_etcd_data:/etcd
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ai_codegen_rag"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - ai_net
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: ai-milvus-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}
+    command: minio server /minio_data --console-address ":9001"
+    volumes:
+      - milvus_minio_data:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - ai_net
+
+  milvus:
+    image: milvusdb/milvus:v2.5.9
+    container_name: ai-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+      MINIO_ACCESS_KEY_ID: minioadmin
+      MINIO_SECRET_ACCESS_KEY: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}
+      COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
+      COMMON_SECURITY_DEFAULTROOTPASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: "-1"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    depends_on:
+      milvus-etcd:
+        condition: service_healthy
+      milvus-minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
     networks:
       - ai_net
 
@@ -179,7 +229,9 @@ networks:
 volumes:
   mysql_data:
   redis_data:
-  pg_data:
+  milvus_etcd_data:
+  milvus_minio_data:
+  milvus_data:
   tmp_data:
   code_deploy_data:
   prometheus_data:

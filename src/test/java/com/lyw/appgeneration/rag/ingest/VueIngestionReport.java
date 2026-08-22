@@ -13,7 +13,7 @@ import java.util.Objects;
  */
 public final class VueIngestionReport {
 
-    private static final String TARGET = "PGVector/templates_vue";
+    private static final String TARGET = "Milvus/templates_vue";
 
     private enum Status {
         NOT_EXECUTED,
@@ -121,12 +121,12 @@ public final class VueIngestionReport {
         }
         if (reason.equals("RAG_VUE_INGEST 未设置为 true")
                 || reason.equals("缺少环境变量 DASHSCOPE_API_KEY")
-                || reason.equals("缺少环境变量 RAG_PGVECTOR_PASSWORD")) {
+                || reason.equals("缺少环境变量 RAG_MILVUS_PASSWORD")) {
             return EvaluationReportSanitizer.sanitize(reason);
         }
-        if (reason.startsWith("PGVector 端口不可达: ")
-                || reason.equals("PGVector 端口不可达")) {
-            return "PGVector 端口不可达";
+        if (reason.startsWith("Milvus 端口不可达: ")
+                || reason.equals("Milvus 端口不可达")) {
+            return "Milvus 端口不可达";
         }
         if (reason.startsWith("真实摄取依赖失败: ")
                 || reason.equals("真实摄取依赖失败")) {

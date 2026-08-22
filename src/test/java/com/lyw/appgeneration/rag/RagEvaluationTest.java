@@ -20,7 +20,7 @@ import java.util.Map;
 /**
  * RAG 检索质量评估主测试类
  *
- * <p><b>运行方式</b>:此测试默认禁用 — 因为完整跑需要 PGVector 数据库 + DashScope API,
+ * <p><b>运行方式</b>:此测试默认禁用 — 因为完整跑需要 Milvus 数据库 + DashScope API,
  * 不适合 CI 默认执行。手动运行需设置环境变量:
  * <pre>
  *   RAG_EVAL=true mvn test -Dtest=RagEvaluationTest

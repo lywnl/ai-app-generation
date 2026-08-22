@@ -18,35 +18,82 @@ class InfrastructureCredentialConfigTest {
             "INFRA_SHARED_PASSWORD";
     private static final String REQUIRED_SHARED_PASSWORD =
             "${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}";
+    private static final String REQUIRED_MINIO_PASSWORD =
+            "${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}";
 
     @Test
-    void 应用和独立PgVector统一读取基础设施密码环境变量() throws IOException {
+    void 应用和本地Milvus分别读取共享与对象存储密码环境变量() throws IOException {
         String application = readProjectFile(
                 "src/main/resources/application.yml");
         String ragProperties = readProjectFile(
                 "src/main/java/com/lyw/appgeneration/config/RagProperties.java");
-        String pgVectorCompose = readProjectFile("docker/pgvector.yml");
+        String milvusCompose = readProjectFile("docker/milvus.yml");
 
-        assertEquals(3, occurrences(application,
+        assertEquals(2, occurrences(application,
                 "password: ${" + SHARED_PASSWORD_VARIABLE + "}"));
+        assertTrue(application.contains(
+                "password: ${RAG_MILVUS_PASSWORD:${INFRA_SHARED_PASSWORD}}"));
         assertTrue(ragProperties.contains("private String password;"));
-        assertTrue(pgVectorCompose.contains(
-                "POSTGRES_PASSWORD: " + REQUIRED_SHARED_PASSWORD));
+        assertTrue(milvusCompose.contains(
+                "MINIO_ROOT_PASSWORD: " + REQUIRED_MINIO_PASSWORD));
+        assertTrue(milvusCompose.contains(
+                "MINIO_SECRET_ACCESS_KEY: " + REQUIRED_MINIO_PASSWORD));
+        assertTrue(milvusCompose.contains(
+                "COMMON_SECURITY_DEFAULTROOTPASSWORD: "
+                        + REQUIRED_SHARED_PASSWORD));
+        assertTrue(serviceBlock(milvusCompose, "milvus").contains(
+                "QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: \"-1\""));
+        assertFalse(milvusCompose.contains(
+                "MINIO_ROOT_PASSWORD: " + REQUIRED_SHARED_PASSWORD));
+        assertFalse(milvusCompose.contains(
+                "MINIO_SECRET_ACCESS_KEY: " + REQUIRED_SHARED_PASSWORD));
     }
 
     @Test
-    void 生产Compose只从统一变量注入所有基础设施密码() throws IOException {
+    void 本地Milvus使用固定版本鉴权健康检查和仅本机端口发布() throws IOException {
+        String compose = readProjectFile("docker/milvus.yml");
+
+        assertTrue(compose.contains("image: milvusdb/milvus:v2.5.9"));
+        assertTrue(compose.contains("image: quay.io/coreos/etcd:v3.5.18"));
+        assertTrue(compose.contains(
+                "image: minio/minio:RELEASE.2023-03-20T20-16-18Z"));
+        assertTrue(compose.contains(
+                "COMMON_SECURITY_AUTHORIZATIONENABLED: \"true\""));
+        assertEquals(1, occurrences(compose, "    ports:"));
+        assertTrue(compose.contains("- \"127.0.0.1:19530:19530\""));
+        assertTrue(compose.contains("- \"127.0.0.1:9091:9091\""));
+        assertFalse(compose.contains("2379:2379"));
+        assertFalse(compose.contains("9000:9000"));
+        assertFalse(compose.contains("9001:9001"));
+        assertTrue(compose.contains("test: [\"CMD\", \"etcdctl\", \"endpoint\", \"health\"]"));
+        assertTrue(compose.contains(
+                "http://localhost:9000/minio/health/live"));
+        assertTrue(compose.contains("http://localhost:9091/healthz"));
+        assertTrue(compose.contains("milvus_etcd_data:"));
+        assertTrue(compose.contains("milvus_minio_data:"));
+        assertTrue(compose.contains("milvus_data:"));
+    }
+
+    @Test
+    void 生产Compose使用共享密码和独立MinIO密码注入基础设施() throws IOException {
         String compose = readProjectFile("prod/docker-compose.yml");
 
         List<String> passwordMappings = List.of(
                 "INFRA_SHARED_PASSWORD: " + REQUIRED_SHARED_PASSWORD,
                 "MYSQL_ROOT_PASSWORD: " + REQUIRED_SHARED_PASSWORD,
                 "MYSQL_PASSWORD: " + REQUIRED_SHARED_PASSWORD,
-                "POSTGRES_PASSWORD: " + REQUIRED_SHARED_PASSWORD,
+                "COMMON_SECURITY_DEFAULTROOTPASSWORD: "
+                        + REQUIRED_SHARED_PASSWORD,
                 "GF_SECURITY_ADMIN_PASSWORD: " + REQUIRED_SHARED_PASSWORD);
         for (String mapping : passwordMappings) {
             assertTrue(compose.contains(mapping), "缺少统一密码映射: " + mapping);
         }
+        assertTrue(compose.contains(
+                "MINIO_ROOT_PASSWORD: " + REQUIRED_MINIO_PASSWORD));
+        assertTrue(compose.contains(
+                "MINIO_SECRET_ACCESS_KEY: " + REQUIRED_MINIO_PASSWORD));
+        assertTrue(serviceBlock(compose, "milvus").contains(
+                "QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: \"-1\""));
 
         assertFalse(compose.contains(
                 "MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}"));
@@ -54,7 +101,11 @@ class InfrastructureCredentialConfigTest {
                 "MYSQL_PASSWORD: ${MYSQL_PASSWORD}"));
         assertFalse(compose.contains(
                 "SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}"));
-        assertFalse(compose.contains("POSTGRES_PASSWORD: ${PG_PASSWORD}"));
+        assertFalse(compose.contains(
+                "MINIO_ROOT_PASSWORD: " + REQUIRED_SHARED_PASSWORD));
+        assertFalse(compose.contains(
+                "MINIO_SECRET_ACCESS_KEY: " + REQUIRED_SHARED_PASSWORD));
+        assertFalse(compose.contains("MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}"));
         assertFalse(compose.contains(
                 "GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}"));
         assertTrue(compose.contains(
@@ -82,16 +133,19 @@ class InfrastructureCredentialConfigTest {
     }
 
     @Test
-    void 生产环境模板只声明统一密码且真实文件被忽略() throws IOException {
+    void 生产环境模板声明共享密码和独立MinIO密码且真实文件被忽略() throws IOException {
         String environmentExample = readProjectFile("prod/.env.example");
         String gitignore = readProjectFile(".gitignore");
 
         assertEquals(List.of(SHARED_PASSWORD_VARIABLE + "="),
                 matchingLines(environmentExample, SHARED_PASSWORD_VARIABLE));
+        assertEquals(List.of("MILVUS_MINIO_PASSWORD="),
+                matchingLines(environmentExample, "MILVUS_MINIO_PASSWORD"));
         assertFalse(environmentExample.contains("MYSQL_ROOT_PASSWORD="));
         assertFalse(environmentExample.contains("MYSQL_PASSWORD="));
         assertFalse(environmentExample.contains("REDIS_PASSWORD="));
-        assertFalse(environmentExample.contains("PG_PASSWORD="));
+        assertFalse(environmentExample.contains("PG_" + "PASSWORD="));
+        assertFalse(environmentExample.contains("PG_" + "USER="));
         assertFalse(environmentExample.contains("GRAFANA_ADMIN_PASSWORD="));
         assertTrue(gitignore.lines()
                 .map(String::strip)
@@ -103,6 +157,23 @@ class InfrastructureCredentialConfigTest {
                 .map(String::strip)
                 .filter(line -> line.startsWith(variable + "="))
                 .toList();
+    }
+
+    private String serviceBlock(String compose, String serviceName) {
+        String serviceStart = "\n  " + serviceName + ":\n";
+        int startIndex = compose.indexOf(serviceStart);
+        assertTrue(startIndex >= 0, "缺少服务: " + serviceName);
+        int endIndex = compose.length();
+        for (int index = startIndex + serviceStart.length(); index < compose.length() - 3; index++) {
+            if (compose.charAt(index) == '\n'
+                    && compose.charAt(index + 1) == ' '
+                    && compose.charAt(index + 2) == ' '
+                    && compose.charAt(index + 3) != ' ') {
+                endIndex = index;
+                break;
+            }
+        }
+        return compose.substring(startIndex, endIndex);
     }
 
     private int occurrences(String content, String target) {

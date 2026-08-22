@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -83,8 +84,44 @@ class ProductionRagDeploymentConfigTest {
         assertTrue(enable > generation, "只能在三项真实成绩之后设置开关为 true");
         assertTrue(restart > enable, "设置开关后必须重启 backend");
         assertTrue(readme.contains("任一步失败都保持 `RAG_HYBRID_ENABLED=false`。"));
-        assertTrue(readme.contains("默认 Maven、PGVector 协议探针、五骨架策展构建都不能替代"
+        assertTrue(readme.contains("默认 Maven、离线协议探针、五骨架策展构建都不能替代"
                 + "以上三项真实成绩，也不得据此开启 Hybrid。"));
+    }
+
+    @Test
+    void 生产Compose仅以Milvus作为Rag向量基础设施() throws IOException {
+        String compose = readProductionFile("docker-compose.yml");
+
+        assertTrue(compose.contains("  milvus-etcd:"));
+        assertTrue(compose.contains("  milvus-minio:"));
+        assertTrue(compose.contains("  milvus:"));
+        assertTrue(compose.contains("      milvus:\n        condition: service_healthy"));
+        assertTrue(compose.contains("RAG_MILVUS_HOST: milvus"));
+        assertTrue(compose.contains("RAG_MILVUS_PORT: 19530"));
+        assertTrue(compose.contains("RAG_MILVUS_DATABASE: default"));
+        assertTrue(compose.contains("RAG_MILVUS_USERNAME: root"));
+        assertTrue(compose.contains(
+                "RAG_MILVUS_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}"));
+        assertTrue(compose.contains("ETCD_ENDPOINTS: milvus-etcd:2379"));
+        assertTrue(compose.contains("MINIO_ADDRESS: milvus-minio:9000"));
+        assertTrue(compose.contains(
+                "MINIO_ROOT_PASSWORD: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}"));
+        assertTrue(compose.contains(
+                "MINIO_SECRET_ACCESS_KEY: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}"));
+        assertTrue(serviceBlock(compose, "milvus").contains(
+                "QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: \"-1\""));
+        assertServiceUsesAiNet(compose, "milvus-etcd");
+        assertServiceUsesAiNet(compose, "milvus-minio");
+        assertServiceUsesAiNet(compose, "milvus");
+        assertServiceDoesNotPublishPorts(compose, "milvus-etcd");
+        assertServiceDoesNotPublishPorts(compose, "milvus-minio");
+        assertServiceDoesNotPublishPorts(compose, "milvus");
+        assertFalse(compose.contains("  pg:"));
+        assertFalse(compose.contains("post" + "gres"));
+        assertFalse(compose.contains("pg" + "vector"));
+        assertFalse(compose.contains("pg_" + "data"));
+        assertFalse(compose.contains("POST" + "GRES_"));
+        assertFalse(compose.contains("RAG_PG" + "VECTOR_"));
     }
 
     private String readProductionFile(String fileName) throws IOException {
@@ -109,6 +146,37 @@ class ProductionRagDeploymentConfigTest {
                 .map(String::strip)
                 .filter(line -> line.contains(variableName))
                 .toList();
+    }
+
+    private void assertServiceUsesAiNet(String compose, String serviceName) {
+        assertTrue(serviceBlock(compose, serviceName).contains(
+                "    networks:\n      - ai_net"),
+                serviceName + " 必须接入 ai_net");
+    }
+
+    private void assertServiceDoesNotPublishPorts(String compose, String serviceName) {
+        assertTrue(!serviceBlock(compose, serviceName).contains("    ports:"),
+                serviceName + " 不得发布宿主端口");
+    }
+
+    private String serviceBlock(String compose, String serviceName) {
+        String serviceStart = "\n  " + serviceName + ":\n";
+        int startIndex = compose.indexOf(serviceStart);
+        assertTrue(startIndex >= 0, "缺少服务: " + serviceName);
+        int contentStartIndex = startIndex + 1;
+        int endIndex = compose.length();
+        for (int index = contentStartIndex + serviceStart.length() - 1;
+             index < compose.length() - 3;
+             index++) {
+            if (compose.charAt(index) == '\n'
+                    && compose.charAt(index + 1) == ' '
+                    && compose.charAt(index + 2) == ' '
+                    && compose.charAt(index + 3) != ' ') {
+                endIndex = index;
+                break;
+            }
+        }
+        return compose.substring(contentStartIndex, endIndex);
     }
 
     private void assertHybridEnabledInBackendEnvironment(String compose) {

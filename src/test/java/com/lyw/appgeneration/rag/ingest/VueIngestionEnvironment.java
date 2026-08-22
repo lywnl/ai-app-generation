@@ -14,7 +14,7 @@ import java.util.Map;
 public record VueIngestionEnvironment(
         boolean ready,
         List<String> reasons,
-        VuePgVectorTarget target) {
+        VueMilvusTarget target) {
 
     public VueIngestionEnvironment {
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
@@ -25,7 +25,7 @@ public record VueIngestionEnvironment(
     }
 
     static VueIngestionEnvironment inspect(Map<String, String> environment, PortProbe probe) {
-        VuePgVectorTarget target = VuePgVectorTarget.from(environment);
+        VueMilvusTarget target = VueMilvusTarget.from(environment);
         if (!"true".equalsIgnoreCase(environment.get("RAG_VUE_INGEST"))) {
             return new VueIngestionEnvironment(
                     false, List.of("RAG_VUE_INGEST 未设置为 true"), target);
@@ -33,9 +33,9 @@ public record VueIngestionEnvironment(
 
         List<String> reasons = new ArrayList<>();
         require(environment, "DASHSCOPE_API_KEY", reasons);
-        require(environment, "RAG_PGVECTOR_PASSWORD", reasons);
+        require(environment, "RAG_MILVUS_PASSWORD", reasons);
         if (reasons.isEmpty() && !probe.isReachable(target.host(), target.port())) {
-            reasons.add("PGVector 端口不可达: " + target.host() + ":" + target.port());
+            reasons.add("Milvus 端口不可达: " + target.host() + ":" + target.port());
         }
         return new VueIngestionEnvironment(reasons.isEmpty(), reasons, target);
     }

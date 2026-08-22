@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.rag.ingest.VueIngestionVerification;
-import com.lyw.appgeneration.rag.ingest.VuePgVectorTarget;
+import com.lyw.appgeneration.rag.ingest.VueMilvusTarget;
 import com.lyw.appgeneration.service.rag.RagRerankService;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import com.lyw.appgeneration.service.rag.VueHybridRetrievalService;
@@ -13,11 +13,12 @@ import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
+import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
+import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import java.io.IOException;
@@ -56,44 +57,68 @@ public final class VueRetrievalQualityGateRunner {
     }
 
     public VueRetrievalEvaluationReport evaluateDataset(
-            VuePgVectorTarget target,
-            String pgVectorPassword,
-            String dashScopeApiKey,
+            VueMilvusTarget target,
+            String password,
+            String apiKey,
             TemplateCatalog catalog) {
-        VueEvalDataset dataset;
-        try {
-            dataset = VueEvalDataset.load("rag/vue-hybrid-eval-set.json", new ObjectMapper());
-        } catch (IOException exception) {
-            throw new UncheckedIOException("加载 Vue 检索评测集失败", exception);
-        }
+        VueEvalDataset dataset = loadDataset();
         try (EvaluationServices services = createEvaluationServices(
-                target, pgVectorPassword, dashScopeApiKey, catalog)) {
+                target, password, apiKey, catalog)) {
             return new VueRetrievalEvaluator(services.retrievalService()).evaluate(dataset.queries());
         }
     }
 
+    private VueEvalDataset loadDataset() {
+        try {
+            return VueEvalDataset.load("rag/vue-hybrid-eval-set.json", new ObjectMapper());
+        } catch (IOException exception) {
+            throw new UncheckedIOException("加载 Vue 检索评测集失败", exception);
+        }
+    }
+
     private EvaluationServices createEvaluationServices(
-            VuePgVectorTarget target,
-            String pgVectorPassword,
-            String dashScopeApiKey,
+            VueMilvusTarget target,
+            String password,
+            String apiKey,
             TemplateCatalog catalog) {
-        RagProperties properties = evaluationProperties(target, pgVectorPassword);
-        EmbeddingModel embeddingModel = OpenAiEmbeddingModel.builder()
+        RagProperties properties = evaluationProperties(target, password);
+        EmbeddingModel embeddingModel = createEmbeddingModel(properties, apiKey);
+        MilvusEmbeddingStoreFactory factory = new MilvusEmbeddingStoreFactory(
+                properties, new MilvusCollectionSchemaVerifier());
+        VueRetrievalResourceProvider resourceProvider = null;
+        try {
+            EmbeddingStore<TextSegment> store = factory.create("templates_vue");
+            resourceProvider = VueRetrievalResourceProvider.forEvaluation(catalog);
+            RagRerankService rerankService = new RagRerankService(properties, apiKey);
+            RagRetrievalService retrievalService = createRetrievalService(
+                    embeddingModel, store, resourceProvider, rerankService, properties);
+            return new EvaluationServices(retrievalService, resourceProvider, factory);
+        } catch (RuntimeException | Error exception) {
+            closeOnCreationFailure(resourceProvider, factory, exception);
+            throw exception;
+        }
+    }
+
+    private EmbeddingModel createEmbeddingModel(RagProperties properties, String apiKey) {
+        return OpenAiEmbeddingModel.builder()
                 .baseUrl(properties.getEmbedding().getBaseUrl())
-                .apiKey(dashScopeApiKey)
+                .apiKey(apiKey)
                 .modelName(properties.getEmbedding().getModelName())
                 .dimensions(properties.getEmbedding().getDimension())
                 .timeout(Duration.ofMillis(properties.getEmbedding().getTimeoutMs()))
                 .logRequests(false)
                 .logResponses(false)
                 .build();
-        EmbeddingStore<TextSegment> store = createVueStore(properties);
+    }
+
+    private RagRetrievalService createRetrievalService(
+            EmbeddingModel embeddingModel,
+            EmbeddingStore<TextSegment> store,
+            VueRetrievalResourceProvider resourceProvider,
+            RagRerankService rerankService,
+            RagProperties properties) {
         Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> stores = Map.of(
                 CodeGenTypeEnum.VUE_PROJECT, store);
-        VueRetrievalResourceProvider resourceProvider =
-                VueRetrievalResourceProvider.forEvaluation(catalog);
-        RagRerankService rerankService = new RagRerankService(
-                properties, dashScopeApiKey);
         VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
                 resourceProvider,
                 new DenseRetriever(embeddingModel, stores, properties),
@@ -101,49 +126,54 @@ public final class VueRetrievalQualityGateRunner {
                 rerankService,
                 new VueRagMetricsCollector(new SimpleMeterRegistry()),
                 properties);
-        RagRetrievalService retrievalService = new RagRetrievalService(
+        return new RagRetrievalService(
                 embeddingModel, stores, properties, rerankService, hybridService);
-        return new EvaluationServices(retrievalService, resourceProvider);
     }
 
-    static RagProperties evaluationProperties(
-            VuePgVectorTarget target,
-            String pgVectorPassword) {
+    private void closeOnCreationFailure(
+            VueRetrievalResourceProvider resourceProvider,
+            MilvusEmbeddingStoreFactory factory,
+            Throwable originalFailure) {
+        if (resourceProvider != null) {
+            try {
+                resourceProvider.close();
+            } catch (RuntimeException closeFailure) {
+                originalFailure.addSuppressed(closeFailure);
+            }
+        }
+        try {
+            factory.close();
+        } catch (RuntimeException closeFailure) {
+            originalFailure.addSuppressed(closeFailure);
+        }
+    }
+
+    static RagProperties evaluationProperties(VueMilvusTarget target, String password) {
         RagProperties properties = new RagProperties();
         properties.setEnabled(true);
         properties.getHybrid().setEnabled(true);
         properties.setTemplatesDir(Path.of("embed_text").toAbsolutePath().toString());
-        properties.getPgvector().setHost(target.host());
-        properties.getPgvector().setPort(target.port());
-        properties.getPgvector().setDatabase(target.database());
-        properties.getPgvector().setUser(target.user());
-        properties.getPgvector().setPassword(pgVectorPassword);
+        properties.getMilvus().setHost(target.host());
+        properties.getMilvus().setPort(target.port());
+        properties.getMilvus().setDatabase(target.database());
+        properties.getMilvus().setUsername(target.username());
+        properties.getMilvus().setPassword(password);
         return properties;
-    }
-
-    private EmbeddingStore<TextSegment> createVueStore(RagProperties properties) {
-        RagProperties.PgVector pg = properties.getPgvector();
-        return PgVectorEmbeddingStore.builder()
-                .host(pg.getHost())
-                .port(pg.getPort())
-                .database(pg.getDatabase())
-                .user(pg.getUser())
-                .password(pg.getPassword())
-                .table("templates_vue")
-                .dimension(properties.getEmbedding().getDimension())
-                .createTable(false)
-                .useIndex(false)
-                .build();
     }
 
     private record EvaluationServices(
             RagRetrievalService retrievalService,
-            VueRetrievalResourceProvider resourceProvider
+            VueRetrievalResourceProvider resourceProvider,
+            MilvusEmbeddingStoreFactory factory
     ) implements AutoCloseable {
 
         @Override
         public void close() {
-            resourceProvider.close();
+            try {
+                resourceProvider.close();
+            } finally {
+                factory.close();
+            }
         }
     }
 }

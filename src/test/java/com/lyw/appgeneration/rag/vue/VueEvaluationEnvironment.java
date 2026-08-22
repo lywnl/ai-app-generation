@@ -13,8 +13,8 @@ import java.util.Map;
  */
 public record VueEvaluationEnvironment(boolean ready, List<String> reasons) {
 
-    private static final String DEFAULT_PG_HOST = "127.0.0.1";
-    private static final int DEFAULT_PG_PORT = 5432;
+    private static final String DEFAULT_MILVUS_HOST = "127.0.0.1";
+    private static final int DEFAULT_MILVUS_PORT = 19530;
 
     public VueEvaluationEnvironment {
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
@@ -33,15 +33,15 @@ public record VueEvaluationEnvironment(boolean ready, List<String> reasons) {
             return new VueEvaluationEnvironment(false, reasons);
         }
         requireEnvironment(environment, "DASHSCOPE_API_KEY", reasons);
-        requireEnvironment(environment, "RAG_PGVECTOR_PASSWORD", reasons);
+        requireEnvironment(environment, "RAG_MILVUS_PASSWORD", reasons);
         if (!reasons.isEmpty()) {
             return new VueEvaluationEnvironment(false, reasons);
         }
 
-        String host = nonBlankOrDefault(environment.get("RAG_PGVECTOR_HOST"), DEFAULT_PG_HOST);
-        int port = parsePort(environment.get("RAG_PGVECTOR_PORT"));
+        String host = nonBlankOrDefault(environment.get("RAG_MILVUS_HOST"), DEFAULT_MILVUS_HOST);
+        int port = parsePort(environment.get("RAG_MILVUS_PORT"));
         if (!portProbe.isReachable(host, port)) {
-            reasons.add("PGVector 端口不可达: " + host + ":" + port);
+            reasons.add("Milvus 端口不可达: " + host + ":" + port);
         }
         return new VueEvaluationEnvironment(reasons.isEmpty(), reasons);
     }
@@ -62,13 +62,13 @@ public record VueEvaluationEnvironment(boolean ready, List<String> reasons) {
 
     private static int parsePort(String value) {
         if (value == null || value.isBlank()) {
-            return DEFAULT_PG_PORT;
+            return DEFAULT_MILVUS_PORT;
         }
         try {
             int port = Integer.parseInt(value);
-            return port > 0 && port <= 65_535 ? port : DEFAULT_PG_PORT;
+            return port > 0 && port <= 65_535 ? port : DEFAULT_MILVUS_PORT;
         } catch (NumberFormatException exception) {
-            return DEFAULT_PG_PORT;
+            return DEFAULT_MILVUS_PORT;
         }
     }
 

@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.rag.eval.EvaluationReportLifecycle;
 import com.lyw.appgeneration.rag.ingest.VueIngestionExpectedSnapshot;
-import com.lyw.appgeneration.rag.ingest.VuePgVectorIngestionVerifier;
-import com.lyw.appgeneration.rag.ingest.VuePgVectorTarget;
+import com.lyw.appgeneration.rag.ingest.VueMilvusIngestionVerifier;
+import com.lyw.appgeneration.rag.ingest.VueMilvusTarget;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -59,16 +59,16 @@ class VueRetrievalQualityGateTest {
     }
 
     @Test
-    void evaluationPropertiesReceivesDedicatedPgVectorPassword() {
+    void evaluationPropertiesReceivesDedicatedMilvusPassword() {
         Map<String, String> environment = Map.of(
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
-                "RAG_PGVECTOR_PASSWORD", "pg-secret");
-        VuePgVectorTarget target = VuePgVectorTarget.from(environment);
+                "RAG_MILVUS_PASSWORD", "milvus-secret");
+        VueMilvusTarget target = VueMilvusTarget.from(environment);
 
         RagProperties properties = VueRetrievalQualityGateRunner.evaluationProperties(
-                target, environment.get("RAG_PGVECTOR_PASSWORD"));
+                target, environment.get("RAG_MILVUS_PASSWORD"));
 
-        assertEquals("pg-secret", properties.getPgvector().getPassword());
+        assertEquals("milvus-secret", properties.getMilvus().getPassword());
     }
 
     @Test
@@ -107,8 +107,8 @@ class VueRetrievalQualityGateTest {
             return VueRetrievalEvaluationReport.notExecuted(runId, environment.reasons());
         }
 
-        VuePgVectorTarget target = VuePgVectorTarget.from(variables);
-        String pgVectorPassword = variables.get("RAG_PGVECTOR_PASSWORD");
+        VueMilvusTarget target = VueMilvusTarget.from(variables);
+        String milvusPassword = variables.get("RAG_MILVUS_PASSWORD");
         TemplateCatalog catalog = new TemplateCatalog(
                 Path.of("embed_text/vue-project"), new ObjectMapper());
         return new VueRetrievalQualityGateRunner().evaluateWhenIngested(
@@ -116,19 +116,19 @@ class VueRetrievalQualityGateTest {
                 () -> new VueRetrievalQualityGateRunner()
                         .evaluateDataset(
                                 target,
-                                pgVectorPassword,
+                                milvusPassword,
                                 variables.get("DASHSCOPE_API_KEY"),
                                 catalog))
                 .withRunId(runId);
     }
 
     private com.lyw.appgeneration.rag.ingest.VueIngestionVerification verifyIngestion(
-            VuePgVectorTarget target,
+            VueMilvusTarget target,
             Map<String, String> variables,
             TemplateCatalog catalog) {
         VueIngestionExpectedSnapshot expected = VueIngestionExpectedSnapshot.from(catalog);
-        return new VuePgVectorIngestionVerifier(new ObjectMapper()).verify(
-                expected, target, variables.get("RAG_PGVECTOR_PASSWORD"));
+        return new VueMilvusIngestionVerifier(new ObjectMapper()).verify(
+                expected, target, variables.get("RAG_MILVUS_PASSWORD"));
     }
 
 }

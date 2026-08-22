@@ -119,9 +119,6 @@ class MemorySchemaMigrationContractTest {
         assertTrue(normalized.contains("uk_appid"));
         assertTrue(normalized.contains("默认回滚"));
         assertTrue(normalized.contains("先导出新增列内容"));
-        assertTrue(normalized.contains("v1__hnsw_index.sql"));
-        assertTrue(normalized.contains("不会自动迁移 mysql"));
-
         List<String> destructiveLines = development.lines()
                 .filter(line -> line.toLowerCase(Locale.ROOT)
                         .contains("drop column"))

@@ -15,14 +15,14 @@ class VueGenerationBuildEnvironmentTest {
                 "DASHSCOPE_API_KEY", "dashscope-secret",
                 "DEEPSEEK_API_KEY", "deepseek-secret",
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
-                "RAG_PGVECTOR_PASSWORD", "pg-secret"));
+                "RAG_MILVUS_PASSWORD", "milvus-secret"));
 
         assertFalse(environment.ready());
         assertTrue(environment.reasons().contains("RAG_BUILD_EVAL 未设置为 true"));
         assertFalse(environment.toString().contains("dashscope-secret"));
         assertFalse(environment.toString().contains("deepseek-secret"));
         assertFalse(environment.toString().contains("mysql-secret"));
-        assertFalse(environment.toString().contains("pg-secret"));
+        assertFalse(environment.toString().contains("milvus-secret"));
     }
 
     @Test
@@ -34,17 +34,17 @@ class VueGenerationBuildEnvironmentTest {
                 "DASHSCOPE_API_KEY", "dashscope-secret",
                 "DEEPSEEK_API_KEY", "deepseek-secret",
                 "SPRING_DATASOURCE_PASSWORD", "mysql-secret",
-                "RAG_PGVECTOR_PASSWORD", "pg-secret"));
+                "RAG_MILVUS_PASSWORD", "milvus-secret"));
 
         assertFalse(missing.ready());
         assertTrue(missing.reasons().contains("缺少环境变量 DASHSCOPE_API_KEY"));
         assertTrue(missing.reasons().contains("缺少环境变量 DEEPSEEK_API_KEY"));
-        assertTrue(missing.reasons().contains("缺少环境变量 RAG_PGVECTOR_PASSWORD"));
+        assertTrue(missing.reasons().contains("缺少环境变量 RAG_MILVUS_PASSWORD"));
         assertTrue(ready.ready());
         assertTrue(ready.reasons().isEmpty());
         assertFalse(ready.toString().contains("dashscope-secret"));
         assertFalse(ready.toString().contains("deepseek-secret"));
         assertFalse(ready.toString().contains("mysql-secret"));
-        assertFalse(ready.toString().contains("pg-secret"));
+        assertFalse(ready.toString().contains("milvus-secret"));
     }
 }

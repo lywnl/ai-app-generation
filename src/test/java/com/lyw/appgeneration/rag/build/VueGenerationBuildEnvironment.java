@@ -12,7 +12,7 @@ public record VueGenerationBuildEnvironment(boolean ready, List<String> reasons)
     private static final List<String> REQUIRED_CREDENTIALS = List.of(
             "DASHSCOPE_API_KEY",
             "DEEPSEEK_API_KEY",
-            "RAG_PGVECTOR_PASSWORD");
+            "RAG_MILVUS_PASSWORD");
 
     public VueGenerationBuildEnvironment {
         reasons = reasons == null ? List.of() : List.copyOf(reasons);

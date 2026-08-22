@@ -2,11 +2,11 @@ package com.lyw.appgeneration.config;
 
 import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +28,7 @@ import java.util.Map;
 public class RagConfig {
 
     private final RagProperties props;
+    private final MilvusEmbeddingStoreFactory milvusEmbeddingStoreFactory;
 
     /**
      * 阿里 text-embedding-v4 走 DashScope 的 OpenAI 兼容端点,复用现有 dashscope.api-key
@@ -46,8 +47,8 @@ public class RagConfig {
     }
 
     /**
-     * 按代码生成类型隔离的向量存储 Map(一种类型一张表,比 metadata filter 更快)
-     * RAG 关闭时返回空 Map，保留依赖契约但不建立 PGVector 连接。
+     * 按代码生成类型隔离的向量存储 Map（一种类型一个 Collection）。
+     * RAG 关闭时返回空 Map，保留依赖契约但不建立 Milvus 连接。
      */
     @Bean
     public Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> embeddingStoreByType() {
@@ -55,33 +56,14 @@ public class RagConfig {
         if (!props.isEnabled()) {
             return map;
         }
-        RagConstants.TYPE_TO_TABLE.forEach((type, table) -> {
+        RagConstants.TYPE_TO_COLLECTION.forEach((type, collectionName) -> {
             try {
-                map.put(type, buildStore(table));
+                map.put(type, milvusEmbeddingStoreFactory.create(collectionName));
             } catch (Exception e) {
-                log.error("[RAG] 构建向量存储失败,type={}, table={},该类型将降级为无 RAG",
-                        type, table, e);
+                log.error("[RAG] 构建向量存储失败,type={}, collection={},该类型将降级为无 RAG",
+                        type, collectionName, e);
             }
         });
         return map;
-    }
-
-    /**
-     * 构建单个 PGVector 存储;createTable=true 让 LangChain4j 自动建表,
-     * 索引走 HNSW 由 V1__hnsw_index.sql 手动建(比 IVFFlat 效果更好)
-     */
-    private EmbeddingStore<TextSegment> buildStore(String table) {
-        RagProperties.PgVector pg = props.getPgvector();
-        return PgVectorEmbeddingStore.builder()
-                .host(pg.getHost())
-                .port(pg.getPort())
-                .database(pg.getDatabase())
-                .user(pg.getUser())
-                .password(pg.getPassword())
-                .table(table)
-                .dimension(props.getEmbedding().getDimension())
-                .createTable(true)
-                .useIndex(false)
-                .build();
     }
 }
