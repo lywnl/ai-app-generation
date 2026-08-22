@@ -16,6 +16,11 @@ class RagPropertiesTest {
     }
 
     @Test
+    void Rerank默认超时为五秒() {
+        assertTrue(new RagProperties().getRerank().getTimeoutMs() == 5000L);
+    }
+
+    @Test
     void Milvus默认协议与应用配置保持一致() {
         RagProperties.Milvus milvus = new RagProperties().getMilvus();
 
@@ -30,6 +35,15 @@ class RagPropertiesTest {
         try (var input = getClass().getResourceAsStream("/application.yml")) {
             String yaml = new String(input.readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(yaml.contains("hybrid:\n    enabled: ${RAG_HYBRID_ENABLED:true}"));
+        }
+    }
+
+    @Test
+    void applicationYaml将Rerank超时配置为五秒() throws IOException {
+        try (var input = getClass().getResourceAsStream("/application.yml")) {
+            String yaml = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(yaml.contains("rerank:\n    enabled: true"));
+            assertTrue(yaml.contains("doc-char-limit: 2000\n    timeout-ms: 5000"));
         }
     }
 

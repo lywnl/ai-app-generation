@@ -151,7 +151,7 @@ rag:
     model-name: gte-rerank-v2
     top-n: 10                  # 粗召回候选数;rerank 后按 retrieval.top-k 截断
     doc-char-limit: 2000
-    timeout-ms: 3000
+    timeout-ms: 5000
   prompt:
     max-context-chars: 4000          # 注入模板的总字符预算(约 2000 token)
 

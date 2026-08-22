@@ -90,7 +90,7 @@ public class RagProperties {
         /** 单条 document 的字符截断阈值,规避 gte-rerank-v2 单条 4000 token 上限 */
         private int docCharLimit = 2000;
         /** HTTP 超时 */
-        private long timeoutMs = 3000L;
+        private long timeoutMs = 5000L;
     }
 
     @Data
