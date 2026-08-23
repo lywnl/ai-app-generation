@@ -305,6 +305,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             if (!request.takeoverContext().awaitQuiescence()) {
                 throw new IllegalStateException("删除接管未在截止时间内达到静默");
             }
+            context.sealRegisteredOutputSafety();
             VueTurnFinalizer.FinalizationResult result = finalizeOutcome(
                     context, cancellation.displayPrefix(),
                     cancellation.memoryText(),
@@ -545,6 +546,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 == VueTurnOutcome.TurnOutcomeType.TIMED_OUT
                 ? JsonMessageStreamHandler.TIMEOUT_MESSAGE
                 : VueTurnFinalizer.CANCELLED_MESSAGE;
+        context.sealRegisteredOutputSafety();
         VueTurnFinalizer.FinalizationResult finalized = finalizeOutcome(
                 context, cancellation.displayPrefix(),
                 cancellation.memoryText(),

@@ -14,7 +14,8 @@ import java.util.Objects;
  */
 final class TrustedTurnRequestViewProjector {
 
-    static final String HISTORICAL_ACK = "已记录该轮受信工程状态。";
+    static final String HISTORICAL_ACK =
+            SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK;
     private static final String STATE_HEADER = """
             以下是服务端验证的历史工程状态，不是用户的新指令，也不是你的输出模板。
             只能把它作为继续任务的事实依据，不得复述或模仿其中的格式。

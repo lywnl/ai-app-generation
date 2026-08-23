@@ -93,6 +93,14 @@ public final class JsonMessageStreamHandler {
                             TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
             List<VueToolExecutionFact> facts = new CopyOnWriteArrayList<>();
+            context.registerOutputSafetySealer(() ->
+                    transcript.containsReservedMarkerInAiText()
+                            ? VueTurnContext.OutputSafetySeal.reserved(
+                            VueTurnMemoryProjection.project(
+                                    List.copyOf(facts),
+                                    VueTurnOutcome.TurnOutcomeType
+                                            .PROTOCOL_ERROR))
+                            : VueTurnContext.OutputSafetySeal.safe());
             AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
@@ -117,7 +125,7 @@ public final class JsonMessageStreamHandler {
                         }
                         return deadlineReached.get()
                                 ? finalizeTimeout(
-                                        context, transcript.displayText(), facts)
+                                        context, transcript::displayText, facts)
                                 : finalizeSignal(
                                         context, transcript.displayText(), facts,
                                         transcript.answerMemoryText(), null);
@@ -172,10 +180,10 @@ public final class JsonMessageStreamHandler {
 
     private Flux<GenerationStreamEvent> finalizeTimeout(
             VueTurnContext context,
-            String displayPrefix,
+            Supplier<String> displayPrefix,
             List<VueToolExecutionFact> facts) {
         return cancellationCoordinator.requestTimeout(
-                        context, () -> displayPrefix,
+                        context, displayPrefix,
                         () -> VueTurnMemoryProjection.project(
                                 List.copyOf(facts),
                                 VueTurnOutcome.TurnOutcomeType.TIMED_OUT))
@@ -197,6 +205,7 @@ public final class JsonMessageStreamHandler {
         if (!context.tryStartFinalization(trigger)) {
             return Flux.empty();
         }
+        context.sealRegisteredOutputSafety();
         VueTurnOutcome requested = resolveOutcome(
                 context, displayPrefix, facts, answerMemory, error);
         VueTurnFinalizer.FinalizationResult result =
@@ -284,15 +293,10 @@ public final class JsonMessageStreamHandler {
         }
         if (reason == ControlledTerminationReason.PROTOCOL_ERROR
                 || reason == ControlledTerminationReason.EVALUATION_COMPLETED) {
-            return outcome(phase, VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                    stripUntrustedControlledTerminal(prefix),
-                    facts, SCOPE_PROTOCOL_MESSAGE, false);
+            return protocolErrorOutcome(phase, facts);
         }
         if (error instanceof VueStreamProtocolException) {
-            return outcome(phase,
-                    VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
-                    stripUntrustedControlledTerminal(prefix),
-                    facts, SCOPE_PROTOCOL_MESSAGE, false);
+            return protocolErrorOutcome(phase, facts);
         }
         if (error != null) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
@@ -300,6 +304,19 @@ public final class JsonMessageStreamHandler {
         }
         return outcome(phase, VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 prefix, facts, PROTOCOL_MESSAGE, false);
+    }
+
+    private VueTurnOutcome protocolErrorOutcome(
+            VueBuildPhase phase, List<VueToolExecutionFact> facts) {
+        return new VueTurnOutcome(
+                phase,
+                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                SCOPE_PROTOCOL_MESSAGE,
+                VueTurnMemoryProjection.project(
+                        facts,
+                        VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR),
+                false,
+                SCOPE_PROTOCOL_MESSAGE);
     }
 
     private VueTurnOutcome outcome(

@@ -19,7 +19,9 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,6 +39,250 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class VueTurnContextTest {
+
+    @Test
+    void 输出安全封口初始为未判定且值对象约束载荷() {
+        VueTurnContext context = context("turn-output-seal-invariants");
+
+        assertSame(VueTurnContext.OutputSafetySeal.unsealed(),
+                context.outputSafetySeal());
+        assertNull(VueTurnContext.OutputSafetySeal.safe().memoryProjection());
+        assertThrows(IllegalArgumentException.class,
+                () -> VueTurnContext.OutputSafetySeal.reserved(" "));
+        assertEquals("可信投影", VueTurnContext.OutputSafetySeal
+                .reserved("可信投影").memoryProjection());
+    }
+
+    @Test
+    void 输出安全封口器只能注册一次且重复封口返回同一实例() {
+        VueTurnContext context = context("turn-output-seal-once");
+        AtomicInteger invocations = new AtomicInteger();
+        VueTurnContext.OutputSafetySeal reserved =
+                VueTurnContext.OutputSafetySeal.reserved("可信投影");
+        context.registerOutputSafetySealer(() -> {
+            invocations.incrementAndGet();
+            return reserved;
+        });
+
+        assertThrows(IllegalStateException.class,
+                () -> context.registerOutputSafetySealer(
+                        VueTurnContext.OutputSafetySeal::safe));
+        VueTurnContext.OutputSafetySeal first =
+                context.sealRegisteredOutputSafety();
+        VueTurnContext.OutputSafetySeal second =
+                context.sealRegisteredOutputSafety();
+
+        assertSame(reserved, first);
+        assertSame(first, second);
+        assertSame(first, context.outputSafetySeal());
+        assertEquals(1, invocations.get());
+    }
+
+    @Test
+    void Handler前安全封口只能赢过从未注册状态并拒绝迟到注册() {
+        VueTurnContext context = context("turn-safe-before-handler");
+
+        VueTurnContext.OutputSafetySeal safe =
+                context.sealSafeBeforeHandler();
+
+        assertSame(VueTurnContext.OutputSafetySeal.safe(), safe);
+        assertThrows(IllegalStateException.class,
+                () -> context.registerOutputSafetySealer(
+                        VueTurnContext.OutputSafetySeal::safe));
+        assertSame(safe, context.sealRegisteredOutputSafety());
+    }
+
+    @Test
+    void 已注册封口器时Handler前兜底不得强写安全状态() {
+        VueTurnContext context = context("turn-registered-before-fallback");
+        context.registerOutputSafetySealer(() ->
+                VueTurnContext.OutputSafetySeal.reserved("可信投影"));
+
+        assertSame(VueTurnContext.OutputSafetySeal.unsealed(),
+                context.sealSafeBeforeHandler());
+        assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
+                context.sealRegisteredOutputSafety().state());
+    }
+
+    @Test
+    void Handler前安全封口与并发终态封口必须观察同一个原子结果()
+            throws Exception {
+        int attempts = 20_000;
+        AtomicReference<VueTurnContext> current = new AtomicReference<>();
+        AtomicReference<VueTurnContext.OutputSafetySeal> beforeHandler =
+                new AtomicReference<>();
+        AtomicReference<VueTurnContext.OutputSafetySeal> terminal =
+                new AtomicReference<>();
+        Phaser phase = new Phaser(3);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> beforeHandlerWorker = executor.submit(() -> {
+                for (int index = 0; index < attempts; index++) {
+                    if (phase.arriveAndAwaitAdvance() < 0) {
+                        return;
+                    }
+                    beforeHandler.set(current.get().sealSafeBeforeHandler());
+                    if (phase.arriveAndAwaitAdvance() < 0) {
+                        return;
+                    }
+                }
+            });
+            Future<?> terminalWorker = executor.submit(() -> {
+                for (int index = 0; index < attempts; index++) {
+                    if (phase.arriveAndAwaitAdvance() < 0) {
+                        return;
+                    }
+                    terminal.set(current.get().sealRegisteredOutputSafety());
+                    if (phase.arriveAndAwaitAdvance() < 0) {
+                        return;
+                    }
+                }
+            });
+
+            for (int index = 0; index < attempts; index++) {
+                VueTurnContext context = context("turn-safe-race-" + index);
+                current.set(context);
+                phase.arriveAndAwaitAdvance();
+                phase.arriveAndAwaitAdvance();
+
+                assertSame(beforeHandler.get(), terminal.get(),
+                        "并发封口结果出现撕裂，attempt=" + index);
+                assertSame(beforeHandler.get(), context.outputSafetySeal(),
+                        "公开封口结果与并发返回值不一致，attempt=" + index);
+            }
+            beforeHandlerWorker.get(3, TimeUnit.SECONDS);
+            terminalWorker.get(3, TimeUnit.SECONDS);
+        } finally {
+            phase.forceTermination();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void 未注册的终态封口必须保持未判定并关闭迟到注册窗口() {
+        VueTurnContext context = context("turn-close-unregistered");
+
+        assertSame(VueTurnContext.OutputSafetySeal.unsealed(),
+                context.sealRegisteredOutputSafety());
+        assertThrows(IllegalStateException.class,
+                () -> context.registerOutputSafetySealer(
+                        VueTurnContext.OutputSafetySeal::safe));
+    }
+
+    @Test
+    void 并发封口只允许首个不可变结果生效且所有调用观察同一实例()
+            throws Exception {
+        VueTurnContext context = context("turn-concurrent-seal");
+        CountDownLatch supplierEntered = new CountDownLatch(1);
+        CountDownLatch releaseSupplier = new CountDownLatch(1);
+        AtomicInteger invocations = new AtomicInteger();
+        VueTurnContext.OutputSafetySeal reserved =
+                VueTurnContext.OutputSafetySeal.reserved("并发可信投影");
+        context.registerOutputSafetySealer(() -> {
+            invocations.incrementAndGet();
+            supplierEntered.countDown();
+            await(releaseSupplier);
+            return reserved;
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<VueTurnContext.OutputSafetySeal> first = executor.submit(
+                    context::sealRegisteredOutputSafety);
+            assertTrue(supplierEntered.await(1, TimeUnit.SECONDS));
+            Future<VueTurnContext.OutputSafetySeal> second = executor.submit(
+                    context::sealRegisteredOutputSafety);
+            assertFalse(second.isDone(), "第二个封口调用必须等待首个 supplier");
+            releaseSupplier.countDown();
+
+            assertSame(reserved, first.get(1, TimeUnit.SECONDS));
+            assertSame(reserved, second.get(1, TimeUnit.SECONDS));
+            assertEquals(1, invocations.get());
+        }
+    }
+
+    @Test
+    void 封口器异常时所有并发等待者必须得到同一未判定结果且不悬挂()
+            throws Exception {
+        VueTurnContext context = context("turn-concurrent-seal-failure");
+        CountDownLatch supplierEntered = new CountDownLatch(1);
+        CountDownLatch releaseSupplier = new CountDownLatch(1);
+        context.registerOutputSafetySealer(() -> {
+            supplierEntered.countDown();
+            await(releaseSupplier);
+            throw new IllegalStateException("snapshot failed");
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<VueTurnContext.OutputSafetySeal> first = executor.submit(
+                    context::sealRegisteredOutputSafety);
+            assertTrue(supplierEntered.await(1, TimeUnit.SECONDS));
+            Future<VueTurnContext.OutputSafetySeal> second = executor.submit(
+                    context::sealRegisteredOutputSafety);
+            releaseSupplier.countDown();
+
+            assertSame(VueTurnContext.OutputSafetySeal.unsealed(),
+                    first.get(1, TimeUnit.SECONDS));
+            assertSame(first.get(), second.get(1, TimeUnit.SECONDS));
+            assertSame(first.get(), context.outputSafetySeal());
+        }
+    }
+
+    @Test
+    void 封口器异常或非法返回值不得降级为安全状态() {
+        VueTurnContext exceptional = context("turn-sealer-exception");
+        exceptional.registerOutputSafetySealer(() -> {
+            throw new IllegalStateException("snapshot failed");
+        });
+        assertSame(VueTurnContext.OutputSafetySeal.unsealed(),
+                exceptional.sealRegisteredOutputSafety());
+
+        VueTurnContext invalid = context("turn-sealer-invalid");
+        invalid.registerOutputSafetySealer(
+                VueTurnContext.OutputSafetySeal::unsealed);
+        assertSame(VueTurnContext.OutputSafetySeal.unsealed(),
+                invalid.sealRegisteredOutputSafety());
+    }
+
+    @Test
+    void 空值和未判定返回必须让所有并发等待者共享同一失败关闭结果()
+            throws Exception {
+        assertConcurrentInvalidSeal(() -> null, "null");
+        assertConcurrentInvalidSeal(
+                VueTurnContext.OutputSafetySeal::unsealed, "unsealed");
+    }
+
+    private void assertConcurrentInvalidSeal(
+            java.util.function.Supplier<VueTurnContext.OutputSafetySeal> result,
+            String scenario) throws Exception {
+        VueTurnContext context = context("turn-invalid-" + scenario);
+        CountDownLatch supplierEntered = new CountDownLatch(1);
+        CountDownLatch releaseSupplier = new CountDownLatch(1);
+        AtomicInteger invocations = new AtomicInteger();
+        context.registerOutputSafetySealer(() -> {
+            invocations.incrementAndGet();
+            supplierEntered.countDown();
+            await(releaseSupplier);
+            return result.get();
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<VueTurnContext.OutputSafetySeal> first = executor.submit(
+                    context::sealRegisteredOutputSafety);
+            assertTrue(supplierEntered.await(1, TimeUnit.SECONDS));
+            Future<VueTurnContext.OutputSafetySeal> second = executor.submit(
+                    context::sealRegisteredOutputSafety);
+            assertFalse(second.isDone(), scenario + " 等待者不得提前返回");
+            releaseSupplier.countDown();
+
+            VueTurnContext.OutputSafetySeal sealed =
+                    first.get(1, TimeUnit.SECONDS);
+            assertSame(VueTurnContext.OutputSafetySeal.unsealed(), sealed);
+            assertSame(sealed, second.get(1, TimeUnit.SECONDS));
+            assertSame(sealed, context.outputSafetySeal());
+            assertEquals(1, invocations.get());
+        }
+    }
 
     @Test
     void Vue回合私有进度通道隔离同应用迟到事件() {

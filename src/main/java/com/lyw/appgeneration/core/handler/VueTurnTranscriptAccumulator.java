@@ -1,9 +1,12 @@
 package com.lyw.appgeneration.core.handler;
 
+import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /** 按来源维护 Vue 单回合有序转录，并支持只回滚指定代次的 AI 正文。 */
@@ -99,6 +102,23 @@ public final class VueTurnTranscriptAccumulator {
 
     public synchronized String answerMemoryText() {
         return joinFragments(true);
+    }
+
+    /** 按 generation 拼接仍保留的 AI 正文，工具展示既不参与也不分隔扫描。 */
+    public synchronized boolean containsReservedMarkerInAiText() {
+        Map<Long, StringBuilder> aiTextByGeneration = new LinkedHashMap<>();
+        for (Fragment fragment : fragments) {
+            if (fragment.source() != FragmentSource.AI_TEXT) {
+                continue;
+            }
+            aiTextByGeneration.computeIfAbsent(
+                            fragment.generation(), ignored -> new StringBuilder())
+                    .append(fragment.text());
+        }
+        return aiTextByGeneration.values().stream()
+                .map(StringBuilder::toString)
+                .anyMatch(SyntheticMemoryMessageProtocol
+                        ::containsReservedMarker);
     }
 
     public synchronized Snapshot snapshot() {

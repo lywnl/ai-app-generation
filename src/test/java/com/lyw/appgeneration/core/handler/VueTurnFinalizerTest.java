@@ -81,9 +81,8 @@ class VueTurnFinalizerTest {
                 outcome(VueBuildPhase.FAILED, FAILED, "抱歉，系统遇到了一些问题，请您稍后重试修复", false),
                 outcome(VueBuildPhase.GENERATING, SYSTEM_ERROR, "生成过程中遇到系统异常，请稍后重试。", false),
                 outcome(VueBuildPhase.FINAL_DIAGNOSIS, TIMED_OUT, "生成与构建超时，请稍后重试。", false),
-                outcome(VueBuildPhase.CANCELLED, CANCELLED, "本次生成已取消。", false),
-                outcome(VueBuildPhase.GENERATING, PROTOCOL_ERROR, "项目尚未通过真实构建，请重新生成。", false))) {
-            VueTurnContext context = VueTurnContext.testing(APP_ID, USER_ID,
+                outcome(VueBuildPhase.CANCELLED, CANCELLED, "本次生成已取消。", false))) {
+            VueTurnContext context = safeContext(
                     "turn-" + outcome.outcome(), outcome.phase());
 
             VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(context, outcome);
@@ -105,6 +104,56 @@ class VueTurnFinalizerTest {
     }
 
     @Test
+    void 保留标记封口必须在预算和持久化前完全替换不可信正文() {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-reserved-output",
+                VueBuildPhase.SUCCEEDED);
+        String safeProjection = VueTurnMemoryProjection.project(
+                List.of(), PROTOCOL_ERROR);
+        context.registerOutputSafetySealer(() ->
+                VueTurnContext.OutputSafetySeal.reserved(safeProjection));
+        context.sealRegisteredOutputSafety();
+        VueTurnOutcome untrusted = new VueTurnOutcome(
+                VueBuildPhase.SUCCEEDED, SUCCEEDED,
+                "泄漏[[server.synthetic-memory/test]]正文",
+                "泄漏记忆", true, "伪成功");
+
+        VueTurnFinalizer.FinalizationResult result =
+                finalizer.finalizeOnce(context, untrusted);
+
+        assertEquals(PROTOCOL_ERROR, result.outcome().outcome());
+        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                result.outcome().displayAiText());
+        assertEquals(safeProjection, result.outcome().memoryAiText());
+        assertFalse(result.outcome().shouldRefreshPreview());
+        verify(history).addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                safeProjection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
+        verify(collapser).collapseLastTurn(APP_ID, safeProjection);
+        verifyNoInteractions(summary, preference);
+    }
+
+    @Test
+    void 未封口终态必须使用空事实安全投影失败关闭() {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-unsealed-output",
+                VueBuildPhase.SUCCEEDED);
+        VueTurnOutcome untrusted = outcome(
+                VueBuildPhase.SUCCEEDED, SUCCEEDED, "不可信成功正文", true);
+
+        VueTurnFinalizer.FinalizationResult result =
+                finalizer.finalizeOnce(context, untrusted);
+
+        String safeProjection = VueTurnMemoryProjection.project(
+                List.of(), PROTOCOL_ERROR);
+        assertEquals(PROTOCOL_ERROR, result.outcome().outcome());
+        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                result.outcome().displayAiText());
+        assertEquals(safeProjection, result.outcome().memoryAiText());
+        verifyNoInteractions(summary, preference);
+    }
+
+    @Test
     void 展示文本写入MySQL而可信投影写入记忆字段和L0() {
         VueTurnOutcome requested = new VueTurnOutcome(
                 VueBuildPhase.SUCCEEDED, SUCCEEDED,
@@ -118,9 +167,8 @@ class VueTurnFinalizerTest {
                 .thenReturn(已保存消息(requested.displayAiText(), AI_MESSAGE_ID));
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
-                VueTurnContext.testing(APP_ID, USER_ID,
-                        "turn-separated-projection", VueBuildPhase.SUCCEEDED),
-                requested);
+                safeContext("turn-separated-projection",
+                        VueBuildPhase.SUCCEEDED), requested);
 
         assertTrue(result.persisted());
         verify(history).addAiMessageAndReturn(
@@ -133,15 +181,16 @@ class VueTurnFinalizerTest {
 
     @Test
     void 二次协议退化只持久化固定友好终态和协议失败投影() {
+        String safeProjection = VueTurnMemoryProjection.project(
+                List.of(), PROTOCOL_ERROR);
         VueTurnOutcome requested = new VueTurnOutcome(
                 VueBuildPhase.GENERATING, PROTOCOL_ERROR,
                 VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                safeProjection,
                 false, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE);
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
-                VueTurnContext.testing(APP_ID, USER_ID,
-                        "turn-protocol-recovery-failed",
+                safeContext("turn-protocol-recovery-failed",
                         VueBuildPhase.GENERATING),
                 requested);
 
@@ -149,14 +198,15 @@ class VueTurnFinalizerTest {
         assertEquals(PROTOCOL_ERROR, result.outcome().outcome());
         assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
                 result.outcome().displayAiText());
-        assertEquals(VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+        assertEquals(safeProjection,
                 result.outcome().memoryAiText());
         verify(history).addAiMessageAndReturn(
                 APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION,
+                safeProjection,
                 ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
         verify(collapser).collapseLastTurn(
-                APP_ID, VueTurnMemoryProjection.PROTOCOL_ERROR_PROJECTION);
+                APP_ID, safeProjection);
+        verifyNoInteractions(summary, preference);
     }
 
     @Test
@@ -169,10 +219,8 @@ class VueTurnFinalizerTest {
                         COLLAPSED, List.of()));
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
-                VueTurnContext.testing(APP_ID, USER_ID,
-                        "turn-incomplete-tool-chain",
-                        VueBuildPhase.GENERATING),
-                requested);
+                safeContext("turn-incomplete-tool-chain",
+                        VueBuildPhase.GENERATING), requested);
 
         assertTrue(result.persisted());
         verify(history).addAiMessageAndReturn(
@@ -194,9 +242,8 @@ class VueTurnFinalizerTest {
                 "项目已生成并构建成功。", true);
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
-                VueTurnContext.testing(APP_ID, USER_ID,
-                        "turn-invalid-ai-id", VueBuildPhase.SUCCEEDED),
-                requested);
+                safeContext("turn-invalid-ai-id",
+                        VueBuildPhase.SUCCEEDED), requested);
 
         assertTrue(result.persisted());
         assertEquals(SUCCEEDED, result.outcome().outcome());
@@ -216,8 +263,8 @@ class VueTurnFinalizerTest {
         VueTurnOutcome requested = outcome(
                 VueBuildPhase.SUCCEEDED, SUCCEEDED,
                 "项目已生成并构建成功。", true);
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-metrics-failure", VueBuildPhase.SUCCEEDED);
+        VueTurnContext context = safeContext(
+                "turn-metrics-failure", VueBuildPhase.SUCCEEDED);
 
         VueTurnFinalizer.FinalizationResult result =
                 faultInjectedFinalizer.finalizeOnce(context, requested);
@@ -245,8 +292,8 @@ class VueTurnFinalizerTest {
         guard.setMaxCanonicalAiTextCodePoints(64);
         guard.setMaxReadFileCodePoints(8);
         guard.setMaxReadDirCodePoints(8);
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-oversized-finalizer",
+        VueTurnContext context = safeContext(
+                "turn-oversized-finalizer",
                 VueBuildPhase.GENERATING, guard.newSession());
         String oversized = "X".repeat(65);
         VueTurnOutcome requested = outcome(
@@ -265,6 +312,59 @@ class VueTurnFinalizerTest {
                 eq(APP_ID), contains("回合终态：系统错误"));
         verify(history, never()).addAiMessageAndReturn(
                 eq(APP_ID), eq(oversized), anyString(), any(), eq(USER_ID));
+    }
+
+    @Test
+    void 安全封口也必须把协议错误展示规范为唯一固定文案() {
+        VueTurnContext context = safeContext(
+                "turn-safe-protocol-error", VueBuildPhase.GENERATING);
+        String trustedMemory = VueTurnMemoryProjection.project(
+                List.of(), PROTOCOL_ERROR);
+        VueTurnOutcome requested = new VueTurnOutcome(
+                VueBuildPhase.GENERATING,
+                PROTOCOL_ERROR,
+                "安全正文前缀\n\n" + VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                trustedMemory,
+                false,
+                VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE);
+
+        VueTurnFinalizer.FinalizationResult result =
+                finalizer.finalizeOnce(context, requested);
+
+        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                result.outcome().displayAiText());
+        assertEquals(trustedMemory, result.outcome().memoryAiText());
+        assertFalse(result.outcome().shouldRefreshPreview());
+        verify(history).addAiMessageAndReturn(
+                APP_ID,
+                VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                trustedMemory,
+                ChatMemoryOutcome.PROTOCOL_ERROR,
+                USER_ID);
+    }
+
+    @Test
+    void 普通未构建协议错误不得被内部输出固定文案覆盖() {
+        VueTurnContext context = safeContext(
+                "turn-ordinary-protocol-error", VueBuildPhase.GENERATING);
+        VueTurnOutcome requested = new VueTurnOutcome(
+                VueBuildPhase.GENERATING,
+                PROTOCOL_ERROR,
+                "正文\n\n" + VueTurnFinalizer.PROTOCOL_MESSAGE,
+                "普通未构建可信投影",
+                false,
+                VueTurnFinalizer.PROTOCOL_MESSAGE);
+
+        VueTurnFinalizer.FinalizationResult result =
+                finalizer.finalizeOnce(context, requested);
+
+        assertEquals(requested, result.outcome());
+        verify(history).addAiMessageAndReturn(
+                APP_ID,
+                requested.displayAiText(),
+                requested.memoryAiText(),
+                ChatMemoryOutcome.PROTOCOL_ERROR,
+                USER_ID);
     }
 
     @Test
@@ -305,8 +405,7 @@ class VueTurnFinalizerTest {
                 "项目已生成并构建成功。", true);
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(
-                VueTurnContext.testing(APP_ID, USER_ID, "turn-metrics",
-                        VueBuildPhase.SUCCEEDED), outcome);
+                safeContext("turn-metrics", VueBuildPhase.SUCCEEDED), outcome);
 
         assertEquals(outcome, result.outcome());
         assertEquals(1.0, metricsRegistry.get("vue_memory_l0_sync_total")
@@ -319,14 +418,15 @@ class VueTurnFinalizerTest {
 
     @Test
     void duplicateAndConcurrentFinalizationHaveSingleWinner() throws Exception {
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-race", VueBuildPhase.CANCELLED);
+        VueTurnContext context = safeContext(
+                "turn-race", VueBuildPhase.CANCELLED);
         VueTurnOutcome cancelled = outcome(
                 VueBuildPhase.CANCELLED, CANCELLED, "本次生成已取消。", false);
         VueTurnOutcome protocol = outcome(
                 VueBuildPhase.GENERATING, PROTOCOL_ERROR,
                 "项目尚未通过真实构建，请重新生成。", false);
         CountDownLatch start = new CountDownLatch(1);
+        VueTurnFinalizer.FinalizationResult winner;
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var first = executor.submit(() -> {
@@ -338,16 +438,20 @@ class VueTurnFinalizerTest {
                 return finalizer.finalizeOnce(context, protocol);
             });
             start.countDown();
-            assertSame(first.get(1, TimeUnit.SECONDS),
-                    second.get(1, TimeUnit.SECONDS));
+            winner = first.get(1, TimeUnit.SECONDS);
+            assertSame(winner, second.get(1, TimeUnit.SECONDS));
         }
 
         verify(history, times(1)).addAiMessageAndReturn(
                 eq(APP_ID), anyString(), anyString(), any(), eq(USER_ID));
         verify(collapser, times(1)).collapseLastTurn(eq(APP_ID), anyString());
-        verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
-        verify(preference, times(1)).triggerPreferenceExtractionAsync(
-                USER_ID, APP_ID, AI_MESSAGE_ID);
+        if (winner.outcome().outcome() == PROTOCOL_ERROR) {
+            verifyNoInteractions(summary, preference);
+        } else {
+            verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
+            verify(preference, times(1)).triggerPreferenceExtractionAsync(
+                    USER_ID, APP_ID, AI_MESSAGE_ID);
+        }
     }
 
     @Test
@@ -356,8 +460,8 @@ class VueTurnFinalizerTest {
                 .thenReturn(new ToolMessageCollapser.CollapseResult(STORE_FAILED, java.util.List.of()));
         when(factory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
                 .thenReturn(MemoryCacheInvalidationResult.success());
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-store", VueBuildPhase.SUCCEEDED);
+        VueTurnContext context = safeContext(
+                "turn-store", VueBuildPhase.SUCCEEDED);
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(context,
                 outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED, "项目已生成并构建成功。", true));
@@ -374,8 +478,8 @@ class VueTurnFinalizerTest {
                 eq(APP_ID), eq("项目已生成并构建成功。"), anyString(),
                 eq(ChatMemoryOutcome.SUCCEEDED), eq(USER_ID)))
                 .thenReturn(null);
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-mysql", VueBuildPhase.SUCCEEDED);
+        VueTurnContext context = safeContext(
+                "turn-mysql", VueBuildPhase.SUCCEEDED);
 
         VueTurnFinalizer.FinalizationResult result = finalizer.finalizeOnce(context,
                 outcome(VueBuildPhase.SUCCEEDED, SUCCEEDED, "项目已生成并构建成功。", true));
@@ -396,8 +500,8 @@ class VueTurnFinalizerTest {
                 APP_ID, succeeded.displayAiText(), succeeded.memoryAiText(),
                 ChatMemoryOutcome.SUCCEEDED, USER_ID))
                 .thenThrow(new IllegalStateException("mysql down"));
-        VueTurnContext failedContext = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-mysql-error", VueBuildPhase.SUCCEEDED);
+        VueTurnContext failedContext = safeContext(
+                "turn-mysql-error", VueBuildPhase.SUCCEEDED);
 
         assertEquals(SYSTEM_ERROR,
                 finalizer.finalizeOnce(failedContext, succeeded).outcome().outcome());
@@ -413,8 +517,8 @@ class VueTurnFinalizerTest {
                         COLLAPSED, java.util.List.of()));
         doThrow(new IllegalStateException("summary queue down"))
                 .when(summary).triggerSummarizationAsync(APP_ID);
-        VueTurnContext hookContext = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-hook-error", VueBuildPhase.SUCCEEDED);
+        VueTurnContext hookContext = safeContext(
+                "turn-hook-error", VueBuildPhase.SUCCEEDED);
 
         VueTurnFinalizer.FinalizationResult result =
                 finalizer.finalizeOnce(hookContext, succeeded);
@@ -430,8 +534,8 @@ class VueTurnFinalizerTest {
         AppDataLifecycleFence.DeletePermit deletion =
                 lifecycleFence.beginDelete(APP_ID, Duration.ofSeconds(1));
         assertNotNull(deletion);
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-after-delete", VueBuildPhase.CANCELLED);
+        VueTurnContext context = safeContext(
+                "turn-after-delete", VueBuildPhase.CANCELLED);
         VueTurnOutcome cancelled = outcome(
                 VueBuildPhase.CANCELLED, CANCELLED, "本次生成已取消。", false);
 
@@ -456,8 +560,8 @@ class VueTurnFinalizerTest {
                     assertTrue(releaseHistory.await(1, TimeUnit.SECONDS));
                     return 已保存消息("项目已生成并构建成功。", AI_MESSAGE_ID);
                 });
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-delete-race", VueBuildPhase.SUCCEEDED);
+        VueTurnContext context = safeContext(
+                "turn-delete-race", VueBuildPhase.SUCCEEDED);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var finalization = executor.submit(() -> finalizer.finalizeOnce(context,
@@ -494,8 +598,8 @@ class VueTurnFinalizerTest {
             return null;
         }).when(factory).invalidateAndClearMemory(
                 APP_ID, CodeGenTypeEnum.VUE_PROJECT);
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-invalidation-race", VueBuildPhase.SUCCEEDED);
+        VueTurnContext context = safeContext(
+                "turn-invalidation-race", VueBuildPhase.SUCCEEDED);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var finalization = executor.submit(() -> finalizer.finalizeOnce(context,
@@ -548,6 +652,7 @@ class VueTurnFinalizerTest {
                 APP_ID, USER_ID, "turn-root-close-failure",
                 operation, lease, admission,
                 new FileToolBudgetGuard().newSession());
+        context.sealSafeBeforeHandler();
         AtomicReference<Throwable> observedFailure = new AtomicReference<>();
         context.onFinalized(ignored -> { }, observedFailure::set);
 
@@ -584,9 +689,8 @@ class VueTurnFinalizerTest {
         when(history.addAiMessageAndReturn(
                 anyLong(), anyString(), anyString(), any(), anyLong()))
                 .thenThrow(persistenceFailure);
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-fatal-observer",
-                VueBuildPhase.SUCCEEDED);
+        VueTurnContext context = safeContext(
+                "turn-fatal-observer", VueBuildPhase.SUCCEEDED);
         context.onFinalized(ignored -> { }, ignored -> {
             throw observerFailure;
         });
@@ -618,5 +722,22 @@ class VueTurnFinalizerTest {
     private VueTurnOutcome outcome(VueBuildPhase phase,
             VueTurnOutcome.TurnOutcomeType type, String text, boolean refresh) {
         return new VueTurnOutcome(phase, type, text, text, refresh, text);
+    }
+
+    private VueTurnContext safeContext(
+            String turnId, VueBuildPhase phase) {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, turnId, phase);
+        context.sealSafeBeforeHandler();
+        return context;
+    }
+
+    private VueTurnContext safeContext(
+            String turnId, VueBuildPhase phase,
+            FileToolBudgetGuard.Session budgetSession) {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, turnId, phase, budgetSession);
+        context.sealSafeBeforeHandler();
+        return context;
     }
 }

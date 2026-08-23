@@ -61,6 +61,12 @@ public final class VueTurnContext implements ContextContinuationGate {
             new AtomicReference<>();
     private final AtomicReference<TurnState> turnState =
             new AtomicReference<>(TurnState.active());
+    private final AtomicReference<OutputSafetySeal> outputSafetySeal =
+            new AtomicReference<>(OutputSafetySeal.unsealed());
+    private final AtomicReference<OutputSafetyRegistration>
+            outputSafetyRegistration = new AtomicReference<>(
+            OutputSafetyRegistration.open());
+    private final Object outputSafetyLock = new Object();
     private final AtomicReference<VueTurnMode> turnMode =
             new AtomicReference<>();
     private final CompletableFuture<VueTurnFinalizer.FinalizationResult> finalization =
@@ -427,6 +433,110 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     public Optional<ControlledTermination> controlledTermination() {
         return Optional.ofNullable(controlledTermination.get());
+    }
+
+    /** 注册延迟读取最新转录与工程事实的唯一输出安全封口器。 */
+    public void registerOutputSafetySealer(
+            Supplier<OutputSafetySeal> sealer) {
+        OutputSafetyRegistration registered =
+                OutputSafetyRegistration.registered(
+                        Objects.requireNonNull(sealer,
+                                "输出安全封口器不能为空"));
+        synchronized (outputSafetyLock) {
+            if (outputSafetyRegistration.get().state()
+                    != OutputSafetyRegistrationState.OPEN) {
+                throw new IllegalStateException("输出安全封口器注册窗口已经关闭");
+            }
+            outputSafetyRegistration.set(registered);
+        }
+    }
+
+    /** 执行已注册封口器；未注册或封口失败时保持 UNSEALED 安全失败关闭。 */
+    public OutputSafetySeal sealRegisteredOutputSafety() {
+        while (true) {
+            OutputSafetyRegistration sealing = null;
+            CompletableFuture<OutputSafetySeal> pending = null;
+            synchronized (outputSafetyLock) {
+                OutputSafetySeal sealed = outputSafetySeal.get();
+                if (sealed.state() != OutputSafetySeal.SealState.UNSEALED) {
+                    return sealed;
+                }
+                OutputSafetyRegistration current =
+                        outputSafetyRegistration.get();
+                switch (current.state()) {
+                    case OPEN -> {
+                        outputSafetyRegistration.set(
+                                OutputSafetyRegistration.closedUnsealed());
+                        return outputSafetySeal.get();
+                    }
+                    case REGISTERED -> {
+                        sealing = current.sealing();
+                        outputSafetyRegistration.set(sealing);
+                    }
+                    case SEALING -> pending = current.completion();
+                    case CLOSED_BEFORE_HANDLER, CLOSED_UNSEALED,
+                         CLOSED_SEALED -> {
+                        return outputSafetySeal.get();
+                    }
+                }
+            }
+            if (sealing != null) {
+                return executeOutputSafetySealer(sealing);
+            }
+            return pending.join();
+        }
+    }
+
+    /** 仅 Handler 从未注册时原子封为 SAFE，不能覆盖已注册封口器。 */
+    public OutputSafetySeal sealSafeBeforeHandler() {
+        synchronized (outputSafetyLock) {
+            OutputSafetySeal sealed = outputSafetySeal.get();
+            if (sealed.state() != OutputSafetySeal.SealState.UNSEALED) {
+                return sealed;
+            }
+            OutputSafetyRegistration current = outputSafetyRegistration.get();
+            if (current.state() != OutputSafetyRegistrationState.OPEN) {
+                return sealed;
+            }
+            outputSafetySeal.set(OutputSafetySeal.safe());
+            outputSafetyRegistration.set(
+                    OutputSafetyRegistration.closedBeforeHandler());
+            return outputSafetySeal.get();
+        }
+    }
+
+    public OutputSafetySeal outputSafetySeal() {
+        return outputSafetySeal.get();
+    }
+
+    private OutputSafetySeal executeOutputSafetySealer(
+            OutputSafetyRegistration sealing) {
+        OutputSafetySeal result = OutputSafetySeal.unsealed();
+        try {
+            OutputSafetySeal candidate = Objects.requireNonNull(
+                    sealing.sealer().get(),
+                    "输出安全封口器不能返回空值");
+            if (candidate.state() == OutputSafetySeal.SealState.SAFE
+                    || candidate.state()
+                    == OutputSafetySeal.SealState.RESERVED) {
+                result = candidate;
+            }
+        } catch (RuntimeException exception) {
+            log.warn("输出安全封口失败，保持 UNSEALED 失败关闭 turnId={} type={}",
+                    turnId, exception.getClass().getSimpleName());
+        } finally {
+            synchronized (outputSafetyLock) {
+                if (result.state() != OutputSafetySeal.SealState.UNSEALED) {
+                    outputSafetySeal.set(result);
+                }
+                outputSafetyRegistration.set(
+                        result.state() == OutputSafetySeal.SealState.UNSEALED
+                                ? OutputSafetyRegistration.closedUnsealed()
+                                : OutputSafetyRegistration.closedSealed());
+            }
+            sealing.completion().complete(result);
+        }
+        return result;
     }
 
     /** complete、error、cancel、timeout 与删除接管只允许一个分支决定规范终态。 */
@@ -837,6 +947,116 @@ public final class VueTurnContext implements ContextContinuationGate {
         ACTIVE,
         FINALIZING,
         FINALIZED
+    }
+
+    /** 不可变输出安全判定；只有 RESERVED 携带可信工程事实投影。 */
+    public static final class OutputSafetySeal {
+
+        private static final OutputSafetySeal UNSEALED =
+                new OutputSafetySeal(SealState.UNSEALED, null);
+        private static final OutputSafetySeal SAFE =
+                new OutputSafetySeal(SealState.SAFE, null);
+        private final SealState state;
+        private final String memoryProjection;
+
+        private OutputSafetySeal(
+                SealState state, String memoryProjection) {
+            this.state = Objects.requireNonNull(
+                    state, "输出安全状态不能为空");
+            if (state == SealState.RESERVED
+                    && (memoryProjection == null
+                    || memoryProjection.isBlank())) {
+                throw new IllegalArgumentException(
+                        "RESERVED 必须携带可信记忆投影");
+            }
+            if (state != SealState.RESERVED && memoryProjection != null) {
+                throw new IllegalArgumentException(
+                        "只有 RESERVED 可以携带记忆投影");
+            }
+            this.memoryProjection = memoryProjection;
+        }
+
+        public static OutputSafetySeal unsealed() {
+            return UNSEALED;
+        }
+
+        public static OutputSafetySeal safe() {
+            return SAFE;
+        }
+
+        public static OutputSafetySeal reserved(String memoryProjection) {
+            return new OutputSafetySeal(SealState.RESERVED, memoryProjection);
+        }
+
+        public SealState state() {
+            return state;
+        }
+
+        public String memoryProjection() {
+            return memoryProjection;
+        }
+
+        public enum SealState {
+            UNSEALED,
+            SAFE,
+            RESERVED
+        }
+    }
+
+    private enum OutputSafetyRegistrationState {
+        OPEN,
+        REGISTERED,
+        SEALING,
+        CLOSED_BEFORE_HANDLER,
+        CLOSED_UNSEALED,
+        CLOSED_SEALED
+    }
+
+    private record OutputSafetyRegistration(
+            OutputSafetyRegistrationState state,
+            Supplier<OutputSafetySeal> sealer,
+            CompletableFuture<OutputSafetySeal> completion) {
+
+        private OutputSafetyRegistration {
+            Objects.requireNonNull(state, "输出安全注册状态不能为空");
+        }
+
+        private static OutputSafetyRegistration open() {
+            return new OutputSafetyRegistration(
+                    OutputSafetyRegistrationState.OPEN, null, null);
+        }
+
+        private static OutputSafetyRegistration registered(
+                Supplier<OutputSafetySeal> sealer) {
+            return new OutputSafetyRegistration(
+                    OutputSafetyRegistrationState.REGISTERED,
+                    sealer, new CompletableFuture<>());
+        }
+
+        private OutputSafetyRegistration sealing() {
+            return new OutputSafetyRegistration(
+                    OutputSafetyRegistrationState.SEALING,
+                    sealer, completion);
+        }
+
+        private static OutputSafetyRegistration closedBeforeHandler() {
+            return new OutputSafetyRegistration(
+                    OutputSafetyRegistrationState.CLOSED_BEFORE_HANDLER,
+                    null, null);
+        }
+
+        private static OutputSafetyRegistration closedUnsealed() {
+            return new OutputSafetyRegistration(
+                    OutputSafetyRegistrationState.CLOSED_UNSEALED,
+                    null, null);
+        }
+
+        private static OutputSafetyRegistration closedSealed() {
+            return new OutputSafetyRegistration(
+                    OutputSafetyRegistrationState.CLOSED_SEALED,
+                    null, null);
+        }
+
     }
 
     static final class DeleteTakeoverRequest {

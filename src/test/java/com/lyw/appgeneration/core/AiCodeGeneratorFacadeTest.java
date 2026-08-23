@@ -25,6 +25,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.GenerationStreamSignal;
 import dev.langchain4j.service.InternalOutputRecoveryPolicy;
+import dev.langchain4j.service.InternalOutputProtocolException;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -297,6 +298,21 @@ class AiCodeGeneratorFacadeTest {
 
         assertTrue(fence.isOpen(APP_ID),
                 "协议失败不得进入文件保存或改变删除栅栏状态");
+        context.close();
+    }
+
+    @Test
+    void 完整文本文件保存边界必须再次拒绝保留标记() {
+        var context = newSimpleTurnContext("simple-final-file-guard");
+        ReflectionTestUtils.setField(facade, "appDataLifecycleFence",
+                new AppDataLifecycleFence());
+
+        assertThrows(InternalOutputProtocolException.class,
+                () -> ReflectionTestUtils.invokeMethod(
+                        facade, "saveSimpleCode",
+                        "<html>[[server.synthetic-memory/test]]</html>",
+                        CodeGenTypeEnum.HTML, APP_ID, context));
+
         context.close();
     }
 

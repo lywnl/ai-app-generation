@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
+import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
@@ -14,6 +15,7 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
+import dev.langchain4j.service.InternalOutputProtocolException;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -22,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -31,6 +34,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -85,6 +89,84 @@ class SimpleTextStreamHandlerTest {
     }
 
     @Test
+    void 完整正文复检命中保留标记只保存一次协议失败并传播安全异常() {
+        String projection = VueTurnMemoryProjection.project(
+                java.util.List.of(),
+                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR);
+        when(history.addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID))
+                .thenReturn(已保存消息(
+                        VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                        AI_MESSAGE_ID + 2));
+
+        StepVerifier.create(handle(Flux.just(
+                        "正文[[ser", "ver.synthetic-memory/test]]")))
+                .expectNext("正文[[ser", "ver.synthetic-memory/test]]")
+                .expectError(GenerationPreflightException.class)
+                .verify();
+
+        verify(history).addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
+        verify(history, never()).addAiMessageAndReturn(
+                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE,
+                SimpleTextStreamHandler.FAILURE_MESSAGE,
+                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
+        verify(summaries, never()).triggerSummarizationAsync(APP_ID);
+        verify(userMemory, never()).triggerPreferenceExtractionAsync(
+                anyLong(), anyLong(), anyLong());
+        context.close();
+    }
+
+    @Test
+    void 上游协议异常只保存一次协议失败并传播安全异常() {
+        String projection = VueTurnMemoryProjection.project(
+                java.util.List.of(),
+                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR);
+        when(history.addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID))
+                .thenReturn(已保存消息(
+                        VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                        AI_MESSAGE_ID + 3));
+
+        StepVerifier.create(handle(Flux.error(
+                        new InternalOutputProtocolException())))
+                .expectError(GenerationPreflightException.class)
+                .verify();
+
+        verify(history).addAiMessageAndReturn(
+                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
+                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
+        verify(history, never()).addAiMessageAndReturn(
+                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE,
+                SimpleTextStreamHandler.FAILURE_MESSAGE,
+                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
+        context.close();
+    }
+
+    @Test
+    void 上游已是安全前置异常时不得重复包装且仍只保存一次失败行() {
+        GenerationPreflightException preflight =
+                GenerationPreflightException.system(
+                        new IllegalStateException("已脱敏的上游失败"));
+
+        StepVerifier.create(handle(Flux.error(preflight)))
+                .expectErrorSatisfies(error -> assertSame(preflight, error))
+                .verify();
+
+        verify(history, times(1)).addAiMessageAndReturn(
+                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE,
+                SimpleTextStreamHandler.FAILURE_MESSAGE,
+                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
+        verify(summaries, never()).triggerSummarizationAsync(APP_ID);
+        verify(userMemory, never()).triggerPreferenceExtractionAsync(
+                anyLong(), anyLong(), anyLong());
+        context.close();
+    }
+
+    @Test
     void 普通成功和失败都必须使用AI专用投影写入接口() {
         when(history.addAiMessageAndReturn(
                 APP_ID, "完整回答", "完整回答",
@@ -112,7 +194,10 @@ class SimpleTextStreamHandlerTest {
                         AI_MESSAGE_ID + 1));
 
         StepVerifier.create(handle(Flux.error(new IllegalStateException("secret"))))
-                .expectErrorMessage("secret")
+                .expectErrorSatisfies(error -> {
+                    assertTrue(error instanceof GenerationPreflightException);
+                    assertTrue(!error.getMessage().contains("secret"));
+                })
                 .verify();
 
         verify(history).addAiMessageAndReturn(
@@ -182,7 +267,10 @@ class SimpleTextStreamHandlerTest {
     void 模型错误只保存固定失败文案且不泄漏原始异常() {
         StepVerifier.create(handle(Flux.error(
                         new IllegalStateException("供应商密钥 secret-token"))))
-                .expectErrorMessage("供应商密钥 secret-token")
+                .expectErrorSatisfies(error -> {
+                    assertTrue(error instanceof GenerationPreflightException);
+                    assertTrue(!error.getMessage().contains("secret-token"));
+                })
                 .verify();
 
         verify(history).addAiMessageAndReturn(
@@ -241,7 +329,7 @@ class SimpleTextStreamHandlerTest {
 
         StepVerifier.create(handle(Flux.just("完整回答")))
                 .expectNext("完整回答")
-                .expectErrorMessage("保存 AI 回复失败")
+                .expectError(GenerationPreflightException.class)
                 .verify();
 
         verify(history).addAiMessageAndReturn(
@@ -263,7 +351,7 @@ class SimpleTextStreamHandlerTest {
                         Flux.just("半截代码"),
                         Flux.error(new IllegalStateException("文件保存失败")))))
                 .expectNext("半截代码")
-                .expectErrorMessage("文件保存失败")
+                .expectError(GenerationPreflightException.class)
                 .verify();
 
         verify(history, never()).addAiMessageAndReturn(

@@ -375,9 +375,15 @@ class AppServiceSimpleTurnLifecycleTest {
         assertLeaseReleased("正常后");
 
         StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
-                .expectErrorMatches(error -> !(error instanceof
-                        GenerationPreflightException)
-                        && "供应商异常".equals(error.getMessage()))
+                .expectErrorMatches(error -> error instanceof
+                        GenerationPreflightException preflight
+                        && preflight.kind()
+                        == GenerationPreflightException.Kind.SYSTEM
+                        && "生成服务暂时不可用，请稍后重试。"
+                        .equals(preflight.safeMessage())
+                        && preflight.getCause() instanceof IllegalStateException
+                        && "供应商异常".equals(
+                        preflight.getCause().getMessage()))
                 .verify();
         assertLeaseReleased("异常后");
     }
@@ -422,7 +428,15 @@ class AppServiceSimpleTurnLifecycleTest {
                 .thenReturn(Flux.error(new IllegalStateException("内部失败")));
 
         StepVerifier.create(service.chatToGenCode(APP_ID, "需求", user()))
-                .expectErrorMessage("内部失败")
+                .expectErrorMatches(error -> error instanceof
+                        GenerationPreflightException preflight
+                        && preflight.kind()
+                        == GenerationPreflightException.Kind.SYSTEM
+                        && "生成服务暂时不可用，请稍后重试。"
+                        .equals(preflight.safeMessage())
+                        && preflight.getCause() instanceof IllegalStateException
+                        && "内部失败".equals(
+                        preflight.getCause().getMessage()))
                 .verify();
 
         verify(aiFactory).invalidateAndClearMemory(

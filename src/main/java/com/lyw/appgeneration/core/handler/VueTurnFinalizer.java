@@ -20,6 +20,7 @@ import java.util.List;
 
 import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatus.COLLAPSED;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.INCOMPLETE_TOOL_CHAIN;
+import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR;
 
 /** 同一回合唯一允许执行稳定终态持久化与记忆副作用的组件。 */
@@ -130,6 +131,7 @@ public class VueTurnFinalizer implements InitializingBean {
             return context.awaitFinalization();
         }
         try {
+            requestedOutcome = enforceOutputSafety(context, requestedOutcome);
             requestedOutcome = enforceCanonicalBudget(context, requestedOutcome);
             FinalizationResult result = persistWithinWriterPermit(
                     context, requestedOutcome);
@@ -142,6 +144,38 @@ public class VueTurnFinalizer implements InitializingBean {
             failSharedFinalization(context, failure);
             throw failure;
         }
+    }
+
+    private VueTurnOutcome enforceOutputSafety(
+            VueTurnContext context, VueTurnOutcome requestedOutcome) {
+        VueTurnContext.OutputSafetySeal seal = context.outputSafetySeal();
+        if (seal.state() == VueTurnContext.OutputSafetySeal.SealState.SAFE) {
+            return normalizeSafeProtocolError(requestedOutcome);
+        }
+        String safeProjection = seal.state()
+                == VueTurnContext.OutputSafetySeal.SealState.RESERVED
+                ? seal.memoryProjection()
+                : VueTurnMemoryProjection.project(List.of(), PROTOCOL_ERROR);
+        return new VueTurnOutcome(
+                context.phase(), PROTOCOL_ERROR,
+                SCOPE_PROTOCOL_MESSAGE, safeProjection,
+                false, SCOPE_PROTOCOL_MESSAGE);
+    }
+
+    private VueTurnOutcome normalizeSafeProtocolError(
+            VueTurnOutcome requestedOutcome) {
+        if (requestedOutcome.outcome() != PROTOCOL_ERROR
+                || !SCOPE_PROTOCOL_MESSAGE.equals(
+                        requestedOutcome.clientMessage())) {
+            return requestedOutcome;
+        }
+        return new VueTurnOutcome(
+                requestedOutcome.phase(),
+                PROTOCOL_ERROR,
+                SCOPE_PROTOCOL_MESSAGE,
+                requestedOutcome.memoryAiText(),
+                false,
+                SCOPE_PROTOCOL_MESSAGE);
     }
 
     private void closeResourcesAfterFailure(
@@ -242,7 +276,8 @@ public class VueTurnFinalizer implements InitializingBean {
             invalidateUnstableMemory(context);
             return new FinalizationResult(requestedOutcome, true);
         }
-        if (requestedOutcome.outcome() == INCOMPLETE_TOOL_CHAIN) {
+        if (requestedOutcome.outcome() == INCOMPLETE_TOOL_CHAIN
+                || requestedOutcome.outcome() == PROTOCOL_ERROR) {
             return new FinalizationResult(requestedOutcome, true);
         }
         triggerStableMemoryHooks(context, saved.getId());

@@ -45,11 +45,157 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 
 class VueTurnCancellationCoordinatorTest {
+
+    @Test
+    void 取消必须等待回调静默后执行已注册安全封口器() throws Exception {
+        assertCancellationSealAfterQuiescence(false);
+    }
+
+    @Test
+    void 超时必须等待回调静默后执行已注册安全封口器() throws Exception {
+        assertCancellationSealAfterQuiescence(true);
+    }
+
+    private void assertCancellationSealAfterQuiescence(boolean timeout)
+            throws Exception {
+        String turnId = timeout
+                ? "turn-timeout-output-seal" : "turn-cancel-output-seal";
+        VueTurnContext context = VueTurnContext.testing(
+                7L, 9L, turnId, VueBuildPhase.GENERATING);
+        context.commitUser(() -> true);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        AtomicBoolean lateMarkerObserved = new AtomicBoolean();
+        VueTurnContext.OutputSafetySeal reserved =
+                VueTurnContext.OutputSafetySeal.reserved("静默后可信投影");
+        context.registerOutputSafetySealer(() -> lateMarkerObserved.get()
+                ? reserved : VueTurnContext.OutputSafetySeal.safe());
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            assertSame(reserved, context.outputSafetySeal());
+            VueTurnOutcome requested = invocation.getArgument(1);
+            var result = new VueTurnFinalizer.FinalizationResult(
+                    requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, executor, Duration.ofMillis(20))) {
+            Future<Boolean> callback = executor.submit(() ->
+                    context.tryRunCallback(() -> {
+                        callbackEntered.countDown();
+                        await(releaseCallback);
+                        lateMarkerObserved.set(true);
+                    }));
+            assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
+
+            Mono<VueTurnFinalizer.FinalizationResult> timeoutResult = timeout
+                    ? coordinator.requestTimeout(
+                            context, () -> "展示", () -> "记忆")
+                            .orElseThrow()
+                    : null;
+            if (!timeout) {
+                assertTrue(coordinator.requestCancellation(
+                        context, () -> "展示", () -> "记忆"));
+            }
+            verify(finalizer, never()).finalizeOnce(eq(context), any());
+            releaseCallback.countDown();
+
+            assertTrue(callback.get(1, TimeUnit.SECONDS));
+            VueTurnFinalizer.FinalizationResult result = timeout
+                    ? timeoutResult.block(Duration.ofSeconds(1))
+                    : context.awaitFinalization();
+            assertNotNull(result);
+            assertSame(reserved, context.outputSafetySeal());
+            verify(finalizer).finalizeOnce(eq(context), any());
+        } finally {
+            releaseCallback.countDown();
+            context.closeResources();
+        }
+    }
+
+    @Test
+    void 删除接管必须等待回调静默后执行已注册安全封口器()
+            throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        String turnId = "turn-delete-output-seal";
+        var operation = manager.acquire(
+                7L, AppOperationLeaseManager.AppOperationType.GENERATE, turnId);
+        var lease = new VueBuildSessionManager().open(
+                operation, 9L, turnId);
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, turnId, operation, lease, budgetSession());
+        context.commitUser(() -> true);
+        context.registerDeleteTakeoverParticipant();
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        AtomicBoolean lateMarkerObserved = new AtomicBoolean();
+        VueTurnContext.OutputSafetySeal reserved =
+                VueTurnContext.OutputSafetySeal.reserved("删除静默后可信投影");
+        context.registerOutputSafetySealer(() -> lateMarkerObserved.get()
+                ? reserved : VueTurnContext.OutputSafetySeal.safe());
+        AtomicReference<VueTurnContext.DeleteTakeoverRequest> request =
+                new AtomicReference<>();
+        CountDownLatch requestObserved = new CountDownLatch(1);
+        context.deleteTakeoverSignal().subscribe(observed -> {
+            request.set(observed);
+            requestObserved.countDown();
+        });
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            assertSame(reserved, context.outputSafetySeal());
+            VueTurnOutcome requested = invocation.getArgument(1);
+            var result = new VueTurnFinalizer.FinalizationResult(
+                    requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, executor, Duration.ofSeconds(1))) {
+            Future<Boolean> callback = executor.submit(() ->
+                    context.tryRunCallback(() -> {
+                        callbackEntered.countDown();
+                        await(releaseCallback);
+                        lateMarkerObserved.set(true);
+                    }));
+            assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
+            Future<AppOperationLeaseManager.AppOperationLease> deletion =
+                    executor.submit(() -> manager.cancelAndAcquireDelete(
+                            7L, "delete-output-seal", Duration.ofSeconds(2)));
+            assertTrue(requestObserved.await(1, TimeUnit.SECONDS));
+
+            Mono<VueTurnFinalizer.FinalizationResult> result = coordinator
+                    .requestDeleteTakeover(
+                            context, request.get(), () -> "展示", () -> "记忆")
+                    .orElseThrow();
+            verify(finalizer, never()).finalizeOnce(eq(context), any());
+            releaseCallback.countDown();
+
+            assertTrue(callback.get(1, TimeUnit.SECONDS));
+            assertNotNull(result.block(Duration.ofSeconds(1)));
+            try (var deleteLease = deletion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
+                        deleteLease.operationType());
+            }
+            assertSame(reserved, context.outputSafetySeal());
+            verify(finalizer).finalizeOnce(eq(context), any());
+        } finally {
+            releaseCallback.countDown();
+            context.closeResources();
+        }
+    }
 
     @Test
     void cancellationClosesGateCancelsModelWaitsAndFinalizesOnce() throws Exception {

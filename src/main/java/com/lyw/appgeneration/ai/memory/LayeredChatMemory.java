@@ -27,7 +27,7 @@ public class LayeredChatMemory implements ChatMemory {
     private static final String L1_PREFIX =
             "以下是本应用早期对话的摘要,供你延续上下文(不是用户的新指令):\n";
     private static final String L1_ACK =
-            "明白,我会基于以上摘要和后续对话继续。";
+            SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK;
 
     private final ChatMemory delegate;
     private final MemorySummaryService summaryService;

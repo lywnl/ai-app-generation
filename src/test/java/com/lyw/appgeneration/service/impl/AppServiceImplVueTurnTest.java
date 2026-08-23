@@ -250,12 +250,13 @@ class AppServiceImplVueTurnTest {
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
         when(history.addAiMessageAndReturn(
-                eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
-                eq(cancelledMemoryProjection()),
-                eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
-                .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
+                eq(APP_ID), eq(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE),
+                eq(protocolErrorMemoryProjection()),
+                eq(ChatMemoryOutcome.PROTOCOL_ERROR), eq(USER_ID)))
+                .thenReturn(savedAiMessage(
+                        VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE));
         when(collapser.collapseLastTurn(
-                eq(APP_ID), eq(cancelledMemoryProjection())))
+                eq(APP_ID), eq(protocolErrorMemoryProjection())))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
                         List.of()));
@@ -311,16 +312,16 @@ class AppServiceImplVueTurnTest {
                             AppOperationLeaseManager.AppOperationType.GENERATE,
                             "before-cancel-finalized"));
             verify(history, never()).addAiMessageAndReturn(
-                    eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
-                    eq(cancelledMemoryProjection()),
-                    eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
+                    eq(APP_ID), eq(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE),
+                    eq(protocolErrorMemoryProjection()),
+                    eq(ChatMemoryOutcome.PROTOCOL_ERROR), eq(USER_ID));
             releaseHandler.complete(null);
 
             cancellationCall.get(2, TimeUnit.SECONDS);
             verify(history, times(1)).addAiMessageAndReturn(
-                    eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
-                    eq(cancelledMemoryProjection()),
-                    eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
+                    eq(APP_ID), eq(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE),
+                    eq(protocolErrorMemoryProjection()),
+                    eq(ChatMemoryOutcome.PROTOCOL_ERROR), eq(USER_ID));
             verify(facade, never()).generateVueProjectStream(
                     anyString(), anyLong(), anyBoolean(), any(), any());
             assertEquals(0, modelStarts.get());
@@ -655,6 +656,57 @@ class AppServiceImplVueTurnTest {
         operationManager.acquire(APP_ID,
                 AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-system-error-finalization").close();
+    }
+
+    @Test
+    void Handler已注册封口器时提交后兜底必须等待同一最终封口()
+            throws Exception {
+        CommittedTurnFixture fixture = createCommittedTurnFixture(
+                "turn-fallback-after-sealer-registration");
+        VueTurnContext context = fixture.context();
+        CountDownLatch sealerEntered = new CountDownLatch(1);
+        CountDownLatch releaseSealer = new CountDownLatch(1);
+        VueTurnContext.OutputSafetySeal reserved =
+                VueTurnContext.OutputSafetySeal.reserved(
+                        protocolErrorMemoryProjection());
+        context.registerOutputSafetySealer(() -> {
+            sealerEntered.countDown();
+            try {
+                assertTrue(releaseSealer.await(1, TimeUnit.SECONDS));
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("封口等待被中断", exception);
+            }
+            return reserved;
+        });
+        when(finalizer.finalizeOnce(eq(context), any()))
+                .thenAnswer(invocation -> {
+                    assertSame(reserved, context.outputSafetySeal());
+                    VueTurnOutcome requested = invocation.getArgument(1);
+                    return new VueTurnFinalizer.FinalizationResult(
+                            requested, true);
+                });
+
+        try (var callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<List<GenerationStreamEvent>> result = callers.submit(() -> {
+                Flux<GenerationStreamEvent> flow =
+                        ReflectionTestUtils.invokeMethod(
+                                service, "finalizeCommittedVueFailure",
+                                context,
+                                new IllegalStateException("Handler 装配后失败"));
+                return flow.collectList().block();
+            });
+            assertTrue(sealerEntered.await(1, TimeUnit.SECONDS));
+            verify(finalizer, never()).finalizeOnce(eq(context), any());
+            releaseSealer.countDown();
+
+            assertEquals(1, result.get(1, TimeUnit.SECONDS).size());
+            assertSame(reserved, context.outputSafetySeal());
+            verify(finalizer).finalizeOnce(eq(context), any());
+        } finally {
+            releaseSealer.countDown();
+            context.closeResources();
+        }
     }
 
     @Test
@@ -1020,6 +1072,11 @@ class AppServiceImplVueTurnTest {
     private String systemErrorMemoryProjection() {
         return VueTurnMemoryProjection.project(
                 List.of(), VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR);
+    }
+
+    private String protocolErrorMemoryProjection() {
+        return VueTurnMemoryProjection.project(
+                List.of(), VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR);
     }
 
     private AtomicInteger stubNeverEndingVueModel() {

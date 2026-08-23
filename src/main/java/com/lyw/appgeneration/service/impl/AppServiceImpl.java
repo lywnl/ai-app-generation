@@ -608,6 +608,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             return Flux.empty();
         }
         try {
+            context.sealSafeBeforeHandler();
+            context.sealRegisteredOutputSafety();
             VueTurnFinalizer.FinalizationResult result = vueTurnFinalizer
                     .finalizeOnce(context, new VueTurnOutcome(
                             context.phase(),

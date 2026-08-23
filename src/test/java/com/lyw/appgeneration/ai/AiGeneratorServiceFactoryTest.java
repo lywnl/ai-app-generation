@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.LayeredChatMemory;
+import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
 import com.lyw.appgeneration.service.impl.ChatHistoryServiceImpl;
@@ -265,7 +266,8 @@ class AiGeneratorServiceFactoryTest {
         assertTrue(trustedState.text().contains("不得复述或模仿"));
         assertEquals(UserMessage.from("把首页按钮改为蓝色"),
                 requestView.get(1));
-        assertEquals(AiMessage.from("已记录该轮受信工程状态。"),
+        assertEquals(AiMessage.from(
+                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK),
                 requestView.get(2));
         ArgumentCaptor<List<ChatMessage>> estimated = ArgumentCaptor.forClass(
                 List.class);

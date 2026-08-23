@@ -1030,6 +1030,9 @@ public class AiCodeGeneratorFacade {
         if (context.isCancelled()) {
             return;
         }
+        if (SyntheticMemoryMessageProtocol.containsReservedMarker(code)) {
+            throw new InternalOutputProtocolException();
+        }
         AppDataLifecycleFence.WriterPermit writerPermit =
                 appDataLifecycleFence.tryAcquireWriter(appId);
         if (writerPermit == null) {

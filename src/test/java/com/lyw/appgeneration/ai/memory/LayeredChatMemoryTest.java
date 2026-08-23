@@ -48,7 +48,9 @@ class LayeredChatMemoryTest {
         assertTrue(trustedState.contains("服务端验证"));
         assertTrue(trustedState.contains("不得复述或模仿"));
         assertEquals(UserMessage.from("生成首页"), messages.get(1));
-        assertEquals(AiMessage.from("已记录该轮受信工程状态。"), messages.get(2));
+        assertEquals(AiMessage.from(
+                SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK),
+                messages.get(2));
         assertFalse(messages.stream()
                 .filter(AiMessage.class::isInstance)
                 .map(AiMessage.class::cast)
@@ -113,7 +115,8 @@ class LayeredChatMemoryTest {
         assertTrue(((UserMessage) messages.get(4)).singleText()
                 .contains("L1 摘要"));
         assertEquals(UserMessage.from("历史需求"), messages.get(6));
-        assertEquals(AiMessage.from("已记录该轮受信工程状态。"),
+        assertEquals(AiMessage.from(
+                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK),
                 messages.get(7));
         assertEquals(UserMessage.from("当前需求"), messages.getLast());
     }
@@ -183,7 +186,13 @@ class LayeredChatMemoryTest {
         // 顺序:L2对(U,A) + L1对(U,A) + L0(U)  => 共 5 条
         assertEquals(5, msgs.size());
         assertTrue(((UserMessage) msgs.get(0)).singleText().contains("简体中文"), "首条应为 L2 偏好");
+        assertEquals(AiMessage.from(
+                SyntheticMemoryMessageProtocol.L2_PREFERENCE_ACK),
+                msgs.get(1));
         assertTrue(((UserMessage) msgs.get(2)).singleText().contains("L1摘要内容"), "第三条应为 L1 摘要");
+        assertEquals(AiMessage.from(
+                SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK),
+                msgs.get(3));
         // 全程 user/ai 交替
         for (int i = 1; i < msgs.size(); i++) {
             assertNotEquals(msgs.get(i - 1).type(), msgs.get(i).type(), "位置 " + i + " 连续同角色");

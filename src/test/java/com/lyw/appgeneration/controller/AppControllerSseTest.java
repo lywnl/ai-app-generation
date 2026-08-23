@@ -556,6 +556,38 @@ class AppControllerSseTest {
     }
 
     @Test
+    void 普通正文已发送后安全异常仍只产生一个业务错误和一个递增Done() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
+                .thenReturn(Flux.concat(
+                        Flux.just(
+                                GenerationStreamEvent.content("第一段"),
+                                GenerationStreamEvent.content("第二段")),
+                        Flux.error(GenerationPreflightException.system(
+                                new IllegalStateException("内部失败")))));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(
+                requestBody(), request).collectList().block();
+
+        assertEquals(List.of(
+                        "message", "message", "business-error", "done"),
+                events.stream().map(ServerSentEvent::event).toList());
+        assertSimpleMessage(events.get(0), 1L, "第一段");
+        assertSimpleMessage(events.get(1), 2L, "第二段");
+        var error = JSONUtil.parseObj(events.get(2).data());
+        assertEquals("generation-error/v1", error.getStr("protocol"));
+        assertEquals("SYSTEM", error.getStr("kind"));
+        assertEquals("生成服务暂时不可用，请稍后重试。",
+                error.getStr("message"));
+        assertFalse(error.containsKey("sequence"));
+        assertDone(events.get(3), 3L);
+        assertEquals(1, events.stream()
+                .filter(event -> "business-error".equals(event.event()))
+                .count());
+        assertEquals(1, events.stream()
+                .filter(event -> "done".equals(event.event())).count());
+    }
+
+    @Test
     void parameterFailureAlsoUsesBusinessErrorProtocol() {
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
                 new AppChatGenerateRequest("0", "需求"), request)

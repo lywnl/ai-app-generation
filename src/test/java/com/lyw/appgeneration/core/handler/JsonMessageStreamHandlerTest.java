@@ -48,6 +48,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -57,6 +58,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
@@ -100,6 +102,51 @@ class JsonMessageStreamHandlerTest {
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 outcome.outcome());
         assertFalse(outcome.shouldRefreshPreview());
+    }
+
+    @Test
+    void 正常完成必须在Finalizer前封口最新Ai正文() {
+        VueTurnContext context = context(
+                "turn-seal-complete", VueBuildPhase.GENERATING);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
+                    context.outputSafetySeal().state());
+            assertEquals(VueTurnMemoryProjection.project(
+                            List.of(),
+                            VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR),
+                    context.outputSafetySeal().memoryProjection());
+            VueTurnOutcome requested = invocation.getArgument(1);
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        handler.handle(Flux.just(
+                "{\"type\":\"ai_response\",\"generation\":1,"
+                        + "\"data\":\"[[server.synthetic-memory/test]]\"}"),
+                context).collectList().block();
+
+        assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
+                context.outputSafetySeal().state());
+    }
+
+    @Test
+    void 普通错误必须在Finalizer前封口已接收Ai正文() {
+        VueTurnContext context = context(
+                "turn-seal-error", VueBuildPhase.GENERATING);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
+                    context.outputSafetySeal().state());
+            VueTurnOutcome requested = invocation.getArgument(1);
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        Flux<String> origin = Flux.concat(
+                Flux.just("{\"type\":\"ai_response\",\"generation\":1,"
+                        + "\"data\":\"[[server.synthetic-memory/test]]\"}"),
+                Flux.error(new IllegalStateException("model failed")));
+
+        handler.handle(origin, context).collectList().block();
+
+        assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
+                context.outputSafetySeal().state());
     }
 
     @Test
@@ -1037,7 +1084,7 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
-    void protocolTerminationOwnsFinalMessageAndStripsAnyLegacyTerminalText() {
+    void 协议终止即使正文安全也必须只保留固定展示和可信记忆投影() {
         VueTurnContext context = context("turn-protocol", VueBuildPhase.GENERATING);
         context.recordControlledTermination(new ToolLoopTerminationProtocol
                 .ControlledTermination(ToolLoopTerminationProtocol
@@ -1046,12 +1093,17 @@ class JsonMessageStreamHandlerTest {
             VueTurnOutcome requested = invocation.getArgument(1);
             assertEquals(JsonMessageStreamHandler.SCOPE_PROTOCOL_MESSAGE,
                     requested.displayAiText());
+            assertEquals(VueTurnMemoryProjection.project(
+                            List.of(),
+                            VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR),
+                    requested.memoryAiText());
+            assertFalse(requested.shouldRefreshPreview());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
 
         List<GenerationStreamEvent> output = handler.handle(Flux.concat(
-                Flux.just("{\"type\":\"ai_response\",\"generation\":1,\"data\":\""
-                        + JsonMessageStreamHandler.BUILD_FAILED_MESSAGE + "\"}"),
+                Flux.just("{\"type\":\"ai_response\",\"generation\":1,"
+                        + "\"data\":\"不会命中旧终态剥离规则的安全正文\"}"),
                 Flux.error(new AiCodeGeneratorFacade
                         .OnlineControlledTerminationException(
                         ToolLoopTerminationProtocol.ControlledTerminationReason
@@ -1100,6 +1152,86 @@ class JsonMessageStreamHandlerTest {
                 })
                 .verifyComplete();
         verify(cancellationCoordinator).requestTimeout(eq(context), any(), any());
+    }
+
+    @Test
+    void 超时必须在回调静默后读取最终展示快照() throws Exception {
+        VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-timeout-late-display",
+                VueBuildPhase.GENERATING, Duration.ofMinutes(30),
+                () -> scheduler.now(TimeUnit.NANOSECONDS));
+        context.commitUser(() -> true);
+        CountDownLatch sourceReady = new CountDownLatch(1);
+        CountDownLatch renderEntered = new CountDownLatch(1);
+        CountDownLatch releaseRender = new CountDownLatch(1);
+        AtomicReference<reactor.core.publisher.FluxSink<String>> source =
+                new AtomicReference<>();
+        BaseTool readTool = mock(BaseTool.class);
+        when(toolManager.getTool("readFile")).thenReturn(readTool);
+        when(readTool.generateToolExecutedResult(any(JSONObject.class), any()))
+                .thenAnswer(invocation -> {
+                    renderEntered.countDown();
+                    assertTrue(releaseRender.await(1, TimeUnit.SECONDS));
+                    return "静默前完成的可信工具展示";
+                });
+        String readResult = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"readFile\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
+                + "\"message\":\"已读取\",\"failureReason\":null,"
+                + "\"content\":null}";
+        String readEvent = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("generation", 1L)
+                .set("id", "late-timeout-read")
+                .set("name", "readFile")
+                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
+                .set("result", readResult));
+
+        try (var finalizationExecutor =
+                     Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = new VueTurnCancellationCoordinator(
+                     finalizer, finalizationExecutor, Duration.ofMillis(20))) {
+            when(finalizer.finalizeOnce(eq(context), any()))
+                    .thenAnswer(invocation -> {
+                        VueTurnOutcome requested = invocation.getArgument(1);
+                        assertTrue(requested.displayAiText().contains(
+                                "静默前完成的可信工具展示"));
+                        assertTrue(requested.displayAiText().endsWith(
+                                JsonMessageStreamHandler.TIMEOUT_MESSAGE));
+                        var result = new VueTurnFinalizer.FinalizationResult(
+                                requested, true);
+                        context.closeResources();
+                        context.completeFinalization(result);
+                        return result;
+                    });
+            JsonMessageStreamHandler timedHandler =
+                    new JsonMessageStreamHandler(
+                            toolManager, finalizer, coordinator, scheduler);
+            Flux<String> origin = Flux.create(sink -> {
+                source.set(sink);
+                sourceReady.countDown();
+            });
+            Future<List<GenerationStreamEvent>> output =
+                    finalizationExecutor.submit(() -> timedHandler
+                            .handle(origin, context).collectList().block());
+            assertTrue(sourceReady.await(1, TimeUnit.SECONDS));
+            Future<Boolean> callback = finalizationExecutor.submit(() ->
+                    context.tryRunCallback(() -> source.get().next(readEvent)));
+            assertTrue(renderEntered.await(1, TimeUnit.SECONDS));
+
+            scheduler.advanceTimeBy(Duration.ofMinutes(30));
+            verify(finalizer, never()).finalizeOnce(eq(context), any());
+            releaseRender.countDown();
+
+            assertTrue(callback.get(1, TimeUnit.SECONDS));
+            assertEquals(VueTurnOutcome.TurnOutcomeType.TIMED_OUT,
+                    outcomeOf(output.get(2, TimeUnit.SECONDS).getLast())
+                            .outcome());
+        } finally {
+            releaseRender.countDown();
+            context.closeResources();
+        }
     }
 
     @Test

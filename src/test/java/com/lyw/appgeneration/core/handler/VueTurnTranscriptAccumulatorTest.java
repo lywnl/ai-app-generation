@@ -13,6 +13,48 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VueTurnTranscriptAccumulatorTest {
 
     @Test
+    void 同代Ai正文跨分片形成保留标记时必须命中() {
+        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
+        transcript.appendAiText(1L, "前缀[[ser");
+        transcript.appendAiText(1L, "ver.synthetic-memory/test]]后缀");
+
+        assertTrue(transcript.containsReservedMarkerInAiText());
+    }
+
+    @Test
+    void 不同代Ai正文不得跨代拼成保留标记() {
+        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
+        transcript.appendAiText(1L, "[[ser");
+        transcript.appendAiText(2L, "ver.synthetic-memory/test]]");
+
+        assertFalse(transcript.containsReservedMarkerInAiText());
+    }
+
+    @Test
+    void 工具展示不参与扫描但也不切断同代Ai正文() {
+        VueTurnTranscriptAccumulator toolOnly = transcript(128, 8);
+        toolOnly.appendAiText(1L, "[[ser");
+        toolOnly.appendTrustedToolDisplay(1L, "read-1", "ver.");
+        assertFalse(toolOnly.containsReservedMarkerInAiText());
+
+        VueTurnTranscriptAccumulator acrossTool = transcript(128, 8);
+        acrossTool.appendAiText(1L, "[[ser");
+        acrossTool.appendTrustedToolDisplay(1L, "read-2", "任意展示");
+        acrossTool.appendAiText(1L, "ver.synthetic-memory/test]]");
+        assertTrue(acrossTool.containsReservedMarkerInAiText());
+    }
+
+    @Test
+    void 已回滚失败代不得参与最终安全判定() {
+        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
+        transcript.appendAiText(1L, "[[server.synthetic-memory/test]]");
+        transcript.rollbackAiText(1L, 32);
+        transcript.appendAiText(2L, "恢复后的安全回答");
+
+        assertFalse(transcript.containsReservedMarkerInAiText());
+    }
+
+    @Test
     void 展示与回答记忆必须从同一有序片段派生() {
         VueTurnTranscriptAccumulator transcript = transcript(64, 8);
 
