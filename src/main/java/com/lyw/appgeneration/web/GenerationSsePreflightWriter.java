@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.web;
 
-import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,7 +9,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 
 /** 在 Controller 调用前把生成入口错误写成唯一一组安全 SSE 事件。 */
 @Component
@@ -19,8 +17,6 @@ public final class GenerationSsePreflightWriter {
     public static final String GENERATION_PATH = "/app/chat/gen/code";
     public static final String WRITTEN_ATTRIBUTE =
             GenerationSsePreflightWriter.class.getName() + ".WRITTEN";
-
-    private static final String ERROR_PROTOCOL = "generation-error/v1";
 
     private final AppLifecycleMetricsCollector metricsCollector;
 
@@ -88,14 +84,6 @@ public final class GenerationSsePreflightWriter {
     }
 
     private String encode(GenerationPreflightException error) {
-        Map<String, Object> data = Map.of(
-                "protocol", ERROR_PROTOCOL,
-                "kind", error.kind().name(),
-                "code", error.code(),
-                "message", error.safeMessage());
-        return "event: business-error\n"
-                + "data: " + JSONUtil.toJsonStr(data) + "\n\n"
-                + "event: done\n"
-                + "data:\n\n";
+        return new GenerationSseEncoder().preflightWire(error);
     }
 }

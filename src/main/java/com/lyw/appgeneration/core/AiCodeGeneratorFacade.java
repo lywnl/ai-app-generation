@@ -12,6 +12,8 @@ import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
 import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
+import com.lyw.appgeneration.ai.model.message.InternalOutputRecoveryMessage;
+import com.lyw.appgeneration.ai.model.message.InternalOutputRollbackMessage;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentDeltaMessage;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
@@ -40,6 +42,7 @@ import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.IncompleteToolChainRecoveryPolicy;
 import dev.langchain4j.service.InternalOutputProtocolException;
 import dev.langchain4j.service.InternalOutputRecoveryPolicy;
+import dev.langchain4j.service.GenerationStreamSignal;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -61,7 +64,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -337,7 +340,20 @@ public class AiCodeGeneratorFacade {
                         phase -> turnContext.tryRunCallback(() ->
                                 turnContext.publishIncompleteToolChainRecovery(
                                         incompleteRecoveryMessage(phase)))));
+        tokenStream.internalOutputRecoveryPolicy(
+                vueInternalOutputRecoveryPolicy());
         return processOnlineTokenStream(tokenStream, turnContext);
+    }
+
+    private InternalOutputRecoveryPolicy
+            vueInternalOutputRecoveryPolicy() {
+        return new InternalOutputRecoveryPolicy(
+                InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
+                SyntheticMemoryMessageProtocol.RESERVED_PREFIX,
+                Set.of(
+                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK,
+                        SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK,
+                        SyntheticMemoryMessageProtocol.L2_PREFERENCE_ACK));
     }
 
     private IncompleteToolChainRecoveryPolicy.BuildState incompleteBuildState(
@@ -539,8 +555,32 @@ public class AiCodeGeneratorFacade {
                                 scope, toolName, action)));
         return Flux.create(sink -> {
             AtomicBoolean terminated = new AtomicBoolean();
+            SerializedGenerationStreamEmitter emitter =
+                    new SerializedGenerationStreamEmitter(
+                            new SerializedGenerationStreamEmitter.Target() {
+                                @Override
+                                public boolean isCancelled() {
+                                    return sink.isCancelled();
+                                }
+
+                                @Override
+                                public void next(String value) {
+                                    sink.next(value);
+                                }
+
+                                @Override
+                                public void complete() {
+                                    sink.complete();
+                                }
+
+                                @Override
+                                public void error(Throwable error) {
+                                    sink.error(error);
+                                }
+                            });
             Runnable cancelModel = () -> {
                 if (terminated.compareAndSet(false, true)) {
+                    emitter.cancel();
                     tokenStream.cancel();
                 }
             };
@@ -551,144 +591,192 @@ public class AiCodeGeneratorFacade {
                     terminated.compareAndSet(false, true);
                 }
             });
-            Map<String, ToolRequestStreamParser> parsers =
-                    new ConcurrentHashMap<>();
-            Set<String> announcedToolIds = ConcurrentHashMap.newKeySet();
-            Set<String> completedToolIds = ConcurrentHashMap.newKeySet();
+            Map<String, ToolRequestStreamParser> parsers = new HashMap<>();
+            Set<String> announcedToolIds = new java.util.HashSet<>();
+            Set<String> completedToolIds = new java.util.HashSet<>();
             FileToolBudgetGuard.Session budgetSession = scope.budgetSession();
             try {
-                tokenStream.onPartialResponse(partial -> context.tryRunCallback(() -> {
-                            if (!sink.isCancelled()) {
-                                sink.next(JSONUtil.toJsonStr(new AiResponseMessage(partial)));
-                            }
-                        }))
-                        .onPartialToolExecutionRequest((index, request) ->
+                tokenStream.onGenerationStreamSignal(signal ->
                                 context.tryRunCallback(() -> {
-                                    if (sink.isCancelled()) {
-                                        return;
-                                    }
-                                    ToolRequestStreamParser parser = parsers.get(request.id());
-                                    if (parser == null) {
-                                        if (announcedToolIds.add(request.id())) {
-                                            sink.next(JSONUtil.toJsonStr(
-                                                    new ToolRequestMessage(
-                                                            request.id(),
-                                                            request.name(), null)));
-                                        }
-                                        parser = new ToolRequestStreamParser(request.name(), evt -> {
-                                            if (sink.isCancelled()) {
-                                                return;
-                                            }
-                                            switch (evt.type) {
-                                                case DELTA -> emitBudgetedArgumentDelta(
-                                                        sink, tokenStream, budgetSession,
-                                                        completedToolIds, request.id(),
-                                                        request.name(), evt.key, evt.payload);
-                                                case VALUE_READY -> {
-                                                    if (!ToolStreamingSpec.isStreaming(
-                                                            request.name(), evt.key)
-                                                            && !completedToolIds.contains(
-                                                            request.id())) {
-                                                        sink.next(JSONUtil.toJsonStr(
-                                                                new ToolArgumentMessage(
-                                                                        request.id(), request.name(),
-                                                                        evt.key, evt.payload)));
-                                                    }
-                                                }
-                                                case KEY_READY -> { }
-                                            }
-                                        });
-                                        parsers.put(request.id(), parser);
-                                    }
-                                    parser.feed(request.arguments());
+                                    emitter.execute(target ->
+                                            handleGenerationSignal(
+                                                    signal, target::next,
+                                                    tokenStream, budgetSession,
+                                                    parsers, announcedToolIds,
+                                                    completedToolIds));
                                 }))
-                        .onCompleteToolExecutionRequest((index, request) ->
-                                context.tryRunCallback(() -> {
-                                    if (!sink.isCancelled()
-                                            && announcedToolIds.add(request.id())) {
-                                        sink.next(JSONUtil.toJsonStr(
-                                                new ToolRequestMessage(
-                                                        request.id(),
-                                                        request.name(), null)));
-                                    }
-                                }))
-                        .onToolExecuted(execution -> context.tryRunCallback(() -> {
-                            if (sink.isCancelled()) {
-                                return;
-                            }
-                            ToolRequestStreamParser parser = parsers.remove(
-                                    execution.request().id());
-                            if (parser != null) {
-                                parser.finish();
-                            }
-                            ToolLoopTerminationProtocol.ToolLoopTermination parsed =
-                                    ToolLoopTerminationProtocol.parseTrusted(
-                                            execution.request().name(),
-                                            execution.result());
-                            if (parsed.reason()
-                                    == ToolLoopTerminationProtocol
-                                    .ControlledTerminationReason
-                                    .RESOURCE_LIMIT_EXCEEDED) {
-                                emitResourceLimitExecution(
-                                        sink, tokenStream, budgetSession,
-                                        completedToolIds, execution);
-                                return;
-                            }
-                            if (completedToolIds.add(execution.request().id())) {
-                                sink.next(JSONUtil.toJsonStr(
-                                        new ToolExecutedMessage(execution)));
-                            }
-                        }))
                         .onControlledTermination(termination ->
                                 context.tryRunCallback(() -> {
-                                    if (sink.isCancelled()) {
-                                        return;
-                                    }
-                                    context.recordControlledTermination(termination);
-                                    terminated.set(true);
-                                    Throwable error = onlineControlledTerminationError(termination);
+                                    Throwable error =
+                                            onlineControlledTerminationError(
+                                                    termination);
+                                    Consumer<SerializedGenerationStreamEmitter
+                                            .Target> beforeTerminal = ignored -> {
+                                                finishParsers(parsers);
+                                                context.recordControlledTermination(
+                                                        termination);
+                                                terminated.set(true);
+                                            };
                                     if (error == null) {
-                                        sink.complete();
+                                        emitter.complete(beforeTerminal);
                                     } else {
-                                        sink.error(error);
+                                        emitter.error(beforeTerminal, error);
                                     }
                                 }))
                         .onCompleteResponse(response -> context.tryRunCallback(() -> {
-                            if (!sink.isCancelled()) {
-                                parsers.values().forEach(ToolRequestStreamParser::finish);
+                            emitter.complete(ignored -> {
+                                finishParsers(parsers);
                                 terminated.set(true);
-                                sink.complete();
-                            }
+                            });
                         }))
                         .onError(error -> context.tryRunCallback(() -> {
-                            if (!sink.isCancelled()) {
+                            emitter.error(ignored -> {
+                                finishParsers(parsers);
                                 terminated.set(true);
-                                sink.error(error);
-                            }
+                            }, error);
                         }))
                         .start();
             } catch (RuntimeException exception) {
                 terminated.set(true);
-                if (!sink.isCancelled()) {
-                    sink.error(exception);
-                }
+                emitter.error(exception);
             }
         });
     }
 
+    private void handleGenerationSignal(
+            GenerationStreamSignal signal,
+            Consumer<String> output,
+            TokenStream tokenStream,
+            FileToolBudgetGuard.Session budgetSession,
+            Map<String, ToolRequestStreamParser> parsers,
+            Set<String> announcedToolIds,
+            Set<String> completedToolIds) {
+        switch (signal) {
+            case GenerationStreamSignal.AiText text -> output.accept(
+                    JSONUtil.toJsonStr(new AiResponseMessage(
+                            text.generation(), text.text())));
+            case GenerationStreamSignal.PartialToolRequest partial ->
+                    handlePartialToolRequest(
+                            partial, output, tokenStream, budgetSession,
+                            parsers, announcedToolIds, completedToolIds);
+            case GenerationStreamSignal.CompleteToolRequest complete -> {
+                var request = complete.request();
+                if (announcedToolIds.add(request.id())) {
+                    output.accept(JSONUtil.toJsonStr(
+                            new ToolRequestMessage(
+                                    complete.generation(), request.id(),
+                                    request.name(), null)));
+                }
+            }
+            case GenerationStreamSignal.ToolExecuted executed ->
+                    handleToolExecuted(
+                            executed, output, tokenStream, budgetSession,
+                            parsers, completedToolIds);
+            case GenerationStreamSignal.Rollback rollback -> {
+                rollback.provisionalToolRequestIds().forEach(toolId -> {
+                    parsers.remove(toolId);
+                    announcedToolIds.remove(toolId);
+                });
+                output.accept(JSONUtil.toJsonStr(
+                        new InternalOutputRollbackMessage(rollback)));
+            }
+            case GenerationStreamSignal.Recovery recovery -> output.accept(
+                    JSONUtil.toJsonStr(
+                            new InternalOutputRecoveryMessage(recovery)));
+        }
+    }
+
+    private void handlePartialToolRequest(
+            GenerationStreamSignal.PartialToolRequest partial,
+            Consumer<String> output,
+            TokenStream tokenStream,
+            FileToolBudgetGuard.Session budgetSession,
+            Map<String, ToolRequestStreamParser> parsers,
+            Set<String> announcedToolIds,
+            Set<String> completedToolIds) {
+        var request = partial.request();
+        ToolRequestStreamParser parser = parsers.get(request.id());
+        if (parser == null) {
+            if (announcedToolIds.add(request.id())) {
+                output.accept(JSONUtil.toJsonStr(new ToolRequestMessage(
+                        partial.generation(), request.id(),
+                        request.name(), null)));
+            }
+            parser = new ToolRequestStreamParser(request.name(), event -> {
+                switch (event.type) {
+                    case DELTA -> emitBudgetedArgumentDelta(
+                            output, tokenStream, budgetSession,
+                            completedToolIds, partial.generation(),
+                            request.id(), request.name(),
+                            event.key, event.payload);
+                    case VALUE_READY -> {
+                        if (!ToolStreamingSpec.isStreaming(
+                                request.name(), event.key)
+                                && !completedToolIds.contains(request.id())) {
+                            output.accept(JSONUtil.toJsonStr(
+                                    new ToolArgumentMessage(
+                                            partial.generation(), request.id(),
+                                            request.name(), event.key,
+                                            event.payload)));
+                        }
+                    }
+                    case KEY_READY -> { }
+                }
+            });
+            parsers.put(request.id(), parser);
+        }
+        parser.feed(request.arguments());
+    }
+
+    private void handleToolExecuted(
+            GenerationStreamSignal.ToolExecuted executed,
+            Consumer<String> output,
+            TokenStream tokenStream,
+            FileToolBudgetGuard.Session budgetSession,
+            Map<String, ToolRequestStreamParser> parsers,
+            Set<String> completedToolIds) {
+        ToolExecution execution = executed.execution();
+        ToolRequestStreamParser parser = parsers.remove(
+                execution.request().id());
+        if (parser != null) {
+            parser.finish();
+        }
+        ToolLoopTerminationProtocol.ToolLoopTermination parsed =
+                ToolLoopTerminationProtocol.parseTrusted(
+                        execution.request().name(), execution.result());
+        if (parsed.reason() == ToolLoopTerminationProtocol
+                .ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED) {
+            emitResourceLimitExecution(
+                    output, tokenStream, budgetSession, completedToolIds,
+                    executed.generation(), execution);
+            return;
+        }
+        if (completedToolIds.add(execution.request().id())) {
+            output.accept(JSONUtil.toJsonStr(new ToolExecutedMessage(
+                    executed.generation(), execution)));
+        }
+    }
+
+    private void finishParsers(
+            Map<String, ToolRequestStreamParser> parsers) {
+        parsers.values().forEach(ToolRequestStreamParser::finish);
+        parsers.clear();
+    }
+
     private void emitResourceLimitExecution(
-            reactor.core.publisher.FluxSink<String> sink,
+            Consumer<String> output,
             TokenStream tokenStream,
             FileToolBudgetGuard.Session budgetSession,
             Set<String> completedToolIds,
+            long generation,
             ToolExecution execution) {
         String toolId = execution.request().id();
         if (completedToolIds.add(toolId)) {
             var redactedRequest = dev.langchain4j.agent.tool.ToolExecutionRequest
                     .builder().id(toolId).name(execution.request().name())
                     .arguments("{}").build();
-            sink.next(JSONUtil.toJsonStr(new ToolExecutedMessage(
-                    ToolExecution.builder().request(redactedRequest)
+            output.accept(JSONUtil.toJsonStr(new ToolExecutedMessage(
+                    generation, ToolExecution.builder().request(redactedRequest)
                             .result(execution.result()).build())));
         }
         if (budgetSession.claimResourceLimit()) {
@@ -701,10 +789,11 @@ public class AiCodeGeneratorFacade {
     }
 
     private void emitBudgetedArgumentDelta(
-            reactor.core.publisher.FluxSink<String> sink,
+            Consumer<String> output,
             TokenStream tokenStream,
             FileToolBudgetGuard.Session budgetSession,
             Set<String> completedToolIds,
+            long generation,
             String toolId, String toolName, String key, String delta) {
         if (!ToolStreamingSpec.isStreaming(toolName, key)
                 || completedToolIds.contains(toolId)) {
@@ -713,8 +802,9 @@ public class AiCodeGeneratorFacade {
         FileToolBudgetGuard.ArgumentDecision decision =
                 budgetSession.acceptArgumentDelta(toolId, key, delta);
         if (!decision.acceptedPrefix().isEmpty()) {
-            sink.next(JSONUtil.toJsonStr(new ToolArgumentDeltaMessage(
-                    toolId, toolName, key, decision.acceptedPrefix())));
+            output.accept(JSONUtil.toJsonStr(new ToolArgumentDeltaMessage(
+                    generation, toolId, toolName, key,
+                    decision.acceptedPrefix())));
         }
         if (!decision.resourceLimitExceeded()
                 || !budgetSession.claimResourceLimit()) {
@@ -722,8 +812,8 @@ public class AiCodeGeneratorFacade {
         }
         String rejectedResult = resourceLimitToolResult(toolName);
         if (completedToolIds.add(toolId)) {
-            sink.next(JSONUtil.toJsonStr(new ToolExecutedMessage(
-                    ToolExecution.builder()
+            output.accept(JSONUtil.toJsonStr(new ToolExecutedMessage(
+                    generation, ToolExecution.builder()
                             .request(dev.langchain4j.agent.tool.ToolExecutionRequest
                                     .builder().id(toolId).name(toolName)
                                     .arguments("{}").build())

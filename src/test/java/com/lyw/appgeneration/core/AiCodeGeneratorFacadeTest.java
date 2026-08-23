@@ -23,6 +23,8 @@ import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dev.langchain4j.service.ModelRequestGate;
+import dev.langchain4j.service.GenerationStreamSignal;
+import dev.langchain4j.service.InternalOutputRecoveryPolicy;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -195,6 +197,69 @@ class AiCodeGeneratorFacadeTest {
                         "writeFile", "readFile", "modifyFile", "deleteFile",
                         "readDir", "buildProject"),
                 policyCaptor.getValue().registeredToolNames());
+        var internalPolicyCaptor = org.mockito.ArgumentCaptor.forClass(
+                InternalOutputRecoveryPolicy.class);
+        verify(tokenStream).internalOutputRecoveryPolicy(
+                internalPolicyCaptor.capture());
+        assertEquals(InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
+                internalPolicyCaptor.getValue().mode());
+        context.closeResources();
+    }
+
+    @Test
+    void Vue统一信号必须按generation序列化为在线内部消息() {
+        properties.setEnabled(false);
+        UnifiedGenerationTokenStream stream =
+                new UnifiedGenerationTokenStream();
+        when(generatorService.generateVueProjectCodeStream(
+                APP_ID, RAW_QUERY)).thenReturn(stream);
+        VueTurnContext context = newVueTurnContext(
+                "unified-generation-stream");
+
+        List<String> output = facade.generateVueProjectStream(
+                        RAW_QUERY, APP_ID, false, context,
+                        generatorService)
+                .collectList().block();
+
+        assertEquals(5, output.size());
+        assertTrue(output.get(0).contains("\"type\":\"ai_response\""));
+        assertTrue(output.get(0).contains("\"generation\":1"));
+        assertTrue(output.get(1).contains("\"type\":\"tool_request\""));
+        assertTrue(output.get(1).contains("\"generation\":1"));
+        assertTrue(output.get(2).contains(
+                "\"type\":\"tool_executed\""));
+        assertTrue(output.get(2).contains("\"generation\":1"));
+        assertTrue(output.get(3).contains(
+                "\"type\":\"internal_output_rollback\""));
+        assertTrue(output.get(4).contains(
+                "\"type\":\"internal_output_recovery\""));
+        assertEquals(0, stream.legacyBusinessRegistrations.get());
+        context.closeResources();
+    }
+
+    @Test
+    void 回滚临时工具请求不得finish并补发未完成参数() {
+        properties.setEnabled(false);
+        RollbackPartialToolTokenStream stream =
+                new RollbackPartialToolTokenStream();
+        when(generatorService.generateVueProjectCodeStream(
+                APP_ID, RAW_QUERY)).thenReturn(stream);
+        VueTurnContext context = newVueTurnContext(
+                "rollback-partial-tool");
+
+        List<String> output = facade.generateVueProjectStream(
+                        RAW_QUERY, APP_ID, false, context,
+                        generatorService)
+                .collectList().block();
+
+        assertEquals(2, output.size());
+        assertTrue(output.getFirst().contains(
+                "\"type\":\"tool_request\""));
+        assertTrue(output.getLast().contains(
+                "\"type\":\"internal_output_rollback\""));
+        assertTrue(output.stream().noneMatch(message ->
+                        message.contains("tool_argument")),
+                "回滚 provisional parser 时不得 finish 补发参数");
         context.closeResources();
     }
 
@@ -1156,9 +1221,7 @@ class AiCodeGeneratorFacadeTest {
     private static final class CompleteOnlyToolRequestTokenStream
             implements TokenStream {
 
-        private BiConsumer<Integer,
-                dev.langchain4j.agent.tool.ToolExecutionRequest> completeToolHandler;
-        private Consumer<dev.langchain4j.service.tool.ToolExecution> toolHandler;
+        private Consumer<GenerationStreamSignal> generationHandler;
         private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
                 completeResponseHandler;
 
@@ -1172,7 +1235,6 @@ class AiCodeGeneratorFacadeTest {
         @Override public TokenStream onCompleteToolExecutionRequest(
                 BiConsumer<Integer,
                         dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
-            completeToolHandler = handler;
             return this;
         }
         @Override public TokenStream onRetrieved(
@@ -1181,7 +1243,11 @@ class AiCodeGeneratorFacadeTest {
         }
         @Override public TokenStream onToolExecuted(
                 Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
-            toolHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onGenerationStreamSignal(
+                Consumer<GenerationStreamSignal> handler) {
+            generationHandler = handler;
             return this;
         }
         @Override public TokenStream onCompleteResponse(
@@ -1201,13 +1267,16 @@ class AiCodeGeneratorFacadeTest {
                     .name("buildProject")
                     .arguments("{}")
                     .build();
-            completeToolHandler.accept(0, request);
-            toolHandler.accept(dev.langchain4j.service.tool.ToolExecution.builder()
-                    .request(request)
-                    .result("{\"protocol\":\"vue-build/v1\","
-                            + "\"invocationStatus\":\"COMPLETED\","
-                            + "\"success\":true,\"attempt\":1}")
-                    .build());
+            generationHandler.accept(
+                    new GenerationStreamSignal.CompleteToolRequest(
+                            1L, 0, request));
+            generationHandler.accept(new GenerationStreamSignal.ToolExecuted(
+                    1L, dev.langchain4j.service.tool.ToolExecution.builder()
+                            .request(request)
+                            .result("{\"protocol\":\"vue-build/v1\","
+                                    + "\"invocationStatus\":\"COMPLETED\","
+                                    + "\"success\":true,\"attempt\":1}")
+                            .build()));
             completeResponseHandler.accept(
                     dev.langchain4j.model.chat.response.ChatResponse.builder()
                             .aiMessage(dev.langchain4j.data.message.AiMessage.from("完成"))
@@ -1300,8 +1369,7 @@ class AiCodeGeneratorFacadeTest {
         private final AtomicInteger cancellations = new AtomicInteger();
         private final String toolName;
         private final String arguments;
-        private BiConsumer<Integer,
-                dev.langchain4j.agent.tool.ToolExecutionRequest> partialHandler;
+        private Consumer<GenerationStreamSignal> generationHandler;
         private Consumer<ToolLoopTerminationProtocol.ControlledTermination>
                 controlledHandler;
         private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
@@ -1326,7 +1394,13 @@ class AiCodeGeneratorFacadeTest {
         public TokenStream onPartialToolExecutionRequest(
                 BiConsumer<Integer,
                         dev.langchain4j.agent.tool.ToolExecutionRequest> handler) {
-            partialHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onGenerationStreamSignal(
+                Consumer<GenerationStreamSignal> handler) {
+            generationHandler = handler;
             return this;
         }
 
@@ -1389,12 +1463,15 @@ class AiCodeGeneratorFacadeTest {
 
         @Override
         public void start() {
-            partialHandler.accept(0,
-                    dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
-                            .id("tool-large")
-                            .name(toolName)
-                            .arguments(arguments)
-                            .build());
+            generationHandler.accept(
+                    new GenerationStreamSignal.PartialToolRequest(
+                            1L, 0,
+                            dev.langchain4j.agent.tool.ToolExecutionRequest
+                                    .builder()
+                                    .id("tool-large")
+                                    .name(toolName)
+                                    .arguments(arguments)
+                                    .build()));
             if (resourceTerminations.get() == 0) {
                 completeHandler.accept(null);
             }
@@ -1405,7 +1482,7 @@ class AiCodeGeneratorFacadeTest {
             implements TokenStream {
 
         private static final String SECRET = "绝不能进入SSE的完整超限代码";
-        private Consumer<dev.langchain4j.service.tool.ToolExecution> toolHandler;
+        private Consumer<GenerationStreamSignal> generationHandler;
         private Consumer<ToolLoopTerminationProtocol.ControlledTermination>
                 controlledHandler;
 
@@ -1422,7 +1499,11 @@ class AiCodeGeneratorFacadeTest {
                 Consumer<List<dev.langchain4j.rag.content.Content>> handler) { return this; }
         @Override public TokenStream onToolExecuted(
                 Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
-            toolHandler = handler;
+            return this;
+        }
+        @Override public TokenStream onGenerationStreamSignal(
+                Consumer<GenerationStreamSignal> handler) {
+            generationHandler = handler;
             return this;
         }
         @Override public TokenStream onCompleteResponse(
@@ -1450,8 +1531,9 @@ class AiCodeGeneratorFacadeTest {
                     "message":"工具内容超过本轮资源上限",\
                     "failureReason":"RESOURCE_LIMIT_EXCEEDED","content":null}
                     """;
-            toolHandler.accept(dev.langchain4j.service.tool.ToolExecution.builder()
-                    .request(request).result(result).build());
+            generationHandler.accept(new GenerationStreamSignal.ToolExecuted(
+                    1L, dev.langchain4j.service.tool.ToolExecution.builder()
+                            .request(request).result(result).build()));
         }
 
         @Override
@@ -1754,6 +1836,199 @@ class AiCodeGeneratorFacadeTest {
         @Override
         public void start() {
             beforeStart.run();
+            completeHandler.accept(dev.langchain4j.model.chat.response
+                    .ChatResponse.builder()
+                    .aiMessage(dev.langchain4j.data.message.AiMessage.from(""))
+                    .build());
+        }
+    }
+
+    private static final class UnifiedGenerationTokenStream
+            implements TokenStream {
+
+        private Consumer<GenerationStreamSignal> generationHandler;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeHandler;
+        private final AtomicInteger legacyBusinessRegistrations =
+                new AtomicInteger();
+
+        @Override
+        public TokenStream internalOutputRecoveryPolicy(
+                InternalOutputRecoveryPolicy policy) {
+            assertEquals(InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
+                    policy.mode());
+            return this;
+        }
+
+        @Override
+        public TokenStream onGenerationStreamSignal(
+                Consumer<GenerationStreamSignal> handler) {
+            generationHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialResponse(Consumer<String> handler) {
+            legacyBusinessRegistrations.incrementAndGet();
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest>
+                        handler) {
+            legacyBusinessRegistrations.incrementAndGet();
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest>
+                        handler) {
+            legacyBusinessRegistrations.incrementAndGet();
+            return this;
+        }
+
+        @Override
+        public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            legacyBusinessRegistrations.incrementAndGet();
+            return this;
+        }
+
+        @Override
+        public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                        handler) {
+            completeHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onError(Consumer<Throwable> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream ignoreErrors() {
+            return this;
+        }
+
+        @Override
+        public void start() {
+            var request = dev.langchain4j.agent.tool.ToolExecutionRequest
+                    .builder().id("tool-1").name("writeFile")
+                    .arguments("{\"relativeFilePath\":\"src/App.vue\"}")
+                    .build();
+            generationHandler.accept(
+                    new GenerationStreamSignal.AiText(1L, "正文"));
+            generationHandler.accept(
+                    new GenerationStreamSignal.CompleteToolRequest(
+                            1L, 0, request));
+            generationHandler.accept(
+                    new GenerationStreamSignal.ToolExecuted(
+                            1L, dev.langchain4j.service.tool.ToolExecution
+                            .builder().request(request).result("{}").build()));
+            generationHandler.accept(
+                    new GenerationStreamSignal.Rollback(
+                            1L, 2, Set.of()));
+            generationHandler.accept(
+                    new GenerationStreamSignal.Recovery(
+                            GenerationStreamSignal.Recovery.Phase.STARTED,
+                            1L, 2L, null));
+            completeHandler.accept(dev.langchain4j.model.chat.response
+                    .ChatResponse.builder()
+                    .aiMessage(dev.langchain4j.data.message.AiMessage.from(""))
+                    .build());
+        }
+    }
+
+    private static final class RollbackPartialToolTokenStream
+            implements TokenStream {
+
+        private Consumer<GenerationStreamSignal> generationHandler;
+        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                completeHandler;
+
+        @Override
+        public TokenStream onGenerationStreamSignal(
+                Consumer<GenerationStreamSignal> handler) {
+            generationHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialResponse(Consumer<String> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onPartialToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest>
+                        handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteToolExecutionRequest(
+                BiConsumer<Integer,
+                        dev.langchain4j.agent.tool.ToolExecutionRequest>
+                        handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onRetrieved(
+                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onToolExecuted(
+                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream onCompleteResponse(
+                Consumer<dev.langchain4j.model.chat.response.ChatResponse>
+                        handler) {
+            completeHandler = handler;
+            return this;
+        }
+
+        @Override
+        public TokenStream onError(Consumer<Throwable> handler) {
+            return this;
+        }
+
+        @Override
+        public TokenStream ignoreErrors() {
+            return this;
+        }
+
+        @Override
+        public void start() {
+            var request = dev.langchain4j.agent.tool.ToolExecutionRequest
+                    .builder()
+                    .id("provisional-1")
+                    .name("writeFile")
+                    .arguments("{\"relativeFilePath\":\"src/App.vue")
+                    .build();
+            generationHandler.accept(
+                    new GenerationStreamSignal.PartialToolRequest(
+                            1L, 0, request));
+            generationHandler.accept(new GenerationStreamSignal.Rollback(
+                    1L, 0, Set.of("provisional-1")));
             completeHandler.accept(dev.langchain4j.model.chat.response
                     .ChatResponse.builder()
                     .aiMessage(dev.langchain4j.data.message.AiMessage.from(""))

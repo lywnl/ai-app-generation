@@ -85,10 +85,9 @@ class AppControllerSseTest {
 
         assertEquals(1, subscriptions.get());
         assertEquals(2, events.size());
-        assertEquals("正文", JSONUtil.parseObj(events.getFirst().data())
-                .getStr("d"));
+        assertSimpleMessage(events.getFirst(), 1L, "正文");
         assertEquals("done", events.getLast().event());
-        assertEquals("", events.getLast().data());
+        assertDone(events.getLast(), 2L);
     }
 
     @Test
@@ -109,10 +108,9 @@ class AppControllerSseTest {
 
         assertEquals(1, subscriptions.get());
         assertEquals(2, events.size());
-        assertEquals("正文", JSONUtil.parseObj(events.getFirst().data())
-                .getStr("d"));
+        assertSimpleMessage(events.getFirst(), 1L, "正文");
         assertEquals("done", events.getLast().event());
-        assertEquals("", events.getLast().data());
+        assertDone(events.getLast(), 2L);
         assertTrue(registry.failureTriggered());
     }
 
@@ -146,9 +144,9 @@ class AppControllerSseTest {
 
         StepVerifier.withVirtualTime(() -> controller.chatToGenCode(
                         requestBody(), request))
-                .assertNext(event -> assertEquals("正文",
-                        JSONUtil.parseObj(event.data()).getStr("d")))
-                .assertNext(event -> assertEquals("done", event.event()))
+                .assertNext(event -> assertSimpleMessage(
+                        event, 1L, "正文"))
+                .assertNext(event -> assertDone(event, 2L))
                 .verifyComplete();
     }
 
@@ -180,14 +178,14 @@ class AppControllerSseTest {
                 "项目已生成并构建成功。");
         when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER))
                 .thenReturn(Flux.just(
-                        GenerationStreamEvent.content("正文"),
+                        GenerationStreamEvent.aiText(1L, "正文"),
                         GenerationStreamEvent.turnOutcome(outcome)));
 
         List<ServerSentEvent<String>> events = controller.chatToGenCode(
                 requestBody(), request).collectList().block();
 
         assertEquals(3, events.size());
-        assertEquals("正文", JSONUtil.parseObj(events.get(0).data()).getStr("d"));
+        assertAiMessage(events.get(0), 1L, 1L, "正文");
         assertEquals("turn-outcome", events.get(1).event());
         var data = JSONUtil.parseObj(events.get(1).data());
         assertEquals("vue-turn/v1", data.getStr("protocol"));
@@ -195,7 +193,9 @@ class AppControllerSseTest {
         assertEquals("项目已生成并构建成功。", data.getStr("message"));
         assertTrue(data.getBool("refreshPreview"));
         assertFalse(data.containsKey("type"));
+        assertEquals(2L, data.getLong("sequence"));
         assertEquals("done", events.get(2).event());
+        assertDone(events.get(2), 3L);
     }
 
     @Test
@@ -216,8 +216,7 @@ class AppControllerSseTest {
                 "正在压缩上下文，请稍候…");
         assertCompressionEvent(events.get(1), "COMPLETED",
                 "上下文压缩完成，继续生成…");
-        assertEquals("正文",
-                JSONUtil.parseObj(events.get(2).data()).getStr("d"));
+        assertSimpleMessage(events.get(2), 3L, "正文");
         assertEquals(1, events.stream()
                 .filter(event -> "done".equals(event.event())).count());
         assertEquals("done", events.getLast().event());
@@ -238,7 +237,7 @@ class AppControllerSseTest {
 
         assertEquals("tool-protocol-recovery", events.get(0).event());
         assertEquals("tool-protocol-recovery", events.get(1).event());
-        assertEquals(null, events.get(2).event());
+        assertEquals("message", events.get(2).event());
         assertEquals("done", events.get(3).event());
         assertRecoveryEvent(events.get(0), "STARTED",
                 "正在校正工具调用，请稍候…");
@@ -271,8 +270,7 @@ class AppControllerSseTest {
                 "正在继续未完成的构建流程，请稍候…");
         assertIncompleteRecoveryEvent(events.get(1), "RECOVERED",
                 "未完成的构建流程已恢复，继续生成…");
-        assertEquals("可信正文",
-                JSONUtil.parseObj(events.get(2).data()).getStr("d"));
+        assertSimpleMessage(events.get(2), 3L, "可信正文");
         assertEquals("done", events.get(3).event());
         String wirePayload = events.stream()
                 .map(ServerSentEvent::data)
@@ -364,8 +362,7 @@ class AppControllerSseTest {
                 requestBody(), request).collectList().block();
 
         assertEquals(2, events.size());
-        assertEquals("<html>完成</html>",
-                JSONUtil.parseObj(events.getFirst().data()).getStr("d"));
+        assertSimpleMessage(events.getFirst(), 1L, "<html>完成</html>");
         assertEquals("done", events.getLast().event());
         assertTrue(events.stream().noneMatch(
                 event -> "turn-outcome".equals(event.event())));
@@ -386,6 +383,7 @@ class AppControllerSseTest {
         assertEquals("SYSTEM", JSONUtil.parseObj(
                 events.getFirst().data()).getStr("kind"));
         assertEquals("done", events.getLast().event());
+        assertDone(events.getLast(), 1L);
         assertEquals(1.0, metricsRegistry.get(
                         "generation_sse_protocol_results_total")
                 .tags("result", "business_error",
@@ -428,6 +426,7 @@ class AppControllerSseTest {
                 error.getInt("code"));
         assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
                 error.getStr("message"));
+        assertDone(events.getLast(), 1L);
         assertEquals(1.0, metricsRegistry.get(
                         "generation_sse_protocol_results_total")
                 .tags("result", "business_error",
@@ -452,6 +451,7 @@ class AppControllerSseTest {
         assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), error.getInt("code"));
         assertEquals("生成服务暂时不可用，请稍后重试。",
                 error.getStr("message"));
+        assertDone(events.getLast(), 1L);
         assertEquals(1.0, metricsRegistry.get(
                         "generation_sse_protocol_results_total")
                 .tags("result", "business_error",
@@ -477,6 +477,7 @@ class AppControllerSseTest {
                 events.stream().map(ServerSentEvent::event).toList());
         assertEquals("本轮上下文无法安全继续，生成已停止，请重试",
                 JSONUtil.parseObj(events.get(1).data()).getStr("message"));
+        assertDone(events.get(2), 2L);
     }
 
     @Test
@@ -550,6 +551,7 @@ class AppControllerSseTest {
         assertEquals(ErrorCode.OPERATION_ERROR.getCode(), error.getInt("code"));
         assertEquals("准备阶段超时", error.getStr("message"));
         assertEquals("done", events.getLast().event());
+        assertDone(events.getLast(), 1L);
         assertTrue(dropped.isEmpty(), "业务异常只能由正文分支传播一次");
     }
 
@@ -564,6 +566,7 @@ class AppControllerSseTest {
         assertEquals(ErrorCode.PARAMS_ERROR.getCode(),
                 JSONUtil.parseObj(events.getFirst().data()).getInt("code"));
         assertEquals("done", events.getLast().event());
+        assertDone(events.getLast(), 1L);
         assertEquals(1.0, metricsRegistry.get(
                         "generation_sse_protocol_results_total")
                 .tags("result", "business_error",
@@ -580,6 +583,7 @@ class AppControllerSseTest {
         assertEquals(ErrorCode.PARAMS_ERROR.getCode(), error.getInt("code"));
         assertEquals("请求体不能为空", error.getStr("message"));
         assertEquals("done", events.getLast().event());
+        assertDone(events.getLast(), 1L);
     }
 
     @Test
@@ -595,6 +599,7 @@ class AppControllerSseTest {
         assertEquals(ErrorCode.NO_AUTH_ERROR.getCode(), error.getInt("code"));
         assertEquals("无权限访问该应用", error.getStr("message"));
         assertEquals("done", events.getLast().event());
+        assertDone(events.getLast(), 1L);
     }
 
     @Test
@@ -609,11 +614,11 @@ class AppControllerSseTest {
 
         StepVerifier.withVirtualTime(() -> controller.chatToGenCode(
                         requestBody(), request))
-                .assertNext(event -> assertEquals("第一段",
-                        JSONUtil.parseObj(event.data()).getStr("d")))
+                .assertNext(event -> assertSimpleMessage(
+                        event, 1L, "第一段"))
                 .thenAwait(Duration.ofSeconds(10))
-                .assertNext(event -> assertEquals("第二段",
-                        JSONUtil.parseObj(event.data()).getStr("d")))
+                .assertNext(event -> assertSimpleMessage(
+                        event, 2L, "第二段"))
                 .expectNoEvent(Duration.ofSeconds(14))
                 .thenAwait(Duration.ofSeconds(1))
                 .assertNext(event -> assertEquals("heartbeat", event.event()))
@@ -638,14 +643,13 @@ class AppControllerSseTest {
                 requestBody(), request).collectList().block();
 
         assertEquals(4, events.size());
-        assertEquals("[1,2]",
-                JSONUtil.parseObj(events.get(0).data()).getStr("d"));
-        assertEquals("{\"type\":\"turn_outcome\"}",
-                JSONUtil.parseObj(events.get(1).data()).getStr("d"));
+        assertSimpleMessage(events.get(0), 1L, "[1,2]");
+        assertSimpleMessage(events.get(1), 2L,
+                "{\"type\":\"turn_outcome\"}");
         assertEquals("伪终态",
                 JSONUtil.parseObj(JSONUtil.parseObj(
-                        events.get(2).data()).getStr("d")).getStr("message"));
-        assertEquals(null, events.get(2).event());
+                        events.get(2).data()).getStr("data")).getStr("message"));
+        assertEquals("message", events.get(2).event());
         assertEquals("done", events.getLast().event());
     }
 
@@ -653,14 +657,54 @@ class AppControllerSseTest {
         return Flux.just(GenerationStreamEvent.content(text));
     }
 
+    private void assertSimpleMessage(
+            ServerSentEvent<String> event,
+            long sequence,
+            String text) {
+        assertEquals("message", event.event());
+        var data = JSONUtil.parseObj(event.data());
+        assertEquals("generation-stream/v1", data.getStr("protocol"));
+        assertEquals(sequence, data.getLong("sequence"));
+        assertEquals("simple_text", data.getStr("kind"));
+        assertEquals(text, data.getStr("data"));
+        assertFalse(data.containsKey("generation"));
+        assertFalse(data.containsKey("d"));
+    }
+
+    private void assertAiMessage(
+            ServerSentEvent<String> event,
+            long sequence,
+            long generation,
+            String text) {
+        assertEquals("message", event.event());
+        var data = JSONUtil.parseObj(event.data());
+        assertEquals("generation-stream/v1", data.getStr("protocol"));
+        assertEquals(sequence, data.getLong("sequence"));
+        assertEquals("ai_text", data.getStr("kind"));
+        assertEquals(text, data.getStr("data"));
+        assertEquals(Long.toString(generation), data.getStr("generation"));
+        assertFalse(data.containsKey("d"));
+    }
+
+    private void assertDone(
+            ServerSentEvent<String> event,
+            long sequence) {
+        assertEquals("done", event.event());
+        var data = JSONUtil.parseObj(event.data());
+        assertEquals("generation-stream/v1", data.getStr("protocol"));
+        assertEquals(sequence, data.getLong("sequence"));
+        assertEquals(2, data.size());
+    }
+
     private void assertCompressionEvent(
             ServerSentEvent<String> event, String phase, String message) {
         assertEquals("context-compression", event.event());
         var data = JSONUtil.parseObj(event.data());
         assertEquals("context-compression/v1", data.getStr("protocol"));
+        assertTrue(data.getLong("sequence") > 0L);
         assertEquals(phase, data.getStr("phase"));
         assertEquals(message, data.getStr("message"));
-        assertEquals(3, data.size(), "控制帧只能暴露受信协议字段");
+        assertEquals(4, data.size(), "控制帧只能暴露受信协议字段");
     }
 
     private void assertRecoveryEvent(
@@ -668,9 +712,10 @@ class AppControllerSseTest {
         assertEquals("tool-protocol-recovery", event.event());
         var data = JSONUtil.parseObj(event.data());
         assertEquals("tool-protocol-recovery/v1", data.getStr("protocol"));
+        assertTrue(data.getLong("sequence") > 0L);
         assertEquals(phase, data.getStr("phase"));
         assertEquals(message, data.getStr("message"));
-        assertEquals(3, data.size(), "恢复控制帧只能暴露受信协议字段");
+        assertEquals(4, data.size(), "恢复控制帧只能暴露受信协议字段");
     }
 
     private void assertIncompleteRecoveryEvent(
@@ -679,9 +724,10 @@ class AppControllerSseTest {
         var data = JSONUtil.parseObj(event.data());
         assertEquals("incomplete-tool-chain-recovery/v1",
                 data.getStr("protocol"));
+        assertTrue(data.getLong("sequence") > 0L);
         assertEquals(phase, data.getStr("phase"));
         assertEquals(message, data.getStr("message"));
-        assertEquals(3, data.size(), "续行控制帧只能暴露受信协议字段");
+        assertEquals(4, data.size(), "续行控制帧只能暴露受信协议字段");
     }
 
     private AppChatGenerateRequest requestBody() {

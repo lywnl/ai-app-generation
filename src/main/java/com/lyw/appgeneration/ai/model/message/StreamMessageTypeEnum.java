@@ -13,6 +13,10 @@ public enum StreamMessageTypeEnum {
     TOOL_ARGUMENT("tool_argument", "工具参数完成"),
     TOOL_ARGUMENT_DELTA("tool_argument_delta", "工具参数增量"),
     TOOL_EXECUTED("tool_executed", "工具执行结果"),
+    INTERNAL_OUTPUT_ROLLBACK(
+            "internal_output_rollback", "内部输出回滚"),
+    INTERNAL_OUTPUT_RECOVERY(
+            "internal_output_recovery", "内部输出恢复"),
     TURN_OUTCOME("turn_outcome", "回合终态");
 
     private final String value;

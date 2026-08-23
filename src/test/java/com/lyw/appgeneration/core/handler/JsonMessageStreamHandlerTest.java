@@ -92,7 +92,7 @@ class JsonMessageStreamHandlerTest {
         });
 
         List<GenerationStreamEvent> output = handler.handle(Flux.just(
-                "{\"type\":\"ai_response\",\"data\":\"正文\"}"), context)
+                "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"正文\"}"), context)
                 .collectList().block();
 
         assertEquals("正文", contentText(output.getFirst()));
@@ -118,7 +118,7 @@ class JsonMessageStreamHandlerTest {
         });
 
         List<GenerationStreamEvent> output = handler.handle(Flux.just(
-                "{\"type\":\"ai_response\",\"data\":\"当前布局使用卡片式结构。\"}"),
+                "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"当前布局使用卡片式结构。\"}"),
                 context).collectList().block();
 
         assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
@@ -151,7 +151,7 @@ class JsonMessageStreamHandlerTest {
         });
 
         List<GenerationStreamEvent> output = handler.handle(Flux.just(
-                "{\"type\":\"ai_response\",\"data\":\"只读回答\"}"), context)
+                "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"只读回答\"}"), context)
                 .collectList().block();
 
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
@@ -185,13 +185,14 @@ class JsonMessageStreamHandlerTest {
         });
         String buildEvent = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "build-answered")
                 .set("name", "buildProject")
                 .set("arguments", "{}")
                 .set("result", buildResult));
 
         List<GenerationStreamEvent> output = handler.handle(Flux.just(buildEvent,
-                "{\"type\":\"ai_response\",\"data\":\"只读回答\"}"), context)
+                "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"只读回答\"}"), context)
                 .collectList().block();
 
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
@@ -223,13 +224,14 @@ class JsonMessageStreamHandlerTest {
 
         String toolEvent = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "read-1")
                 .set("name", "readFile")
                 .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
                 .set("result", result));
         List<GenerationStreamEvent> output = handler.handle(Flux.just(
                 toolEvent,
-                "{\"type\":\"ai_response\",\"data\":\"首页使用 Vue 组件。\"}"),
+                "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"首页使用 Vue 组件。\"}"),
                 context).collectList().block();
 
         assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
@@ -247,7 +249,7 @@ class JsonMessageStreamHandlerTest {
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
         Flux<GenerationStreamEvent> business = handler.handle(
-                Flux.just("{\"type\":\"ai_response\",\"data\":\"正文\"}"),
+                Flux.just("{\"type\":\"ai_response\",\"generation\":1,\"data\":\"正文\"}"),
                 context);
         Flux<GenerationStreamEvent> merged = context.mergeProgress(
                 Flux.defer(() -> {
@@ -322,12 +324,14 @@ class JsonMessageStreamHandlerTest {
                 toolManager, realFinalizer, cancellationCoordinator);
         String writeExecuted = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "write-recovered")
                 .set("name", "writeFile")
                 .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
                 .set("result", writeResult));
         String buildExecuted = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "build-recovered")
                 .set("name", "buildProject")
                 .set("arguments", "{}")
@@ -338,7 +342,7 @@ class JsonMessageStreamHandlerTest {
             return Flux.concat(
                     Flux.just(JSONUtil.toJsonStr(
                             new com.lyw.appgeneration.ai.model.message
-                                    .AiResponseMessage("可信前缀"))),
+                                    .AiResponseMessage(1L, "可信前缀"))),
                     Mono.fromRunnable(() ->
                                     context.publishToolProtocolRecovery(
                                             ToolProtocolRecoveryMessage
@@ -349,7 +353,7 @@ class JsonMessageStreamHandlerTest {
                                     JSONUtil.toJsonStr(
                                             new com.lyw.appgeneration.ai.model
                                                     .message.AiResponseMessage(
-                                                    "纠正完成")))));
+                                                    1L, "纠正完成")))));
         });
 
         List<GenerationStreamEvent> events = context.mergeProgress(
@@ -367,7 +371,7 @@ class JsonMessageStreamHandlerTest {
                         .map(event -> event.message().phase())
                         .toList());
         String clientPayload = events.stream().map(event -> switch (event) {
-            case GenerationStreamEvent.Content content -> content.text();
+            case GenerationStreamEvent.SimpleText content -> content.text();
             case GenerationStreamEvent.ToolProtocolRecovery recovery ->
                     recovery.message().message();
             case GenerationStreamEvent.TurnOutcome outcome ->
@@ -375,6 +379,13 @@ class JsonMessageStreamHandlerTest {
             case GenerationStreamEvent.ContextCompression ignored -> "";
             case GenerationStreamEvent.IncompleteToolChainRecovery recovery ->
                     recovery.message().message();
+            case GenerationStreamEvent.AiText aiText -> aiText.text();
+            case GenerationStreamEvent.StructuredToolEvent toolEvent ->
+                    toolEvent.json();
+            case GenerationStreamEvent.TrustedToolDisplay display ->
+                    display.message().text();
+            case GenerationStreamEvent.Rollback ignored -> "";
+            case GenerationStreamEvent.InternalRecovery ignored -> "";
         }).reduce("", String::concat);
         assertFalse(clientPayload.contains(pseudoToolText));
         assertFalse(clientPayload.contains("不得泄漏的伪源码"));
@@ -493,12 +504,12 @@ class JsonMessageStreamHandlerTest {
 
         String oversized = "A".repeat(canonicalLimit + 16);
         List<GenerationStreamEvent> output = handler.handle(Flux.just(
-                        "{\"type\":\"ai_response\",\"data\":\""
+                        "{\"type\":\"ai_response\",\"generation\":1,\"data\":\""
                                 + oversized + "\"}"), context)
                 .collectList().block();
 
         String visible = output.stream()
-                .filter(GenerationStreamEvent.Content.class::isInstance)
+                .filter(GenerationStreamEvent.AiText.class::isInstance)
                 .map(JsonMessageStreamHandlerTest::contentText)
                 .reduce("", String::concat);
         assertFalse(visible.contains(oversized));
@@ -525,7 +536,7 @@ class JsonMessageStreamHandlerTest {
                     requested.displayAiText());
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
-        String event = "{\"type\":\"tool_executed\",\"id\":\"tool-1\","
+        String event = "{\"type\":\"tool_executed\",\"generation\":1,\"id\":\"tool-1\","
                 + "\"name\":\"buildProject\",\"arguments\":\"{}\","
                 + "\"result\":\"{\\\"success\\\":false,"
                 + "\\\"secretLog\\\":\\\"raw\\\"}\"}";
@@ -533,7 +544,17 @@ class JsonMessageStreamHandlerTest {
         List<GenerationStreamEvent> output = handler.handle(Flux.just(event), context)
                 .collectList().block();
 
-        assertEquals(event, contentText(output.get(0)));
+        GenerationStreamEvent.StructuredToolEvent structured =
+                (GenerationStreamEvent.StructuredToolEvent) output.get(0);
+        assertEquals(1L, structured.generation());
+        JSONObject clientPayload = JSONUtil.parseObj(structured.json());
+        assertFalse(clientPayload.containsKey("generation"));
+        assertEquals("tool_executed", clientPayload.getStr("type"));
+        assertEquals("tool-1", clientPayload.getStr("id"));
+        assertEquals("buildProject", clientPayload.getStr("name"));
+        assertEquals("{}", clientPayload.getStr("arguments"));
+        assertEquals("{\"success\":false,\"secretLog\":\"raw\"}",
+                clientPayload.getStr("result"));
         assertEquals("\n\n第 1 次构建失败，正在修复\n\n",
                 contentText(output.get(1)));
         verify(tool).generateToolExecutedResult(any(JSONObject.class),
@@ -597,6 +618,7 @@ class JsonMessageStreamHandlerTest {
                 后续操作以当前磁盘文件为准。""";
         String writeExecuted = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "write-1")
                 .set("name", "writeFile")
                 .set("arguments", "{\"relativeFilePath\":\"src/App.vue\","
@@ -604,13 +626,14 @@ class JsonMessageStreamHandlerTest {
                 .set("result", writeResult));
         String buildExecuted = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "build-1")
                 .set("name", "buildProject")
                 .set("arguments", "{}")
                 .set("result", buildResult));
 
         realHandler.handle(Flux.just(
-                "{\"type\":\"ai_response\",\"data\":\"模型声称已经完成\"}",
+                "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"模型声称已经完成\"}",
                 writeExecuted, buildExecuted), context).collectList().block();
 
         verify(history).addAiMessageAndReturn(
@@ -626,7 +649,7 @@ class JsonMessageStreamHandlerTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"null-arguments", "malformed-arguments", "missing-tool"})
+    @ValueSource(strings = {"render-failure", "malformed-arguments", "missing-tool"})
     void 工具展示失败时MySQL和L0仍保留先观察到的真实事实(String failureMode) {
         VueTurnContext context = context(
                 "turn-observe-before-display-" + failureMode,
@@ -638,12 +661,12 @@ class JsonMessageStreamHandlerTest {
                 + "\"message\":\"已写入\",\"failureReason\":null,"
                 + "\"content\":null}";
         String arguments = switch (failureMode) {
-            case "null-arguments" -> null;
+            case "render-failure" -> "{}";
             case "malformed-arguments" -> "{";
             case "missing-tool" -> "{}";
             default -> throw new IllegalArgumentException(failureMode);
         };
-        if ("null-arguments".equals(failureMode)) {
+        if ("render-failure".equals(failureMode)) {
             when(toolManager.getTool("writeFile")).thenReturn(writeTool);
             when(writeTool.generateToolExecutedResult(
                     any(JSONObject.class), eq(writeResult)))
@@ -675,6 +698,7 @@ class JsonMessageStreamHandlerTest {
                 后续操作以当前磁盘文件为准。""";
         String executed = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "write-display-failure")
                 .set("name", "writeFile")
                 .set("arguments", arguments)
@@ -700,7 +724,7 @@ class JsonMessageStreamHandlerTest {
             VueTurnOutcome requested = invocation.getArgument(1);
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
-        String event = "{\"type\":\"tool_request\",\"id\":\"build-1\","
+        String event = "{\"type\":\"tool_request\",\"generation\":1,\"id\":\"build-1\","
                 + "\"name\":\"buildProject\",\"arguments\":null}";
 
         List<GenerationStreamEvent> output = handler.handle(
@@ -715,6 +739,168 @@ class JsonMessageStreamHandlerTest {
         assertFalse(realtimeRequest.containsKey("arguments"));
         assertEquals("\n\n[选择工具] 构建项目\n\n",
                 contentText(output.get(1)));
+    }
+
+    @Test
+    void 内部输出回滚只撤销失败代正文并保留已执行工具展示() {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-internal-rollback",
+                VueBuildPhase.GENERATING, VueTurnMode.READ_ONLY);
+        context.commitUser(() -> true);
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool("readFile")).thenReturn(tool);
+        String result = "{\"protocol\":\"file-tool/v1\","
+                + "\"operation\":\"readFile\",\"status\":\"APPLIED\","
+                + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
+                + "\"message\":\"已读取\",\"failureReason\":null,"
+                + "\"content\":null}";
+        when(tool.generateToolExecutedResult(any(JSONObject.class), eq(result)))
+                .thenReturn("[工具调用] 已读取 src/App.vue");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                    requested.outcome());
+            assertFalse(requested.displayAiText().contains("失败正文"));
+            assertTrue(requested.displayAiText().contains("已读取"));
+            assertTrue(requested.displayAiText().endsWith("恢复回答"));
+            assertEquals("恢复回答", requested.memoryAiText());
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        String executed = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("generation", 1L)
+                .set("id", "read-rollback")
+                .set("name", "readFile")
+                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
+                .set("result", result));
+        String rollback = JSONUtil.toJsonStr(
+                new com.lyw.appgeneration.ai.model.message
+                        .InternalOutputRollbackMessage(
+                        1L, 4, java.util.Set.of("pending-write")));
+        String recovery = JSONUtil.toJsonStr(
+                new com.lyw.appgeneration.ai.model.message
+                        .InternalOutputRecoveryMessage(
+                        dev.langchain4j.service.GenerationStreamSignal.Recovery
+                                .Phase.RECOVERED,
+                        1L, 2L, null));
+
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(
+                JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model.message
+                        .AiResponseMessage(1L, "失败正文")),
+                executed,
+                rollback,
+                recovery,
+                JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model.message
+                        .AiResponseMessage(2L, "恢复回答"))), context)
+                .collectList().block();
+
+        assertTrue(output.stream().anyMatch(
+                GenerationStreamEvent.Rollback.class::isInstance));
+        assertTrue(output.stream().anyMatch(
+                GenerationStreamEvent.InternalRecovery.class::isInstance));
+        assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
+                outcomeOf(output.getLast()).outcome());
+    }
+
+    @Test
+    void 回滚临时工具请求后同一请求标识可由恢复代重新公布() {
+        VueTurnContext context = context(
+                "turn-provisional-tool-rollback", VueBuildPhase.GENERATING);
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool("writeFile")).thenReturn(tool);
+        when(tool.generateToolRequestResponse()).thenReturn("选择写入工具");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation ->
+                new VueTurnFinalizer.FinalizationResult(
+                        invocation.getArgument(1), true));
+        String first = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
+                .message.ToolRequestMessage(
+                1L, "pending-write", "writeFile", null));
+        String rollback = JSONUtil.toJsonStr(
+                new com.lyw.appgeneration.ai.model.message
+                        .InternalOutputRollbackMessage(
+                        1L, 0, java.util.Set.of("pending-write")));
+        String recovered = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
+                .message.ToolRequestMessage(
+                2L, "pending-write", "writeFile", null));
+
+        List<GenerationStreamEvent> output = handler.handle(
+                Flux.just(first, rollback, recovered), context)
+                .collectList().block();
+
+        assertEquals(2, output.stream()
+                .filter(GenerationStreamEvent.TrustedToolDisplay.class
+                        ::isInstance)
+                .count());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{",
+            "null",
+            "[]",
+            "{}",
+            "{\"type\":\"ai_response\",\"generation\":0,\"data\":\"正文\"}",
+            "{\"type\":\"internal_output_recovery\",\"phase\":\"STARTED\",\"originalFailedGeneration\":1,\"recoveryGeneration\":null,\"failedGeneration\":null}",
+            "{\"type\":\"internal_output_recovery\",\"phase\":\"FAILED\",\"originalFailedGeneration\":1,\"recoveryGeneration\":2,\"failedGeneration\":1}"
+    })
+    void 非法在线消息必须进入协议错误而不是普通系统错误(
+            String invalidMessage) {
+        VueTurnContext context = context(
+                "turn-invalid-message-" + invalidMessage.hashCode(),
+                VueBuildPhase.GENERATING);
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                    requested.outcome());
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        List<GenerationStreamEvent> output = handler.handle(
+                Flux.just(invalidMessage), context).collectList().block();
+
+        assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                outcomeOf(output.getLast()).outcome());
+    }
+
+    @Test
+    void 结构化工具事件只允许外层携带generation() {
+        VueTurnContext context = context(
+                "turn-tool-generation-authority",
+                VueBuildPhase.GENERATING);
+        BaseTool tool = mock(BaseTool.class);
+        when(toolManager.getTool("writeFile")).thenReturn(tool);
+        when(tool.generateToolRequestResponse()).thenReturn("选择写入工具");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation ->
+                new VueTurnFinalizer.FinalizationResult(
+                        invocation.getArgument(1), true));
+        String request = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
+                .message.ToolRequestMessage(
+                1L, "write-generation", "writeFile", null));
+        String argument = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
+                .message.ToolArgumentMessage(
+                1L, "write-generation", "writeFile",
+                "relativeFilePath", "src/App.vue"));
+        String delta = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
+                .message.ToolArgumentDeltaMessage(
+                1L, "write-generation", "writeFile",
+                "content", "正文"));
+
+        List<GenerationStreamEvent> output = handler.handle(
+                Flux.just(request, argument, delta), context)
+                .collectList().block();
+
+        List<GenerationStreamEvent.StructuredToolEvent> structured = output
+                .stream()
+                .filter(GenerationStreamEvent.StructuredToolEvent.class
+                        ::isInstance)
+                .map(GenerationStreamEvent.StructuredToolEvent.class::cast)
+                .toList();
+        assertEquals(3, structured.size());
+        structured.forEach(event -> {
+            assertEquals(1L, event.generation());
+            assertFalse(JSONUtil.parseObj(event.json())
+                    .containsKey("generation"), event.json());
+        });
     }
 
     @ParameterizedTest
@@ -740,6 +926,7 @@ class JsonMessageStreamHandlerTest {
         });
         String event = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
+                .set("generation", 1L)
                 .set("id", "tool-read")
                 .set("name", toolName)
                 .set("arguments", "{\"" + pathArgument
@@ -839,7 +1026,7 @@ class JsonMessageStreamHandlerTest {
         });
 
         VueTurnOutcome outcome = outcomeOf(handler.handle(
-                        Flux.just("{\"type\":\"ai_response\",\"data\":\""
+                        Flux.just("{\"type\":\"ai_response\",\"generation\":1,\"data\":\""
                                 + JsonMessageStreamHandler.BUILD_FAILED_MESSAGE
                                 + "\"}"), context).blockLast());
 
@@ -863,7 +1050,7 @@ class JsonMessageStreamHandlerTest {
         });
 
         List<GenerationStreamEvent> output = handler.handle(Flux.concat(
-                Flux.just("{\"type\":\"ai_response\",\"data\":\""
+                Flux.just("{\"type\":\"ai_response\",\"generation\":1,\"data\":\""
                         + JsonMessageStreamHandler.BUILD_FAILED_MESSAGE + "\"}"),
                 Flux.error(new AiCodeGeneratorFacade
                         .OnlineControlledTerminationException(
@@ -897,7 +1084,7 @@ class JsonMessageStreamHandlerTest {
                 toolManager, finalizer, cancellationCoordinator, scheduler);
         Flux<String> continuous = Flux.interval(
                         Duration.ofMinutes(1), scheduler)
-                .map(index -> "{\"type\":\"ai_response\",\"data\":\"x\"}");
+                .map(index -> "{\"type\":\"ai_response\",\"generation\":1,\"data\":\"x\"}");
 
         StepVerifier.withVirtualTime(
                         () -> timedHandler.handle(continuous, context),
@@ -1082,7 +1269,7 @@ class JsonMessageStreamHandlerTest {
         JsonMessageStreamHandler takeoverHandler = new JsonMessageStreamHandler(
                 toolManager, finalizer, fixture.coordinator());
         var output = takeoverHandler.handle(Flux.concat(
-                        Flux.just("{\"type\":\"ai_response\",\"data\":\"正文\"}")
+                        Flux.just("{\"type\":\"ai_response\",\"generation\":1,\"data\":\"正文\"}")
                                 .doOnNext(ignored -> bodyPublished.countDown()),
                         Flux.never()), fixture.context())
                 .collectList().toFuture();
@@ -1275,7 +1462,17 @@ class JsonMessageStreamHandlerTest {
     }
 
     private static String contentText(GenerationStreamEvent event) {
-        return ((GenerationStreamEvent.Content) event).text();
+        return switch (event) {
+            case GenerationStreamEvent.SimpleText text -> text.text();
+            case GenerationStreamEvent.AiText text -> text.text();
+            case GenerationStreamEvent.StructuredToolEvent structured ->
+                    structured.json();
+            case GenerationStreamEvent.TrustedToolDisplay display ->
+                    display.message().text();
+            default -> throw new IllegalArgumentException(
+                    "事件不承载可见正文: "
+                            + event.getClass().getSimpleName());
+        };
     }
 
     private static VueTurnOutcome outcomeOf(GenerationStreamEvent event) {

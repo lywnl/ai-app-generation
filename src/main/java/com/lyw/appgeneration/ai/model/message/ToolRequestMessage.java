@@ -13,6 +13,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ToolRequestMessage extends StreamMessage {
 
+    private long generation;
+
     private String id;
 
     private String name;
@@ -31,5 +33,27 @@ public class ToolRequestMessage extends StreamMessage {
         this.id = id;
         this.name = name;
         this.arguments = arguments;
+    }
+
+    public ToolRequestMessage(
+            long generation, String id, String name, String arguments) {
+        super(StreamMessageTypeEnum.TOOL_REQUEST.getValue());
+        this.generation = AiResponseMessage.requirePositiveGeneration(
+                generation);
+        this.id = requireText(id, "工具请求 ID");
+        this.name = requireText(name, "工具名");
+        this.arguments = arguments;
+    }
+
+    public void setGeneration(long generation) {
+        this.generation = AiResponseMessage.requirePositiveGeneration(
+                generation);
+    }
+
+    private static String requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(field + "不能为空白");
+        }
+        return value;
     }
 }

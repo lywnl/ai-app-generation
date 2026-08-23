@@ -15,6 +15,7 @@ class TurnOutcomeMessageTest {
         String rawResult = "{\"protocol\":\"vue-build-tool/v1\",\"success\":true}";
         ToolExecutedMessage tool = new ToolExecutedMessage();
         tool.setType(StreamMessageTypeEnum.TOOL_EXECUTED.getValue());
+        tool.setGeneration(1L);
         tool.setId("build-1");
         tool.setName("buildProject");
         tool.setArguments("{}");
@@ -54,7 +55,9 @@ class TurnOutcomeMessageTest {
                 .collect(java.util.stream.Collectors.toSet());
 
         assertEquals(java.util.Set.of(
-                "Content", "TurnOutcome", "ContextCompression",
+                "SimpleText", "AiText", "StructuredToolEvent",
+                "TrustedToolDisplay", "Rollback", "InternalRecovery",
+                "TurnOutcome", "ContextCompression",
                 "ToolProtocolRecovery", "IncompleteToolChainRecovery"),
                 nestedTypes);
         assertNotNull(GenerationStreamEvent.class.getMethod(

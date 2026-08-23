@@ -69,6 +69,9 @@ class GlobalExceptionHandlerTest {
         assertTrue(body.contains("\"protocol\":\"generation-error/v1\""));
         assertTrue(body.contains("\"kind\":\"BUSINESS\""));
         assertTrue(body.contains("\"code\":40000"));
+        assertTrue(body.contains("event: done\n"
+                + "data: {\"protocol\":\"generation-stream/v1\","
+                + "\"sequence\":1}"));
         assertFalse(body.contains("Jackson"));
 
         var duplicate = handler.httpMessageNotReadableExceptionHandler(
@@ -110,6 +113,9 @@ class GlobalExceptionHandlerTest {
         assertEquals(1, count(body, "event: done"));
         assertTrue(body.indexOf("event: business-error")
                 < body.indexOf("event: done"));
+        assertTrue(body.contains("event: done\n"
+                + "data: {\"protocol\":\"generation-stream/v1\","
+                + "\"sequence\":1}"));
     }
 
     @Test

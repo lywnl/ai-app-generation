@@ -12,6 +12,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ToolArgumentMessage extends StreamMessage {
 
+    private long generation;
+
     /** tool call id */
     private String id;
     /** 工具名 */
@@ -27,5 +29,30 @@ public class ToolArgumentMessage extends StreamMessage {
         this.name = name;
         this.key = key;
         this.value = value;
+    }
+
+    public ToolArgumentMessage(
+            long generation, String id, String name,
+            String key, String value) {
+        super(StreamMessageTypeEnum.TOOL_ARGUMENT.getValue());
+        this.generation = AiResponseMessage.requirePositiveGeneration(
+                generation);
+        this.id = requireText(id, "工具请求 ID");
+        this.name = requireText(name, "工具名");
+        this.key = requireText(key, "工具参数名");
+        this.value = java.util.Objects.requireNonNull(
+                value, "工具参数值不能为空");
+    }
+
+    public void setGeneration(long generation) {
+        this.generation = AiResponseMessage.requirePositiveGeneration(
+                generation);
+    }
+
+    private static String requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(field + "不能为空白");
+        }
+        return value;
     }
 }

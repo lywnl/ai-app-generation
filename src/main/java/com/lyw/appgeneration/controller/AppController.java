@@ -1,7 +1,6 @@
 package com.lyw.appgeneration.controller;
 
 import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.annotation.AuthCheck;
 import com.lyw.appgeneration.common.BaseResponse;
@@ -19,6 +18,7 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.web.GenerationSseEncoder;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.UserService;
@@ -41,7 +41,6 @@ import reactor.core.publisher.SignalType;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Function;
 
 /**
@@ -54,8 +53,6 @@ import java.util.function.Function;
 public class AppController {
 
     private static final Duration SSE_HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
-    private static final String VUE_TURN_PROTOCOL = "vue-turn/v1";
-
     @Autowired
     private AppService appService;
 
@@ -87,6 +84,7 @@ public class AppController {
             @RequestBody AppChatGenerateRequest requestBody,
             HttpServletRequest request) {
         return Flux.defer(() -> {
+            GenerationSseEncoder encoder = new GenerationSseEncoder();
             AppLifecycleMetricsCollector.SseProtocolObservation protocolObservation =
                     appLifecycleMetricsCollector.startSseProtocolObservation();
             AppLifecycleMetricsCollector.SsePublisherObservation publisherObservation =
@@ -110,7 +108,7 @@ public class AppController {
                             this::toInitialGatePreflight);
             Flux<ServerSentEvent<String>> protocol =
                     encodeBusinessWithHeartbeat(observeVueProtocolOutcome(
-                            business, protocolObservation))
+                            business, protocolObservation), encoder)
                             .onErrorResume(
                                     GenerationPreflightException.class,
                                     error -> {
@@ -119,10 +117,11 @@ public class AppController {
                                                         .SseProtocolResult
                                                         .BUSINESS_ERROR,
                                                 errorKind(error));
-                                        return businessErrorEvent(error);
+                                        return Flux.just(
+                                                encoder.businessError(error));
                                     });
             Flux<ServerSentEvent<String>> done = Mono
-                    .fromSupplier(this::doneEvent)
+                    .fromSupplier(encoder::done)
                     .doOnNext(ignored -> protocolObservation.complete(
                             AppLifecycleMetricsCollector.SseProtocolResult.DONE,
                             AppLifecycleMetricsCollector.SseErrorKind.NONE))
@@ -198,103 +197,32 @@ public class AppController {
     }
 
     private Flux<ServerSentEvent<String>> encodeBusinessWithHeartbeat(
-            Flux<GenerationStreamEvent> business) {
+            Flux<GenerationStreamEvent> business,
+            GenerationSseEncoder encoder) {
         return business.publish(shared -> {
-            Flux<ServerSentEvent<String>> body = shared.map(this::encodeBusinessEvent);
+            Flux<ServerSentEvent<String>> body = shared.map(event ->
+                    encodeBusinessEvent(encoder, event));
             Flux<ServerSentEvent<String>> heartbeat = shared
                     .map(ignored -> 0L)
                     .onErrorComplete()
                     .startWith(0L)
                     .switchMap(ignored -> Mono.delay(SSE_HEARTBEAT_INTERVAL)
                             .repeat()
-                            .map(tick -> heartbeatEvent()))
+                            .map(tick -> encoder.heartbeat(
+                                    System.currentTimeMillis())))
                     .takeUntilOther(shared.ignoreElements().onErrorComplete());
             return Flux.merge(body, heartbeat);
         });
     }
 
     private ServerSentEvent<String> encodeBusinessEvent(
+            GenerationSseEncoder encoder,
             GenerationStreamEvent event) {
-        if (event instanceof GenerationStreamEvent.ContextCompression
-                compressionEvent) {
-            var compression = compressionEvent.message();
-            Map<String, Object> data = Map.of(
-                    "protocol", compression.protocol(),
-                    "phase", compression.phase().name(),
-                    "message", compression.message());
-            return ServerSentEvent.<String>builder()
-                    .event("context-compression")
-                    .data(JSONUtil.toJsonStr(data))
-                    .build();
+        try {
+            return encoder.business(event);
+        } catch (RuntimeException exception) {
+            throw GenerationPreflightException.system(exception);
         }
-        if (event instanceof GenerationStreamEvent.ToolProtocolRecovery
-                recoveryEvent) {
-            var recovery = recoveryEvent.message();
-            Map<String, Object> data = Map.of(
-                    "protocol", recovery.protocol(),
-                    "phase", recovery.phase().name(),
-                    "message", recovery.message());
-            return ServerSentEvent.<String>builder()
-                    .event("tool-protocol-recovery")
-                    .data(JSONUtil.toJsonStr(data))
-                    .build();
-        }
-        if (event instanceof GenerationStreamEvent.IncompleteToolChainRecovery
-                recoveryEvent) {
-            var recovery = recoveryEvent.message();
-            Map<String, Object> data = Map.of(
-                    "protocol", recovery.protocol(),
-                    "phase", recovery.phase().name(),
-                    "message", recovery.message());
-            return ServerSentEvent.<String>builder()
-                    .event("incomplete-tool-chain-recovery")
-                    .data(JSONUtil.toJsonStr(data))
-                    .build();
-        }
-        if (event instanceof GenerationStreamEvent.TurnOutcome turnEvent) {
-            var outcome = turnEvent.message();
-            Map<String, Object> data = Map.of(
-                    "protocol", VUE_TURN_PROTOCOL,
-                    "outcome", outcome.getOutcome().name(),
-                    "message", outcome.getMessage(),
-                    "refreshPreview", outcome.isShouldRefreshPreview());
-            return ServerSentEvent.<String>builder()
-                    .event("turn-outcome")
-                    .data(JSONUtil.toJsonStr(data))
-                    .build();
-        }
-        String chunk = ((GenerationStreamEvent.Content) event).text();
-        return ServerSentEvent.<String>builder()
-                .data(JSONUtil.toJsonStr(Map.of("d", chunk)))
-                .build();
-    }
-
-    private Flux<ServerSentEvent<String>> businessErrorEvent(
-            GenerationPreflightException error) {
-        Map<String, Object> data = Map.of(
-                "protocol", "generation-error/v1",
-                "kind", error.kind().name(),
-                "code", error.code(),
-                "message", error.safeMessage());
-        return Flux.just(ServerSentEvent.<String>builder()
-                .event("business-error")
-                .data(JSONUtil.toJsonStr(data))
-                .build());
-    }
-
-    private ServerSentEvent<String> heartbeatEvent() {
-        return ServerSentEvent.<String>builder()
-                .event("heartbeat")
-                .data(JSONUtil.toJsonStr(Map.of(
-                        "timestamp", System.currentTimeMillis())))
-                .build();
-    }
-
-    private ServerSentEvent<String> doneEvent() {
-        return ServerSentEvent.<String>builder()
-                .event("done")
-                .data("")
-                .build();
     }
 
     /**

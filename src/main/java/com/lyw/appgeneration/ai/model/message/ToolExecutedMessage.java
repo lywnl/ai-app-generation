@@ -14,6 +14,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ToolExecutedMessage extends StreamMessage {
 
+    private long generation;
+
     private String id;
 
     private String name;
@@ -30,9 +32,26 @@ public class ToolExecutedMessage extends StreamMessage {
         this.result = toolExecution.result();
     }
 
+    public ToolExecutedMessage(
+            long generation, ToolExecution toolExecution) {
+        super(StreamMessageTypeEnum.TOOL_EXECUTED.getValue());
+        this.generation = AiResponseMessage.requirePositiveGeneration(
+                generation);
+        this.id = toolExecution.request().id();
+        this.name = toolExecution.request().name();
+        this.arguments = toolExecution.request().arguments();
+        this.result = toolExecution.result();
+    }
+
+    public void setGeneration(long generation) {
+        this.generation = AiResponseMessage.requirePositiveGeneration(
+                generation);
+    }
+
     public ToolExecutedMessage toClientSafeCopy() {
         ToolExecutedMessage copy = new ToolExecutedMessage();
         copy.setType(getType());
+        copy.generation = generation;
         copy.id = id;
         copy.name = name;
         copy.arguments = ToolStreamMessageRedactor.safeArguments(name, arguments);

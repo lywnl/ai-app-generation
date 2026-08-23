@@ -358,7 +358,7 @@ class AppServiceImplVueTurnTest {
                 APP_ID, "需求", User.builder().id(USER_ID).build());
 
         assertEquals(0, starts.get(), "返回冷 Flux 时模型尚未启动");
-        assertEquals("raw", ((GenerationStreamEvent.Content)
+        assertEquals("raw", ((GenerationStreamEvent.SimpleText)
                 result.blockFirst()).text());
         assertEquals(1, starts.get());
         assertEquals(1.0, metricsRegistry.get("app_operations_total")
@@ -441,7 +441,7 @@ class AppServiceImplVueTurnTest {
                 .collectList().block();
 
         assertEquals(1, events.size());
-        assertEquals("raw", ((GenerationStreamEvent.Content)
+        assertEquals("raw", ((GenerationStreamEvent.SimpleText)
                 events.getFirst()).text());
         assertEquals(1, modelStarts.get());
         verify(history, times(1)).addChatMessage(

@@ -18,6 +18,7 @@ import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.web.GenerationSseEncoder;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
@@ -104,7 +105,8 @@ class AppServiceSimpleTurnLifecycleTest {
         AppController controller = new AppController();
         Flux<ServerSentEvent<String>> encoded = ReflectionTestUtils
                 .invokeMethod(controller, "encodeBusinessWithHeartbeat",
-                        service.chatToGenCode(APP_ID, "需求", user()));
+                        service.chatToGenCode(APP_ID, "需求", user()),
+                        new GenerationSseEncoder());
 
         StepVerifier.create(encoded)
                 .expectNextCount(1)

@@ -33,7 +33,7 @@ class TurnProgressChannelTest {
                 .assertNext(event -> assertCompressionPhase(
                         event, ContextCompressionMessage.Phase.COMPLETED))
                 .assertNext(event -> assertEquals("正文",
-                        ((GenerationStreamEvent.Content) event).text()))
+                        ((GenerationStreamEvent.SimpleText) event).text()))
                 .verifyComplete();
 
         assertEquals(1, businessSubscriptions.get(), "业务 Flux 不得被二次订阅");

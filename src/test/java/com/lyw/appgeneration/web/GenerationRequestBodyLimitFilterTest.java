@@ -231,6 +231,9 @@ class GenerationRequestBodyLimitFilterTest {
         assertEquals(1, count(content, "event: done"));
         assertTrue(content.indexOf("event: business-error")
                 < content.indexOf("event: done"));
+        assertTrue(content.contains("event: done\n"
+                + "data: {\"protocol\":\"generation-stream/v1\","
+                + "\"sequence\":1}"));
         return response;
     }
 

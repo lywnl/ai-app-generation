@@ -4,16 +4,24 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
+import com.lyw.appgeneration.ai.model.message.InternalOutputRecoveryMessage;
+import com.lyw.appgeneration.ai.model.message.InternalOutputRollbackMessage;
 import com.lyw.appgeneration.ai.model.message.StreamMessage;
 import com.lyw.appgeneration.ai.model.message.StreamMessageTypeEnum;
+import com.lyw.appgeneration.ai.model.message.ToolArgumentDeltaMessage;
+import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
+import com.lyw.appgeneration.ai.model.message.TrustedToolDisplayMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.tools.VueToolExecutionFact;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
+import dev.langchain4j.service.GenerationStreamSignal;
+import dev.langchain4j.service.tool.ToolExecution;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -27,6 +35,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /** 维护 Vue 正文/工具事件顺序，并把所有信号汇合为唯一稳定终态。 */
 @Slf4j
@@ -78,20 +87,18 @@ public final class JsonMessageStreamHandler {
     public Flux<GenerationStreamEvent> handle(
             Flux<String> originFlux, VueTurnContext context) {
         return Flux.defer(() -> {
-            FileToolBudgetGuard.CanonicalAccumulator display =
-                    context.budgetSession().newCanonicalAccumulator(
+            VueTurnTranscriptAccumulator transcript =
+                    new VueTurnTranscriptAccumulator(
+                            context.budgetSession(),
                             TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
             List<VueToolExecutionFact> facts = new CopyOnWriteArrayList<>();
-            FileToolBudgetGuard.CanonicalAccumulator answerMemory =
-                    context.budgetSession().newCanonicalAccumulator();
             AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
-                                    chunk, display, facts, answerMemory,
+                                    chunk, transcript, facts,
                                     seenToolIds, context))
-                    .filter(StrUtil::isNotEmpty)
-                    .map(GenerationStreamEvent::content);
+                    .filter(java.util.Objects::nonNull);
             AtomicBoolean deadlineReached = new AtomicBoolean();
             AtomicBoolean deleteTakeoverReached = new AtomicBoolean();
             Mono<Long> deadline = Mono.delay(
@@ -109,10 +116,11 @@ public final class JsonMessageStreamHandler {
                             return Flux.empty();
                         }
                         return deadlineReached.get()
-                                ? finalizeTimeout(context, display.content(), facts)
+                                ? finalizeTimeout(
+                                        context, transcript.displayText(), facts)
                                 : finalizeSignal(
-                                        context, display.content(), facts,
-                                        answerMemory.content(), null);
+                                        context, transcript.displayText(), facts,
+                                        transcript.answerMemoryText(), null);
                     }));
             Flux<GenerationStreamEvent> guardedNormalFlow = normalFlow
                     .onErrorResume(error -> {
@@ -128,13 +136,13 @@ public final class JsonMessageStreamHandler {
                                     ? Flux.empty() : Flux.error(error);
                         }
                         return finalizeSignal(
-                                context, display.content(), facts,
-                                answerMemory.content(), error);
+                                context, transcript.displayText(), facts,
+                                transcript.answerMemoryText(), error);
                     });
             Flux<GenerationStreamEvent> deleteFlow = deleteTakeover
                     .flatMapMany(request -> cancellationCoordinator
                             .requestDeleteTakeover(
-                                    context, request, display::content,
+                                    context, request, transcript::displayText,
                                     () -> VueTurnMemoryProjection.project(
                                             List.copyOf(facts),
                                             VueTurnOutcome.TurnOutcomeType.CANCELLED))
@@ -153,7 +161,7 @@ public final class JsonMessageStreamHandler {
                     .doOnCancel(() -> {
                         if (!terminalDelivered.get()) {
                             cancellationCoordinator.requestCancellation(
-                                    context, display::content,
+                                    context, transcript::displayText,
                                     () -> VueTurnMemoryProjection.project(
                                             List.copyOf(facts),
                                             VueTurnOutcome.TurnOutcomeType.CANCELLED));
@@ -280,6 +288,12 @@ public final class JsonMessageStreamHandler {
                     stripUntrustedControlledTerminal(prefix),
                     facts, SCOPE_PROTOCOL_MESSAGE, false);
         }
+        if (error instanceof VueStreamProtocolException) {
+            return outcome(phase,
+                    VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                    stripUntrustedControlledTerminal(prefix),
+                    facts, SCOPE_PROTOCOL_MESSAGE, false);
+        }
         if (error != null) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     prefix, facts, SYSTEM_ERROR_MESSAGE, false);
@@ -326,62 +340,199 @@ public final class JsonMessageStreamHandler {
         return stripTrustedTerminal(withoutFailure, SUCCESS_MESSAGE);
     }
 
-    private Flux<String> handleJsonMessageChunk(
+    private Flux<GenerationStreamEvent> handleJsonMessageChunk(
             String chunk,
-            FileToolBudgetGuard.CanonicalAccumulator display,
+            VueTurnTranscriptAccumulator transcript,
             List<VueToolExecutionFact> facts,
-            FileToolBudgetGuard.CanonicalAccumulator answerMemory,
             Set<String> seenToolIds, VueTurnContext context) {
-        StreamMessage streamMessage = JSONUtil.toBean(chunk, StreamMessage.class);
+        StreamMessage streamMessage = parseTrusted(() -> {
+            StreamMessage parsed = JSONUtil.toBean(
+                    chunk, StreamMessage.class);
+            if (parsed == null) {
+                throw new IllegalArgumentException(
+                        "Vue 在线消息不能为空");
+            }
+            return parsed;
+        });
         StreamMessageTypeEnum type = StreamMessageTypeEnum.getEnumByValue(
                 streamMessage.getType());
         if (type == null) {
-            log.error("不支持的消息类型: {}", streamMessage.getType());
-            return Flux.empty();
+            return Flux.error(new VueStreamProtocolException(
+                    "不支持的 Vue 在线消息类型"));
         }
         return switch (type) {
             case AI_RESPONSE -> {
-                String data = JSONUtil.toBean(chunk, AiResponseMessage.class).getData();
-                FileToolBudgetGuard.AppendDecision decision = display.append(data);
-                answerMemory.append(decision.acceptedPrefix());
+                AiResponseMessage message = parseTrusted(() -> {
+                    AiResponseMessage parsed = JSONUtil.toBean(
+                            chunk, AiResponseMessage.class);
+                    return new AiResponseMessage(
+                            parsed.getGeneration(), parsed.getData());
+                });
+                VueTurnTranscriptAccumulator.AppendDecision decision =
+                        transcript.appendAiText(
+                                message.getGeneration(), message.getData());
                 recordResourceLimit(context, decision);
                 yield decision.resourceLimitExceeded()
-                        ? resourceLimitAfter(decision.acceptedPrefix())
-                        : Flux.just(decision.acceptedPrefix());
+                        ? resourceLimitAfter(
+                                GenerationStreamEvent.aiText(
+                                        message.getGeneration(),
+                                        decision.acceptedPrefix()))
+                        : eventIfNotEmpty(GenerationStreamEvent.aiText(
+                                message.getGeneration(),
+                                decision.acceptedPrefix()));
             }
             case TOOL_REQUEST -> {
-                ToolRequestMessage request = JSONUtil.toBean(
-                        chunk, ToolRequestMessage.class);
+                ToolRequestMessage request = parseTrusted(() -> {
+                    ToolRequestMessage parsed = JSONUtil.toBean(
+                            chunk, ToolRequestMessage.class);
+                    return new ToolRequestMessage(
+                            parsed.getGeneration(), parsed.getId(),
+                            parsed.getName(), parsed.getArguments());
+                });
                 if (request.getId() != null && seenToolIds.add(request.getId())) {
                     String realtimeEvent = JSONUtil.toJsonStr(
                             new ToolRequestMessage(
-                                    request.getId(), request.getName(), null));
+                                    request.getGeneration(), request.getId(),
+                                    request.getName(), null));
                     String displayText = toolManager.getTool(request.getName())
                             .generateToolRequestResponse();
-                    yield Flux.just(realtimeEvent, displayText);
+                    yield Flux.just(
+                            GenerationStreamEvent.structuredToolEvent(
+                                    request.getGeneration(),
+                                    stripTransportGeneration(realtimeEvent)),
+                            GenerationStreamEvent.trustedToolDisplay(
+                                    new TrustedToolDisplayMessage(
+                                            request.getGeneration(),
+                                            request.getId(),
+                                            TrustedToolDisplayMessage.Stage
+                                                    .REQUESTED,
+                                            displayText)));
                 }
                 yield Flux.empty();
             }
             case TOOL_EXECUTED -> {
-                ToolExecutedMessage executed = JSONUtil.toBean(
-                        chunk, ToolExecutedMessage.class);
+                ToolExecutedMessage executed = parseTrusted(() ->
+                        trustedExecuted(JSONUtil.toBean(
+                                chunk, ToolExecutedMessage.class)));
                 observeTrustedFact(executed, facts);
                 JSONObject arguments = JSONUtil.parseObj(executed.getArguments());
                 BaseTool tool = toolManager.getTool(executed.getName());
                 String markdown = tool.generateToolExecutedResult(
                         arguments, executed.getResult());
                 String output = String.format("\n\n%s\n\n", markdown);
-                FileToolBudgetGuard.AppendDecision decision = display.append(output);
+                VueTurnTranscriptAccumulator.AppendDecision decision =
+                        transcript.appendTrustedToolDisplay(
+                                executed.getGeneration(), executed.getId(),
+                                output);
                 recordResourceLimit(context, decision);
+                GenerationStreamEvent structured =
+                        GenerationStreamEvent.structuredToolEvent(
+                                executed.getGeneration(),
+                                realtimeToolExecutedChunk(chunk, executed));
+                GenerationStreamEvent display =
+                        GenerationStreamEvent.trustedToolDisplay(
+                                new TrustedToolDisplayMessage(
+                                        executed.getGeneration(),
+                                        executed.getId(),
+                                        TrustedToolDisplayMessage.Stage
+                                                .EXECUTED,
+                                        decision.acceptedPrefix()));
                 yield decision.resourceLimitExceeded()
-                        ? Flux.just(realtimeToolExecutedChunk(chunk, executed))
+                        ? Flux.just(structured)
                         .concatWith(Flux.error(new ResourceLimitExceededException()))
-                        : Flux.just(realtimeToolExecutedChunk(chunk, executed),
-                        decision.acceptedPrefix());
+                        : decision.acceptedPrefix().isEmpty()
+                                ? Flux.just(structured)
+                                : Flux.just(structured, display);
             }
-            case TOOL_ARGUMENT, TOOL_ARGUMENT_DELTA -> Flux.just(chunk);
-            case TURN_OUTCOME -> Flux.empty();
+            case TOOL_ARGUMENT -> {
+                ToolArgumentMessage message = parseTrusted(() -> {
+                    ToolArgumentMessage parsed = JSONUtil.toBean(
+                            chunk, ToolArgumentMessage.class);
+                    return new ToolArgumentMessage(
+                            parsed.getGeneration(), parsed.getId(),
+                            parsed.getName(), parsed.getKey(),
+                            parsed.getValue());
+                });
+                yield Flux.just(GenerationStreamEvent.structuredToolEvent(
+                        message.getGeneration(), stripTransportGeneration(
+                                JSONUtil.toJsonStr(message))));
+            }
+            case TOOL_ARGUMENT_DELTA -> {
+                ToolArgumentDeltaMessage message = parseTrusted(() -> {
+                    ToolArgumentDeltaMessage parsed = JSONUtil.toBean(
+                            chunk, ToolArgumentDeltaMessage.class);
+                    return new ToolArgumentDeltaMessage(
+                            parsed.getGeneration(), parsed.getId(),
+                            parsed.getName(), parsed.getKey(),
+                            parsed.getDelta());
+                });
+                yield Flux.just(GenerationStreamEvent.structuredToolEvent(
+                        message.getGeneration(), stripTransportGeneration(
+                                JSONUtil.toJsonStr(message))));
+            }
+            case INTERNAL_OUTPUT_ROLLBACK -> {
+                InternalOutputRollbackMessage message = parseTrusted(() -> {
+                    InternalOutputRollbackMessage parsed = JSONUtil.toBean(
+                            chunk, InternalOutputRollbackMessage.class);
+                    return new InternalOutputRollbackMessage(
+                            parsed.getFailedGeneration(),
+                            parsed.getCodePoints(),
+                            parsed.getProvisionalToolRequestIds());
+                });
+                transcript.rollbackAiText(
+                        message.getFailedGeneration(),
+                        message.getCodePoints());
+                seenToolIds.removeAll(
+                        message.getProvisionalToolRequestIds());
+                yield Flux.just(GenerationStreamEvent.rollback(message));
+            }
+            case INTERNAL_OUTPUT_RECOVERY -> {
+                InternalOutputRecoveryMessage message = parseTrusted(() -> {
+                    InternalOutputRecoveryMessage parsed = JSONUtil.toBean(
+                            chunk, InternalOutputRecoveryMessage.class);
+                    return new InternalOutputRecoveryMessage(
+                                new GenerationStreamSignal.Recovery(
+                                        parsed.getPhase(),
+                                        parsed.getOriginalFailedGeneration(),
+                                        parsed.getRecoveryGeneration(),
+                                        parsed.getFailedGeneration()));
+                });
+                yield Flux.just(
+                        GenerationStreamEvent.internalRecovery(message));
+            }
+            case TURN_OUTCOME -> Flux.error(new VueStreamProtocolException(
+                    "模型业务流不能伪造 Vue 回合终态"));
         };
+    }
+
+    private <T> T parseTrusted(Supplier<T> parser) {
+        try {
+            return parser.get();
+        } catch (RuntimeException exception) {
+            throw new VueStreamProtocolException(
+                    "Vue 在线消息不符合受信协议", exception);
+        }
+    }
+
+    private ToolExecutedMessage trustedExecuted(
+            ToolExecutedMessage parsed) {
+        if (parsed.getId() == null || parsed.getId().isBlank()
+                || parsed.getName() == null || parsed.getName().isBlank()
+                || parsed.getArguments() == null
+                || parsed.getResult() == null) {
+            throw new IllegalArgumentException(
+                    "工具执行消息字段不完整");
+        }
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id(parsed.getId())
+                .name(parsed.getName())
+                .arguments(parsed.getArguments())
+                .build();
+        ToolExecution execution = ToolExecution.builder()
+                .request(request)
+                .result(parsed.getResult())
+                .build();
+        return new ToolExecutedMessage(parsed.getGeneration(), execution);
     }
 
     private void observeTrustedFact(
@@ -390,15 +541,23 @@ public final class JsonMessageStreamHandler {
                 .ifPresent(facts::add);
     }
 
-    private Flux<String> resourceLimitAfter(String acceptedPrefix) {
-        Flux<String> prefix = acceptedPrefix == null || acceptedPrefix.isEmpty()
+    private Flux<GenerationStreamEvent> resourceLimitAfter(
+            GenerationStreamEvent acceptedPrefix) {
+        Flux<GenerationStreamEvent> prefix = acceptedPrefix == null
+                || acceptedPrefix instanceof GenerationStreamEvent.AiText text
+                && text.text().isEmpty()
                 ? Flux.empty() : Flux.just(acceptedPrefix);
         return prefix.concatWith(Flux.error(new ResourceLimitExceededException()));
     }
 
+    private Flux<GenerationStreamEvent> eventIfNotEmpty(
+            GenerationStreamEvent.AiText event) {
+        return event.text().isEmpty() ? Flux.empty() : Flux.just(event);
+    }
+
     private void recordResourceLimit(
             VueTurnContext context,
-            FileToolBudgetGuard.AppendDecision decision) {
+            VueTurnTranscriptAccumulator.AppendDecision decision) {
         if (decision.resourceLimitExceeded()
                 && context.budgetSession().claimResourceLimit()) {
             context.recordControlledTermination(
@@ -417,12 +576,32 @@ public final class JsonMessageStreamHandler {
         }
     }
 
+    private static final class VueStreamProtocolException
+            extends IllegalStateException {
+
+        private VueStreamProtocolException(String message) {
+            super(message);
+        }
+
+        private VueStreamProtocolException(
+                String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     /** 模型继续使用原始消息，浏览器只接收脱敏副本。 */
     private String realtimeToolExecutedChunk(
             String rawChunk, ToolExecutedMessage executed) {
-        if (!CLIENT_REDACTED_FILE_TOOLS.contains(executed.getName())) {
-            return rawChunk;
-        }
-        return JSONUtil.toJsonStr(executed.toClientSafeCopy());
+        String clientChunk = CLIENT_REDACTED_FILE_TOOLS.contains(
+                executed.getName())
+                ? JSONUtil.toJsonStr(executed.toClientSafeCopy())
+                : rawChunk;
+        return stripTransportGeneration(clientChunk);
+    }
+
+    private String stripTransportGeneration(String json) {
+        JSONObject object = JSONUtil.parseObj(json);
+        object.remove("generation");
+        return JSONUtil.toJsonStr(object);
     }
 }
