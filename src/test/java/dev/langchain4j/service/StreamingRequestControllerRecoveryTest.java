@@ -4,6 +4,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -23,6 +24,161 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StreamingRequestControllerRecoveryTest {
+
+    @Test
+    void 内部恢复提交后的钩子必须先于SDK启动执行() {
+        StreamingRequestController controller = activeController();
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertEquals(CANCELLED, controller.cancelGenerationForRecovery(sourceGeneration));
+        List<String> order = new ArrayList<>();
+        GenerationAwareModelRequestOrchestrator orchestrator = new GenerationAwareModelRequestOrchestrator(
+                controller, inlineAllowingGate(), action -> {
+                    action.run();
+                    return true;
+                });
+
+        orchestrator.submit(GenerationAwareModelRequestOrchestrator.recovery(
+                sourceGeneration, null,
+                () -> List.of(UserMessage.from("恢复请求")),
+                () -> { }, () -> { },
+                generation -> {
+                    assertTrue(controller.isCurrentGeneration(generation));
+                    order.add("started-" + generation);
+                },
+                ignored -> order.add("failed"),
+                (messages, generation) -> () -> order.add("sdk-" + generation)));
+
+        assertEquals(List.of("started-2", "sdk-2"), order);
+    }
+
+    @Test
+    void 内部恢复准备失败或取消先赢不得调用启动钩子() throws Exception {
+        StreamingRequestController preparationFailure = activeController();
+        long preparationSource = preparationFailure.latestModelRequestGeneration();
+        assertEquals(CANCELLED, preparationFailure.cancelGenerationForRecovery(preparationSource));
+        AtomicInteger hooks = new AtomicInteger();
+        AtomicInteger failures = new AtomicInteger();
+        AtomicInteger cancellations = new AtomicInteger();
+        GenerationAwareModelRequestOrchestrator failureOrchestrator = new GenerationAwareModelRequestOrchestrator(
+                preparationFailure, inlineAllowingGate(), action -> {
+                    action.run();
+                    return true;
+                });
+        failureOrchestrator.submit(GenerationAwareModelRequestOrchestrator.recovery(
+                preparationSource, null, () -> List.of(UserMessage.from("恢复请求")),
+                () -> { }, () -> { }, ignored -> hooks.incrementAndGet(),
+                ignored -> failures.incrementAndGet(),
+                (messages, generation) -> {
+                    throw new IllegalStateException("准备失败");
+                }));
+        assertEquals(0, hooks.get());
+        assertEquals(1, failures.get());
+
+        StreamingRequestController cancelled = activeController();
+        long cancelledSource = cancelled.latestModelRequestGeneration();
+        assertEquals(CANCELLED, cancelled.cancelGenerationForRecovery(cancelledSource));
+        failures.set(0);
+        CountDownLatch prepareEntered = new CountDownLatch(1);
+        CountDownLatch releasePrepare = new CountDownLatch(1);
+        GenerationAwareModelRequestOrchestrator cancelledOrchestrator = new GenerationAwareModelRequestOrchestrator(
+                cancelled, inlineAllowingGate(), action -> {
+                    action.run();
+                    return true;
+                });
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> submission = executor.submit(() -> cancelledOrchestrator.submit(
+                    GenerationAwareModelRequestOrchestrator.recovery(
+                            cancelledSource, null, () -> List.of(UserMessage.from("恢复请求")),
+                            () -> { }, cancellations::incrementAndGet, ignored -> hooks.incrementAndGet(),
+                            ignored -> failures.incrementAndGet(),
+                            (messages, generation) -> {
+                                prepareEntered.countDown();
+                                await(releasePrepare);
+                                return () -> { };
+                            })));
+            assertTrue(prepareEntered.await(1, TimeUnit.SECONDS));
+            cancelled.cancel();
+            releasePrepare.countDown();
+            submission.get(1, TimeUnit.SECONDS);
+        }
+        assertEquals(0, hooks.get());
+        assertEquals(0, failures.get());
+        assertEquals(1, cancellations.get());
+    }
+
+    @Test
+    void 内部恢复SDK同步失败必须先发布启动钩子再调用失败处理器() {
+        StreamingRequestController controller = activeController();
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertEquals(CANCELLED, controller.cancelGenerationForRecovery(sourceGeneration));
+        List<String> order = new ArrayList<>();
+        GenerationAwareModelRequestOrchestrator orchestrator = new GenerationAwareModelRequestOrchestrator(
+                controller, inlineAllowingGate(), action -> {
+                    action.run();
+                    return true;
+                });
+
+        orchestrator.submit(GenerationAwareModelRequestOrchestrator.recovery(
+                sourceGeneration, null, () -> List.of(UserMessage.from("恢复请求")),
+                () -> { }, () -> { }, generation -> order.add("started-" + generation),
+                ignored -> order.add("failed"),
+                (messages, generation) -> () -> {
+                    order.add("sdk-" + generation);
+                    throw new IllegalStateException("SDK 同步失败");
+                }));
+
+        assertEquals(List.of("started-2", "sdk-2", "failed"), order);
+    }
+
+    @Test
+    void 内部恢复启动钩子抛错必须先尝试钩子再失败且不得启动SDK() {
+        StreamingRequestController controller = activeController();
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertEquals(CANCELLED, controller.cancelGenerationForRecovery(sourceGeneration));
+        List<String> order = new ArrayList<>();
+        GenerationAwareModelRequestOrchestrator orchestrator = new GenerationAwareModelRequestOrchestrator(
+                controller, inlineAllowingGate(), action -> {
+                    action.run();
+                    return true;
+                });
+
+        orchestrator.submit(GenerationAwareModelRequestOrchestrator.recovery(
+                sourceGeneration, null, () -> List.of(UserMessage.from("恢复请求")),
+                () -> { }, () -> order.add("cancelled"), generation -> {
+                    order.add("started-" + generation);
+                    throw new IllegalStateException("启动钩子失败");
+                }, ignored -> order.add("failed"),
+                (messages, generation) -> () -> order.add("sdk-" + generation)));
+
+        assertEquals(List.of("started-2", "failed"), order);
+    }
+
+    @Test
+    void 相同恢复来源竞争时仅一个提交启动钩子和SDK() throws Exception {
+        StreamingRequestController controller = activeController();
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertEquals(CANCELLED, controller.cancelGenerationForRecovery(sourceGeneration));
+        AtomicInteger hooks = new AtomicInteger();
+        AtomicInteger starts = new AtomicInteger();
+        GenerationAwareModelRequestOrchestrator orchestrator = new GenerationAwareModelRequestOrchestrator(
+                controller, inlineAllowingGate(), action -> {
+                    action.run();
+                    return true;
+                });
+        java.util.concurrent.Callable<Void> submit = () -> {
+            orchestrator.submit(GenerationAwareModelRequestOrchestrator.recovery(
+                    sourceGeneration, null, () -> List.of(UserMessage.from("恢复请求")),
+                    () -> { }, () -> { }, ignored -> hooks.incrementAndGet(),
+                    ignored -> { }, (messages, generation) -> starts::incrementAndGet));
+            return null;
+        };
+
+        race(submit, submit);
+
+        assertEquals(1, hooks.get());
+        assertEquals(1, starts.get());
+        assertEquals(2, controller.modelRequestCount());
+    }
 
     @Test
     void initial认领后启动前异常必须按新generation唯一收口() {

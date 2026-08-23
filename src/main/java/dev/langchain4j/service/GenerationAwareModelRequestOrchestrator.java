@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -263,6 +264,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 return;
             }
             submission.commitStart();
+            submission.startCommittedHandler().accept(claim.generation());
             sdkStart.run();
         } catch (RuntimeException exception) {
             failClaimedGeneration(submission, claim.generation(), exception);
@@ -357,6 +359,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 false,
                 () -> { },
                 () -> { },
+                ignored -> { },
                 failureHandler,
                 requestStarter);
     }
@@ -376,6 +379,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 false,
                 () -> { },
                 () -> { },
+                ignored -> { },
                 failureHandler,
                 requestStarter);
     }
@@ -387,6 +391,26 @@ final class GenerationAwareModelRequestOrchestrator {
             Runnable loopLimitHandler,
             Consumer<Throwable> failureHandler,
             RequestStarter requestStarter) {
+        return recovery(
+                sourceGeneration,
+                gateRequest,
+                directMessages,
+                loopLimitHandler,
+                loopLimitHandler,
+                ignored -> { },
+                failureHandler,
+                requestStarter);
+    }
+
+    static Submission recovery(
+            long sourceGeneration,
+            ModelRequestGate.Request gateRequest,
+            Supplier<List<ChatMessage>> directMessages,
+            Runnable loopLimitHandler,
+            Runnable cancellationHandler,
+            LongConsumer startCommittedHandler,
+            Consumer<Throwable> failureHandler,
+            RequestStarter requestStarter) {
         return new Submission(
                 sourceGeneration,
                 SourceKind.RECOVERY,
@@ -395,7 +419,8 @@ final class GenerationAwareModelRequestOrchestrator {
                 gateRequest,
                 true,
                 loopLimitHandler,
-                loopLimitHandler,
+                cancellationHandler,
+                startCommittedHandler,
                 failureHandler,
                 requestStarter);
     }
@@ -410,6 +435,7 @@ final class GenerationAwareModelRequestOrchestrator {
         private final boolean gateRequired;
         private final Runnable loopLimitHandler;
         private final Runnable cancellationHandler;
+        private final LongConsumer startCommittedHandler;
         private final Consumer<Throwable> failureHandler;
         private final RequestStarter requestStarter;
         private final AtomicReference<SubmissionState> state =
@@ -424,6 +450,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 boolean gateRequired,
                 Runnable loopLimitHandler,
                 Runnable cancellationHandler,
+                LongConsumer startCommittedHandler,
                 Consumer<Throwable> failureHandler,
                 RequestStarter requestStarter) {
             if (sourceGeneration < 0L) {
@@ -443,6 +470,8 @@ final class GenerationAwareModelRequestOrchestrator {
                     loopLimitHandler, "模型循环上限处理器不能为空");
             this.cancellationHandler = Objects.requireNonNull(
                     cancellationHandler, "模型请求取消处理器不能为空");
+            this.startCommittedHandler = Objects.requireNonNull(
+                    startCommittedHandler, "模型启动提交处理器不能为空");
             this.failureHandler = Objects.requireNonNull(
                     failureHandler, "模型请求失败处理器不能为空");
             this.requestStarter = Objects.requireNonNull(
@@ -483,6 +512,10 @@ final class GenerationAwareModelRequestOrchestrator {
 
         private Consumer<Throwable> failureHandler() {
             return failureHandler;
+        }
+
+        private LongConsumer startCommittedHandler() {
+            return startCommittedHandler;
         }
 
         private RequestStarter requestStarter() {
