@@ -82,7 +82,7 @@ public class VueReadOnlyIntentPolicy {
         if (!message.startsWith(prefix)) {
             return false;
         }
-        return isEngineeringSubject(message.substring(prefix.length()));
+        return isEngineeringSubject(message.substring(prefix.length()), "当前");
     }
 
     private boolean isComponentListQuery(String message) {
@@ -99,7 +99,7 @@ public class VueReadOnlyIntentPolicy {
             return false;
         }
         return isEngineeringSubject(message.substring("当前".length(),
-                message.length() - "是什么".length()));
+                message.length() - "是什么".length()), "当前");
     }
 
     private boolean isReasonQuery(String message) {
@@ -128,27 +128,35 @@ public class VueReadOnlyIntentPolicy {
     }
 
     private boolean isEngineeringSubject(String subject) {
+        return isEngineeringSubject(subject, null);
+    }
+
+    /** 外层句式已消费的限定词只修饰首段，关系后的对象按自身限定词独立校验。 */
+    private boolean isEngineeringSubject(String subject, String inheritedQualifier) {
         int index = 0;
+        boolean firstSegment = true;
         while (index < subject.length()) {
             int relationIndex = nextRelationIndex(subject, index);
             int segmentEnd = relationIndex < 0 ? subject.length() : relationIndex;
-            if (!isEngineeringSegment(subject.substring(index, segmentEnd))) {
+            String segmentQualifier = firstSegment ? inheritedQualifier : null;
+            if (!isEngineeringSegment(subject.substring(index, segmentEnd), segmentQualifier)) {
                 return false;
             }
             if (relationIndex < 0) {
                 return true;
             }
             index = relationIndex + relationLength(subject, relationIndex);
+            firstSegment = false;
         }
         return false;
     }
 
     /** 工程对象只允许“限定词* + 实体”，并可用“的/中的”连接多个此类片段。 */
-    private boolean isEngineeringSegment(String segment) {
+    private boolean isEngineeringSegment(String segment, String inheritedQualifier) {
         int index = 0;
         String qualifier;
         while ((qualifier = matchingPrefix(segment, index, ENGINEERING_QUALIFIERS)) != null) {
-            if (isRepeatedOrConflictingQualifier(segment, qualifier, index)) {
+            if (isRepeatedOrConflictingQualifier(segment, qualifier, index, inheritedQualifier)) {
                 return false;
             }
             index += qualifier.length();
@@ -157,12 +165,37 @@ public class VueReadOnlyIntentPolicy {
         return entity != null && index + entity.length() == segment.length();
     }
 
-    private boolean isRepeatedOrConflictingQualifier(String segment, String qualifier, int index) {
+    private boolean isRepeatedOrConflictingQualifier(
+            String segment, String qualifier, int index, String inheritedQualifier) {
         if (segment.indexOf(qualifier) < index) {
             return true;
         }
-        return (qualifier.equals("显示") && segment.indexOf("隐藏") >= 0)
-                || (qualifier.equals("隐藏") && segment.indexOf("显示") >= 0);
+        return isSameQualifierGroup(qualifier, inheritedQualifier)
+                || isQualifierGroupPresent(segment, qualifier);
+    }
+
+    private boolean isQualifierGroupPresent(String segment, String qualifier) {
+        return (qualifier.equals("当前") && segment.contains("现在"))
+                || (qualifier.equals("现在") && segment.contains("当前"))
+                || (qualifier.equals("显示") && segment.contains("隐藏"))
+                || (qualifier.equals("隐藏") && segment.contains("显示"));
+    }
+
+    private boolean isSameQualifierGroup(String qualifier, String inheritedQualifier) {
+        if (inheritedQualifier == null) {
+            return false;
+        }
+        return qualifier.equals(inheritedQualifier)
+                || (isTimeQualifier(qualifier) && isTimeQualifier(inheritedQualifier))
+                || (isVisibilityQualifier(qualifier) && isVisibilityQualifier(inheritedQualifier));
+    }
+
+    private boolean isTimeQualifier(String qualifier) {
+        return qualifier.equals("当前") || qualifier.equals("现在");
+    }
+
+    private boolean isVisibilityQualifier(String qualifier) {
+        return qualifier.equals("显示") || qualifier.equals("隐藏");
     }
 
     private int nextRelationIndex(String subject, int startIndex) {
