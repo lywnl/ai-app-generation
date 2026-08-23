@@ -7,6 +7,7 @@ import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
 import com.lyw.appgeneration.ai.VueToolNames;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
+import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
@@ -37,6 +38,8 @@ import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.IncompleteToolChainRecoveryPolicy;
+import dev.langchain4j.service.InternalOutputProtocolException;
+import dev.langchain4j.service.InternalOutputRecoveryPolicy;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -164,6 +167,8 @@ public class AiCodeGeneratorFacade {
         }
         TokenStream tokenStream = createSimpleCodeStream(
                 userMessage, codeGenTypeEnum, isFirstMessage, generatorService);
+        tokenStream.internalOutputRecoveryPolicy(
+                simpleInternalOutputRecoveryPolicy());
         tokenStream.modelRequestGate(modelRequestGate, context);
         Flux<String> source = processSimpleTokenStream(tokenStream, context);
         return progressCodeStream(source, codeGenTypeEnum, appId, context);
@@ -192,6 +197,17 @@ public class AiCodeGeneratorFacade {
             default -> throw new IllegalArgumentException(
                     "普通生成入口只支持 HTML 和 MULTI_FILE");
         });
+    }
+
+    private InternalOutputRecoveryPolicy
+            simpleInternalOutputRecoveryPolicy() {
+        return new InternalOutputRecoveryPolicy(
+                InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                SyntheticMemoryMessageProtocol.RESERVED_PREFIX,
+                Set.of(
+                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK,
+                        SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK,
+                        SyntheticMemoryMessageProtocol.L2_PREFERENCE_ACK));
     }
 
     /**
@@ -224,10 +240,8 @@ public class AiCodeGeneratorFacade {
                             }
                         })
                         .onControlledTermination(ignored -> {
-                            if (terminated.compareAndSet(false, true)
-                                    && !sink.isCancelled()) {
-                                sink.complete();
-                            }
+                            finishSimpleControlledTermination(
+                                    ignored, terminated, sink);
                         })
                         .onCompleteResponse(ignored -> {
                             if (terminated.compareAndSet(false, true)
@@ -254,6 +268,23 @@ public class AiCodeGeneratorFacade {
                 }
             }
         });
+    }
+
+    private void finishSimpleControlledTermination(
+            ToolLoopTerminationProtocol.ControlledTermination termination,
+            AtomicBoolean terminated,
+            reactor.core.publisher.FluxSink<String> sink) {
+        if (!terminated.compareAndSet(false, true)
+                || sink.isCancelled()) {
+            return;
+        }
+        if (termination.reason()
+                == ToolLoopTerminationProtocol
+                .ControlledTerminationReason.PROTOCOL_ERROR) {
+            sink.error(new InternalOutputProtocolException());
+        } else {
+            sink.complete();
+        }
     }
 
     /**

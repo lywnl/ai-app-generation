@@ -10,6 +10,8 @@ import java.util.function.Consumer;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 
+import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR;
+
 /**
  * 统一模型请求的门禁、代次认领与 SDK 启动边界。
  *
@@ -315,16 +317,11 @@ final class GenerationAwareModelRequestOrchestrator {
         if (!submission.closePending()) {
             return;
         }
-        boolean claimed = submission.sourceKind() == SourceKind.RECOVERY
-                ? requestController.claimRecoverySourceFailure(
-                        submission.sourceGeneration())
-                : requestController.claimErrorCompletion(
-                        submission.sourceGeneration());
-        if (claimed) {
-            submission.failureHandler().accept(failure);
-        } else {
-            submission.cancellationHandler().run();
-        }
+        completeFailure(
+                submission,
+                submission.sourceGeneration(),
+                true,
+                failure);
     }
 
     private void failClaimedGeneration(
@@ -333,11 +330,52 @@ final class GenerationAwareModelRequestOrchestrator {
         if (!submission.closeOwned()) {
             return;
         }
-        if (requestController.claimErrorCompletion(claimedGeneration)) {
-            submission.failureHandler().accept(failure);
-        } else {
+        completeFailure(submission, claimedGeneration, false, failure);
+    }
+
+    private void completeFailure(
+            Submission submission,
+            long failedGeneration,
+            boolean sourceFailure,
+            Throwable failure) {
+        boolean claimed = claimFailureTerminal(
+                submission, failedGeneration, sourceFailure);
+        if (!claimed) {
             submission.cancellationHandler().run();
+            return;
         }
+        if (submission.failureTerminal() == FailureTerminal.NORMAL_ERROR) {
+            submission.failureHandler().accept(failure);
+            return;
+        }
+        try {
+            submission.failureHandler().accept(failure);
+        } finally {
+            requestController.dispatchClaimedTermination();
+        }
+    }
+
+    private boolean claimFailureTerminal(
+            Submission submission,
+            long failedGeneration,
+            boolean sourceFailure) {
+        if (submission.failureTerminal() == FailureTerminal.NORMAL_ERROR) {
+            return sourceFailure
+                    && submission.sourceKind() == SourceKind.RECOVERY
+                    ? requestController.claimRecoverySourceFailure(
+                            submission.sourceGeneration())
+                    : requestController.claimErrorCompletion(
+                            failedGeneration);
+        }
+        ToolLoopTerminationProtocol.ControlledTermination termination =
+                new ToolLoopTerminationProtocol.ControlledTermination(
+                        PROTOCOL_ERROR, null);
+        return sourceFailure
+                && submission.sourceKind() == SourceKind.RECOVERY
+                ? requestController.claimRecoverySourceControlledTermination(
+                        submission.sourceGeneration(), termination)
+                : requestController.claimControlledTermination(
+                        failedGeneration, termination);
     }
 
     enum SourceKind {
@@ -360,6 +398,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 () -> { },
                 () -> { },
                 ignored -> { },
+                FailureTerminal.NORMAL_ERROR,
                 failureHandler,
                 requestStarter);
     }
@@ -380,6 +419,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 () -> { },
                 () -> { },
                 ignored -> { },
+                FailureTerminal.NORMAL_ERROR,
                 failureHandler,
                 requestStarter);
     }
@@ -421,6 +461,31 @@ final class GenerationAwareModelRequestOrchestrator {
                 loopLimitHandler,
                 cancellationHandler,
                 startCommittedHandler,
+                FailureTerminal.NORMAL_ERROR,
+                failureHandler,
+                requestStarter);
+    }
+
+    static Submission internalProtocolRecovery(
+            long sourceGeneration,
+            ModelRequestGate.Request gateRequest,
+            Supplier<List<ChatMessage>> directMessages,
+            Runnable loopLimitHandler,
+            Runnable cancellationHandler,
+            LongConsumer startCommittedHandler,
+            Consumer<Throwable> failureHandler,
+            RequestStarter requestStarter) {
+        return new Submission(
+                sourceGeneration,
+                SourceKind.RECOVERY,
+                ModelRequestGateException.Stage.CONTINUATION,
+                directMessages,
+                gateRequest,
+                true,
+                loopLimitHandler,
+                cancellationHandler,
+                startCommittedHandler,
+                FailureTerminal.PROTOCOL_ERROR,
                 failureHandler,
                 requestStarter);
     }
@@ -436,6 +501,7 @@ final class GenerationAwareModelRequestOrchestrator {
         private final Runnable loopLimitHandler;
         private final Runnable cancellationHandler;
         private final LongConsumer startCommittedHandler;
+        private final FailureTerminal failureTerminal;
         private final Consumer<Throwable> failureHandler;
         private final RequestStarter requestStarter;
         private final AtomicReference<SubmissionState> state =
@@ -451,6 +517,7 @@ final class GenerationAwareModelRequestOrchestrator {
                 Runnable loopLimitHandler,
                 Runnable cancellationHandler,
                 LongConsumer startCommittedHandler,
+                FailureTerminal failureTerminal,
                 Consumer<Throwable> failureHandler,
                 RequestStarter requestStarter) {
             if (sourceGeneration < 0L) {
@@ -472,6 +539,8 @@ final class GenerationAwareModelRequestOrchestrator {
                     cancellationHandler, "模型请求取消处理器不能为空");
             this.startCommittedHandler = Objects.requireNonNull(
                     startCommittedHandler, "模型启动提交处理器不能为空");
+            this.failureTerminal = Objects.requireNonNull(
+                    failureTerminal, "模型请求失败终态不能为空");
             this.failureHandler = Objects.requireNonNull(
                     failureHandler, "模型请求失败处理器不能为空");
             this.requestStarter = Objects.requireNonNull(
@@ -514,6 +583,10 @@ final class GenerationAwareModelRequestOrchestrator {
             return failureHandler;
         }
 
+        private FailureTerminal failureTerminal() {
+            return failureTerminal;
+        }
+
         private LongConsumer startCommittedHandler() {
             return startCommittedHandler;
         }
@@ -554,6 +627,11 @@ final class GenerationAwareModelRequestOrchestrator {
             }
             return false;
         }
+    }
+
+    private enum FailureTerminal {
+        NORMAL_ERROR,
+        PROTOCOL_ERROR
     }
 
     private enum SubmissionState {

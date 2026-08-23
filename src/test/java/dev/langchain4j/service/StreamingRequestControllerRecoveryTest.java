@@ -16,6 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dev.langchain4j.service.StreamingRequestController.GenerationCancellation.CANCELLED;
 import static dev.langchain4j.service.StreamingRequestController.GenerationCancellation.REJECTED;
+import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR;
 import static dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -24,6 +25,107 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StreamingRequestControllerRecoveryTest {
+
+    @Test
+    void 内部协议恢复门禁失败必须由控制器认领唯一协议终态() {
+        StreamingRequestController controller = activeController();
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertEquals(CANCELLED,
+                controller.cancelGenerationForRecovery(sourceGeneration));
+        AtomicInteger failures = new AtomicInteger();
+        AtomicInteger terminations = new AtomicInteger();
+        controller.onControlledTermination(ignored ->
+                terminations.incrementAndGet());
+        GenerationAwareModelRequestOrchestrator orchestrator =
+                new GenerationAwareModelRequestOrchestrator(
+                        controller,
+                        inlineGate(new ModelRequestGate.Decision(
+                                ModelRequestGate.Status.HARD_LIMIT_REJECTED,
+                                List.of(UserMessage.from("恢复上下文过长")),
+                                32_768,
+                                "恢复上下文过长")),
+                        action -> {
+                            action.run();
+                            return true;
+                        });
+
+        orchestrator.submit(
+                GenerationAwareModelRequestOrchestrator
+                        .internalProtocolRecovery(
+                                sourceGeneration,
+                                null,
+                                () -> List.of(UserMessage.from("恢复请求")),
+                                () -> { },
+                                () -> { },
+                                ignored -> { },
+                                ignored -> {
+                                    assertEquals(PROTOCOL_ERROR,
+                                            controller.controlledTermination()
+                                                    .reason());
+                                    assertEquals(0, terminations.get(),
+                                            "FAILED 必须先于受控终止派发");
+                                    failures.incrementAndGet();
+                                },
+                                (messages, generation) -> () -> { }));
+
+        assertEquals(1, failures.get());
+        assertEquals(1, terminations.get());
+        assertFalse(controller.isOpen());
+        assertEquals(PROTOCOL_ERROR,
+                controller.controlledTermination().reason());
+    }
+
+    @Test
+    void 内部协议恢复同步启动失败必须由控制器认领唯一协议终态() {
+        StreamingRequestController controller = activeController();
+        long sourceGeneration = controller.latestModelRequestGeneration();
+        assertEquals(CANCELLED,
+                controller.cancelGenerationForRecovery(sourceGeneration));
+        List<String> order = new ArrayList<>();
+        AtomicInteger terminations = new AtomicInteger();
+        controller.onControlledTermination(ignored -> {
+            order.add("terminated");
+            terminations.incrementAndGet();
+        });
+        GenerationAwareModelRequestOrchestrator orchestrator =
+                new GenerationAwareModelRequestOrchestrator(
+                        controller, inlineAllowingGate(), action -> {
+                            action.run();
+                            return true;
+                        });
+
+        orchestrator.submit(
+                GenerationAwareModelRequestOrchestrator
+                        .internalProtocolRecovery(
+                                sourceGeneration,
+                                null,
+                                () -> List.of(UserMessage.from("恢复请求")),
+                                () -> { },
+                                () -> { },
+                                generation -> order.add(
+                                        "started-" + generation),
+                                ignored -> {
+                                    assertEquals(PROTOCOL_ERROR,
+                                            controller.controlledTermination()
+                                                    .reason());
+                                    assertEquals(0, terminations.get(),
+                                            "FAILED 必须先于受控终止派发");
+                                    order.add("failed");
+                                },
+                                (messages, generation) -> () -> {
+                                    order.add("sdk-" + generation);
+                                    throw new IllegalStateException(
+                                            "SDK 同步失败");
+                                }));
+
+        assertEquals(List.of(
+                "started-2", "sdk-2", "failed", "terminated"),
+                order);
+        assertEquals(1, terminations.get());
+        assertFalse(controller.isOpen());
+        assertEquals(PROTOCOL_ERROR,
+                controller.controlledTermination().reason());
+    }
 
     @Test
     void 内部恢复提交后的钩子必须先于SDK启动执行() {

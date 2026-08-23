@@ -49,6 +49,18 @@ public interface TokenStream {
         return this;
     }
 
+    /** 为当前流安装服务端内部输出隔离和恢复策略。 */
+    default TokenStream internalOutputRecoveryPolicy(
+            InternalOutputRecoveryPolicy policy) {
+        return this;
+    }
+
+    /** 注册携带模型 generation 的统一受信流式信号监听器。 */
+    default TokenStream onGenerationStreamSignal(
+            Consumer<GenerationStreamSignal> handler) {
+        return this;
+    }
+
     default TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
         return this;

@@ -153,6 +153,16 @@ class AiCodeGeneratorFacadeTest {
                 context, generatorService);
 
         verify(tokenStream).modelRequestGate(modelRequestGate, context);
+        var policyCaptor = org.mockito.ArgumentCaptor.forClass(
+                dev.langchain4j.service.InternalOutputRecoveryPolicy.class);
+        verify(tokenStream).internalOutputRecoveryPolicy(
+                policyCaptor.capture());
+        assertEquals(dev.langchain4j.service.InternalOutputRecoveryPolicy
+                        .Mode.FAIL_FAST,
+                policyCaptor.getValue().mode());
+        assertEquals(com.lyw.appgeneration.ai.memory
+                        .SyntheticMemoryMessageProtocol.RESERVED_PREFIX,
+                policyCaptor.getValue().reservedPrefix());
         context.close();
     }
 
@@ -199,6 +209,29 @@ class AiCodeGeneratorFacadeTest {
                 context, generatorService);
 
         verify(tokenStream, never()).toolProtocolRecoveryPolicy(any());
+        context.close();
+    }
+
+    @Test
+    void 普通内部协议失败必须抛专用异常且不得进入文件保存() {
+        OnlineControlledTokenStream stream = new OnlineControlledTokenStream(
+                ToolLoopTerminationProtocol.ControlledTerminationReason
+                        .PROTOCOL_ERROR);
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
+                .thenReturn(stream);
+        var context = newSimpleTurnContext("simple-protocol-error");
+        AppDataLifecycleFence fence = new AppDataLifecycleFence();
+        ReflectionTestUtils.setField(facade, "appDataLifecycleFence", fence);
+
+        StepVerifier.create(facade.generateAndSaveCodeStream(
+                        RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false,
+                        context, generatorService))
+                .expectError(dev.langchain4j.service
+                        .InternalOutputProtocolException.class)
+                .verify();
+
+        assertTrue(fence.isOpen(APP_ID),
+                "协议失败不得进入文件保存或改变删除栅栏状态");
         context.close();
     }
 

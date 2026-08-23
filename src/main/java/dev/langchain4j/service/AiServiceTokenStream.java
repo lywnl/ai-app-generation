@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -50,6 +51,10 @@ public class AiServiceTokenStream implements TokenStream {
     private Consumer<ToolExecution> toolExecutionHandler;
     private Consumer<ChatResponse> completeResponseHandler;
     private Consumer<Throwable> errorHandler;
+    private Consumer<ToolLoopTerminationProtocol.ControlledTermination>
+            controlledTerminationHandler;
+    private final AtomicBoolean controlledTerminationDelivered =
+            new AtomicBoolean();
     private BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler;
     private BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler;
     private final StreamingRequestController requestController =
@@ -60,6 +65,14 @@ public class AiServiceTokenStream implements TokenStream {
     private ToolProtocolRecoveryCoordinator recoveryCoordinator;
     private IncompleteToolChainRecoveryCoordinator
             incompleteRecoveryCoordinator;
+    private InternalOutputRecoveryPolicy internalOutputRecoveryPolicy;
+    private Consumer<GenerationStreamSignal> generationStreamSignalHandler;
+    private final GenerationDisclosureBuffer generationSignalBus =
+            new GenerationDisclosureBuffer();
+    private final AtomicBoolean generationSignalFailureHandled =
+            new AtomicBoolean();
+    private InternalOutputRecoveryCoordinator
+            internalOutputRecoveryCoordinator;
     private GenerationAwareModelRequestOrchestrator requestOrchestrator;
     private boolean initialToolChoiceRequired;
 
@@ -67,6 +80,10 @@ public class AiServiceTokenStream implements TokenStream {
     private int onCompleteResponseInvoked;
     private int onRetrievedInvoked;
     private int onToolExecutedInvoked;
+    private int onPartialToolExecutionRequestInvoked;
+    private int onCompleteToolExecutionRequestInvoked;
+    private int internalOutputRecoveryPolicyInvoked;
+    private int onGenerationStreamSignalInvoked;
     private int onErrorInvoked;
     private int ignoreErrorsInvoked;
 
@@ -98,12 +115,14 @@ public class AiServiceTokenStream implements TokenStream {
     @Override
     public TokenStream onPartialToolExecutionRequest(BiConsumer<Integer, ToolExecutionRequest> toolExecutionRequestHandler) {
         this.partialToolExecutionRequestHandler = toolExecutionRequestHandler;
+        this.onPartialToolExecutionRequestInvoked++;
         return this;
     }
 
     @Override
     public TokenStream onCompleteToolExecutionRequest(BiConsumer<Integer, ToolExecutionRequest> completedHandler) {
         this.completeToolExecutionRequestHandler = completedHandler;
+        this.onCompleteToolExecutionRequestInvoked++;
         return this;
     }
 
@@ -144,6 +163,9 @@ public class AiServiceTokenStream implements TokenStream {
 
     @Override
     public void cancel() {
+        if (internalOutputRecoveryCoordinator != null) {
+            internalOutputRecoveryCoordinator.closeSilently();
+        }
         requestController.cancel();
     }
 
@@ -201,15 +223,44 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream internalOutputRecoveryPolicy(
+            InternalOutputRecoveryPolicy policy) {
+        this.internalOutputRecoveryPolicy = ensureNotNull(
+                policy, "internalOutputRecoveryPolicy");
+        this.internalOutputRecoveryPolicyInvoked++;
+        return this;
+    }
+
+    @Override
+    public TokenStream onGenerationStreamSignal(
+            Consumer<GenerationStreamSignal> handler) {
+        this.generationStreamSignalHandler = ensureNotNull(
+                handler, "generationStreamSignalHandler");
+        this.onGenerationStreamSignalInvoked++;
+        return this;
+    }
+
+    @Override
     public TokenStream onControlledTermination(
             Consumer<ToolLoopTerminationProtocol.ControlledTermination> handler) {
-        requestController.onControlledTermination(handler);
+        Consumer<ToolLoopTerminationProtocol.ControlledTermination> checked =
+                ensureNotNull(handler, "controlledTerminationHandler");
+        this.controlledTerminationHandler = termination -> {
+            if (controlledTerminationDelivered.compareAndSet(false, true)) {
+                checked.accept(termination);
+            }
+        };
+        requestController.onControlledTermination(
+                controlledTerminationHandler);
         return this;
     }
 
     @Override
     public TokenStream requestControlledTermination(
             ToolLoopTerminationProtocol.ControlledTermination termination) {
+        if (internalOutputRecoveryCoordinator != null) {
+            internalOutputRecoveryCoordinator.closeSilently();
+        }
         requestController.terminate(termination);
         return this;
     }
@@ -226,6 +277,23 @@ public class AiServiceTokenStream implements TokenStream {
                 new ContextCompressionAttemptState();
         requestOrchestrator = new GenerationAwareModelRequestOrchestrator(
                 requestController, modelRequestGate, continuationGate);
+        if (internalOutputRecoveryPolicy != null) {
+            Consumer<GenerationStreamSignal> listener =
+                    generationStreamSignalHandler;
+            Consumer<GenerationStreamSignal> signalPublisher;
+            if (listener == null) {
+                signalPublisher = ignored -> { };
+            } else {
+                signalPublisher = new GenerationSignalPublisher(
+                        generationSignalBus,
+                        signal -> publishGenerationSignal(listener, signal));
+                generationStreamSignalHandler = signalPublisher;
+            }
+            internalOutputRecoveryCoordinator =
+                    new InternalOutputRecoveryCoordinator(
+                            internalOutputRecoveryPolicy,
+                            signalPublisher);
+        }
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -275,7 +343,7 @@ public class AiServiceTokenStream implements TokenStream {
                 completeToolExecutionRequestHandler,
                 toolExecutionHandler,
                 completeResponseHandler,
-                errorHandler,
+                this::notifyStreamError,
                 temporaryMemory,
                 new TokenUsage(),
                 toolSpecifications,
@@ -289,7 +357,10 @@ public class AiServiceTokenStream implements TokenStream {
                 continuationGate,
                 recoveryCoordinator,
                 incompleteRecoveryCoordinator,
-                compressionAttemptState);
+                compressionAttemptState,
+                internalOutputRecoveryPolicy,
+                internalOutputRecoveryCoordinator,
+                generationStreamSignalHandler);
 
         if (contentsHandler != null && retrievedContents != null) {
             contentsHandler.accept(retrievedContents);
@@ -301,6 +372,48 @@ public class AiServiceTokenStream implements TokenStream {
         return context.hasChatMemory()
                 ? context.chatMemoryService.getOrCreateChatMemory(memoryId)
                 : temporaryMemory;
+    }
+
+    private void notifyStreamError(Throwable failure) {
+        notifyGateFailure(failure);
+    }
+
+    private void publishGenerationSignal(
+            Consumer<GenerationStreamSignal> listener,
+            GenerationStreamSignal signal) {
+        if (generationSignalFailureHandled.get()) {
+            return;
+        }
+        try {
+            listener.accept(signal);
+        } catch (RuntimeException | Error failure) {
+            handleGenerationSignalFailure(signal);
+        }
+    }
+
+    private void handleGenerationSignalFailure(
+            GenerationStreamSignal signal) {
+        if (!generationSignalFailureHandled.compareAndSet(false, true)) {
+            return;
+        }
+        boolean recoveryFailed = false;
+        if (internalOutputRecoveryCoordinator != null) {
+            recoveryFailed = internalOutputRecoveryCoordinator
+                    .failBeforeRecoveryStart();
+            if (!recoveryFailed) {
+                recoveryFailed = internalOutputRecoveryCoordinator
+                        .failAfterRecoveryStart();
+            }
+            if (!recoveryFailed) {
+                internalOutputRecoveryCoordinator.closeSilently();
+            }
+        }
+        ToolLoopTerminationProtocol.ControlledTermination termination =
+                new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol
+                                .ControlledTerminationReason.PROTOCOL_ERROR,
+                        null);
+        requestController.terminate(termination);
     }
 
     private void notifyGateFailure(Throwable failure) {
@@ -317,8 +430,36 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     private void validateConfiguration() {
-        if (onPartialResponseInvoked != 1) {
+        if (internalOutputRecoveryPolicyInvoked > 1) {
+            throw new IllegalConfigurationException(
+                    "TokenStream 最多只能安装一次内部输出恢复策略");
+        }
+        if (onGenerationStreamSignalInvoked > 1) {
+            throw new IllegalConfigurationException(
+                    "TokenStream 最多只能安装一次统一 generation 信号监听器");
+        }
+        boolean unifiedSignalMode = onGenerationStreamSignalInvoked == 1;
+        int legacyStreamingCallbacks = onPartialResponseInvoked
+                + onPartialToolExecutionRequestInvoked
+                + onCompleteToolExecutionRequestInvoked
+                + onToolExecutedInvoked;
+        if (unifiedSignalMode && legacyStreamingCallbacks != 0) {
+            throw new IllegalConfigurationException(
+                    "统一 generation 信号监听器不能与旧流式回调同时安装");
+        }
+        if (!unifiedSignalMode && onPartialResponseInvoked != 1) {
             throw new IllegalConfigurationException("onPartialResponse must be invoked on TokenStream exactly 1 time");
+        }
+        if (unifiedSignalMode && internalOutputRecoveryPolicy == null) {
+            throw new IllegalConfigurationException(
+                    "统一 generation 信号监听器必须同时安装内部输出恢复策略");
+        }
+        if (internalOutputRecoveryPolicy != null
+                && internalOutputRecoveryPolicy.mode()
+                == InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE
+                && !unifiedSignalMode) {
+            throw new IllegalConfigurationException(
+                    "一次恢复模式必须安装统一 generation 信号监听器");
         }
         if (onCompleteResponseInvoked > 1) {
             throw new IllegalConfigurationException("onCompleteResponse can be invoked on TokenStream at most 1 time");
@@ -328,6 +469,14 @@ public class AiServiceTokenStream implements TokenStream {
         }
         if (onToolExecutedInvoked > 1) {
             throw new IllegalConfigurationException("onToolExecuted can be invoked on TokenStream at most 1 time");
+        }
+        if (onPartialToolExecutionRequestInvoked > 1) {
+            throw new IllegalConfigurationException(
+                    "TokenStream 最多只能安装一次局部工具请求回调");
+        }
+        if (onCompleteToolExecutionRequestInvoked > 1) {
+            throw new IllegalConfigurationException(
+                    "TokenStream 最多只能安装一次完整工具请求回调");
         }
         if (onErrorInvoked + ignoreErrorsInvoked != 1) {
             throw new IllegalConfigurationException(

@@ -720,6 +720,25 @@ public final class StreamingRequestController {
         return claimed;
     }
 
+    /** 原子认领仍由已撤销 generation 派生的恢复准备受控终止。 */
+    boolean claimRecoverySourceControlledTermination(
+            long sourceGeneration,
+            ControlledTermination controlledTermination) {
+        Objects.requireNonNull(controlledTermination, "受控终止不能为空");
+        boolean claimed;
+        synchronized (this) {
+            if (!isRecoverySourceGenerationActive(sourceGeneration)) {
+                return false;
+            }
+            state = State.CONTROLLED_TERMINATION;
+            pendingModelRequestClaim = null;
+            termination = controlledTermination;
+            claimed = true;
+        }
+        dispatchRecoveryReadinessWaiters();
+        return claimed;
+    }
+
     void dispatchClaimedTermination() {
         ControlledTermination current;
         synchronized (this) {

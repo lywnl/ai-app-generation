@@ -107,30 +107,40 @@ public final class InternalOutputRecoveryCoordinator {
         publishQueuedSignals(shouldPublish);
     }
 
-    public void failBeforeRecoveryStart() {
+    public boolean failBeforeRecoveryStart() {
         boolean shouldPublish = false;
+        boolean transitioned = false;
         synchronized (this) {
             if (state == State.STARTING) {
                 state = State.FAILED;
+                transitioned = true;
                 shouldPublish = enqueueSignal(recoverySignal(
                         GenerationStreamSignal.Recovery.Phase.FAILED,
                         originalFailedGeneration));
             }
         }
         publishQueuedSignals(shouldPublish);
+        return transitioned;
     }
 
-    public void failAfterRecoveryStart() {
+    public boolean failAfterRecoveryStart() {
         boolean shouldPublish = false;
+        boolean transitioned = false;
         synchronized (this) {
             if (state == State.RECOVERING) {
                 state = State.FAILED;
+                transitioned = true;
                 shouldPublish = enqueueSignal(recoverySignal(
                         GenerationStreamSignal.Recovery.Phase.FAILED,
                         recoveryGeneration));
             }
         }
         publishQueuedSignals(shouldPublish);
+        return transitioned;
+    }
+
+    public synchronized boolean isRecoveryInProgress() {
+        return state == State.RECOVERING;
     }
 
     public void failForRecoveryViolation(long failedGeneration) {

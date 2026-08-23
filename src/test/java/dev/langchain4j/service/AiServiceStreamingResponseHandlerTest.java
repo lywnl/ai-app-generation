@@ -1859,6 +1859,220 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void outputGuardrail改写引入内部标记时不得发布完成或写入分叉正文() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        String rewrittenLeak = "护栏改写<internal-ack>";
+        configureOutputGuardrailRewrite(context, rewrittenLeak);
+        MessageWindowChatMemory memory =
+                MessageWindowChatMemory.withMaxMessages(10);
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
+                terminal = new AtomicReference<>();
+        controller.onControlledTermination(terminal::set);
+        List<GenerationStreamSignal> signals = new ArrayList<>();
+        AtomicReference<ChatResponse> completed = new AtomicReference<>();
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, signals::add);
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        completed::set,
+                        error -> fail("护栏改写泄漏应走协议终止", error),
+                        memory, new TokenUsage(), List.of(), Map.of(),
+                        dev.langchain4j.guardrail.GuardrailRequestParams
+                                .builder()
+                                .userMessageTemplate("测试")
+                                .variables(Map.of())
+                                .build(),
+                        "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, signals::add);
+
+        handler.onPartialResponse("模型安全正文");
+        handler.onCompleteResponse(ordinaryResponse("模型安全正文"));
+
+        assertAll(
+                () -> assertTrue(signals.stream()
+                                .noneMatch(GenerationStreamSignal.AiText.class
+                                        ::isInstance),
+                        "最终护栏投影违规时不得发布原始或改写正文"),
+                () -> assertNull(completed.get(),
+                        "包含内部标记的护栏最终响应不得进入 complete callback"),
+                () -> assertTrue(memory.messages().stream()
+                                .noneMatch(AiMessage.class::isInstance),
+                        "最终投影违规时不得保存原始与护栏改写两个分叉版本"),
+                () -> assertNotNull(terminal.get(),
+                        "护栏最终投影泄漏必须产生协议终态"),
+                () -> assertEquals(ToolLoopTerminationProtocol
+                                .ControlledTerminationReason.PROTOCOL_ERROR,
+                        terminal.get().reason()),
+                () -> assertFalse(controller.isOpen()));
+    }
+
+    @Test
+    void outputGuardrail安全改写必须成为正文完成回调与记忆的唯一规范投影() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        String originalText = "模型原始正文A";
+        String rewrittenText = "护栏安全改写B";
+        configureOutputGuardrailRewrite(context, rewrittenText);
+        MessageWindowChatMemory memory =
+                MessageWindowChatMemory.withMaxMessages(10);
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        List<GenerationStreamSignal> signals = new ArrayList<>();
+        AtomicReference<ChatResponse> completed = new AtomicReference<>();
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, signals::add);
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        completed::set,
+                        error -> fail("安全护栏改写不应失败", error),
+                        memory, new TokenUsage(), List.of(), Map.of(),
+                        dev.langchain4j.guardrail.GuardrailRequestParams
+                                .builder()
+                                .userMessageTemplate("测试")
+                                .variables(Map.of())
+                                .build(),
+                        "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, signals::add);
+
+        handler.onPartialResponse(originalText);
+        handler.onCompleteResponse(ordinaryResponse(originalText));
+
+        List<GenerationStreamSignal.AiText> texts = signals.stream()
+                .filter(GenerationStreamSignal.AiText.class::isInstance)
+                .map(GenerationStreamSignal.AiText.class::cast)
+                .toList();
+        List<AiMessage> storedAiMessages = memory.messages().stream()
+                .filter(AiMessage.class::isInstance)
+                .map(AiMessage.class::cast)
+                .toList();
+        assertAll(
+                () -> assertEquals(List.of(
+                                new GenerationStreamSignal.AiText(
+                                        initialClaim.generation(),
+                                        rewrittenText)),
+                        texts,
+                        "正文信号只能发布 guardrail 最终安全投影"),
+                () -> assertNotNull(completed.get()),
+                () -> assertEquals(rewrittenText,
+                        completed.get().aiMessage().text()),
+                () -> assertEquals(1, storedAiMessages.size()),
+                () -> assertEquals(rewrittenText,
+                        storedAiMessages.getFirst().text()),
+                () -> assertTrue(storedAiMessages.stream()
+                        .noneMatch(message -> originalText.equals(
+                                message.text()))),
+                () -> assertFalse(controller.isOpen()),
+                () -> assertNull(controller.controlledTermination()));
+    }
+
+    @Test
+    void outputGuardrail安全改写正文监听器失败时不得完成或写入记忆() {
+        GuardrailUnifiedFixture fixture = guardrailUnifiedFixture(
+                "护栏安全改写B",
+                signal -> {
+                    if (signal instanceof GenerationStreamSignal.AiText) {
+                        throw new IllegalStateException("正文 listener 失败");
+                    }
+                });
+
+        fixture.handler().onPartialResponse("模型原始正文A");
+        fixture.handler().onCompleteResponse(
+                ordinaryResponse("模型原始正文A"));
+
+        assertAll(
+                () -> assertNull(fixture.completed().get()),
+                () -> assertTrue(fixture.memory().messages().stream()
+                        .noneMatch(AiMessage.class::isInstance)),
+                () -> assertFalse(fixture.controller().isOpen()),
+                () -> assertEquals(ToolLoopTerminationProtocol
+                                .ControlledTerminationReason.PROTOCOL_ERROR,
+                        fixture.controller().controlledTermination()
+                                .reason()));
+    }
+
+    @Test
+    void outputGuardrail改写正文超限时必须资源终止且不发不存() {
+        String oversized = "超".repeat(
+                AiServiceStreamingResponseHandler
+                        .MAX_TRACKED_RESPONSE_CHARS + 1);
+        GuardrailUnifiedFixture fixture = guardrailUnifiedFixture(
+                oversized, signal -> fail("超限投影不得发布信号"));
+
+        fixture.handler().onCompleteResponse(ordinaryResponse("原始安全"));
+
+        assertAll(
+                () -> assertNull(fixture.completed().get()),
+                () -> assertTrue(fixture.memory().messages().stream()
+                        .noneMatch(AiMessage.class::isInstance)),
+                () -> assertFalse(fixture.controller().isOpen()),
+                () -> assertEquals(ToolLoopTerminationProtocol
+                                .ControlledTerminationReason
+                                .RESOURCE_LIMIT_EXCEEDED,
+                        fixture.controller().controlledTermination()
+                                .reason()));
+    }
+
+    @Test
+    void outputGuardrail把普通响应改成工具请求时必须协议终止且不得写未配对记忆() {
+        ToolExecutionRequest injected =
+                tool("guardrail-injected", "writeFile");
+        ChatResponse rewritten = ChatResponse.builder()
+                .aiMessage(AiMessage.from(List.of(injected)))
+                .metadata(ChatResponseMetadata.builder()
+                        .tokenUsage(new TokenUsage()).build())
+                .build();
+        GuardrailUnifiedFixture fixture = guardrailUnifiedFixture(
+                rewritten, signal -> fail("非法工具投影不得发布信号"));
+
+        fixture.handler().onCompleteResponse(ordinaryResponse("原始安全"));
+
+        assertAll(
+                () -> assertNull(fixture.completed().get()),
+                () -> assertTrue(fixture.memory().messages().stream()
+                        .noneMatch(AiMessage.class::isInstance)),
+                () -> assertFalse(hasUnpairedToolRequests(
+                        fixture.memory().messages())),
+                () -> assertFalse(fixture.controller().isOpen()),
+                () -> assertEquals(ToolLoopTerminationProtocol
+                                .ControlledTerminationReason.PROTOCOL_ERROR,
+                        fixture.controller().controlledTermination()
+                                .reason()));
+    }
+
+    @Test
     void ordinaryBufferedPartialFailureReportsErrorWithoutComplete() {
         AiServiceContext context = new AiServiceContext(Object.class);
         context.streamingChatModel = new CapturingStreamingChatModel();
@@ -2378,6 +2592,120 @@ class AiServiceStreamingResponseHandlerTest {
                         org.springframework.test.util.ReflectionTestUtils.getField(
                                 context, "guardrailService");
         reference.set(guardrails);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void configureOutputGuardrailRewrite(
+            AiServiceContext context, String rewrittenText) {
+        configureOutputGuardrailRewrite(context,
+                request -> dev.langchain4j.guardrail.OutputGuardrailResult
+                        .successWith(rewrittenText)
+                        .response(request));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void configureOutputGuardrailRewrite(
+            AiServiceContext context,
+            ChatResponse rewrittenResponse) {
+        configureOutputGuardrailRewrite(
+                context, request -> rewrittenResponse);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void configureOutputGuardrailRewrite(
+            AiServiceContext context,
+            java.util.function.Function<
+                    dev.langchain4j.guardrail.OutputGuardrailRequest,
+                    ChatResponse> rewriter) {
+        dev.langchain4j.service.guardrail.GuardrailService guardrails =
+                org.mockito.Mockito.mock(
+                        dev.langchain4j.service.guardrail
+                                .GuardrailService.class);
+        org.mockito.Mockito.when(guardrails.hasOutputGuardrails("method-1"))
+                .thenReturn(true);
+        org.mockito.Mockito.when(guardrails.executeGuardrails(
+                        org.mockito.ArgumentMatchers.eq("method-1"),
+                        org.mockito.ArgumentMatchers.any(
+                                dev.langchain4j.guardrail
+                                        .OutputGuardrailRequest.class)))
+                .thenAnswer(invocation -> {
+                    dev.langchain4j.guardrail.OutputGuardrailRequest request =
+                            invocation.getArgument(1);
+                    return rewriter.apply(request);
+                });
+        java.util.concurrent.atomic.AtomicReference<
+                dev.langchain4j.service.guardrail.GuardrailService> reference =
+                (java.util.concurrent.atomic.AtomicReference<
+                        dev.langchain4j.service.guardrail.GuardrailService>)
+                        org.springframework.test.util.ReflectionTestUtils
+                                .getField(context, "guardrailService");
+        reference.set(guardrails);
+    }
+
+    private GuardrailUnifiedFixture guardrailUnifiedFixture(
+            String rewrittenText,
+            java.util.function.Consumer<GenerationStreamSignal> listener) {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        configureOutputGuardrailRewrite(context, rewrittenText);
+        return guardrailUnifiedFixture(context, listener);
+    }
+
+    private GuardrailUnifiedFixture guardrailUnifiedFixture(
+            ChatResponse rewrittenResponse,
+            java.util.function.Consumer<GenerationStreamSignal> listener) {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        configureOutputGuardrailRewrite(context, rewrittenResponse);
+        return guardrailUnifiedFixture(context, listener);
+    }
+
+    private GuardrailUnifiedFixture guardrailUnifiedFixture(
+            AiServiceContext context,
+            java.util.function.Consumer<GenerationStreamSignal> listener) {
+        MessageWindowChatMemory memory =
+                MessageWindowChatMemory.withMaxMessages(10);
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        AtomicReference<ChatResponse> completed = new AtomicReference<>();
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, listener);
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        completed::set,
+                        error -> fail("guardrail 最终投影不应走普通错误", error),
+                        memory, new TokenUsage(), List.of(), Map.of(),
+                        dev.langchain4j.guardrail.GuardrailRequestParams
+                                .builder()
+                                .userMessageTemplate("测试")
+                                .variables(Map.of())
+                                .build(),
+                        "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, listener);
+        return new GuardrailUnifiedFixture(
+                handler, memory, controller, completed);
+    }
+
+    private record GuardrailUnifiedFixture(
+            AiServiceStreamingResponseHandler handler,
+            MessageWindowChatMemory memory,
+            StreamingRequestController controller,
+            AtomicReference<ChatResponse> completed) {
     }
 
     private static ToolExecutionRequest tool(String id, String name) {
