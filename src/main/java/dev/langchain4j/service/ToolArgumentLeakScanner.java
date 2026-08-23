@@ -44,10 +44,13 @@ public final class ToolArgumentLeakScanner {
     }
 
     public synchronized ScanResult complete(String requestId, String completeArguments) {
-        if (isInvalidRequest(requestId) || completeArguments == null) {
+        if (isInvalidRequest(requestId)) {
             return new ScanResult(Status.INVALID);
         }
         StringBuilder partial = partialArguments.remove(requestId);
+        if (completeArguments == null) {
+            return new ScanResult(Status.INVALID);
+        }
         if (partial != null && !partial.toString().equals(completeArguments)) {
             return new ScanResult(Status.MISMATCH);
         }
@@ -256,13 +259,26 @@ public final class ToolArgumentLeakScanner {
             }
             int value = 0;
             for (int offset = 0; offset < 4; offset++) {
-                int digit = Character.digit(source.charAt(index++), 16);
+                int digit = asciiHexDigit(source.charAt(index++));
                 if (digit < 0) {
                     throw new InvalidJsonException();
                 }
                 value = value * 16 + digit;
             }
             return (char) value;
+        }
+
+        private int asciiHexDigit(char current) {
+            if (current >= '0' && current <= '9') {
+                return current - '0';
+            }
+            if (current >= 'A' && current <= 'F') {
+                return current - 'A' + 10;
+            }
+            if (current >= 'a' && current <= 'f') {
+                return current - 'a' + 10;
+            }
+            return -1;
         }
 
         private void parseLiteralOrNumber() {

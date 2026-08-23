@@ -144,6 +144,18 @@ class ToolArgumentLeakScannerTest {
     }
 
     @Test
+    void Unicode转义仅接受ASCII十六进制字符() {
+        ToolArgumentLeakScanner scanner = scanner();
+
+        assertEquals(ToolArgumentLeakScanner.Status.INVALID,
+                scanner.complete("fullwidth-digit", "{\"text\":\"\\u００５Ｂ\"}").status());
+        assertEquals(ToolArgumentLeakScanner.Status.INVALID,
+                scanner.complete("fullwidth-letter", "{\"text\":\"\\u00ＡＦ\"}").status());
+        assertEquals(ToolArgumentLeakScanner.Status.INVALID,
+                scanner.complete("mixed-fullwidth", "{\"text\":\"\\u0Ａ0B\"}").status());
+    }
+
+    @Test
     void 丢弃请求后不保留跨请求状态() {
         ToolArgumentLeakScanner scanner = scanner();
         assertEquals(ToolArgumentLeakScanner.Status.BUFFERING,
@@ -163,6 +175,17 @@ class ToolArgumentLeakScannerTest {
         assertEquals(ToolArgumentLeakScanner.Status.INVALID, scanner.complete(null, "{}").status());
         assertEquals(ToolArgumentLeakScanner.Status.INVALID, scanner.complete("\t", "{}").status());
         assertEquals(ToolArgumentLeakScanner.Status.INVALID, scanner.complete("request", null).status());
+    }
+
+    @Test
+    void 完成参数为空时也清理有效请求的累计状态() {
+        ToolArgumentLeakScanner scanner = scanner();
+        String complete = "{\"text\":\"安全\"}";
+
+        assertEquals(ToolArgumentLeakScanner.Status.SAFE,
+                scanner.accept("request", "{\"text\":\"安全").status());
+        assertEquals(ToolArgumentLeakScanner.Status.INVALID, scanner.complete("request", null).status());
+        assertEquals(ToolArgumentLeakScanner.Status.SAFE, scanner.complete("request", complete).status());
     }
 
     @Test
