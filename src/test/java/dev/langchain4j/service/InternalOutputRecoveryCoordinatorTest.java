@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -261,11 +262,14 @@ class InternalOutputRecoveryCoordinatorTest {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<?> started = executor.submit(
                     () -> coordinator.recoveryStartCommitted(2));
-            startedListenerEntered.await();
-            Future<?> recovered = executor.submit(() -> coordinator.recovered(2));
-            recovered.get();
-            releaseStartedListener.countDown();
-            started.get();
+            try {
+                assertTrue(startedListenerEntered.await(3, TimeUnit.SECONDS));
+                Future<?> recovered = executor.submit(() -> coordinator.recovered(2));
+                recovered.get(3, TimeUnit.SECONDS);
+            } finally {
+                releaseStartedListener.countDown();
+            }
+            started.get(3, TimeUnit.SECONDS);
         }
 
         assertEquals(List.of(
@@ -290,11 +294,14 @@ class InternalOutputRecoveryCoordinatorTest {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<?> started = executor.submit(
                     () -> coordinator.recoveryStartCommitted(2));
-            startedListenerEntered.await();
-            Future<?> failed = executor.submit(coordinator::failAfterRecoveryStart);
-            failed.get();
-            releaseStartedListener.countDown();
-            started.get();
+            try {
+                assertTrue(startedListenerEntered.await(3, TimeUnit.SECONDS));
+                Future<?> failed = executor.submit(coordinator::failAfterRecoveryStart);
+                failed.get(3, TimeUnit.SECONDS);
+            } finally {
+                releaseStartedListener.countDown();
+            }
+            started.get(3, TimeUnit.SECONDS);
         }
 
         assertEquals(List.of(
@@ -337,7 +344,10 @@ class InternalOutputRecoveryCoordinatorTest {
                             == GenerationStreamSignal.Recovery.Phase.STARTED) {
                         startedListenerEntered.countDown();
                         try {
-                            releaseStartedListener.await();
+                            if (!releaseStartedListener.await(
+                                    3, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("等待启动信号释放超时");
+                            }
                         } catch (InterruptedException exception) {
                             Thread.currentThread().interrupt();
                             throw new IllegalStateException("等待启动信号释放时被中断", exception);
