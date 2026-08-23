@@ -289,9 +289,17 @@ public final class VueTurnContext implements ContextContinuationGate {
     /** 只读回合在真实写工具成功落盘后自动升级为构建义务。 */
     public boolean requiresBuild() {
         VueTurnMode mode = turnMode();
-        long mutationRevision = lease == null
-                ? 0L : lease.snapshot().mutationRevision();
+        long mutationRevision = mutationRevision();
         return mode == VueTurnMode.MUTATION_REQUIRED || mutationRevision > 0L;
+    }
+
+    /** ANSWERED 只能用于尚未发生真实变更的只读回合。 */
+    public boolean isReadOnlyAnswerEligible() {
+        return turnMode() == VueTurnMode.READ_ONLY && mutationRevision() == 0L;
+    }
+
+    private long mutationRevision() {
+        return lease == null ? 0L : lease.snapshot().mutationRevision();
     }
 
     /** 只有工程变更回合的首次模型请求需要强制结构化工具调用。 */

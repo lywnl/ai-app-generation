@@ -2,10 +2,10 @@ package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
+import com.lyw.appgeneration.ai.VueTurnModeRoutingService;
+import com.lyw.appgeneration.ai.VueTurnModeRoutingServiceFactory;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
-import com.lyw.appgeneration.ai.VueTurnModeRoutingServiceFactory;
-import com.lyw.appgeneration.ai.VueTurnModeRoutingService;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.config.RagProperties;
@@ -37,6 +37,7 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.VueTurnModeRouter;
+import com.lyw.appgeneration.service.VueReadOnlyIntentPolicy;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
@@ -139,12 +140,14 @@ class AppServiceImplVueTurnTest {
     private final VueTurnCancellationCoordinator cancellationCoordinator =
             mock(VueTurnCancellationCoordinator.class);
     private final VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+    private final VueReadOnlyIntentPolicy vueReadOnlyIntentPolicy =
+            mock(VueReadOnlyIntentPolicy.class);
     private final VueTurnModeRoutingServiceFactory vueTurnModeRoutingServiceFactory =
             mock(VueTurnModeRoutingServiceFactory.class);
     private final VueTurnModeRoutingService vueTurnModeRoutingService =
             mock(VueTurnModeRoutingService.class);
     private final VueTurnModeRouter vueTurnModeRouter = new VueTurnModeRouter(
-            vueTurnModeRoutingServiceFactory);
+            vueReadOnlyIntentPolicy, vueTurnModeRoutingServiceFactory);
     private AppOperationLeaseManager operationManager;
     private AppServiceImpl service;
     private SimpleMeterRegistry metricsRegistry;
@@ -175,10 +178,8 @@ class AppServiceImplVueTurnTest {
                 new com.lyw.appgeneration.ai.tools.FileToolBudgetGuard());
         ReflectionTestUtils.setField(service, "vueTurnModeRouter",
                 vueTurnModeRouter);
-        when(vueTurnModeRoutingServiceFactory.create())
-                .thenReturn(vueTurnModeRoutingService);
-        when(vueTurnModeRoutingService.route(anyString()))
-                .thenReturn(VueTurnMode.MUTATION_REQUIRED);
+        when(vueReadOnlyIntentPolicy.isExplicitReadOnly(anyString()))
+                .thenReturn(false);
         App app = App.builder().id(APP_ID).userId(USER_ID)
                 .codeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue()).build();
         service = org.mockito.Mockito.spy(service);

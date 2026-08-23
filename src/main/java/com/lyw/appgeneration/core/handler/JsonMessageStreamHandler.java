@@ -212,7 +212,11 @@ public final class JsonMessageStreamHandler {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SUCCEEDED,
                     prefix, facts, SUCCESS_MESSAGE, true);
         }
-        if (reason == null && error == null && !context.requiresBuild()
+        if (reason == null && error == null
+                && phase == VueBuildPhase.GENERATING
+                && context.isReadOnlyAnswerEligible()
+                && facts.stream().noneMatch(fact ->
+                fact.buildAttempt() != null)
                 && facts.stream().noneMatch(fact ->
                 fact.changedRelativePath() != null)
                 && answerMemory != null && !answerMemory.isBlank()) {

@@ -126,6 +126,79 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
+    void 真实文件变更后即使回合原本只读也不得进入ANSWERED() {
+        var operationManager = new AppOperationLeaseManager();
+        var operation = operationManager.acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE,
+                "turn-answered-after-mutation");
+        var lease = new VueBuildSessionManager().open(
+                operation, USER_ID, "turn-answered-after-mutation");
+        var admission = new com.lyw.appgeneration.core.concurrency
+                .VueTurnAdmissionController(
+                        new VueBuildRepairMetricsCollector(
+                                new SimpleMeterRegistry()))
+                .tryAcquire().orElseThrow();
+        VueTurnContext context = new VueTurnContext(
+                APP_ID, USER_ID, "turn-answered-after-mutation", operation,
+                lease, admission, new FileToolBudgetGuard().newSession());
+        context.commitUser(() -> true);
+        lease.recordSuccessfulMutation();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                    requested.outcome());
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(
+                "{\"type\":\"ai_response\",\"data\":\"只读回答\"}"), context)
+                .collectList().block();
+
+        assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                outcomeOf(output.getLast()).outcome());
+        context.closeResources();
+    }
+
+    @Test
+    void 出现构建尝试事实后只读回合不得进入ANSWERED() {
+        VueTurnContext context = VueTurnContext.testing(
+                APP_ID, USER_ID, "turn-answered-after-build", VueBuildPhase.GENERATING,
+                VueTurnMode.READ_ONLY);
+        context.commitUser(() -> true);
+        BaseTool buildTool = mock(BaseTool.class);
+        when(toolManager.getTool("buildProject")).thenReturn(buildTool);
+        String buildResult = "{\"protocol\":\"vue-build-tool/v1\","
+                + "\"invocationStatus\":\"COMPLETED\",\"success\":false,"
+                + "\"attempt\":1,\"maxAttempts\":3,\"stage\":\"NPM_BUILD\","
+                + "\"failureKind\":\"CODE\",\"timedOut\":false,"
+                + "\"repairable\":true,\"reflectionRequired\":false,"
+                + "\"nextAction\":\"REPAIR\",\"message\":\"构建失败\","
+                + "\"errorSummary\":\"测试失败\",\"terminateToolLoop\":false,"
+                + "\"finalResponse\":null}";
+        when(buildTool.generateToolExecutedResult(any(JSONObject.class),
+                eq(buildResult))).thenReturn("构建被拒绝");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                    requested.outcome());
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        String buildEvent = JSONUtil.toJsonStr(new JSONObject()
+                .set("type", "tool_executed")
+                .set("id", "build-answered")
+                .set("name", "buildProject")
+                .set("arguments", "{}")
+                .set("result", buildResult));
+
+        List<GenerationStreamEvent> output = handler.handle(Flux.just(buildEvent,
+                "{\"type\":\"ai_response\",\"data\":\"只读回答\"}"), context)
+                .collectList().block();
+
+        assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
+                outcomeOf(output.getLast()).outcome());
+    }
+
+    @Test
     void 只读回合读取文件后仍以普通答案结束不要求构建() {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-answered-read", VueBuildPhase.GENERATING,

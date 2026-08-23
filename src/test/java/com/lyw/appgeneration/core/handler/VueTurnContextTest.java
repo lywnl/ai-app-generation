@@ -142,6 +142,33 @@ class VueTurnContextTest {
     }
 
     @Test
+    void 只读回答资格必须要求真实变更版本仍为零() {
+        var operationManager = new com.lyw.appgeneration.core.concurrency
+                .AppOperationLeaseManager();
+        var operation = operationManager.acquire(7L,
+                com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager
+                        .AppOperationType.GENERATE,
+                "turn-answer-eligibility");
+        var vueLease = new com.lyw.appgeneration.core.builder
+                .VueBuildSessionManager().open(
+                        operation, 9L, "turn-answer-eligibility");
+        var admission = new VueTurnAdmissionController(
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()))
+                .tryAcquire().orElseThrow();
+        VueTurnContext context = new VueTurnContext(
+                7L, 9L, "turn-answer-eligibility", operation, vueLease,
+                admission, new FileToolBudgetGuard().newSession());
+        try {
+            assertTrue(context.isReadOnlyAnswerEligible());
+            vueLease.recordSuccessfulMutation();
+
+            assertFalse(context.isReadOnlyAnswerEligible());
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
     void 回合模式只能初始化一次() {
         VueTurnContext context = VueTurnContext.testing(
                 7L, 9L, "turn-mode-once", VueBuildPhase.GENERATING,

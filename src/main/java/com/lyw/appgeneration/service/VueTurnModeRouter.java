@@ -13,9 +13,13 @@ import java.util.Objects;
 @Service
 public final class VueTurnModeRouter {
 
+    private final VueReadOnlyIntentPolicy readOnlyIntentPolicy;
     private final VueTurnModeRoutingServiceFactory factory;
 
-    public VueTurnModeRouter(VueTurnModeRoutingServiceFactory factory) {
+    public VueTurnModeRouter(VueReadOnlyIntentPolicy readOnlyIntentPolicy,
+            VueTurnModeRoutingServiceFactory factory) {
+        this.readOnlyIntentPolicy = Objects.requireNonNull(readOnlyIntentPolicy,
+                "Vue 只读资格策略不能为空");
         this.factory = Objects.requireNonNull(factory, "Vue 模式路由工厂不能为空");
     }
 
@@ -33,15 +37,28 @@ public final class VueTurnModeRouter {
                     "NONE", startedAt);
         }
         try {
-            VueTurnMode mode = factory.create().route(userMessage);
-            if (mode == null) {
+            if (!readOnlyIntentPolicy.isExplicitReadOnly(userMessage)) {
                 return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                        "ROUTING_MODEL", "INVALID_RESULT", startedAt);
+                        "LOCAL_POLICY_REJECTED", "NONE", startedAt);
             }
-            return recordDecision(mode, "ROUTING_MODEL", "NONE", startedAt);
         } catch (RuntimeException exception) {
             return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                    "ROUTING_MODEL", exception.getClass().getSimpleName(),
+                    "LOCAL_POLICY_ERROR", exception.getClass().getSimpleName(),
+                    startedAt);
+        }
+        try {
+            VueTurnMode modelMode = factory.create().route(userMessage);
+            if (modelMode == VueTurnMode.READ_ONLY) {
+                return recordDecision(VueTurnMode.READ_ONLY,
+                        "ROUTING_MODEL_AND_POLICY", "NONE", startedAt);
+            }
+            return recordDecision(VueTurnMode.MUTATION_REQUIRED,
+                    modelMode == null ? "ROUTING_MODEL_INVALID"
+                            : "ROUTING_MODEL_REJECTED",
+                    "NONE", startedAt);
+        } catch (RuntimeException exception) {
+            return recordDecision(VueTurnMode.MUTATION_REQUIRED,
+                    "ROUTING_MODEL_ERROR", exception.getClass().getSimpleName(),
                     startedAt);
         }
     }
