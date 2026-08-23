@@ -6,6 +6,7 @@ import dev.langchain4j.service.tool.ToolExecution;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -247,6 +248,64 @@ class InternalOutputRecoveryCoordinatorTest {
         }
     }
 
+    @Test
+    void 启动信号监听阻塞时并发恢复仍按提交顺序发布() throws Exception {
+        List<GenerationStreamSignal> signals = Collections.synchronizedList(
+                new ArrayList<>());
+        CountDownLatch startedListenerEntered = new CountDownLatch(1);
+        CountDownLatch releaseStartedListener = new CountDownLatch(1);
+        InternalOutputRecoveryCoordinator coordinator = coordinatorWithBlockingStarted(
+                signals, startedListenerEntered, releaseStartedListener);
+        coordinator.claimViolation(1);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> started = executor.submit(
+                    () -> coordinator.recoveryStartCommitted(2));
+            startedListenerEntered.await();
+            Future<?> recovered = executor.submit(() -> coordinator.recovered(2));
+            recovered.get();
+            releaseStartedListener.countDown();
+            started.get();
+        }
+
+        assertEquals(List.of(
+                new GenerationStreamSignal.Recovery(
+                        GenerationStreamSignal.Recovery.Phase.STARTED,
+                        1, 2L, null),
+                new GenerationStreamSignal.Recovery(
+                        GenerationStreamSignal.Recovery.Phase.RECOVERED,
+                        1, 2L, null)), signals);
+    }
+
+    @Test
+    void 启动信号监听阻塞时并发失败仍按提交顺序发布() throws Exception {
+        List<GenerationStreamSignal> signals = Collections.synchronizedList(
+                new ArrayList<>());
+        CountDownLatch startedListenerEntered = new CountDownLatch(1);
+        CountDownLatch releaseStartedListener = new CountDownLatch(1);
+        InternalOutputRecoveryCoordinator coordinator = coordinatorWithBlockingStarted(
+                signals, startedListenerEntered, releaseStartedListener);
+        coordinator.claimViolation(1);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> started = executor.submit(
+                    () -> coordinator.recoveryStartCommitted(2));
+            startedListenerEntered.await();
+            Future<?> failed = executor.submit(coordinator::failAfterRecoveryStart);
+            failed.get();
+            releaseStartedListener.countDown();
+            started.get();
+        }
+
+        assertEquals(List.of(
+                new GenerationStreamSignal.Recovery(
+                        GenerationStreamSignal.Recovery.Phase.STARTED,
+                        1, 2L, null),
+                new GenerationStreamSignal.Recovery(
+                        GenerationStreamSignal.Recovery.Phase.FAILED,
+                        1, 2L, 2L)), signals);
+    }
+
     private InternalOutputRecoveryCoordinator.ViolationAction resultOf(
             Future<InternalOutputRecoveryCoordinator.ViolationAction> future) {
         try {
@@ -261,5 +320,30 @@ class InternalOutputRecoveryCoordinatorTest {
             List<GenerationStreamSignal> signals) {
         return new InternalOutputRecoveryCoordinator(
                 new InternalOutputRecoveryPolicy(mode, PREFIX, Set.of(MARKER)), signals::add);
+    }
+
+    private InternalOutputRecoveryCoordinator coordinatorWithBlockingStarted(
+            List<GenerationStreamSignal> signals,
+            CountDownLatch startedListenerEntered,
+            CountDownLatch releaseStartedListener) {
+        return new InternalOutputRecoveryCoordinator(
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
+                        PREFIX,
+                        Set.of(MARKER)),
+                signal -> {
+                    if (signal instanceof GenerationStreamSignal.Recovery recovery
+                            && recovery.phase()
+                            == GenerationStreamSignal.Recovery.Phase.STARTED) {
+                        startedListenerEntered.countDown();
+                        try {
+                            releaseStartedListener.await();
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException("等待启动信号释放时被中断", exception);
+                        }
+                    }
+                    signals.add(signal);
+                });
     }
 }

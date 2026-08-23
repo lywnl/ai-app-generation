@@ -3,8 +3,10 @@ package dev.langchain4j.service;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.function.Consumer;
 
 /** 单个 TokenStream 的内部输出恢复额度和跨 generation 终态协调器。 */
@@ -27,6 +29,9 @@ public final class InternalOutputRecoveryCoordinator {
     private State state = State.AVAILABLE;
     private long originalFailedGeneration = -1L;
     private long recoveryGeneration = -1L;
+    private final Queue<GenerationStreamSignal> pendingSignals =
+            new ArrayDeque<>();
+    private boolean publishingSignals;
 
     public InternalOutputRecoveryCoordinator(
             InternalOutputRecoveryPolicy policy,
@@ -74,7 +79,7 @@ public final class InternalOutputRecoveryCoordinator {
 
     public void recoveryStartCommitted(long committedRecoveryGeneration) {
         validateGeneration(committedRecoveryGeneration);
-        GenerationStreamSignal.Recovery signal = null;
+        boolean shouldPublish = false;
         synchronized (this) {
             if (state == State.STARTING) {
                 if (committedRecoveryGeneration <= originalFailedGeneration) {
@@ -82,51 +87,55 @@ public final class InternalOutputRecoveryCoordinator {
                 }
                 recoveryGeneration = committedRecoveryGeneration;
                 state = State.RECOVERING;
-                signal = recoverySignal(GenerationStreamSignal.Recovery.Phase.STARTED, null);
+                shouldPublish = enqueueSignal(recoverySignal(
+                        GenerationStreamSignal.Recovery.Phase.STARTED, null));
             }
         }
-        publish(signal);
+        publishQueuedSignals(shouldPublish);
     }
 
     public void recovered(long safeGeneration) {
         validateGeneration(safeGeneration);
-        GenerationStreamSignal.Recovery signal = null;
+        boolean shouldPublish = false;
         synchronized (this) {
             if (state == State.RECOVERING && safeGeneration >= recoveryGeneration) {
                 state = State.RECOVERED;
-                signal = recoverySignal(GenerationStreamSignal.Recovery.Phase.RECOVERED, null);
+                shouldPublish = enqueueSignal(recoverySignal(
+                        GenerationStreamSignal.Recovery.Phase.RECOVERED, null));
             }
         }
-        publish(signal);
+        publishQueuedSignals(shouldPublish);
     }
 
     public void failBeforeRecoveryStart() {
-        GenerationStreamSignal.Recovery signal = null;
+        boolean shouldPublish = false;
         synchronized (this) {
             if (state == State.STARTING) {
                 state = State.FAILED;
-                signal = recoverySignal(GenerationStreamSignal.Recovery.Phase.FAILED,
-                        originalFailedGeneration);
+                shouldPublish = enqueueSignal(recoverySignal(
+                        GenerationStreamSignal.Recovery.Phase.FAILED,
+                        originalFailedGeneration));
             }
         }
-        publish(signal);
+        publishQueuedSignals(shouldPublish);
     }
 
     public void failAfterRecoveryStart() {
-        GenerationStreamSignal.Recovery signal = null;
+        boolean shouldPublish = false;
         synchronized (this) {
             if (state == State.RECOVERING) {
                 state = State.FAILED;
-                signal = recoverySignal(GenerationStreamSignal.Recovery.Phase.FAILED,
-                        recoveryGeneration);
+                shouldPublish = enqueueSignal(recoverySignal(
+                        GenerationStreamSignal.Recovery.Phase.FAILED,
+                        recoveryGeneration));
             }
         }
-        publish(signal);
+        publishQueuedSignals(shouldPublish);
     }
 
     public void failForRecoveryViolation(long failedGeneration) {
         validateGeneration(failedGeneration);
-        GenerationStreamSignal.Recovery signal = null;
+        boolean shouldPublish = false;
         synchronized (this) {
             if ((state == State.RECOVERING || state == State.RECOVERED)
                     && failedGeneration < recoveryGeneration) {
@@ -135,11 +144,12 @@ public final class InternalOutputRecoveryCoordinator {
             if ((state == State.RECOVERING || state == State.RECOVERED)
                     && failedGeneration >= recoveryGeneration) {
                 state = State.FAILED;
-                signal = recoverySignal(GenerationStreamSignal.Recovery.Phase.FAILED,
-                        failedGeneration);
+                shouldPublish = enqueueSignal(recoverySignal(
+                        GenerationStreamSignal.Recovery.Phase.FAILED,
+                        failedGeneration));
             }
         }
-        publish(signal);
+        publishQueuedSignals(shouldPublish);
     }
 
     public synchronized void closeSilently() {
@@ -156,9 +166,49 @@ public final class InternalOutputRecoveryCoordinator {
                 failedGeneration);
     }
 
-    private void publish(GenerationStreamSignal signal) {
-        if (signal != null) {
-            signalListener.accept(signal);
+    /** 必须在状态锁内调用，使信号入队顺序与状态提交顺序一致。 */
+    private boolean enqueueSignal(GenerationStreamSignal signal) {
+        pendingSignals.add(signal);
+        if (publishingSignals) {
+            return false;
+        }
+        publishingSignals = true;
+        return true;
+    }
+
+    private void publishQueuedSignals(boolean shouldPublish) {
+        if (!shouldPublish) {
+            return;
+        }
+        Throwable failure = null;
+        while (true) {
+            GenerationStreamSignal signal;
+            synchronized (this) {
+                signal = pendingSignals.poll();
+                if (signal == null) {
+                    publishingSignals = false;
+                    rethrow(failure);
+                    return;
+                }
+            }
+            try {
+                signalListener.accept(signal);
+            } catch (RuntimeException | Error listenerFailure) {
+                if (failure == null) {
+                    failure = listenerFailure;
+                } else if (failure != listenerFailure) {
+                    failure.addSuppressed(listenerFailure);
+                }
+            }
+        }
+    }
+
+    private void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
         }
     }
 
