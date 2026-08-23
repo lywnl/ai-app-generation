@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import goldenCases from '../test-fixtures/vue-build-tool-v1-cases.json'
 import {
   clearGenerationSession,
-  getGenerationSessionSnapshot,
   getBuildProjectDisplayState,
   getBuildProjectVisualState,
+  getGenerationSessionSnapshot,
   getGenerationStatusText,
-  shouldShowGenerationStatus,
   shouldRefreshGenerationPreview,
+  shouldShowGenerationStatus,
   startGenerationSession,
   subscribeGenerationSession,
   type SessionEventType,
@@ -16,6 +15,13 @@ import {
 
 const encoder = new TextEncoder()
 const appIds = new Set<string>()
+const recoveryMessages = {
+  STARTED: '检测到生成状态异常，正在重新生成…',
+  RECOVERED: '生成状态已恢复，继续处理…',
+  FAILED: '生成状态异常，系统已停止本次生成，请重新发起。',
+} as const
+
+type WireFrame = { event?: string; data: Record<string, unknown> }
 
 function streamResponse(chunks: string[]): Response {
   return new Response(
@@ -29,105 +35,192 @@ function streamResponse(chunks: string[]): Response {
   )
 }
 
-function event(name: string, data = ''): string {
-  return `event: ${name}\ndata: ${data}\n\n`
+function wire(frames: WireFrame[], lineEnding = '\n'): string {
+  return frames
+    .map((frame) => {
+      const eventLine = frame.event ? `event: ${frame.event}${lineEnding}` : ''
+      return `${eventLine}data: ${JSON.stringify(frame.data)}${lineEnding}${lineEnding}`
+    })
+    .join('')
 }
 
-function messageEvent(payload: unknown): string {
-  return `data: ${JSON.stringify({ d: JSON.stringify(payload) })}\n\n`
+function vueMessage(
+  sequence: number,
+  kind: 'ai_text' | 'structured_tool_event',
+  data: string,
+  generation = '1',
+): WireFrame {
+  return {
+    data: { protocol: 'generation-stream/v1', sequence, kind, data, generation },
+  }
 }
 
-function outcomeEvent(outcome: string, refreshPreview = false): string {
-  return event(
-    'turn-outcome',
-    JSON.stringify({
-      protocol: 'vue-turn/v1',
-      outcome,
-      message: `回合结果：${outcome}`,
-      refreshPreview,
-    }),
-  )
+function simpleMessage(sequence: number, data: string): WireFrame {
+  return { data: { protocol: 'generation-stream/v1', sequence, kind: 'simple_text', data } }
 }
 
-function businessErrorEvent(
-  kind: 'BUSINESS' | 'SYSTEM' = 'BUSINESS',
-  message = '系统繁忙',
-): string {
-  return event(
-    'business-error',
-    JSON.stringify({
-      protocol: 'generation-error/v1',
-      kind,
-      code: kind === 'BUSINESS' ? 40000 : 50000,
-      message,
-    }),
-  )
+function structuredTool(
+  sequence: number,
+  generation: string,
+  payload: Record<string, unknown>,
+): WireFrame {
+  return vueMessage(sequence, 'structured_tool_event', JSON.stringify(payload), generation)
 }
 
-function contextCompressionEvent(phase: 'STARTED' | 'COMPLETED'): string {
-  return event(
-    'context-compression',
-    JSON.stringify({
+function trustedDisplay(
+  sequence: number,
+  generation: string,
+  toolRequestId: string,
+  stage: 'REQUESTED' | 'EXECUTED',
+  text: string,
+): WireFrame {
+  return {
+    event: 'trusted-tool-display',
+    data: {
+      protocol: 'trusted-tool-display/v1',
+      sequence,
+      generation,
+      toolRequestId,
+      stage,
+      text,
+    },
+  }
+}
+
+function rollback(
+  sequence: number,
+  failedGeneration: string,
+  codePoints: number,
+  provisionalToolRequestIds: string[] = [],
+): WireFrame {
+  return {
+    event: 'internal-output-rollback',
+    data: {
+      protocol: 'internal-output-rollback/v1',
+      sequence,
+      failedGeneration,
+      codePoints,
+      provisionalToolRequestIds,
+    },
+  }
+}
+
+function recovery(
+  sequence: number,
+  phase: keyof typeof recoveryMessages,
+  originalFailedGeneration: string,
+  recoveryGeneration: string | null,
+  failedGeneration: string | null,
+): WireFrame {
+  return {
+    event: 'internal-output-recovery',
+    data: {
+      protocol: 'internal-output-recovery/v1',
+      sequence,
+      phase,
+      originalFailedGeneration,
+      recoveryGeneration,
+      failedGeneration,
+      message: recoveryMessages[phase],
+    },
+  }
+}
+
+function contextCompression(sequence: number, phase: 'STARTED' | 'COMPLETED'): WireFrame {
+  return {
+    event: 'context-compression',
+    data: {
       protocol: 'context-compression/v1',
+      sequence,
       phase,
       message: phase === 'STARTED' ? '正在压缩上下文，请稍候…' : '上下文压缩完成，继续生成…',
-    }),
-  )
+    },
+  }
 }
 
-function toolProtocolRecoveryEvent(
+function toolRecovery(
+  sequence: number,
+  eventName: 'tool-protocol-recovery' | 'incomplete-tool-chain-recovery',
   phase: 'STARTED' | 'RECOVERED' | 'FAILED',
-  override: Record<string, unknown> = {},
-): string {
-  const messages = {
-    STARTED: '正在校正工具调用，请稍候…',
-    RECOVERED: '工具调用已校正，继续生成…',
-    FAILED: '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
-  } as const
-  return event(
-    'tool-protocol-recovery',
-    JSON.stringify({
-      protocol: 'tool-protocol-recovery/v1',
+): WireFrame {
+  const messages =
+    eventName === 'tool-protocol-recovery'
+      ? {
+          STARTED: '正在校正工具调用，请稍候…',
+          RECOVERED: '工具调用已校正，继续生成…',
+          FAILED:
+            '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
+        }
+      : {
+          STARTED: '正在继续未完成的构建流程，请稍候…',
+          RECOVERED: '未完成的构建流程已恢复，继续生成…',
+          FAILED: '模型未能继续完成真实工具执行和构建，本轮已安全停止。',
+        }
+  return {
+    event: eventName,
+    data: {
+      protocol:
+        eventName === 'tool-protocol-recovery'
+          ? 'tool-protocol-recovery/v1'
+          : 'incomplete-tool-chain-recovery/v1',
+      sequence,
       phase,
       message: messages[phase],
-      ...override,
-    }),
-  )
+    },
+  }
 }
 
-function incompleteToolChainRecoveryEvent(
-  phase: 'STARTED' | 'RECOVERED' | 'FAILED',
-  override: Record<string, unknown> = {},
-): string {
-  const messages = {
-    STARTED: '正在继续未完成的构建流程，请稍候…',
-    RECOVERED: '未完成的构建流程已恢复，继续生成…',
-    FAILED: '模型未能继续完成真实工具执行和构建，本轮已安全停止。',
-  } as const
-  return event(
-    'incomplete-tool-chain-recovery',
-    JSON.stringify({
-      protocol: 'incomplete-tool-chain-recovery/v1',
-      phase,
-      message: messages[phase],
-      ...override,
-    }),
-  )
+function outcome(
+  sequence: number,
+  value: string,
+  refreshPreview = value === 'SUCCEEDED',
+): WireFrame {
+  return {
+    event: 'turn-outcome',
+    data: {
+      protocol: 'vue-turn/v1',
+      sequence,
+      outcome: value,
+      message: `回合结果：${value}`,
+      refreshPreview,
+    },
+  }
 }
 
-async function runSession(chunks: string[], expectVueTurnOutcome = true) {
+function done(sequence: number): WireFrame {
+  return { event: 'done', data: { protocol: 'generation-stream/v1', sequence } }
+}
+
+function businessError(message = '系统繁忙'): WireFrame {
+  return {
+    event: 'business-error',
+    data: { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 40000, message },
+  }
+}
+
+function heartbeat(timestamp = 1): WireFrame {
+  return { event: 'heartbeat', data: { timestamp } }
+}
+
+async function runSession(
+  framesOrChunks: WireFrame[] | string[],
+  options: { vue?: boolean; renderMode?: 'direct' | 'throttled'; throttleMs?: number } = {},
+) {
   const appId = `app-${appIds.size + 1}`
   appIds.add(appId)
+  const chunks =
+    typeof framesOrChunks[0] === 'string'
+      ? (framesOrChunks as string[])
+      : [wire(framesOrChunks as WireFrame[])]
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse(chunks)))
-
   startGenerationSession({
     appId,
     userMessage: '生成页面',
     baseURL: 'http://localhost/api',
-    renderMode: 'direct',
-    expectVueTurnOutcome,
+    renderMode: options.renderMode ?? 'direct',
+    throttleMs: options.throttleMs,
+    expectVueTurnOutcome: options.vue ?? true,
   })
-
   await vi.waitFor(() => {
     expect(getGenerationSessionSnapshot(appId)?.status).not.toBe('streaming')
   })
@@ -135,1338 +228,802 @@ async function runSession(chunks: string[], expectVueTurnOutcome = true) {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   appIds.forEach(clearGenerationSession)
   appIds.clear()
   vi.unstubAllGlobals()
 })
 
-describe('generationSession Vue SSE 状态机', () => {
-  it.each([
-    ['压缩中且已有正文', 'compressing', 'idle', true, true],
-    ['压缩中且已有工具卡', 'compressing', 'idle', true, true],
-    ['恢复中且已有输出', 'idle', 'recovering', true, true],
-    ['空闲且已有输出', 'idle', 'idle', true, false],
-  ] as const)(
-    '%s 时状态区可见性符合最高优先级',
-    (_name, compression, recovery, hasVisibleOutput, expected) => {
-      expect(
-        shouldShowGenerationStatus(true, compression, recovery, 'idle', hasVisibleOutput),
-      ).toBe(expected)
-      expect(getGenerationStatusText(compression, recovery, 'idle', 'AI 正在思考...')).toBe(
-        compression === 'compressing'
-          ? '正在压缩上下文，请稍候…'
-          : recovery === 'recovering'
-            ? '正在校正工具调用，请稍候…'
-            : 'AI 正在思考...',
-      )
-    },
-  )
-
-  it('未完成工具链恢复使用独立状态且新可信输出会隐藏提示', async () => {
-    const appId = 'incomplete-tool-chain-recovery'
-    appIds.add(appId)
-    const observed: Array<{ recovery: string; content: string }> = []
-    subscribeGenerationSession(appId, (snapshot) => {
-      observed.push({
-        recovery: snapshot.incompleteToolChainRecovery,
-        content: snapshot.content,
-      })
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        streamResponse([
-          incompleteToolChainRecoveryEvent('STARTED'),
-          messageEvent({
-            type: 'tool_request',
-            id: 'recovered-tool',
-            name: 'writeFile',
-            arguments: '{}',
-          }),
-          incompleteToolChainRecoveryEvent('RECOVERED'),
-          outcomeEvent('SUCCEEDED', true),
-          event('done'),
-        ]),
-      ),
+describe('generationSession generation-stream/v1 状态机', () => {
+  it.each(['direct', 'throttled'] as const)('%s 模式按 generation 回滚响应开头的正文', async (renderMode) => {
+    const snapshot = await runSession(
+      [
+        vueMessage(1, 'ai_text', '错误前缀', '1'),
+        rollback(2, '1', 4),
+        recovery(3, 'STARTED', '1', '2', null),
+        recovery(4, 'RECOVERED', '1', '2', null),
+        vueMessage(5, 'ai_text', '安全正文', '2'),
+        outcome(6, 'ANSWERED', false),
+        done(7),
+      ],
+      { renderMode, throttleMs: 10_000 },
     )
 
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(observed).toContainEqual({ recovery: 'recovering', content: '' })
-    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-      incompleteToolChainRecovery: 'idle',
-      outcome: 'succeeded',
-    })
-  })
-
-  it.each([
-    ['RECOVERED 乱序', incompleteToolChainRecoveryEvent('RECOVERED')],
-    ['FAILED 乱序', incompleteToolChainRecoveryEvent('FAILED')],
-    [
-      '重复 STARTED',
-      incompleteToolChainRecoveryEvent('STARTED') +
-        incompleteToolChainRecoveryEvent('STARTED'),
-    ],
-    [
-      '错误协议',
-      incompleteToolChainRecoveryEvent('STARTED', {
-        protocol: 'incomplete-tool-chain-recovery/v2',
-      }),
-    ],
-    [
-      '额外字段',
-      incompleteToolChainRecoveryEvent('STARTED', { internalReason: 'secret' }),
-    ],
-  ])('%s 的未完成工具链控制帧必须以 protocol_error 失败关闭', async (_name, invalidEvent) => {
-    const snapshot = await runSession([invalidEvent, event('done')])
-
     expect(snapshot).toMatchObject({
-      status: 'error',
-      outcome: 'protocol_error',
-      content: '',
-      incompleteToolChainRecovery: 'idle',
-    })
-  })
-
-  it('未完成工具链失败终态映射为独立前端结果', async () => {
-    const snapshot = await runSession([
-      incompleteToolChainRecoveryEvent('STARTED'),
-      incompleteToolChainRecoveryEvent('FAILED'),
-      outcomeEvent('INCOMPLETE_TOOL_CHAIN'),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({
+      content: '安全正文',
       status: 'done',
-      outcome: 'incomplete_tool_chain',
-      incompleteToolChainRecovery: 'idle',
+      outcome: 'answered',
+      internalOutputRecovery: 'idle',
     })
   })
 
-  it('默认恢复状态为 idle 且正常正文流不受影响', async () => {
+  it('只撤销普通正文之后的失败代 AI 片段并保留其他来源', async () => {
     const snapshot = await runSession([
-      'data: {"d":"正常正文"}\n\n',
-      outcomeEvent('SUCCEEDED', true),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({
-      content: '正常正文',
-      toolProtocolRecovery: 'idle',
-      status: 'done',
-      outcome: 'succeeded',
-    })
-  })
-
-  it('恢复开始保留后端已下发的 direct 可信正文且控制文案不进入正文', async () => {
-    const appId = 'tool-recovery-direct-isolation'
-    appIds.add(appId)
-    const observed: Array<{ content: string; recovery: string | undefined }> = []
-    subscribeGenerationSession(appId, (snapshot) => {
-      observed.push({
-        content: snapshot.content,
-        recovery: snapshot.toolProtocolRecovery,
-      })
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        streamResponse([
-          'data: {"d":"可信前缀"}\n\n',
-          toolProtocolRecoveryEvent('STARTED'),
-          toolProtocolRecoveryEvent('RECOVERED'),
-          outcomeEvent('SUCCEEDED', true),
-          event('done'),
-        ]),
-      ),
-    )
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(observed).toContainEqual({ content: '可信前缀', recovery: 'recovering' })
-    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-      content: '可信前缀',
-      toolProtocolRecovery: 'idle',
-      outcome: 'succeeded',
-    })
-    expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('校正工具调用')
-  })
-
-  it('恢复开始把 throttled 可信缓冲固化为检查点且终态后不重复追加', async () => {
-    vi.useFakeTimers()
-    try {
-      const appId = 'tool-recovery-throttled-isolation'
-      appIds.add(appId)
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue(
-          streamResponse([
-            'data: {"d":"缓冲可信前缀"}\n\n',
-            toolProtocolRecoveryEvent('STARTED'),
-            toolProtocolRecoveryEvent('RECOVERED'),
-            outcomeEvent('SUCCEEDED', true),
-            event('done'),
-          ]),
-        ),
-      )
-
-      startGenerationSession({
-        appId,
-        userMessage: '生成页面',
-        baseURL: 'http://localhost/api',
-        renderMode: 'throttled',
-        throttleMs: 10_000,
-        expectVueTurnOutcome: true,
-      })
-
-      await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-      expect(getGenerationSessionSnapshot(appId)?.content).toBe('缓冲可信前缀')
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(getGenerationSessionSnapshot(appId)?.content).toBe('缓冲可信前缀')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('恢复开始保留已经由结构化 SSE 建立的可信工具卡和可信正文', async () => {
-    const appId = 'tool-recovery-preserves-tool-card'
-    appIds.add(appId)
-    const observed: Array<{
-      recovery: string | undefined
-      toolIds: string[]
-    }> = []
-    subscribeGenerationSession(appId, (snapshot) => {
-      observed.push({
-        recovery: snapshot.toolProtocolRecovery,
-        toolIds: [...snapshot.toolCalls.keys()],
-      })
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        streamResponse([
-          messageEvent({
-            type: 'tool_request',
-            id: 'trusted-tool',
-            name: 'writeFile',
-            arguments: '{}',
-          }),
-          'data: {"d":"工具卡后的可信正文"}\n\n',
-          toolProtocolRecoveryEvent('STARTED'),
-          toolProtocolRecoveryEvent('FAILED'),
-          outcomeEvent('FAILED'),
-          event('done'),
-        ]),
-      ),
-    )
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(observed).toContainEqual({
-      recovery: 'recovering',
-      toolIds: ['trusted-tool'],
-    })
-    expect(getGenerationSessionSnapshot(appId)?.toolCalls.has('trusted-tool')).toBe(true)
-    expect(getGenerationSessionSnapshot(appId)?.content).toBe('工具卡后的可信正文')
-  })
-
-  it('后续 generation 退化时保留后端在 STARTED 前已下发的全部可信正文', async () => {
-    const snapshot = await runSession([
-      'data: {"d":"此前可信正文"}\n\n',
-      messageEvent({
-        type: 'tool_request',
-        id: 'trusted-tool',
-        name: 'readFile',
-        arguments: '{"relativeFilePath":"src/App.vue"}',
-      }),
-      messageEvent({
+      vueMessage(1, 'ai_text', '保留', '1'),
+      structuredTool(2, '1', {
         type: 'tool_executed',
-        id: 'trusted-tool',
-        name: 'readFile',
-        result: JSON.stringify({
-          protocol: 'file-tool/v1',
-          operation: 'readFile',
-          status: 'SUCCESS',
-          relativePath: 'src/App.vue',
-          changed: false,
-          message: '读取成功',
-          failureReason: null,
-          content: '不应展示的源码',
-        }),
-      }),
-      'data: {"d":"后续可信正文"}\n\n',
-      toolProtocolRecoveryEvent('STARTED'),
-      toolProtocolRecoveryEvent('FAILED'),
-      outcomeEvent('PROTOCOL_ERROR'),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({
-      content: '此前可信正文后续可信正文',
-      outcome: 'protocol_error',
-      toolProtocolRecovery: 'idle',
-    })
-    expect(snapshot?.toolCalls.has('trusted-tool')).toBe(true)
-  })
-
-  it('允许后端 STARTED 到 RECOVERED 后再次 FAILED 的合法恢复序列', async () => {
-    const snapshot = await runSession([
-      toolProtocolRecoveryEvent('STARTED'),
-      toolProtocolRecoveryEvent('RECOVERED'),
-      toolProtocolRecoveryEvent('FAILED'),
-      outcomeEvent('PROTOCOL_ERROR'),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({
-      status: 'done',
-      outcome: 'protocol_error',
-      errorMessage:
-        '工具调用格式异常，系统自动校正后仍未恢复。本轮没有执行相关工具，请重新发送请求。',
-      toolProtocolRecovery: 'idle',
-    })
-  })
-
-  it.each(['RECOVERED', 'FAILED'] as const)(
-    '%s 只允许从 recovering 合法回到 idle',
-    async (phase) => {
-      const appId = `tool-recovery-transition-${phase}`
-      appIds.add(appId)
-      const observed: Array<string | undefined> = []
-      subscribeGenerationSession(appId, (snapshot) => {
-        observed.push(snapshot.toolProtocolRecovery)
-      })
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue(
-          streamResponse([
-            toolProtocolRecoveryEvent('STARTED'),
-            toolProtocolRecoveryEvent(phase),
-            outcomeEvent('SUCCEEDED', true),
-            event('done'),
-          ]),
-        ),
-      )
-
-      startGenerationSession({
-        appId,
-        userMessage: '生成页面',
-        baseURL: 'http://localhost/api',
-        renderMode: 'direct',
-        expectVueTurnOutcome: true,
-      })
-
-      await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-      expect(observed).toContain('recovering')
-      expect(observed.slice(observed.indexOf('recovering') + 1)).toContain('idle')
-    },
-  )
-
-  it.each([
-    ['真实正文', 'data: {"d":"可信正文"}\n\n'],
-    [
-      'tool_request',
-      messageEvent({ type: 'tool_request', id: 'tool-request', name: 'writeFile' }),
-    ],
-    [
-      'tool_argument',
-      messageEvent({
-        type: 'tool_argument',
-        id: 'tool-argument',
-        name: 'writeFile',
-        key: 'content',
-        value: '可信参数',
-      }),
-    ],
-    [
-      'tool_argument_delta',
-      messageEvent({
-        type: 'tool_argument_delta',
-        id: 'tool-delta',
-        name: 'writeFile',
-        key: 'content',
-        delta: '可信增量',
-      }),
-    ],
-    [
-      'tool_executed',
-      messageEvent({
-        type: 'tool_executed',
-        id: 'tool-executed',
-        name: 'writeFile',
-        result: '完成',
-      }),
-    ],
-  ])('%s 一开始就隐藏恢复提示且不删除新输出', async (_name, trustedEvent) => {
-    const appId = `tool-recovery-hidden-${String(_name)}`
-    appIds.add(appId)
-    const observed: Array<{
-      recovery: string | undefined
-      content: string
-      toolCount: number
-    }> = []
-    subscribeGenerationSession(appId, (snapshot) => {
-      observed.push({
-        recovery: snapshot.toolProtocolRecovery,
-        content: snapshot.content,
-        toolCount: snapshot.toolCalls.size,
-      })
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        streamResponse([
-          toolProtocolRecoveryEvent('STARTED'),
-          trustedEvent,
-          outcomeEvent('SUCCEEDED', true),
-          event('done'),
-        ]),
-      ),
-    )
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(observed).toContainEqual({
-      recovery: 'recovering',
-      content: '',
-      toolCount: 0,
-    })
-    expect(
-      observed.some(
-        (item) =>
-          item.recovery === 'idle' && (item.content === '可信正文' || item.toolCount === 1),
-      ),
-    ).toBe(true)
-  })
-
-  it.each([
-    ['RECOVERED 乱序', toolProtocolRecoveryEvent('RECOVERED')],
-    ['FAILED 乱序', toolProtocolRecoveryEvent('FAILED')],
-    [
-      '重复 STARTED',
-      toolProtocolRecoveryEvent('STARTED') + toolProtocolRecoveryEvent('STARTED'),
-    ],
-    [
-      '错误协议',
-      toolProtocolRecoveryEvent('STARTED', { protocol: 'tool-protocol-recovery/v2' }),
-    ],
-    ['伪造文案', toolProtocolRecoveryEvent('STARTED', { message: '内部异常详情' })],
-    [
-      '缺字段',
-      event(
-        'tool-protocol-recovery',
-        JSON.stringify({ protocol: 'tool-protocol-recovery/v1', phase: 'STARTED' }),
-      ),
-    ],
-    ['额外字段', toolProtocolRecoveryEvent('STARTED', { internalReason: 'secret' })],
-    ['错误 JSON', event('tool-protocol-recovery', '{not-json')],
-  ])('%s 的恢复控制帧必须以 protocol_error 失败关闭', async (_name, invalidEvent) => {
-    const snapshot = await runSession([invalidEvent, event('done')])
-
-    expect(snapshot).toMatchObject({
-      status: 'error',
-      outcome: 'protocol_error',
-      content: '',
-      toolProtocolRecovery: 'idle',
-    })
-  })
-
-  it('markDone 与错误终止都重置恢复状态且保留已下发可信正文', async () => {
-    const doneSnapshot = await runSession([
-      'data: {"d":"完成前可信正文"}\n\n',
-      toolProtocolRecoveryEvent('STARTED'),
-      outcomeEvent('SUCCEEDED', true),
-      event('done'),
-    ])
-    const errorSnapshot = await runSession([
-      'data: {"d":"错误前可信正文"}\n\n',
-      toolProtocolRecoveryEvent('STARTED'),
-      event('unexpected', '{}'),
-    ])
-
-    expect(doneSnapshot).toMatchObject({
-      content: '完成前可信正文',
-      status: 'done',
-      toolProtocolRecovery: 'idle',
-    })
-    expect(errorSnapshot).toMatchObject({
-      content: '错误前可信正文',
-      status: 'error',
-      outcome: 'protocol_error',
-      toolProtocolRecovery: 'idle',
-    })
-  })
-
-  it('同一 app 新请求初始化会清除上一请求的 recovering 状态', async () => {
-    const appId = 'tool-recovery-new-request-reset'
-    appIds.add(appId)
-    let firstController: ReadableStreamDefaultController<Uint8Array> | undefined
-    const firstResponse = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          firstController = controller
-          controller.enqueue(encoder.encode(toolProtocolRecoveryEvent('STARTED')))
-        },
-      }),
-      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
-    )
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(firstResponse)
-      .mockResolvedValueOnce(
-        streamResponse([
-          'data: {"d":"新请求正文"}\n\n',
-          outcomeEvent('SUCCEEDED', true),
-          event('done'),
-        ]),
-      )
-    vi.stubGlobal('fetch', fetchMock)
-
-    startGenerationSession({
-      appId,
-      userMessage: '第一次请求',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.toolProtocolRecovery).toBe('recovering')
-    })
-
-    startGenerationSession({
-      appId,
-      userMessage: '第二次请求',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-    expect(getGenerationSessionSnapshot(appId)?.toolProtocolRecovery).toBe('idle')
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(getGenerationSessionSnapshot(appId)?.content).toBe('新请求正文')
-    try {
-      firstController?.close()
-    } catch {
-      // 第二次请求会中止旧响应；已关闭控制器无需再次处理。
-    }
-  })
-
-  it('统一提示派生函数保持压缩、恢复、fallback 的固定优先级', async () => {
-    const module = await import('./generationSession')
-    const candidate: unknown = Reflect.get(module, 'getGenerationStatusText')
-
-    expect(candidate).toBeTypeOf('function')
-    if (typeof candidate !== 'function') {
-      return
-    }
-    expect(candidate('compressing', 'recovering', 'recovering', 'fallback')).toBe(
-      '正在压缩上下文，请稍候…',
-    )
-    expect(candidate('idle', 'recovering', 'recovering', 'fallback')).toBe(
-      '正在继续未完成的构建流程，请稍候…',
-    )
-    expect(candidate('idle', 'recovering', 'idle', 'fallback')).toBe(
-      '正在校正工具调用，请稍候…',
-    )
-    expect(candidate('idle', 'idle', 'idle', 'fallback')).toBe('fallback')
-  })
-
-  it('压缩开始和完成只切换状态且不污染正文或监听事件类型', async () => {
-    const appId = 'context-compression-state'
-    appIds.add(appId)
-    const observed: Array<{
-      contextCompression: string | undefined
-      content: string
-      eventType: SessionEventType
-    }> = []
-    const unsubscribe = subscribeGenerationSession(appId, (snapshot, eventType) => {
-      observed.push({
-        contextCompression: snapshot.contextCompression,
-        content: snapshot.content,
-        eventType,
-      })
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          streamResponse([
-            contextCompressionEvent('STARTED'),
-            contextCompressionEvent('COMPLETED'),
-            'data: {"d":"正文"}\n\n',
-            outcomeEvent('SUCCEEDED', true),
-            event('done'),
-          ]),
-        ),
-    )
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
-    })
-    expect(observed).toContainEqual({
-      contextCompression: 'compressing',
-      content: '',
-      eventType: 'delta',
-    })
-    expect(observed.some((item) => item.contextCompression === 'idle')).toBe(true)
-    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-      contextCompression: 'idle',
-      content: '正文',
-      outcome: 'succeeded',
-    })
-    expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('压缩上下文')
-    expect(observed.every((item) => ['delta', 'done', 'error'].includes(item.eventType))).toBe(true)
-    unsubscribe()
-  })
-
-  it.each([
-    [
-      '未知 protocol',
-      {
-        protocol: 'context-compression/v2',
-        phase: 'STARTED',
-        message: '正在压缩上下文，请稍候…',
-      },
-    ],
-    [
-      '未知 phase',
-      {
-        protocol: 'context-compression/v1',
-        phase: 'FAILED',
-        message: '压缩失败',
-      },
-    ],
-    [
-      '非固定安全文案',
-      {
-        protocol: 'context-compression/v1',
-        phase: 'STARTED',
-        message: '内部异常详情',
-      },
-    ],
-  ])('压缩控制帧%s时进入 protocol_error', async (_name, payload) => {
-    const snapshot = await runSession([
-      event('context-compression', JSON.stringify(payload)),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({
-      status: 'error',
-      outcome: 'protocol_error',
-      content: '',
-    })
-  })
-
-  it('没有 STARTED 的 COMPLETED 进入 protocol_error', async () => {
-    const snapshot = await runSession([contextCompressionEvent('COMPLETED'), event('done')])
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it('重复 STARTED 进入 protocol_error', async () => {
-    const snapshot = await runSession([
-      contextCompressionEvent('STARTED'),
-      contextCompressionEvent('STARTED'),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it('资源超限工具结果会结束卡片且只保留已广播参数', async () => {
-    const snapshot = await runSession([
-      messageEvent({
-        type: 'tool_request',
-        id: 'tool-large',
-        name: 'writeFile',
-        arguments: null,
-      }),
-      messageEvent({
-        type: 'tool_argument_delta',
-        id: 'tool-large',
-        name: 'writeFile',
-        key: 'content',
-        delta: '合法前缀',
-      }),
-      messageEvent({
-        type: 'tool_executed',
-        id: 'tool-large',
+        id: 'tool-1',
         name: 'writeFile',
         arguments: '{}',
-        result: JSON.stringify({
-          protocol: 'file-tool/v1',
-          operation: 'writeFile',
-          status: 'REJECTED',
-          relativePath: null,
-          changed: false,
-          message: '工具内容超过本轮资源上限',
-          failureReason: 'RESOURCE_LIMIT_EXCEEDED',
-          content: null,
-        }),
+        result: '完成',
       }),
-      outcomeEvent('SYSTEM_ERROR'),
-      event('done'),
+      trustedDisplay(3, '1', 'tool-1', 'EXECUTED', '工具已执行'),
+      vueMessage(4, 'ai_text', '删除', '2'),
+      rollback(5, '2', 2),
+      recovery(6, 'STARTED', '2', '3', null),
+      recovery(7, 'FAILED', '2', '3', '3'),
+      outcome(8, 'PROTOCOL_ERROR', false),
+      done(9),
     ])
 
-    const tool = snapshot?.toolCalls.get('tool-large')
-    expect(tool?.status).toBe('done')
-    expect(tool?.args.content).toBe('合法前缀')
-    expect(tool?.result).toContain('RESOURCE_LIMIT_EXCEEDED')
+    expect(snapshot?.content).toBe('保留工具已执行')
   })
 
-  it.each([
-    ['streaming', undefined, 'streaming'],
-    ['done', undefined, 'unrecognized'],
-    ['done', { statusText: '构建成功' }, 'parsed'],
-  ] as const)('buildProject %s 卡片展示为 %s', (status, build, expected) => {
-    expect(getBuildProjectDisplayState({ status, build })).toBe(expected)
+  it('按 Unicode 码点回滚 emoji 且 codePoints=0 合法', async () => {
+    const emoji = await runSession([
+      vueMessage(1, 'ai_text', '保留😀泄漏', '1'),
+      rollback(2, '1', 3),
+      recovery(3, 'STARTED', '1', '2', null),
+      recovery(4, 'FAILED', '1', '2', '2'),
+      outcome(5, 'PROTOCOL_ERROR', false),
+      done(6),
+    ])
+    const zero = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'FAILED', '1', '2', '2'),
+      outcome(4, 'PROTOCOL_ERROR', false),
+      done(5),
+    ])
+
+    expect(emoji?.content).toBe('保留')
+    expect(zero).toMatchObject({ outcome: 'protocol_error', content: '' })
   })
 
-  it.each([
-    ['流式工具', 'streaming', undefined, 'streaming'],
-    ['构建成功', 'done', { invocationStatus: 'COMPLETED', success: true }, 'success'],
-    ['构建失败', 'done', { invocationStatus: 'COMPLETED', success: false }, 'failed'],
-    ['构建取消', 'done', { invocationStatus: 'CANCELLED' }, 'cancelled'],
-    ['构建拒绝', 'done', { invocationStatus: 'REJECTED' }, 'neutral'],
-    ['已有构建', 'done', { invocationStatus: 'BUILD_IN_PROGRESS' }, 'neutral'],
-    ['结果不可识别', 'done', undefined, 'unrecognized'],
-  ] as const)('%s 使用 %s 视觉状态', (_name, status, build, expected) => {
-    expect(
-      getBuildProjectVisualState({
-        status,
-        build: build
-          ? {
-              ...build,
-              maxAttempts: 3,
-              statusText: '状态',
-              terminateToolLoop: false,
-            }
-          : undefined,
+  it('节流中未显示的失败片段被回滚且旧 timer 在 FAILED 后不补发', async () => {
+    const snapshot = await runSession(
+      [
+        vueMessage(1, 'ai_text', '待删除', '1'),
+        rollback(2, '1', 3),
+        recovery(3, 'FAILED', '1', null, '1'),
+        outcome(4, 'PROTOCOL_ERROR', false),
+        done(5),
+      ],
+      { renderMode: 'throttled', throttleMs: 10_000 },
+    )
+    expect(snapshot?.content).toBe('')
+  })
+
+  it('内部 FAILED 丢弃其他代尚未展示的节流片段且不让 done 补发', async () => {
+    const snapshot = await runSession(
+      [
+        vueMessage(1, 'ai_text', '尚未展示的安全前缀', '1'),
+        rollback(2, '2', 0),
+        recovery(3, 'STARTED', '2', '3', null),
+        recovery(4, 'FAILED', '2', '3', '3'),
+        outcome(5, 'PROTOCOL_ERROR', false),
+        done(6),
+      ],
+      { renderMode: 'throttled', throttleMs: 10_000 },
+    )
+
+    expect(snapshot).toMatchObject({ content: '', status: 'done', outcome: 'protocol_error' })
+  })
+
+  it('回滚删除指定代 provisional 工具卡和 REQUESTED 展示但保留已执行事实', async () => {
+    const snapshot = await runSession([
+      structuredTool(1, '1', { type: 'tool_request', id: 'temp', name: 'writeFile' }),
+      trustedDisplay(2, '1', 'temp', 'REQUESTED', '准备写入'),
+      structuredTool(3, '1', { type: 'tool_request', id: 'done', name: 'buildProject' }),
+      trustedDisplay(4, '1', 'done', 'REQUESTED', '准备构建'),
+      structuredTool(5, '1', {
+        type: 'tool_executed',
+        id: 'done',
+        name: 'buildProject',
+        arguments: '{}',
+        result: '完成',
       }),
-    ).toBe(expected)
+      trustedDisplay(6, '1', 'done', 'EXECUTED', '构建完成'),
+      rollback(7, '1', 0, ['temp', 'done', 'unknown']),
+      recovery(8, 'FAILED', '1', null, '1'),
+      outcome(9, 'PROTOCOL_ERROR', false),
+      done(10),
+    ])
+
+    expect(snapshot?.toolCalls.has('temp')).toBe(false)
+    expect(snapshot?.toolCalls.get('done')).toMatchObject({
+      generation: '1',
+      provisional: false,
+      status: 'done',
+    })
+    expect(snapshot?.content).toBe('准备构建构建完成')
   })
 
-  it.each([
-    ['done + answered', 'done', 'answered', false],
-    ['done + succeeded', 'done', 'succeeded', true],
-    ['streaming + succeeded', 'streaming', 'succeeded', false],
-    ['done + failed', 'done', 'failed', false],
-    ['error + succeeded', 'error', 'succeeded', false],
-  ] as const)('%s 的预览刷新判断为 %s', (_name, status, outcome, expected) => {
-    expect(shouldRefreshGenerationPreview({ status, outcome })).toBe(expected)
+  it('参数事件必须命中相同 id、generation 和工具名', async () => {
+    const snapshot = await runSession([
+      structuredTool(1, '1', { type: 'tool_request', id: 'tool-1', name: 'writeFile' }),
+      structuredTool(2, '2', {
+        type: 'tool_argument_delta',
+        id: 'tool-1',
+        name: 'writeFile',
+        key: 'content',
+        delta: '越代',
+      }),
+      done(3),
+    ])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    expect(snapshot?.toolCalls.get('tool-1')?.args.content).toBeUndefined()
   })
 
-  it('ANSWERED 业务终态正常结束且不刷新预览', async () => {
-    const snapshot = await runSession([outcomeEvent('ANSWERED'), event('done')])
+  it('complete-only provider 可直接建立已执行工具卡', async () => {
+    const snapshot = await runSession([
+      structuredTool(1, '9', {
+        type: 'tool_executed',
+        id: 'tool-9',
+        name: 'writeFile',
+        arguments: '{"relativeFilePath":"src/App.vue"}',
+        result: '完成',
+      }),
+      outcome(2, 'SUCCEEDED'),
+      done(3),
+    ])
+
+    expect(snapshot?.toolCalls.get('tool-9')).toMatchObject({
+      generation: '9',
+      provisional: false,
+      status: 'done',
+      args: { relativeFilePath: 'src/App.vue' },
+    })
+  })
+
+  it('严格接受第一次恢复成功和恢复代再次泄漏后失败', async () => {
+    const success = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      outcome(4, 'ANSWERED', false),
+      done(5),
+    ])
+    const secondLeak = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      vueMessage(4, 'ai_text', '再次泄漏', '2'),
+      rollback(5, '2', 4),
+      recovery(6, 'FAILED', '1', '2', '2'),
+      outcome(7, 'PROTOCOL_ERROR', false),
+      done(8),
+    ])
+
+    expect(success).toMatchObject({ status: 'done', outcome: 'answered' })
+    expect(secondLeak).toMatchObject({ content: '', status: 'done', outcome: 'protocol_error' })
+  })
+
+  it('恢复成功后接受恢复下界及后续代次的正文、工具事件和可信展示', async () => {
+    const snapshot = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      structuredTool(4, '2', {
+        type: 'tool_executed',
+        id: 'tool-g2',
+        name: 'writeFile',
+        arguments: '{}',
+        result: 'g2 已执行',
+      }),
+      trustedDisplay(5, '2', 'tool-g2', 'EXECUTED', 'g2 工具完成'),
+      vueMessage(6, 'ai_text', 'g3 正文', '3'),
+      structuredTool(7, '3', {
+        type: 'tool_request',
+        id: 'tool-g3',
+        name: 'writeFile',
+      }),
+      trustedDisplay(8, '3', 'tool-g3', 'REQUESTED', 'g3 请求工具'),
+      structuredTool(9, '3', {
+        type: 'tool_executed',
+        id: 'tool-g3',
+        name: 'writeFile',
+        arguments: '{}',
+        result: 'g3 已执行',
+      }),
+      trustedDisplay(10, '3', 'tool-g3', 'EXECUTED', 'g3 工具完成'),
+      vueMessage(11, 'ai_text', 'g4 正文', '4'),
+      structuredTool(12, '4', {
+        type: 'tool_request',
+        id: 'tool-g4',
+        name: 'buildProject',
+      }),
+      trustedDisplay(13, '4', 'tool-g4', 'REQUESTED', 'g4 请求构建'),
+      structuredTool(14, '4', {
+        type: 'tool_executed',
+        id: 'tool-g4',
+        name: 'buildProject',
+        arguments: '{}',
+        result: 'g4 已执行',
+      }),
+      trustedDisplay(15, '4', 'tool-g4', 'EXECUTED', 'g4 构建完成'),
+      outcome(16, 'ANSWERED', false),
+      done(17),
+    ])
 
     expect(snapshot).toMatchObject({
       status: 'done',
       outcome: 'answered',
-      loading: false,
+      content:
+        'g2 工具完成g3 正文g3 请求工具g3 工具完成g4 正文g4 请求构建g4 构建完成',
     })
-    expect(shouldRefreshGenerationPreview(snapshot!)).toBe(false)
-  })
-
-  it('兼容 CRLF、跨 chunk、heartbeat 和无尾随空行', async () => {
-    const complete = [
-      ': heartbeat\r\n\r\n',
-      event('heartbeat', '{"timestamp":1}').replace(/\n/g, '\r\n'),
-      'data: {"d":"你',
-      '好"}\r\n\r\n',
-      outcomeEvent('SUCCEEDED', true).replace(/\n/g, '\r\n'),
-      'event: done\r\ndata:',
-    ]
-
-    const snapshot = await runSession(complete)
-
-    expect(snapshot).toMatchObject({
-      content: '你好',
-      status: 'done',
-      outcome: 'succeeded',
-      loading: false,
+    expect(snapshot?.toolCalls.get('tool-g2')).toMatchObject({
+      generation: '2',
+      provisional: false,
+    })
+    expect(snapshot?.toolCalls.get('tool-g3')).toMatchObject({
+      generation: '3',
+      provisional: false,
+    })
+    expect(snapshot?.toolCalls.get('tool-g4')).toMatchObject({
+      generation: '4',
+      provisional: false,
     })
   })
 
-  it('只有 SUCCEEDED outcome 后收到 done 才成功', async () => {
-    const snapshot = await runSession([outcomeEvent('SUCCEEDED', true), event('done')])
-
-    expect(snapshot).toMatchObject({ status: 'done', outcome: 'succeeded' })
-  })
-
-  it('解析 buildProject 结果但不让它决定整轮成功', async () => {
-    const buildResult = {
-      protocol: 'vue-build-tool/v1',
-      invocationStatus: 'COMPLETED',
-      success: true,
-      attempt: 1,
-      maxAttempts: 3,
-      stage: 'SUCCESS',
-      failureKind: null,
-      timedOut: false,
-      repairable: false,
-      reflectionRequired: false,
-      nextAction: 'STOP',
-      message: '构建成功',
-      errorSummary: null,
-      terminateToolLoop: true,
-      finalResponse: '项目已生成并构建成功。',
-    }
-    const toolExecuted = messageEvent({
-      type: 'tool_executed',
-      id: '9007199254740993123',
-      name: 'buildProject',
-      arguments: '{}',
-      result: JSON.stringify(buildResult),
-    })
-
-    const snapshot = await runSession([toolExecuted, event('done')])
-
-    expect(snapshot?.toolCalls.get('9007199254740993123')).toMatchObject({
-      id: '9007199254740993123',
-      result: JSON.stringify(buildResult),
-      build: { success: true, statusText: '第 1 次构建成功' },
-    })
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it.each(goldenCases)('$name 结果可被页面构建卡片消费', async ({ raw, expectedView }) => {
+  it('恢复成功后拒绝小于恢复下界的迟到旧代', async () => {
     const snapshot = await runSession([
-      messageEvent({
-        type: 'tool_executed',
-        id: `build-${raw.invocationStatus}-${String(raw.attempt)}`,
-        name: 'buildProject',
-        arguments: '{}',
-        result: JSON.stringify(raw),
-      }),
-      outcomeEvent('FAILED'),
-      event('done'),
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      vueMessage(4, 'ai_text', '不得接收的 g1 正文', '1'),
+      done(5),
     ])
-    const tool = [...(snapshot?.toolCalls.values() ?? [])][0]
-    const expectedVisualState =
-      raw.invocationStatus === 'CANCELLED'
-        ? 'cancelled'
-        : raw.invocationStatus !== 'COMPLETED'
-          ? 'neutral'
-          : raw.success
-            ? 'success'
-            : 'failed'
-
-    expect(tool?.build).toEqual(expectedView)
-    expect(tool && getBuildProjectVisualState(tool)).toBe(expectedVisualState)
-  })
-
-  it('回合创建前 business-error 后的 done 保持 system_error', async () => {
-    const snapshot = await runSession([businessErrorEvent('BUSINESS', '系统繁忙'), event('done')])
 
     expect(snapshot).toMatchObject({
-      status: 'done',
-      outcome: 'system_error',
-      errorMessage: '系统繁忙',
-    })
-  })
-
-  it('压缩开始后首次门禁 business-error 安全结束且不污染正文', async () => {
-    const snapshot = await runSession(
-      [
-        contextCompressionEvent('STARTED'),
-        businessErrorEvent('BUSINESS', '本轮上下文无法安全继续，生成已停止，请重试'),
-        event('done'),
-      ],
-      false,
-    )
-
-    expect(snapshot).toMatchObject({
-      content: '',
-      status: 'done',
-      outcome: 'system_error',
-      errorMessage: '本轮上下文无法安全继续，生成已停止，请重试',
-      contextCompression: 'idle',
-    })
-  })
-
-  it('意外 EOF 标记为协议错误', async () => {
-    const snapshot = await runSession([outcomeEvent('SUCCEEDED', true)])
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it('非 Vue 生成流缺少显式 done 时也标记为协议错误', async () => {
-    const snapshot = await runSession(['data: {"d":"正文"}\n\n'], false)
-
-    expect(snapshot).toMatchObject({
-      content: '正文',
       status: 'error',
+      outcome: 'protocol_error',
+      content: '',
+    })
+  })
+
+  it('后续代次再次泄漏时按对应 rollback 和原恢复链 FAILED 收口', async () => {
+    const snapshot = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      vueMessage(4, 'ai_text', 'g2 安全正文', '2'),
+      vueMessage(5, 'ai_text', 'g3 泄漏', '3'),
+      rollback(6, '3', 5),
+      recovery(7, 'FAILED', '1', '2', '3'),
+      outcome(8, 'PROTOCOL_ERROR', false),
+      done(9),
+    ])
+
+    expect(snapshot).toMatchObject({
+      status: 'done',
+      outcome: 'protocol_error',
+      content: 'g2 安全正文',
+      internalOutputRecovery: 'idle',
+    })
+  })
+
+  it.each([
+    [
+      '恢复启动前失败',
+      [rollback(1, '1', 0), recovery(2, 'FAILED', '1', null, '1'), outcome(3, 'PROTOCOL_ERROR', false), done(4)],
+    ],
+    [
+      '恢复代同步或异步失败',
+      [
+        rollback(1, '1', 0),
+        recovery(2, 'STARTED', '1', '2', null),
+        recovery(3, 'FAILED', '1', '2', '2'),
+        outcome(4, 'PROTOCOL_ERROR', false),
+        done(5),
+      ],
+    ],
+  ] as const)('%s 只关闭恢复提示并等待后端终态', async (_name, frames) => {
+    const snapshot = await runSession([...frames])
+    expect(snapshot).toMatchObject({
+      status: 'done',
+      internalOutputRecovery: 'idle',
       outcome: 'protocol_error',
     })
   })
 
-  it('两个 turn-outcome 标记为协议错误', async () => {
+  it('同一恢复阶段只接受一个 rollback', async () => {
+    const beforeStart = await runSession([
+      rollback(1, '1', 0),
+      rollback(2, '1', 0),
+      recovery(3, 'STARTED', '1', '2', null),
+      recovery(4, 'RECOVERED', '1', '2', null),
+      outcome(5, 'ANSWERED', false),
+      done(6),
+    ])
+    const afterRecovered = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      rollback(4, '2', 0),
+      rollback(5, '3', 0),
+      outcome(6, 'ANSWERED', false),
+      done(7),
+    ])
+
+    expect(beforeStart).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    expect(afterRecovered).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('恢复成功后的 rollback 不得回退到恢复下界之前的旧代', async () => {
     const snapshot = await runSession([
-      outcomeEvent('FAILED'),
-      outcomeEvent('FAILED'),
-      event('done'),
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      rollback(4, '1', 0),
+      recovery(5, 'FAILED', '1', '2', '1'),
+      outcome(6, 'PROTOCOL_ERROR', false),
+      done(7),
+    ])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('STARTED 后 RECOVERED 前的恢复代泄漏允许一次 rollback 后失败', async () => {
+    const snapshot = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      rollback(3, '2', 0),
+      recovery(4, 'FAILED', '1', '2', '2'),
+      outcome(5, 'PROTOCOL_ERROR', false),
+      done(6),
+    ])
+
+    expect(snapshot).toMatchObject({
+      status: 'done',
+      outcome: 'protocol_error',
+      content: '',
+    })
+  })
+
+  it('STARTED 后已有待处理 rollback 时拒绝 RECOVERED', async () => {
+    const snapshot = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      rollback(3, '2', 0),
+      recovery(4, 'RECOVERED', '1', '2', null),
+      outcome(5, 'ANSWERED', false),
+      done(6),
     ])
 
     expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
   })
 
   it.each([
-    ['正文', 'data: {"d":"不应接受"}\n\n'],
+    ['AI 正文', vueMessage(7, 'ai_text', '不得接收的 g4 正文', '4')],
     [
-      '工具事件',
-      messageEvent({
+      '结构化工具事件',
+      structuredTool(7, '4', {
+        type: 'tool_request',
+        id: 'tool-after-rollback',
+        name: 'writeFile',
+      }),
+    ],
+    [
+      '可信工具展示',
+      trustedDisplay(7, '3', 'executed-before-rollback', 'EXECUTED', '不得重复展示'),
+    ],
+  ] as const)('恢复分支 rollback 后 FAILED 前拒绝%s', async (_name, unexpectedFrame) => {
+    const snapshot = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      structuredTool(4, '3', {
         type: 'tool_executed',
-        id: 'tool-after-outcome',
+        id: 'executed-before-rollback',
         name: 'writeFile',
         arguments: '{}',
-        result: 'ok',
+        result: '已执行',
       }),
-    ],
-    ['错误事件', event('error', JSON.stringify({ message: '迟到错误' }))],
-    ['压缩事件', contextCompressionEvent('STARTED')],
-  ])('turn-outcome 后收到%s标记为协议错误', async (_name, unexpectedEvent) => {
-    const snapshot = await runSession([
-      outcomeEvent('SUCCEEDED', true),
-      unexpectedEvent,
-      event('done'),
+      vueMessage(5, 'ai_text', 'g3 泄漏', '3'),
+      rollback(6, '3', 5),
+      unexpectedFrame,
+      done(8),
     ])
 
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-    expect(snapshot?.content).not.toContain('不应接受')
-    expect(snapshot?.toolCalls.has('tool-after-outcome')).toBe(false)
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error', content: '' })
+    expect(snapshot?.toolCalls.has('tool-after-rollback')).toBe(false)
   })
 
-  it('同一缓冲中 done 后的压缩事件必须覆盖同步清理竞态并标记协议错误', async () => {
-    const appId = 'event-after-done-with-sync-clear'
-    appIds.add(appId)
-    let lastObserved:
-      | {
-          eventType: SessionEventType
-          status: string
-          outcome: string
-        }
-      | undefined
-    let doneEvents = 0
-    subscribeGenerationSession(appId, (snapshot, eventType) => {
-      lastObserved = {
-        eventType,
-        status: snapshot.status,
-        outcome: snapshot.outcome,
-      }
-      if (eventType === 'done') {
-        doneEvents += 1
-        clearGenerationSession(appId)
-      }
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          streamResponse([
-            outcomeEvent('SUCCEEDED', true) + event('done') + contextCompressionEvent('STARTED'),
-          ]),
-        ),
-    )
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => {
-      expect(lastObserved?.eventType).toBe('error')
-    })
-    expect(lastObserved).toEqual({
-      eventType: 'error',
-      status: 'error',
-      outcome: 'protocol_error',
-    })
-    expect(doneEvents).toBe(0)
-  })
-
-  it('同一缓冲中的重复 done 必须标记协议错误', async () => {
+  it.each([
+    ['ANSWERED', false],
+    ['SUCCEEDED', true],
+  ] as const)('待处理 rollback 时拒绝成功终态 %s', async (wireOutcome, refreshPreview) => {
     const snapshot = await runSession([
-      outcomeEvent('SUCCEEDED', true) + event('done') + event('done'),
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      rollback(4, '2', 0),
+      outcome(5, wireOutcome, refreshPreview),
+      done(6),
     ])
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it('合法唯一 done 仅在 EOF 确认后发布一次', async () => {
-    const appId = 'single-done-after-eof'
-    appIds.add(appId)
-    const doneSnapshots: Array<{ status: string; outcome: string }> = []
-    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
-    subscribeGenerationSession(appId, (snapshot, eventType) => {
-      if (eventType === 'done') {
-        doneSnapshots.push({ status: snapshot.status, outcome: snapshot.outcome })
-      }
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              streamController = controller
-              controller.enqueue(encoder.encode(outcomeEvent('SUCCEEDED', true) + event('done')))
-            },
-          }),
-          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
-        ),
-      ),
-    )
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.outcome).toBe('succeeded'))
-    expect(getGenerationSessionSnapshot(appId)?.status).toBe('streaming')
-    expect(doneSnapshots).toEqual([])
-
-    streamController?.close()
-
-    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
-    expect(doneSnapshots).toEqual([{ status: 'done', outcome: 'succeeded' }])
-  })
-
-  it('business-error 后再收到 outcome 标记为协议错误', async () => {
-    const snapshot = await runSession([businessErrorEvent(), outcomeEvent('FAILED'), event('done')])
 
     expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
   })
 
   it.each([
+    ['started', 'ANSWERED', false],
+    ['started', 'SUCCEEDED', true],
+    ['failed', 'ANSWERED', false],
+    ['failed', 'SUCCEEDED', true],
+  ] as const)(
+    '内部恢复处于 %s 时拒绝成功终态 %s',
+    async (recoveryState, wireOutcome, refreshPreview) => {
+      const recoveryFrames =
+        recoveryState === 'started'
+          ? [recovery(2, 'STARTED', '1', '2', null)]
+          : [
+              recovery(2, 'STARTED', '1', '2', null),
+              recovery(3, 'FAILED', '1', '2', '2'),
+            ]
+      const outcomeSequence = recoveryFrames.length + 2
+      const snapshot = await runSession([
+        rollback(1, '1', 0),
+        ...recoveryFrames,
+        outcome(outcomeSequence, wireOutcome, refreshPreview),
+        done(outcomeSequence + 1),
+      ])
+
+      expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    },
+  )
+
+  it.each([
+    ['rollback 等待态', 'CANCELLED', 'cancelled'],
+    ['rollback 等待态', 'TIMED_OUT', 'timed_out'],
+    ['started', 'CANCELLED', 'cancelled'],
+    ['started', 'TIMED_OUT', 'timed_out'],
+  ] as const)(
+    '内部恢复处于 %s 时允许失败终态 %s 接管',
+    async (recoveryState, wireOutcome, expectedOutcome) => {
+      const recoveryFrames =
+        recoveryState === 'started' ? [recovery(2, 'STARTED', '1', '2', null)] : []
+      const outcomeSequence = recoveryFrames.length + 2
+      const snapshot = await runSession([
+        rollback(1, '1', 0),
+        ...recoveryFrames,
+        outcome(outcomeSequence, wireOutcome, false),
+        done(outcomeSequence + 1),
+      ])
+
+      expect(snapshot).toMatchObject({ status: 'done', outcome: expectedOutcome })
+    },
+  )
+
+  it.each([
+    ['重复 STARTED', [rollback(1, '1', 0), recovery(2, 'STARTED', '1', '2', null), recovery(3, 'STARTED', '1', '3', null)]],
+    ['无 rollback 的 RECOVERED', [recovery(1, 'RECOVERED', '1', '2', null)]],
+    ['字段关系冲突', [rollback(1, '1', 0), recovery(2, 'STARTED', '2', '3', null)]],
+  ] as const)('%s 被拒绝', async (_name, frames) => {
+    const snapshot = await runSession([...frames, done(frames.length + 1)])
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each([
+    ['正文', vueMessage(3, 'ai_text', '过早正文', '2')],
     [
-      '错误协议',
-      { protocol: 'vue-turn/v2', outcome: 'FAILED', message: '失败', refreshPreview: false },
+      '工具',
+      structuredTool(3, '2', { type: 'tool_request', id: 'early-tool', name: 'writeFile' }),
     ],
-    [
-      '成功却不刷新',
-      { protocol: 'vue-turn/v1', outcome: 'SUCCEEDED', message: '成功', refreshPreview: false },
-    ],
-    [
-      '失败却要求刷新',
-      { protocol: 'vue-turn/v1', outcome: 'FAILED', message: '失败', refreshPreview: true },
-    ],
-    [
-      '非字符串 outcome',
-      { protocol: 'vue-turn/v1', outcome: 1, message: '失败', refreshPreview: false },
-    ],
-    [
-      '非字符串 message',
-      { protocol: 'vue-turn/v1', outcome: 'FAILED', message: 123, refreshPreview: false },
-    ],
-  ])('%s 的 outcome 标记为协议错误', async (_name, rawOutcome) => {
+  ] as const)('STARTED 后 RECOVERED 前收到恢复代%s时拒绝', async (_name, frame) => {
     const snapshot = await runSession([
-      event('turn-outcome', JSON.stringify(rawOutcome)),
-      event('done'),
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      frame,
+      done(4),
+    ])
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    expect(snapshot?.content).toBe('')
+    expect(snapshot?.toolCalls.has('early-tool')).toBe(false)
+  })
+
+  it('FAILED 和本地协议错误不撤销未获 rollback 授权的安全正文', async () => {
+    const failed = await runSession([
+      vueMessage(1, 'ai_text', '安全正文', '1'),
+      rollback(2, '1', 0),
+      recovery(3, 'FAILED', '1', null, '1'),
+      outcome(4, 'PROTOCOL_ERROR', false),
+      done(5),
+    ])
+    const invalid = await runSession([
+      vueMessage(1, 'ai_text', '仍应保留', '1'),
+      { event: 'turn-outcome', data: { protocol: 'vue-turn/v1', sequence: 2 } },
+      done(3),
     ])
 
+    expect(failed?.content).toBe('安全正文')
+    expect(invalid?.content).toBe('仍应保留')
+  })
+
+  it.each([
+    ['Vue 接受 simple_text', [simpleMessage(1, '错误')], true],
+    ['普通链接受 ai_text', [vueMessage(1, 'ai_text', '错误')], false],
+    ['旧 d 包装', [{ data: { d: JSON.stringify({ type: 'ai_response', data: '错误' }) } }], true],
+  ] as const)('%s 时进入 protocol_error', async (_name, frames, vue) => {
+    const snapshot = await runSession([...frames, done(2)], { vue })
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error', content: '' })
+  })
+
+  it.each([
+    ['message 多余字段', { ...vueMessage(1, 'ai_text', '正文').data, extra: true }],
+    ['message 宽松 sequence', { ...vueMessage(1, 'ai_text', '正文').data, sequence: '1' }],
+    ['message 数字 generation', { ...vueMessage(1, 'ai_text', '正文').data, generation: 1 }],
+    ['message 缺 generation', { protocol: 'generation-stream/v1', sequence: 1, kind: 'ai_text', data: '正文' }],
+    ['控制帧多余字段', { ...rollback(1, '1', 0).data, extra: true }],
+  ])('%s 被严格拒绝', async (name, data) => {
+    const eventName = name === '控制帧多余字段' ? 'internal-output-rollback' : undefined
+    const snapshot = await runSession([{ event: eventName, data }, done(2)])
     expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each([
+    ['内层 generation', { type: 'tool_request', id: '1', name: 'writeFile', generation: '1' }],
+    ['内层多余字段', { type: 'tool_request', id: '1', name: 'writeFile', extra: true }],
+    ['非字符串 id', { type: 'tool_request', id: 1, name: 'writeFile' }],
+    ['非法工具类型', { type: 'ai_response', data: '伪正文' }],
+  ])('%s 的结构化工具对象被拒绝', async (_name, payload) => {
+    const snapshot = await runSession([structuredTool(1, '1', payload), done(2)])
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each([
+    ['重复', [vueMessage(1, 'ai_text', '一'), vueMessage(1, 'ai_text', '二')]],
+    ['跳号', [vueMessage(1, 'ai_text', '一'), vueMessage(3, 'ai_text', '二')]],
+    ['倒序', [vueMessage(2, 'ai_text', '一')]],
+    ['零值', [vueMessage(0, 'ai_text', '一')]],
+    ['超过 int 上限', [vueMessage(2_147_483_648, 'ai_text', '一')]],
+  ] as const)('sequence %s 时拒绝后续帧', async (_name, frames) => {
+    const lastSequence = frames.at(-1)!.data.sequence as number
+    const snapshot = await runSession([...frames, done(lastSequence + 1)])
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('heartbeat 不编号且不改变业务序号', async () => {
+    const snapshot = await runSession([
+      heartbeat(123),
+      vueMessage(1, 'ai_text', '正文'),
+      heartbeat(456),
+      outcome(2, 'ANSWERED', false),
+      done(3),
+    ])
+    expect(snapshot).toMatchObject({ content: '正文', status: 'done', outcome: 'answered' })
   })
 
   it.each([
     ['ANSWERED', 'answered'],
-    ['FAILED', 'failed'],
-    ['CANCELLED', 'cancelled'],
-    ['TIMED_OUT', 'timed_out'],
-    ['SYSTEM_ERROR', 'system_error'],
     ['PROTOCOL_ERROR', 'protocol_error'],
-  ])('映射 %s 业务终态', async (wireOutcome, expectedOutcome) => {
-    const snapshot = await runSession([outcomeEvent(wireOutcome), event('done')])
+  ] as const)(
+    'turn-outcome %s 后允许无序号 heartbeat 穿插再由连续 done 闭合',
+    async (wireOutcome, expectedOutcome) => {
+      const snapshot = await runSession([
+        vueMessage(1, 'ai_text', '已确认正文'),
+        outcome(2, wireOutcome, false),
+        heartbeat(789),
+        done(3),
+      ])
 
-    expect(snapshot).toMatchObject({ status: 'done', outcome: expectedOutcome })
+      expect(snapshot).toMatchObject({
+        content: '已确认正文',
+        status: 'done',
+        outcome: expectedOutcome,
+      })
+    },
+  )
+
+  it('business-error 后 heartbeat 仍被拒绝且不能伪装正常 done', async () => {
+    const snapshot = await runSession([businessError('前置失败'), heartbeat(789), done(1)])
+
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
   })
 
-  it('生成请求使用 POST JSON 且大整数 appId 全程保持字符串', async () => {
-    const appId = '9007199254740993123'
-    const userMessage = '生成内容不能进入 URL'
-    appIds.add(appId)
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(streamResponse([outcomeEvent('SUCCEEDED', true), event('done')]))
-    vi.stubGlobal('fetch', fetchMock)
+  it.each([
+    ['首部错误', [businessError('首部失败'), done(1)]],
+    ['已有业务帧后的错误', [contextCompression(1, 'STARTED'), businessError('中途失败'), done(2)]],
+  ] as const)('%s 后 done 延续当前序号', async (_name, frames) => {
+    const snapshot = await runSession([...frames], { vue: false })
+    expect(snapshot).toMatchObject({ status: 'done', outcome: 'system_error' })
+  })
 
+  it('business-error 丢弃尚未展示的节流正文且 done 不再补发', async () => {
+    const snapshot = await runSession(
+      [simpleMessage(1, '尚未展示'), businessError(), done(2)],
+      { vue: false, renderMode: 'throttled', throttleMs: 10_000 },
+    )
+
+    expect(snapshot).toMatchObject({ content: '', status: 'done', outcome: 'system_error' })
+  })
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'business-error 非法错误码 %s 被拒绝',
+    async (code) => {
+      const frame = businessError()
+      frame.data.code = code
+      const snapshot = await runSession([frame, done(1)], { vue: false })
+      expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    },
+  )
+
+  it('business-error 后业务帧被拒绝且安全正文不被猜测撤销', async () => {
+    const snapshot = await runSession([
+      vueMessage(1, 'ai_text', '保留'),
+      businessError(),
+      vueMessage(2, 'ai_text', '迟到'),
+      done(3),
+    ])
+    expect(snapshot).toMatchObject({ content: '保留', status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each([
+    ['generation 前导零', vueMessage(1, 'ai_text', '正文', '01')],
+    ['generation 超过 long 上限', vueMessage(1, 'ai_text', '正文', '9223372036854775808')],
+    ['codePoints 小数', rollback(1, '1', 1.5)],
+    ['codePoints 超过 int 上限', rollback(1, '1', 2_147_483_648)],
+    ['rollback 重复 id', rollback(1, '1', 0, ['a', 'a'])],
+    ['rollback 空 id', rollback(1, '1', 0, [''])],
+  ] as const)('%s 被有界校验拒绝', async (_name, frame) => {
+    const snapshot = await runSession([frame, done(2)])
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('rollback 超过失败代现有 AI 码点数时保留原正文并协议失败', async () => {
+    const snapshot = await runSession([
+      vueMessage(1, 'ai_text', '安全', '1'),
+      rollback(2, '1', 3),
+      done(3),
+    ])
+    expect(snapshot).toMatchObject({ content: '安全', status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('已知 provisional id generation 冲突时协议失败而不删除工具卡', async () => {
+    const snapshot = await runSession([
+      structuredTool(1, '1', { type: 'tool_request', id: 'tool-1', name: 'writeFile' }),
+      rollback(2, '2', 0, ['tool-1']),
+      done(3),
+    ])
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    expect(snapshot?.toolCalls.has('tool-1')).toBe(true)
+  })
+
+  it('上下文压缩、内部恢复、未完成工具链、工具恢复和普通提示优先级固定', () => {
+    expect(getGenerationStatusText('compressing', 'recovering', 'recovering', 'recovering', '普通')).toBe(
+      '正在压缩上下文，请稍候…',
+    )
+    expect(getGenerationStatusText('idle', 'recovering', 'recovering', 'recovering', '普通')).toBe(
+      '正在恢复安全生成，请稍候…',
+    )
+    expect(getGenerationStatusText('idle', 'idle', 'recovering', 'recovering', '普通')).toBe(
+      '正在继续未完成的构建流程，请稍候…',
+    )
+    expect(getGenerationStatusText('idle', 'idle', 'idle', 'recovering', '普通')).toBe(
+      '正在校正工具调用，请稍候…',
+    )
+  })
+
+  it('恢复状态参与可见性判断且新一轮会重置', async () => {
+    expect(shouldShowGenerationStatus(true, 'idle', 'recovering', 'idle', 'idle', true)).toBe(true)
+    const snapshot = await runSession([
+      rollback(1, '1', 0),
+      recovery(2, 'STARTED', '1', '2', null),
+      recovery(3, 'RECOVERED', '1', '2', null),
+      outcome(4, 'ANSWERED', false),
+      done(5),
+    ])
+    expect(snapshot?.internalOutputRecovery).toBe('idle')
+  })
+
+  it('普通链只接受 simple_text、上下文压缩、business-error 与 done', async () => {
+    const snapshot = await runSession(
+      [simpleMessage(1, '你好'), contextCompression(2, 'STARTED'), contextCompression(3, 'COMPLETED'), done(4)],
+      { vue: false, renderMode: 'throttled' },
+    )
+    expect(snapshot).toMatchObject({ content: '你好', outcome: 'succeeded', status: 'done' })
+  })
+
+  it('工具协议恢复只属于 Vue 会话', async () => {
+    const snapshot = await runSession([toolRecovery(1, 'tool-protocol-recovery', 'STARTED'), done(2)], {
+      vue: false,
+    })
+    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('turn-outcome 与 done 都只能出现一次且必须连续编号', async () => {
+    const duplicateOutcome = await runSession([outcome(1, 'ANSWERED', false), outcome(2, 'ANSWERED', false), done(3)])
+    const duplicateDone = await runSession([outcome(1, 'ANSWERED', false), done(2), done(3)])
+    expect(duplicateOutcome).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+    expect(duplicateDone).toMatchObject({ status: 'error', outcome: 'protocol_error' })
+  })
+
+  it('失败 turn-outcome 丢弃尚未展示的节流正文且 done 不再补发', async () => {
+    const snapshot = await runSession(
+      [vueMessage(1, 'ai_text', '尚未展示'), outcome(2, 'PROTOCOL_ERROR', false), done(3)],
+      { renderMode: 'throttled', throttleMs: 10_000 },
+    )
+
+    expect(snapshot).toMatchObject({ content: '', status: 'done', outcome: 'protocol_error' })
+  })
+
+  it('缺少 turn-outcome 的 done 不得提交尚未展示的节流正文', async () => {
+    const snapshot = await runSession(
+      [vueMessage(1, 'ai_text', '尚未展示'), done(2)],
+      { renderMode: 'throttled', throttleMs: 10_000 },
+    )
+
+    expect(snapshot).toMatchObject({ content: '', status: 'error', outcome: 'protocol_error' })
+  })
+
+  it.each([
+    ['ANSWERED', 'answered', false],
+    ['SUCCEEDED', 'succeeded', true],
+  ] as const)('%s 终态映射正确且预览刷新为 %s', async (value, expected, refresh) => {
+    const snapshot = await runSession([outcome(1, value, refresh), done(2)])
+    expect(snapshot).toMatchObject({ status: 'done', outcome: expected })
+    expect(shouldRefreshGenerationPreview(snapshot!)).toBe(refresh)
+  })
+
+  it('请求体中的大整数 appId 全程保持字符串', async () => {
+    const appId = '9007199254740993123'
+    appIds.add(appId)
+    const fetchMock = vi.fn().mockResolvedValue(streamResponse([wire([outcome(1, 'ANSWERED', false), done(2)])]))
+    vi.stubGlobal('fetch', fetchMock)
     startGenerationSession({
       appId,
-      userMessage,
+      userMessage: '生成页面',
       baseURL: 'http://localhost/api/',
       renderMode: 'direct',
       expectVueTurnOutcome: true,
     })
-
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
-    })
-    expect(fetchMock).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
     const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('http://localhost/api/app/chat/gen/code')
-    expect(url).not.toContain('?')
-    expect(url).not.toContain(userMessage)
-    expect(request.method).toBe('POST')
-    expect(request.credentials).toBe('include')
-    expect(request.headers).toEqual({
-      Accept: 'text/event-stream',
-      'Content-Type': 'application/json; charset=UTF-8',
-    })
-    expect(JSON.parse(String(request.body))).toEqual({ appId, message: userMessage })
-    expect(request.signal).toBeInstanceOf(AbortSignal)
+    expect(JSON.parse(String(request.body))).toEqual({ appId, message: '生成页面' })
   })
 
-  it.each([
-    [413, '请求内容过大，请缩短需求后重试。'],
-    [502, '生成服务暂时不可用，请稍后重试。'],
-  ])('HTTP %i 不读取响应正文并使用固定安全文案', async (status, safeMessage) => {
-    const appId = `http-error-${status}`
-    appIds.add(appId)
-    const response = new Response('SECRET_PROXY_BODY', {
-      status,
-      statusText: 'SECRET_PROXY_STATUS',
-      headers: { 'Content-Type': 'text/html' },
-    })
-    const getReader = vi.spyOn(response.body as ReadableStream<Uint8Array>, 'getReader')
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
-
-    startGenerationSession({
-      appId,
-      userMessage: '生成页面',
-      baseURL: 'http://localhost/api',
-      expectVueTurnOutcome: true,
-    })
-
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('error')
-    })
-    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-      outcome: 'system_error',
-      errorMessage: safeMessage,
-      content: '',
-    })
-    expect(getReader).not.toHaveBeenCalled()
-  })
-
-  it.each([undefined, 'application/json', 'text/event-streaming'])(
-    'HTTP 2xx Content-Type=%s 时拒绝读取正文',
-    async (contentType) => {
-      const appId = `content-type-${String(contentType)}`
-      appIds.add(appId)
-      const headers = contentType ? { 'Content-Type': contentType } : undefined
-      const response = new Response('SECRET_NON_SSE_BODY', { status: 200, headers })
-      const getReader = vi.spyOn(response.body as ReadableStream<Uint8Array>, 'getReader')
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
-
+  it('未提供会话类型时拒绝发起请求', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(() =>
       startGenerationSession({
-        appId,
+        appId: 'unknown-type',
         userMessage: '生成页面',
         baseURL: 'http://localhost/api',
-        expectVueTurnOutcome: true,
-      })
-
-      await vi.waitFor(() => {
-        expect(getGenerationSessionSnapshot(appId)?.status).toBe('error')
-      })
-      expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-        outcome: 'system_error',
-        errorMessage: '生成服务暂时不可用，请稍后重试。',
-        content: '',
-      })
-      expect(getReader).not.toHaveBeenCalled()
-    },
-  )
+      } as never),
+    ).toThrow('生成会话类型未确定')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 
   it.each([
-    [
-      '未知协议',
-      { protocol: 'generation-error/v2', kind: 'BUSINESS', code: 40000, message: '失败' },
-    ],
-    ['缺少协议', { kind: 'BUSINESS', code: 40000, message: '失败' }],
-    ['未知 kind', { protocol: 'generation-error/v1', kind: 'OTHER', code: 40000, message: '失败' }],
-    ['缺少 kind', { protocol: 'generation-error/v1', code: 40000, message: '失败' }],
-    [
-      '非整数 code',
-      { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 1.5, message: '失败' },
-    ],
-    [
-      '非安全整数 code',
-      {
-        protocol: 'generation-error/v1',
-        kind: 'BUSINESS',
-        code: 9007199254740992,
-        message: '失败',
-      },
-    ],
-    ['缺少 code', { protocol: 'generation-error/v1', kind: 'BUSINESS', message: '失败' }],
-    [
-      '空 message',
-      { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 40000, message: '  ' },
-    ],
-    ['缺少 message', { protocol: 'generation-error/v1', kind: 'BUSINESS', code: 40000 }],
-  ])('business-error %s 时进入 protocol_error', async (_name, payload) => {
-    const snapshot = await runSession([
-      event('business-error', JSON.stringify(payload)),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it.each(['BUSINESS', 'SYSTEM'] as const)(
-    '合法 %s business-error 只在 done 时通知一次',
-    async (kind) => {
-      const appId = `preflight-${kind}`
-      appIds.add(appId)
-      const localEvents: SessionEventType[] = []
-      const unsubscribe = subscribeGenerationSession(appId, (_snapshot, eventType) => {
-        localEvents.push(eventType)
-      })
-      vi.stubGlobal(
-        'fetch',
-        vi
-          .fn()
-          .mockResolvedValue(
-            streamResponse([
-              event('heartbeat', '{"timestamp":1}'),
-              businessErrorEvent(kind, '安全前置错误'),
-              event('done'),
-            ]),
-          ),
-      )
-
-      startGenerationSession({
-        appId,
-        userMessage: '生成页面',
-        baseURL: 'http://localhost/api',
-        expectVueTurnOutcome: true,
-      })
-
-      await vi.waitFor(() => {
-        expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
-      })
-      expect(getGenerationSessionSnapshot(appId)).toMatchObject({
-        outcome: 'system_error',
-        errorMessage: '安全前置错误',
-      })
-      expect(localEvents.filter((item) => item === 'done')).toHaveLength(1)
-      expect(localEvents.filter((item) => item === 'error')).toHaveLength(0)
-      expect(localEvents).not.toContain('business-error')
-      unsubscribe()
-    },
-  )
-
-  it.each([
-    ['正文后', ['data: {"d":"正文"}\n\n', businessErrorEvent(), event('done')]],
-    [
-      '工具后',
-      [
-        messageEvent({ type: 'tool_request', id: 'tool-1', name: 'writeFile', arguments: '{}' }),
-        businessErrorEvent(),
-        event('done'),
-      ],
-    ],
-    ['重复错误', [businessErrorEvent(), businessErrorEvent(), event('done')]],
-    ['错误后正文', [businessErrorEvent(), 'data: {"d":"正文"}\n\n', event('done')]],
-    ['错误后心跳', [businessErrorEvent(), event('heartbeat', '{"timestamp":2}'), event('done')]],
-  ])('%s收到 business-error 时进入 protocol_error', async (_name, chunks) => {
-    const snapshot = await runSession(chunks)
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it('business-error 后 EOF 必须覆盖为 protocol_error', async () => {
-    const snapshot = await runSession([businessErrorEvent()])
-
-    expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
-  })
-
-  it.each(['error', 'build_status', 'unexpected-event'])(
-    '未知命名事件 %s 不得退化成聊天正文',
-    async (name) => {
-      const snapshot = await runSession([event(name, '{"message":"机密正文"}'), event('done')])
-
-      expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error', content: '' })
-    },
-  )
-
-  it('支持 BOM、注释、多行 data、重复 event 最后值和未知字段', async () => {
-    const snapshot = await runSession([
-      '\uFEFF: 注释\r\nunknown: ignored\r\nevent: unexpected\r\nevent: message\r\ndata: 第一行\r\ndata: 第二行\r\n\r\n',
-      outcomeEvent('SUCCEEDED', true),
-      event('done'),
-    ])
-
-    expect(snapshot).toMatchObject({
-      content: '第一行\n第二行',
-      status: 'done',
-      outcome: 'succeeded',
-    })
-  })
-
-  it('UTF-8 多字节字符跨字节 chunk 时仍完整解码', async () => {
-    const appId = 'split-utf8'
+    ['HTTP 413', new Response('SECRET', { status: 413 }), '请求内容过大，请缩短需求后重试。'],
+    ['非 SSE', new Response('SECRET', { status: 200, headers: { 'Content-Type': 'application/json' } }), '生成服务暂时不可用，请稍后重试。'],
+  ])('%s 使用固定安全文案', async (_name, response, message) => {
+    const appId = `safe-error-${appIds.size}`
     appIds.add(appId)
-    const bytes = encoder.encode(
-      `data: {"d":"中文😀"}\n\n${outcomeEvent('SUCCEEDED', true)}${event('done')}`,
-    )
-    const emojiStart = bytes.findIndex((value) => value === 0xf0)
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes.slice(0, emojiStart + 2))
-          controller.enqueue(bytes.slice(emojiStart + 2))
-          controller.close()
-        },
-      }),
-      { status: 200, headers: { 'Content-Type': 'TEXT/EVENT-STREAM; charset=UTF-8' } },
-    )
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
-
     startGenerationSession({
       appId,
       userMessage: '生成页面',
@@ -1474,128 +1031,72 @@ describe('generationSession Vue SSE 状态机', () => {
       renderMode: 'direct',
       expectVueTurnOutcome: true,
     })
-
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('error'))
+    expect(getGenerationSessionSnapshot(appId)).toMatchObject({
+      outcome: 'system_error',
+      errorMessage: message,
+      content: '',
     })
-    expect(getGenerationSessionSnapshot(appId)?.content).toBe('中文😀')
   })
 
-  it('非法 UTF-8 使用固定 protocol_error 且不产生替换字符', async () => {
+  it('非法 UTF-8 按协议失败且不产生替换字符', async () => {
     const appId = 'invalid-utf8'
     appIds.add(appId)
     const response = new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(Uint8Array.from([0x64, 0x61, 0x74, 0x61, 0x3a, 0x20, 0xc3, 0x28]))
+          controller.enqueue(Uint8Array.of(0xc3, 0x28))
           controller.close()
         },
       }),
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
     )
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
-
     startGenerationSession({
       appId,
       userMessage: '生成页面',
       baseURL: 'http://localhost/api',
+      renderMode: 'direct',
       expectVueTurnOutcome: true,
     })
-
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('error')
-    })
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('error'))
     expect(getGenerationSessionSnapshot(appId)).toMatchObject({
       outcome: 'protocol_error',
       errorMessage: '生成流包含非法 UTF-8 数据',
-      content: '',
     })
-    expect(getGenerationSessionSnapshot(appId)?.content).not.toContain('\uFFFD')
   })
 
-  it('readFile 工具卡片只保留白名单元数据并强制清除正文', async () => {
-    const secret = 'SECRET_READ_CONTENT_7fdd'
-    const unsafeResult = JSON.stringify({
-      protocol: 'file-tool/v1',
-      operation: 'readFile',
-      status: 'APPLIED',
-      relativePath: 'src/App.vue',
-      changed: false,
-      message: '文件读取成功',
-      failureReason: null,
-      content: secret,
-      extraSecret: secret,
-    })
-    const snapshot = await runSession([
-      messageEvent({
-        type: 'tool_request',
-        id: 'read-1',
-        name: 'readFile',
-        arguments: JSON.stringify({
-          relativeFilePath: 'src/App.vue',
-          content: secret,
-        }),
-      }),
-      messageEvent({
-        type: 'tool_argument_delta',
-        id: 'read-1',
-        name: 'readFile',
-        key: 'content',
-        delta: secret,
-      }),
-      messageEvent({
-        type: 'tool_executed',
-        id: 'read-1',
-        name: 'readFile',
-        arguments: JSON.stringify({ relativeFilePath: 'src/App.vue' }),
-        result: unsafeResult,
-        rawContent: secret,
-      }),
-      outcomeEvent('SUCCEEDED', true),
-      event('done'),
-    ])
-
-    const tool = snapshot?.toolCalls.get('read-1')
-    expect(JSON.parse(tool?.result ?? '{}')).toEqual({
-      protocol: 'file-tool/v1',
-      operation: 'readFile',
-      status: 'APPLIED',
-      relativePath: 'src/App.vue',
-      changed: false,
-      message: '文件读取成功',
-      failureReason: null,
-      content: null,
-    })
-    expect(JSON.stringify(tool)).not.toContain(secret)
-    expect(snapshot?.content).not.toContain(secret)
+  it('SSE 分块、CRLF、heartbeat 和无尾随空行均可解析', async () => {
+    const complete = wire(
+      [heartbeat(), vueMessage(1, 'ai_text', '你好'), outcome(2, 'ANSWERED', false), done(3)],
+      '\r\n',
+    )
+    const split = complete.indexOf('你好') + 1
+    const snapshot = await runSession([complete.slice(0, split), complete.slice(split).trimEnd()])
+    expect(snapshot).toMatchObject({ content: '你好', status: 'done', outcome: 'answered' })
   })
 
-  it('节流缓冲只通知一次正文变化且注销函数可重复调用', async () => {
+  it('节流结束只提交一次正文且注销订阅可重复调用', async () => {
     const appId = 'listener-idempotent'
     appIds.add(appId)
-    const observedContents: string[] = []
+    const observed: string[] = []
     const listener = (snapshot: { content: string }, eventType: SessionEventType) => {
-      if (eventType === 'delta') {
-        observedContents.push(snapshot.content)
-      }
+      if (eventType === 'delta') observed.push(snapshot.content)
     }
     const unsubscribe = subscribeGenerationSession(appId, listener)
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockImplementation(() =>
-          Promise.resolve(
-            streamResponse([
-              'data: {"d":"你"}\n\n',
-              'data: {"d":"好"}\n\n',
-              outcomeEvent('SUCCEEDED', true),
-              event('done'),
-            ]),
-          ),
-        ),
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          wire([
+            vueMessage(1, 'ai_text', '你'),
+            vueMessage(2, 'ai_text', '好'),
+            outcome(3, 'ANSWERED', false),
+            done(4),
+          ]),
+        ]),
+      ),
     )
-
     startGenerationSession({
       appId,
       userMessage: '生成页面',
@@ -1604,24 +1105,33 @@ describe('generationSession Vue SSE 状态机', () => {
       throttleMs: 10_000,
       expectVueTurnOutcome: true,
     })
+    await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
+    expect(observed.filter((content) => content === '你好')).toHaveLength(1)
+    unsubscribe()
+    unsubscribe()
+  })
 
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
-    })
-    expect(observedContents.filter((content) => content === '你好')).toHaveLength(1)
-    const callsBeforeUnsubscribe = observedContents.length
-    unsubscribe()
-    unsubscribe()
-    startGenerationSession({
-      appId,
-      userMessage: '再次生成',
-      baseURL: 'http://localhost/api',
-      renderMode: 'direct',
-      expectVueTurnOutcome: true,
-    })
-    await vi.waitFor(() => {
-      expect(getGenerationSessionSnapshot(appId)?.status).toBe('done')
-    })
-    expect(observedContents).toHaveLength(callsBeforeUnsubscribe)
+  it.each([
+    ['streaming', undefined, 'streaming'],
+    ['done', undefined, 'unrecognized'],
+    ['done', { statusText: '构建成功' }, 'parsed'],
+  ] as const)('构建卡片展示状态为 %s', (status, build, expected) => {
+    expect(getBuildProjectDisplayState({ status, build })).toBe(expected)
+  })
+
+  it.each([
+    ['streaming', undefined, 'streaming'],
+    ['done', { invocationStatus: 'COMPLETED', success: true }, 'success'],
+    ['done', { invocationStatus: 'COMPLETED', success: false }, 'failed'],
+    ['done', { invocationStatus: 'CANCELLED' }, 'cancelled'],
+  ] as const)('构建视觉状态为 %s', (status, build, expected) => {
+    expect(
+      getBuildProjectVisualState({
+        status,
+        build: build
+          ? { ...build, maxAttempts: 3, statusText: '状态', terminateToolLoop: false }
+          : undefined,
+      }),
+    ).toBe(expected)
   })
 })

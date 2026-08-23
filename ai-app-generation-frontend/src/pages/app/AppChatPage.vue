@@ -168,8 +168,9 @@
                   <span>{{
                     getGenerationStatusText(
                       message.contextCompression || 'idle',
-                      message.toolProtocolRecovery || 'idle',
+                      message.internalOutputRecovery || 'idle',
                       message.incompleteToolChainRecovery || 'idle',
+                      message.toolProtocolRecovery || 'idle',
                       'AI 正在思考...',
                     )
                   }}</span>
@@ -298,8 +299,9 @@
             <p>{{
               getGenerationStatusText(
                 contextCompression,
-                toolProtocolRecovery,
+                internalOutputRecovery,
                 incompleteToolChainRecovery,
+                toolProtocolRecovery,
                 '正在生成网站...',
               )
             }}</p>
@@ -351,6 +353,7 @@ import {
   type GenerationSessionSnapshot,
   type GenerationOutcome,
   type ContextCompressionState,
+  type InternalOutputRecoveryState,
   type ToolProtocolRecoveryState,
   type IncompleteToolChainRecoveryState,
   startGenerationSession,
@@ -425,6 +428,7 @@ interface Message {
   content: string
   loading?: boolean
   contextCompression?: ContextCompressionState
+  internalOutputRecovery?: InternalOutputRecoveryState
   toolProtocolRecovery?: ToolProtocolRecoveryState
   incompleteToolChainRecovery?: IncompleteToolChainRecoveryState
   createTime?: string
@@ -440,6 +444,7 @@ const activeSessionAppId = ref<string | null>(null)
 const sessionMessageIndex = ref<number | null>(null)
 const detachSession = ref<null | (() => void)>(null)
 const contextCompression = ref<ContextCompressionState>('idle')
+const internalOutputRecovery = ref<InternalOutputRecoveryState>('idle')
 const toolProtocolRecovery = ref<ToolProtocolRecoveryState>('idle')
 const incompleteToolChainRecovery =
   ref<IncompleteToolChainRecoveryState>('idle')
@@ -612,6 +617,7 @@ const fetchAppInfo = async () => {
 
 const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   contextCompression.value = snapshot.contextCompression
+  internalOutputRecovery.value = snapshot.internalOutputRecovery
   toolProtocolRecovery.value = snapshot.toolProtocolRecovery
   incompleteToolChainRecovery.value = snapshot.incompleteToolChainRecovery
   const idx = sessionMessageIndex.value
@@ -622,14 +628,16 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.content = snapshot.content
   aiMessage.toolCalls = new Map(snapshot.toolCalls)
   aiMessage.contextCompression = snapshot.contextCompression
+  aiMessage.internalOutputRecovery = snapshot.internalOutputRecovery
   aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery
   aiMessage.incompleteToolChainRecovery = snapshot.incompleteToolChainRecovery
   const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
   aiMessage.loading = shouldShowGenerationStatus(
     snapshot.loading,
     snapshot.contextCompression,
-    snapshot.toolProtocolRecovery,
+    snapshot.internalOutputRecovery,
     snapshot.incompleteToolChainRecovery,
+    snapshot.toolProtocolRecovery,
     hasVisibleOutput,
   )
   isGenerating.value = snapshot.status === 'streaming'
@@ -690,10 +698,28 @@ const attachSessionListener = (targetAppId: string) => {
   })
 }
 
+const resolveVueSessionType = (): boolean | undefined => {
+  const codeGenType = appInfo.value?.codeGenType
+  if (codeGenType === CodeGenTypeEnum.VUE_PROJECT) {
+    return true
+  }
+  if (codeGenType === CodeGenTypeEnum.HTML || codeGenType === CodeGenTypeEnum.MULTI_FILE) {
+    return false
+  }
+  return undefined
+}
+
 const startGeneration = async (inputMessage: string, aiMessageIndex: number) => {
   const targetAppId = appId.value
   if (!targetAppId) {
     message.error('应用ID不存在')
+    messages.value.splice(aiMessageIndex, 1)
+    return
+  }
+  const expectVueTurnOutcome = resolveVueSessionType()
+  if (expectVueTurnOutcome === undefined) {
+    message.error('应用类型尚未加载或不受支持')
+    messages.value.splice(aiMessageIndex, 1)
     return
   }
   activeSessionAppId.value = targetAppId
@@ -706,9 +732,9 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
     userMessage: inputMessage,
     baseURL: request.defaults.baseURL || API_BASE_URL,
     renderMode:
-      appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT ? 'direct' : 'throttled',
+      expectVueTurnOutcome ? 'direct' : 'throttled',
     throttleMs: 100,
-    expectVueTurnOutcome: appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT,
+    expectVueTurnOutcome,
   })
   const snapshot = getGenerationSessionSnapshot(targetAppId)
   if (snapshot) {
