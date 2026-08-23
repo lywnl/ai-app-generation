@@ -23,7 +23,8 @@ class VueReadOnlyIntentPolicyTest {
                 "现在页面有哪些组件？",
                 "解释购物车是怎么实现的",
                 "刚才修改了哪些文件？",
-                "上次修改了什么");
+                "请问，刚才修改了哪些文件？",
+                "麻烦告诉我上次修改了什么。");
     }
 
     @ParameterizedTest
@@ -40,6 +41,8 @@ class VueReadOnlyIntentPolicyTest {
                 Arguments.of("排版松散一点"),
                 Arguments.of("再现代一点"),
                 Arguments.of("为什么不把按钮改成红色"),
+                Arguments.of("刚才修改了哪些文件，然后删除登录页"),
+                Arguments.of("上次修改了什么，顺便重构导航栏"),
                 Arguments.of("继续"),
                 Arguments.of(""),
                 Arguments.of((String) null));
