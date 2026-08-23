@@ -19,8 +19,10 @@ public class VueReadOnlyIntentPolicy {
             "替换", "改成", "换成", "优化", "调整", "更新", "美化", "补充", "移动",
             "重命名", "开启", "关闭", "启用", "禁用", "升级", "迁移",
             "丰富一点", "松散一点", "继续完善", "再现代一点");
-    private static final List<String> ENGINEERING_SUBJECT_ENDINGS = List.of(
-            "页面", "组件", "组件名称", "导航", "配置", "策略", "逻辑", "状态", "实现", "购物车");
+    private static final List<String> ENGINEERING_ENTITIES = List.of(
+            "组件名称", "页面", "组件", "导航", "配置", "策略", "逻辑", "状态", "实现", "购物车", "首页");
+    private static final List<String> ENGINEERING_QUALIFIERS = List.of(
+            "当前", "现在", "全部", "后端", "并发", "合并", "显示", "隐藏");
 
     public boolean isExplicitReadOnly(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
@@ -33,7 +35,7 @@ public class VueReadOnlyIntentPolicy {
         if (hasTrailingContentAfterHistoryFactQuery(message)) {
             return false;
         }
-        if (hasClauseDelimiter(message) || containsCommandStructure(message) || startsWithCommand(message)) {
+        if (hasClauseDelimiter(message) || startsWithCommand(message)) {
             return false;
         }
         if (containsAny(message, MUTATION_PHRASES)) {
@@ -67,10 +69,6 @@ public class VueReadOnlyIntentPolicy {
     private boolean startsWithCommand(String message) {
         return message.startsWith("把") || message.startsWith("帮我")
                 || message.startsWith("显示") || message.startsWith("隐藏");
-    }
-
-    private boolean containsCommandStructure(String message) {
-        return message.contains("做一个");
     }
 
     /** 只读资格只接受一个自然语言问句；出现分句分隔符即按混合输入失败关闭。 */
@@ -130,8 +128,53 @@ public class VueReadOnlyIntentPolicy {
     }
 
     private boolean isEngineeringSubject(String subject) {
-        return !subject.isBlank()
-                && ENGINEERING_SUBJECT_ENDINGS.stream().anyMatch(subject::endsWith);
+        int index = 0;
+        while (index < subject.length()) {
+            int relationIndex = nextRelationIndex(subject, index);
+            int segmentEnd = relationIndex < 0 ? subject.length() : relationIndex;
+            if (!isEngineeringSegment(subject.substring(index, segmentEnd))) {
+                return false;
+            }
+            if (relationIndex < 0) {
+                return true;
+            }
+            index = relationIndex + relationLength(subject, relationIndex);
+        }
+        return false;
+    }
+
+    /** 工程对象只允许“限定词* + 实体”，并可用“的/中的”连接多个此类片段。 */
+    private boolean isEngineeringSegment(String segment) {
+        int index = 0;
+        String qualifier;
+        while ((qualifier = matchingPrefix(segment, index, ENGINEERING_QUALIFIERS)) != null) {
+            index += qualifier.length();
+        }
+        String entity = matchingPrefix(segment, index, ENGINEERING_ENTITIES);
+        return entity != null && index + entity.length() == segment.length();
+    }
+
+    private int nextRelationIndex(String subject, int startIndex) {
+        int possessiveIndex = subject.indexOf('的', startIndex);
+        int locativeIndex = subject.indexOf("中的", startIndex);
+        if (locativeIndex < 0) {
+            return possessiveIndex;
+        }
+        if (possessiveIndex < 0 || locativeIndex < possessiveIndex) {
+            return locativeIndex;
+        }
+        return possessiveIndex;
+    }
+
+    private int relationLength(String subject, int relationIndex) {
+        return subject.startsWith("中的", relationIndex) ? 2 : 1;
+    }
+
+    private String matchingPrefix(String text, int startIndex, List<String> candidates) {
+        return candidates.stream()
+                .filter(candidate -> text.startsWith(candidate, startIndex))
+                .findFirst()
+                .orElse(null);
     }
 
     private String normalizePoliteQuery(String message) {
