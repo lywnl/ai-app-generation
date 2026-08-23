@@ -15,30 +15,73 @@ public class VueReadOnlyIntentPolicy {
     private static final List<String> POLITE_SUFFIXES = List.of(
             "谢谢", "麻烦了", "呢", "呀", "吗");
     private static final List<String> MUTATION_PHRASES = List.of(
-            "创建", "新增", "删除", "修复", "重构", "替换", "改成", "换成",
+            "修改", "创建", "新增", "增加", "添加", "删除", "移除", "修复", "重构",
+            "替换", "改成", "换成", "优化", "调整", "更新", "美化", "补充", "移动",
+            "重命名", "隐藏", "显示", "开启", "关闭", "启用", "禁用", "升级", "迁移",
             "丰富一点", "松散一点", "继续完善", "再现代一点");
-    private static final List<String> READ_ONLY_PHRASES = List.of(
-            "有哪些", "是什么", "为什么", "怎么实现的", "列出当前组件", "解释",
-            "分析", "读取", "查看");
+    private static final List<String> MULTI_ACTION_CONNECTORS = List.of(
+            "然后", "顺便", "接着", "并且", "并", "同时");
 
     public boolean isExplicitReadOnly(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
             return false;
         }
-        String message = userMessage.strip();
-        if (containsAny(message, MUTATION_PHRASES)) {
+        String message = normalizePoliteQuery(userMessage);
+        if (containsMultiActionConnector(message)
+                || startsWithCommand(message)
+                || containsPostActionCombination(message)) {
             return false;
         }
         if (isCompleteHistoryFactQuery(message)) {
             return true;
         }
-        return containsAny(message, READ_ONLY_PHRASES);
+        if (containsAny(message, MUTATION_PHRASES)) {
+            return false;
+        }
+        return isExplicitSingleReadOnlyQuery(message);
     }
 
     /** 历史事实例外只接受完整问句，避免覆盖同句后续的新修改动作。 */
     private boolean isCompleteHistoryFactQuery(String message) {
-        String normalized = stripPolitePrefix(stripTrailingPoliteText(message));
-        return HISTORY_FACT_QUERIES.contains(normalized);
+        return HISTORY_FACT_QUERIES.contains(message);
+    }
+
+    private boolean isExplicitSingleReadOnlyQuery(String message) {
+        return message.contains("有哪些") || message.endsWith("是什么")
+                || message.startsWith("为什么")
+                || message.contains("怎么实现的")
+                || message.startsWith("列出当前组件")
+                || message.startsWith("查看当前")
+                || message.startsWith("读取当前")
+                || message.startsWith("解释")
+                || message.startsWith("分析当前");
+    }
+
+    private boolean startsWithCommand(String message) {
+        return message.startsWith("把") || message.startsWith("帮我");
+    }
+
+    private boolean containsMultiActionConnector(String message) {
+        if (containsAny(message, MULTI_ACTION_CONNECTORS)) {
+            return true;
+        }
+        int againIndex = message.indexOf("再");
+        return againIndex > 0 && againIndex < message.length() - 1
+                && containsAny(message.substring(againIndex + 1), MUTATION_PHRASES);
+    }
+
+    private boolean containsPostActionCombination(String message) {
+        int afterIndex = message.indexOf('后');
+        if (afterIndex < 0 || afterIndex == message.length() - 1) {
+            return false;
+        }
+        String following = message.substring(afterIndex + 1);
+        return following.startsWith("帮我")
+                || containsAny(following, MUTATION_PHRASES);
+    }
+
+    private String normalizePoliteQuery(String message) {
+        return stripPolitePrefix(stripTrailingPoliteText(message.strip()));
     }
 
     private String stripPolitePrefix(String message) {
