@@ -148,10 +148,21 @@ public class VueReadOnlyIntentPolicy {
         int index = 0;
         String qualifier;
         while ((qualifier = matchingPrefix(segment, index, ENGINEERING_QUALIFIERS)) != null) {
+            if (isRepeatedOrConflictingQualifier(segment, qualifier, index)) {
+                return false;
+            }
             index += qualifier.length();
         }
         String entity = matchingPrefix(segment, index, ENGINEERING_ENTITIES);
         return entity != null && index + entity.length() == segment.length();
+    }
+
+    private boolean isRepeatedOrConflictingQualifier(String segment, String qualifier, int index) {
+        if (segment.indexOf(qualifier) < index) {
+            return true;
+        }
+        return (qualifier.equals("显示") && segment.indexOf("隐藏") >= 0)
+                || (qualifier.equals("隐藏") && segment.indexOf("显示") >= 0);
     }
 
     private int nextRelationIndex(String subject, int startIndex) {
