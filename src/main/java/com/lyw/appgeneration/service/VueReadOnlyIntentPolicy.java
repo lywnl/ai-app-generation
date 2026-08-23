@@ -19,12 +19,8 @@ public class VueReadOnlyIntentPolicy {
             "替换", "改成", "换成", "优化", "调整", "更新", "美化", "补充", "移动",
             "重命名", "开启", "关闭", "启用", "禁用", "升级", "迁移",
             "丰富一点", "松散一点", "继续完善", "再现代一点");
-    private static final List<String> COMMAND_ACTION_PHRASES = List.of(
-            "显示", "隐藏", "修改", "创建", "新增", "增加", "添加", "删除", "移除", "修复",
-            "重构", "替换", "改成", "换成", "优化", "调整", "更新", "美化", "补充", "移动",
-            "重命名", "开启", "关闭", "启用", "禁用", "升级", "迁移");
-    private static final List<String> MULTI_ACTION_CONNECTORS = List.of(
-            "然后", "顺便", "接着", "并且", "同时");
+    private static final List<String> ENGINEERING_SUBJECT_ENDINGS = List.of(
+            "页面", "组件", "组件名称", "导航", "配置", "策略", "逻辑", "状态", "实现", "购物车");
 
     public boolean isExplicitReadOnly(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
@@ -37,9 +33,7 @@ public class VueReadOnlyIntentPolicy {
         if (hasTrailingContentAfterHistoryFactQuery(message)) {
             return false;
         }
-        if (containsMultiActionConnector(message)
-                || startsWithCommand(message)
-                || containsPostActionCombination(message)) {
+        if (hasClauseDelimiter(message) || containsCommandStructure(message) || startsWithCommand(message)) {
             return false;
         }
         if (containsAny(message, MUTATION_PHRASES)) {
@@ -60,15 +54,14 @@ public class VueReadOnlyIntentPolicy {
     }
 
     private boolean isExplicitSingleReadOnlyQuery(String message) {
-        return hasContentAround(message, "有哪些")
-                || hasContentBefore(message, "是什么")
-                || hasContentAfterPrefix(message, "为什么")
-                || hasContentBefore(message, "怎么实现的")
-                || message.startsWith("列出当前组件")
-                || hasContentAfterPrefix(message, "查看当前")
-                || hasContentAfterPrefix(message, "读取当前")
-                || hasExplanationSubject(message)
-                || hasContentAfterPrefix(message, "分析当前");
+        return isInspectionQuery(message, "查看当前")
+                || isInspectionQuery(message, "读取当前")
+                || isInspectionQuery(message, "分析当前")
+                || isComponentListQuery(message)
+                || isCurrentDefinitionQuery(message)
+                || isReasonQuery(message)
+                || isImplementationQuery(message)
+                || message.equals("列出当前组件");
     }
 
     private boolean startsWithCommand(String message) {
@@ -76,49 +69,69 @@ public class VueReadOnlyIntentPolicy {
                 || message.startsWith("显示") || message.startsWith("隐藏");
     }
 
-    private boolean containsMultiActionConnector(String message) {
-        if (containsAny(message, MULTI_ACTION_CONNECTORS)) {
-            return true;
-        }
-        int andIndex = message.indexOf("并");
-        if (andIndex > 0 && andIndex < message.length() - 1
-                && containsAny(message.substring(andIndex + 1), COMMAND_ACTION_PHRASES)) {
-            return true;
-        }
-        int againIndex = message.indexOf("再");
-        return againIndex > 0 && againIndex < message.length() - 1
-                && containsAny(message.substring(againIndex + 1), COMMAND_ACTION_PHRASES);
+    private boolean containsCommandStructure(String message) {
+        return message.contains("做一个");
     }
 
-    private boolean containsPostActionCombination(String message) {
-        int afterIndex = message.indexOf('后');
-        if (afterIndex < 0 || afterIndex == message.length() - 1) {
+    /** 只读资格只接受一个自然语言问句；出现分句分隔符即按混合输入失败关闭。 */
+    private boolean hasClauseDelimiter(String message) {
+        return message.indexOf('，') >= 0 || message.indexOf(',') >= 0
+                || message.indexOf('；') >= 0 || message.indexOf(';') >= 0
+                || message.indexOf('、') >= 0 || message.indexOf('\n') >= 0;
+    }
+
+    private boolean isInspectionQuery(String message, String prefix) {
+        if (!message.startsWith(prefix)) {
             return false;
         }
-        String following = message.substring(afterIndex + 1);
-        return following.startsWith("帮我")
-                || containsAny(following, COMMAND_ACTION_PHRASES);
+        return isEngineeringSubject(message.substring(prefix.length()));
     }
 
-    private boolean hasContentAround(String message, String phrase) {
-        int phraseIndex = message.indexOf(phrase);
-        return phraseIndex > 0 && phraseIndex + phrase.length() < message.length();
-    }
-
-    private boolean hasContentBefore(String message, String suffix) {
-        return message.endsWith(suffix) && message.length() > suffix.length();
-    }
-
-    private boolean hasContentAfterPrefix(String message, String prefix) {
-        return message.startsWith(prefix) && message.length() > prefix.length();
-    }
-
-    private boolean hasExplanationSubject(String message) {
-        if (!hasContentAfterPrefix(message, "解释")) {
+    private boolean isComponentListQuery(String message) {
+        int phraseIndex = message.indexOf("有哪些");
+        if (phraseIndex <= 0 || phraseIndex + "有哪些".length() >= message.length()) {
             return false;
         }
-        String subject = message.substring("解释".length());
-        return !subject.equals("一下") && !subject.equals("下");
+        return isEngineeringSubject(message.substring(0, phraseIndex))
+                && isEngineeringSubject(message.substring(phraseIndex + "有哪些".length()));
+    }
+
+    private boolean isCurrentDefinitionQuery(String message) {
+        if (!message.startsWith("当前") || !message.endsWith("是什么")) {
+            return false;
+        }
+        return isEngineeringSubject(message.substring("当前".length(),
+                message.length() - "是什么".length()));
+    }
+
+    private boolean isReasonQuery(String message) {
+        return message.startsWith("为什么")
+                && isEngineeringSubject(message.substring("为什么".length()));
+    }
+
+    private boolean isImplementationQuery(String message) {
+        if (message.startsWith("解释")) {
+            String subject = message.substring("解释".length());
+            return hasConcretePrefixBeforeSuffix(subject, "怎么实现的")
+                    || hasConcretePrefixBeforeSuffix(subject, "实现");
+        }
+        return hasConcretePrefixBeforeSuffix(message, "怎么实现的");
+    }
+
+    private boolean hasConcretePrefixBeforeSuffix(String message, String suffix) {
+        if (!message.endsWith(suffix)) {
+            return false;
+        }
+        String subject = message.substring(0, message.length() - suffix.length());
+        if (subject.endsWith("是")) {
+            subject = subject.substring(0, subject.length() - 1);
+        }
+        return isEngineeringSubject(subject);
+    }
+
+    private boolean isEngineeringSubject(String subject) {
+        return !subject.isBlank()
+                && ENGINEERING_SUBJECT_ENDINGS.stream().anyMatch(subject::endsWith);
     }
 
     private String normalizePoliteQuery(String message) {
