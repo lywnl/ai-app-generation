@@ -41,7 +41,12 @@
         <h4 class="footer-title">资源</h4>
         <ul class="footer-list footer-links">
           <li>
-            <a href="https://gitee.com/lywynl/ai-app-generation" target="_blank" rel="noopener" aria-label="Gitee 仓库">
+            <a
+              href="https://github.com/lywnl/ai-app-generation"
+              target="_blank"
+              rel="noopener"
+              aria-label="GitHub 仓库"
+            >
               <svg class="link-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-3v3h-2v-3H9v-2h3V8h2v3h3v2z"
