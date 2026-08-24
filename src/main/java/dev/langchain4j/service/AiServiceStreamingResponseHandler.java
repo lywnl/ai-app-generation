@@ -1219,7 +1219,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             ToolArgumentLeakScanner.Status status = verifiedArguments == null
                     ? toolArgumentLeakScanner.complete(
                             request.id(), request.arguments()).status()
-                    : verifiedArguments.equals(request.arguments())
+                    : hasEquivalentToolArguments(
+                            verifiedArguments, request.arguments())
                             ? ToolArgumentLeakScanner.Status.SAFE
                             : ToolArgumentLeakScanner.Status.MISMATCH;
             if (status == ToolArgumentLeakScanner.Status.VIOLATION) {
@@ -1227,11 +1228,49 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 return false;
             }
             if (status != ToolArgumentLeakScanner.Status.SAFE) {
+                logToolArgumentConsistencyFailure(
+                        request, status, verifiedArguments);
                 failStreamConsistency();
                 return false;
             }
         }
         return true;
+    }
+
+    private boolean hasEquivalentToolArguments(
+            String verifiedArguments, String finalArguments) {
+        if (Objects.equals(verifiedArguments, finalArguments)) {
+            return true;
+        }
+        ToolArgumentsJsonNormalizer.Result verified =
+                ToolArgumentsJsonNormalizer.normalize(verifiedArguments);
+        ToolArgumentsJsonNormalizer.Result finalResult =
+                ToolArgumentsJsonNormalizer.normalize(finalArguments);
+        return verified.status()
+                == ToolArgumentsJsonNormalizer.Status.VALID
+                && finalResult.status()
+                == ToolArgumentsJsonNormalizer.Status.VALID
+                && Objects.equals(
+                        verified.normalizedArguments(),
+                        finalResult.normalizedArguments());
+    }
+
+    private void logToolArgumentConsistencyFailure(
+            ToolExecutionRequest request,
+            ToolArgumentLeakScanner.Status status,
+            String verifiedArguments) {
+        LOG.error("[Vue 工具链] 工具参数流一致性校验失败,memoryId={},"
+                        + "generation={},toolName={},toolId={},status={},"
+                        + "completeCallbackObserved={},"
+                        + "verifiedArgumentsLength={},finalArgumentsLength={}",
+                memoryId, requestGeneration, request.name(), request.id(),
+                status, verifiedArguments != null,
+                argumentLength(verifiedArguments),
+                argumentLength(request.arguments()));
+    }
+
+    private int argumentLength(String arguments) {
+        return arguments == null ? -1 : arguments.length();
     }
 
     private void publishCommittedToolRequests(
@@ -1507,14 +1546,24 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
             ToolExecutionGuard.GuardedToolExecution guardedExecution;
             try {
+                LOG.info("[Vue 工具链] 工具执行开始,memoryId={},generation={},"
+                                + "toolName={},toolId={}",
+                        memoryId, requestGeneration, toolName,
+                        normalizedRequest.id());
                 guardedExecution = toolExecutionGuard.execute(
                         toolName, memoryId,
                         () -> toolExecutor.execute(
                                 normalizedRequest, memoryId));
+                LOG.info("[Vue 工具链] 工具执行成功,memoryId={},generation={},"
+                                + "toolName={},toolId={}",
+                        memoryId, requestGeneration, toolName,
+                        normalizedRequest.id());
             } catch (RuntimeException exception) {
-                LOG.warn("Tool execution failed, skip this tool and continue: name={}, id={}",
-                        normalizedRequest.name(), normalizedRequest.id(),
-                        exception);
+                LOG.error("[Vue 工具链] 工具执行失败,memoryId={},generation={},"
+                                + "toolName={},toolId={},errorType={}",
+                        memoryId, requestGeneration, toolName,
+                        normalizedRequest.id(),
+                        exception.getClass().getSimpleName(), exception);
                 ToolResultCommit commit = commitToolResult(
                         batchTicket, index, normalizedRequest,
                         String.format("受控跳过：工具 '%s' 执行失败：%s",
@@ -1621,9 +1670,19 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 ? "受控跳过：请求已经取消"
                 : providedResult;
         try {
+            LOG.info("[Vue 工具链] 工具结果写入 L0 开始,memoryId={},"
+                            + "generation={},toolName={},toolId={}",
+                    memoryId, requestGeneration, request.name(), request.id());
             addToMemory(ToolExecutionResultMessage.from(
                     request, committedResult));
+            LOG.info("[Vue 工具链] 工具结果写入 L0 成功,memoryId={},"
+                            + "generation={},toolName={},toolId={}",
+                    memoryId, requestGeneration, request.name(), request.id());
         } catch (RuntimeException exception) {
+            LOG.error("[Vue 工具链] 工具结果写入 L0 失败,memoryId={},"
+                            + "generation={},toolName={},toolId={},errorType={}",
+                    memoryId, requestGeneration, request.name(), request.id(),
+                    exception.getClass().getSimpleName(), exception);
             if (requestController.failPreparedToolResult(
                     batchTicket, index, claim)) {
                 notifyError(exception);
@@ -1638,10 +1697,20 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             return new ToolResultCommit(committedDecision, null, false);
         }
         try {
+            LOG.info("[Vue 工具链] TOOL_EXECUTED 提交发布队列开始,memoryId={},"
+                            + "generation={},toolName={},toolId={}",
+                    memoryId, requestGeneration, request.name(), request.id());
             notifyToolExecutedCallback(request, committedResult);
+            LOG.info("[Vue 工具链] TOOL_EXECUTED 提交发布队列成功,memoryId={},"
+                            + "generation={},toolName={},toolId={}",
+                    memoryId, requestGeneration, request.name(), request.id());
             return new ToolResultCommit(
                     committedDecision, null, false);
         } catch (RuntimeException exception) {
+            LOG.error("[Vue 工具链] TOOL_EXECUTED 提交发布队列失败,memoryId={},"
+                            + "generation={},toolName={},toolId={},errorType={}",
+                    memoryId, requestGeneration, request.name(), request.id(),
+                    exception.getClass().getSimpleName(), exception);
             return new ToolResultCommit(
                     committedDecision, exception, false);
         }

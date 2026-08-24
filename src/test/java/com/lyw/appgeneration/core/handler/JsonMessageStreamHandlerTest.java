@@ -2,6 +2,9 @@ package com.lyw.appgeneration.core.handler;
 
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
@@ -26,6 +29,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -52,6 +56,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -102,6 +107,44 @@ class JsonMessageStreamHandlerTest {
         assertEquals(VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 outcome.outcome());
         assertFalse(outcome.shouldRefreshPreview());
+    }
+
+    @Test
+    void 系统异常收口日志必须携带回合业务键和原始异常堆栈() {
+        VueTurnContext context = context(
+                "turn-system-error-log", VueBuildPhase.GENERATING);
+        IllegalStateException failure =
+                new IllegalStateException("诊断异常");
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            return new VueTurnFinalizer.FinalizationResult(requested, true);
+        });
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                JsonMessageStreamHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try {
+            handler.handle(Flux.error(failure), context)
+                    .collectList().block();
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        ILoggingEvent event = appender.list.stream()
+                .filter(candidate -> candidate.getFormattedMessage()
+                        .contains("Vue 回合流处理异常"))
+                .findFirst().orElseThrow();
+        assertTrue(event.getFormattedMessage().contains("appId=" + APP_ID));
+        assertTrue(event.getFormattedMessage().contains(
+                "turnId=turn-system-error-log"));
+        assertTrue(event.getFormattedMessage().contains(
+                "phase=GENERATING"));
+        assertTrue(event.getFormattedMessage().contains(
+                "errorType=IllegalStateException"));
+        assertNotNull(event.getThrowableProxy());
     }
 
     @Test

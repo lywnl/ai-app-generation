@@ -1,5 +1,8 @@
 package dev.langchain4j.service;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
@@ -17,6 +20,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.service.tool.ToolExecutor;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Constructor;
 import java.util.List;
@@ -1663,10 +1667,21 @@ class AiServiceStreamingResponseHandlerTest {
                         null, "method-1", controller,
                         ToolExecutionGuard.direct());
 
-        assertDoesNotThrow(() -> handler.onCompleteResponse(
-                responseWithTools(
-                        tool("first", "writeFile"),
-                        tool("second", "readFile"))));
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                AiServiceStreamingResponseHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try {
+            assertDoesNotThrow(() -> handler.onCompleteResponse(
+                    responseWithTools(
+                            tool("first", "writeFile"),
+                            tool("second", "readFile"))));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
         handler.onError(new IllegalStateException("迟到错误"));
 
         assertSame(persistenceFailure, observedError.get());
@@ -1684,6 +1699,230 @@ class AiServiceStreamingResponseHandlerTest {
         assertNull(org.springframework.test.util.ReflectionTestUtils.getField(
                 controller, "activeToolBatch"),
                 "结果持久化失败必须回滚活动批次，不能伪装已提交");
+        ILoggingEvent persistenceLog = appender.list.stream()
+                .filter(event -> event.getFormattedMessage()
+                        .contains("工具结果写入 L0 失败"))
+                .findFirst().orElseThrow();
+        assertTrue(persistenceLog.getFormattedMessage()
+                .contains("memoryId=mem-1"));
+        assertTrue(persistenceLog.getFormattedMessage()
+                .contains("toolName=writeFile"));
+        assertTrue(persistenceLog.getFormattedMessage()
+                .contains("toolId=first"));
+        assertTrue(persistenceLog.getFormattedMessage()
+                .contains("errorType=IllegalStateException"));
+        assertNotNull(persistenceLog.getThrowableProxy());
+    }
+
+    @Test
+    void 最终工具参数与complete回调不一致时必须记录安全诊断维度() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, ignored -> { });
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicInteger toolCalls = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        response -> fail("参数不一致后不得完成"),
+                        failure::set,
+                        MessageWindowChatMemory.withMaxMessages(10),
+                        new TokenUsage(), List.of(),
+                        Map.of("readDir", (request, memoryId) -> {
+                            toolCalls.incrementAndGet();
+                            return "不应执行";
+                        }),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, ignored -> { });
+        ToolExecutionRequest callbackRequest =
+                ToolExecutionRequest.builder()
+                        .id("mismatch-log")
+                        .name("readDir")
+                        .arguments("{\"path\":\"src\"}")
+                        .build();
+        ToolExecutionRequest finalRequest =
+                ToolExecutionRequest.builder()
+                        .id("mismatch-log")
+                        .name("readDir")
+                        .arguments("{\"path\":\"src/main\"}")
+                        .build();
+        Logger logger = (Logger) LoggerFactory.getLogger(
+                AiServiceStreamingResponseHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try {
+            handler.onCompleteToolExecutionRequest(0, callbackRequest);
+            handler.onCompleteResponse(responseWithTools(finalRequest));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        assertInstanceOf(StreamingResponseConsistencyException.class,
+                failure.get());
+        assertEquals(0, toolCalls.get());
+        ILoggingEvent event = appender.list.stream()
+                .filter(log -> log.getFormattedMessage()
+                        .contains("工具参数流一致性校验失败"))
+                .findFirst().orElseThrow();
+        assertAll(
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("memoryId=mem-1")),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("generation=" + initialClaim.generation())),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("toolName=readDir")),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("toolId=mismatch-log")),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("status=MISMATCH")),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("completeCallbackObserved=true")),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("verifiedArgumentsLength=14")),
+                () -> assertTrue(event.getFormattedMessage()
+                        .contains("finalArgumentsLength=19")),
+                () -> assertFalse(event.getFormattedMessage()
+                        .contains("src/main")),
+                () -> assertNull(event.getThrowableProxy()));
+    }
+
+    @Test
+    void 最终工具参数仅JSON格式不同时必须视为同一请求并执行() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, ignored -> { });
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicInteger toolCalls = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        response -> { }, failure::set,
+                        MessageWindowChatMemory.withMaxMessages(10),
+                        new TokenUsage(), List.of(),
+                        Map.of("readDir", (request, memoryId) -> {
+                            toolCalls.incrementAndGet();
+                            return "目录读取成功";
+                        }),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, ignored -> { });
+        ToolExecutionRequest callbackRequest =
+                ToolExecutionRequest.builder()
+                        .id("equivalent-json")
+                        .name("readDir")
+                        .arguments("{}")
+                        .build();
+        ToolExecutionRequest finalRequest =
+                ToolExecutionRequest.builder()
+                        .id("equivalent-json")
+                        .name("readDir")
+                        .arguments("{ }")
+                        .build();
+
+        handler.onCompleteToolExecutionRequest(0, callbackRequest);
+        handler.onCompleteResponse(responseWithTools(finalRequest));
+
+        assertAll(
+                () -> assertNull(failure.get()),
+                () -> assertEquals(1, toolCalls.get()),
+                () -> assertEquals(1, model.chatInvocations));
+    }
+
+    @Test
+    void 最终工具参数需要修复时不得视为格式等价请求() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller =
+                new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, ignored -> { });
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicInteger toolCalls = new AtomicInteger();
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        response -> fail("畸形参数不得完成"),
+                        failure::set,
+                        MessageWindowChatMemory.withMaxMessages(10),
+                        new TokenUsage(), List.of(),
+                        Map.of("readDir", (request, memoryId) -> {
+                            toolCalls.incrementAndGet();
+                            return "不应执行";
+                        }),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, ignored -> { });
+        ToolExecutionRequest callbackRequest =
+                ToolExecutionRequest.builder()
+                        .id("repairable-json")
+                        .name("readDir")
+                        .arguments("{\"path\":\"src\"}")
+                        .build();
+        ToolExecutionRequest finalRequest =
+                ToolExecutionRequest.builder()
+                        .id("repairable-json")
+                        .name("readDir")
+                        .arguments("{\"path\":\"src\",}")
+                        .build();
+
+        handler.onCompleteToolExecutionRequest(0, callbackRequest);
+        handler.onCompleteResponse(responseWithTools(finalRequest));
+
+        assertAll(
+                () -> assertInstanceOf(
+                        StreamingResponseConsistencyException.class,
+                        failure.get()),
+                () -> assertEquals(0, toolCalls.get()));
     }
 
     @Test

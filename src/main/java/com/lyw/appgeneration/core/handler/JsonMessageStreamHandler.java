@@ -143,6 +143,7 @@ public final class JsonMessageStreamHandler {
                                     == VueTurnContext.TerminalTrigger.DELETE_TAKEOVER
                                     ? Flux.empty() : Flux.error(error);
                         }
+                        logUnexpectedStreamError(context, error);
                         return finalizeSignal(
                                 context, transcript.displayText(), facts,
                                 transcript.answerMemoryText(), error);
@@ -306,6 +307,18 @@ public final class JsonMessageStreamHandler {
                 prefix, facts, PROTOCOL_MESSAGE, false);
     }
 
+    private void logUnexpectedStreamError(
+            VueTurnContext context, Throwable error) {
+        if (context.controlledTermination().isPresent()
+                || error instanceof VueStreamProtocolException
+                || error instanceof ResourceLimitExceededException) {
+            return;
+        }
+        log.error("Vue 回合流处理异常,appId={},turnId={},phase={},errorType={}",
+                context.appId(), context.turnId(), context.phase(),
+                error.getClass().getSimpleName(), error);
+    }
+
     private VueTurnOutcome protocolErrorOutcome(
             VueBuildPhase phase, List<VueToolExecutionFact> facts) {
         return new VueTurnOutcome(
@@ -431,6 +444,11 @@ public final class JsonMessageStreamHandler {
                 ToolExecutedMessage executed = parseTrusted(() ->
                         trustedExecuted(JSONUtil.toBean(
                                 chunk, ToolExecutedMessage.class)));
+                log.info("[Vue 工具链] TOOL_EXECUTED 处理开始,appId={},"
+                                + "turnId={},generation={},toolName={},toolId={}",
+                        context.appId(), context.turnId(),
+                        executed.getGeneration(), executed.getName(),
+                        executed.getId());
                 observeTrustedFact(executed, facts);
                 JSONObject arguments = JSONUtil.parseObj(executed.getArguments());
                 BaseTool tool = toolManager.getTool(executed.getName());
@@ -454,6 +472,11 @@ public final class JsonMessageStreamHandler {
                                         TrustedToolDisplayMessage.Stage
                                                 .EXECUTED,
                                         decision.acceptedPrefix()));
+                log.info("[Vue 工具链] TOOL_EXECUTED 处理成功,appId={},"
+                                + "turnId={},generation={},toolName={},toolId={}",
+                        context.appId(), context.turnId(),
+                        executed.getGeneration(), executed.getName(),
+                        executed.getId());
                 yield decision.resourceLimitExceeded()
                         ? Flux.just(structured)
                         .concatWith(Flux.error(new ResourceLimitExceededException()))
