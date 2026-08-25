@@ -27,6 +27,7 @@ import com.lyw.appgeneration.core.parser.CodeParserExecutor;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnMode;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.saver.CodeFileSaverExecutor;
 import com.lyw.appgeneration.exception.BusinessException;
@@ -312,9 +313,11 @@ public class AiCodeGeneratorFacade {
             String userMessage, long appId, boolean isFirstMessage,
             VueTurnContext turnContext, AiCodeGeneratorService generatorService) {
         java.util.Objects.requireNonNull(generatorService, "Vue 生成服务不能为空");
-        String generationRequest = isFirstMessage
+        boolean mutationTurn = turnContext.turnMode()
+                == VueTurnMode.MUTATION_REQUIRED;
+        String generationRequest = isFirstMessage && mutationTurn
                 ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
-        if (shouldRetrieveOnlineRag(isFirstMessage)) {
+        if (shouldRetrieveVueOnlineRag(isFirstMessage, mutationTurn)) {
             VueRagContext context = retrieveVueContext(
                     userMessage, ragProperties.getHybrid().isEnabled());
             generationRequest = ragPromptAssembler.assembleVueProject(
@@ -516,6 +519,11 @@ public class AiCodeGeneratorFacade {
 
     private boolean shouldRetrieveOnlineRag(boolean isFirstMessage) {
         return isFirstMessage && ragProperties.isEnabled();
+    }
+
+    private boolean shouldRetrieveVueOnlineRag(
+            boolean isFirstMessage, boolean mutationTurn) {
+        return isFirstMessage && mutationTurn && ragProperties.isEnabled();
     }
 
     /**

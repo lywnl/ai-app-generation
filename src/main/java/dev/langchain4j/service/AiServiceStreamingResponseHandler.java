@@ -1624,7 +1624,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             failure = mergeFailure(failure, exception);
         } finally {
             if (dispatchTermination) {
-                requestController.dispatchClaimedTermination();
+                dispatchClaimedTermination(claimedTermination);
             }
         }
         if (failure != null) {
@@ -2206,6 +2206,36 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 requestController.dispatchClaimedTermination();
             }
         }
+    }
+
+    /**
+     * 统一信号模式下，工具结果和终态共用披露队列。
+     * 终态必须排在已经提交的工具信号之后，否则终态会先关闭 SSE，
+     * 导致前端工具卡永久停留在“执行中”。
+     */
+    private void dispatchClaimedTermination(
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        if (shouldDispatchAfterSignals(termination)
+                && generationStreamSignalHandler
+                instanceof GenerationSignalPublisher publisher) {
+            publisher.publishAtomically(
+                    () -> { }, requestController::dispatchClaimedTermination);
+            return;
+        }
+        requestController.dispatchClaimedTermination();
+    }
+
+    private boolean shouldDispatchAfterSignals(
+            ToolLoopTerminationProtocol.ControlledTermination termination) {
+        if (termination == null) {
+            return false;
+        }
+        return termination.reason()
+                == ToolLoopTerminationProtocol.ControlledTerminationReason
+                .BUILD_SUCCEEDED
+                || termination.reason()
+                == ToolLoopTerminationProtocol.ControlledTerminationReason
+                .BUILD_FAILED;
     }
 
     private void notifyError(Throwable error) {

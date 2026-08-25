@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.service;
 
-import com.lyw.appgeneration.ai.VueTurnModeRoutingService;
 import com.lyw.appgeneration.ai.VueTurnModeRoutingServiceFactory;
 import com.lyw.appgeneration.core.handler.VueTurnMode;
 import lombok.extern.slf4j.Slf4j;
@@ -8,58 +7,46 @@ import org.springframework.stereotype.Service;
 
 import java.util.Objects;
 
-/** Vue 回合模式路由器，集中处理确定性规则和保守降级。 */
+/** Vue 回合模式路由器，仅保留选中元素的确定性规则，其余交给分类模型。 */
 @Slf4j
 @Service
 public final class VueTurnModeRouter {
 
-    private final VueReadOnlyIntentPolicy readOnlyIntentPolicy;
     private final VueTurnModeRoutingServiceFactory factory;
 
-    public VueTurnModeRouter(VueReadOnlyIntentPolicy readOnlyIntentPolicy,
-            VueTurnModeRoutingServiceFactory factory) {
-        this.readOnlyIntentPolicy = Objects.requireNonNull(readOnlyIntentPolicy,
-                "Vue 只读资格策略不能为空");
+    public VueTurnModeRouter(VueTurnModeRoutingServiceFactory factory) {
         this.factory = Objects.requireNonNull(factory, "Vue 模式路由工厂不能为空");
     }
 
     /**
      * @param userMessage 用户消息
-     * @param hasHistory 是否已经存在历史消息
+     * @param hasHistory 是否已经存在历史消息；仅用于保持调用方接口兼容
      * @return 回合执行模式
      */
     public VueTurnMode route(String userMessage, boolean hasHistory) {
         long startedAt = System.nanoTime();
-        if (!hasHistory || containsSelectedElementInfo(userMessage)) {
-            String source = hasHistory
-                    ? "SELECTED_ELEMENT" : "FIRST_TURN";
-            return recordDecision(VueTurnMode.MUTATION_REQUIRED, source,
-                    "NONE", startedAt);
-        }
-        try {
-            if (!readOnlyIntentPolicy.isExplicitReadOnly(userMessage)) {
-                return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                        "LOCAL_POLICY_REJECTED", "NONE", startedAt);
-            }
-        } catch (RuntimeException exception) {
+        if (containsSelectedElementInfo(userMessage)) {
             return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                    "LOCAL_POLICY_ERROR", exception.getClass().getSimpleName(),
-                    startedAt);
+                    "SELECTED_ELEMENT",
+                    "NONE", startedAt);
         }
         try {
             VueTurnMode modelMode = factory.create().route(userMessage);
-            if (modelMode == VueTurnMode.READ_ONLY) {
-                return recordDecision(VueTurnMode.READ_ONLY,
-                        "ROUTING_MODEL_AND_POLICY", "NONE", startedAt);
+            if (modelMode == null) {
+                throw new VueTurnModeRoutingException("分类模型返回空结果");
             }
-            return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                    modelMode == null ? "ROUTING_MODEL_INVALID"
-                            : "ROUTING_MODEL_REJECTED",
-                    "NONE", startedAt);
+            return recordDecision(modelMode, "ROUTING_MODEL", "NONE", startedAt);
         } catch (RuntimeException exception) {
-            return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                    "ROUTING_MODEL_ERROR", exception.getClass().getSimpleName(),
-                    startedAt);
+            if (exception instanceof VueTurnModeRoutingException) {
+                log.warn("Vue 回合模式分类失败，source=ROUTING_MODEL,"
+                                + "exceptionType={}",
+                        exception.getClass().getSimpleName());
+                throw exception;
+            }
+            log.warn("Vue 回合模式分类失败，source=ROUTING_MODEL,"
+                            + "exceptionType={}",
+                    exception.getClass().getSimpleName());
+            throw new VueTurnModeRoutingException("分类模型调用失败", exception);
         }
     }
 

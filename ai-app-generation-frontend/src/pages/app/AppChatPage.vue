@@ -594,15 +594,18 @@ const fetchAppInfo = async () => {
       } else if (messages.value.length >= 2) {
         updatePreview()
       }
-      // 检查是否需要自动发送初始提示词
-      // 只有在是自己的应用且没有对话历史时才自动发送
-      if (
-        appInfo.value.initPrompt &&
+      // 只有自己的空应用才自动发送初始提示词；已有对话则在会话恢复完成后定位到最新消息。
+      const initialPrompt = appInfo.value.initPrompt || ''
+      const shouldSendInitialMessage =
+        initialPrompt.length > 0 &&
         isOwner.value &&
         messages.value.length === 0 &&
         historyLoaded.value
-      ) {
-        await sendInitialMessage(appInfo.value.initPrompt)
+
+      if (shouldSendInitialMessage) {
+        await sendInitialMessage(initialPrompt)
+      } else {
+        scrollToLatestMessageOnEntry()
       }
     } else {
       message.error('获取应用信息失败')
@@ -872,6 +875,13 @@ const scrollToBottom = () => {
     if (!el) return
     el.scrollTop = el.scrollHeight
   })
+}
+
+// 首次进入已有对话时忽略旧的滚动状态，在历史与本地生成会话恢复后定位到最新消息。
+const scrollToLatestMessageOnEntry = () => {
+  if (messages.value.length === 0) return
+  stickBottom.value = true
+  scrollToBottom()
 }
 
 // 下载代码

@@ -10,6 +10,10 @@ import ChatManagePage from "@/pages/admin/ChatManagePage.vue";
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
+  // 所有路由进入方式都从外层页面顶部展示，不恢复浏览器历史滚动位置。
+  scrollBehavior() {
+    return { left: 0, top: 0 }
+  },
   routes: [
     {
       path: '/',

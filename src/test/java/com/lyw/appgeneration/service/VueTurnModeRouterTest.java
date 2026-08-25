@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -20,106 +21,82 @@ import static org.mockito.Mockito.when;
 class VueTurnModeRouterTest {
 
     @Test
-    void 首次回合固定为变更模式且不调用模型() {
-        VueReadOnlyIntentPolicy policy = mock(VueReadOnlyIntentPolicy.class);
+    void 选中元素信息固定为变更模式且不调用分类模型() {
         VueTurnModeRoutingServiceFactory factory = mock(
                 VueTurnModeRoutingServiceFactory.class);
-        VueTurnModeRouter router = new VueTurnModeRouter(policy, factory);
-
-        assertEquals(VueTurnMode.MUTATION_REQUIRED,
-                router.route("创建首页", false));
-        verify(policy, never()).isExplicitReadOnly("创建首页");
-        verify(factory, never()).create();
-    }
-
-    @Test
-    void 选中元素信息固定为变更模式() {
-        VueReadOnlyIntentPolicy policy = mock(VueReadOnlyIntentPolicy.class);
-        VueTurnModeRoutingServiceFactory factory = mock(
-                VueTurnModeRoutingServiceFactory.class);
-        VueTurnModeRouter router = new VueTurnModeRouter(policy, factory);
+        VueTurnModeRouter router = new VueTurnModeRouter(factory);
 
         assertEquals(VueTurnMode.MUTATION_REQUIRED,
                 router.route("查看这个元素\n\n选中元素信息：\n- 标签：button", true));
-        verify(policy, never()).isExplicitReadOnly(
-                "查看这个元素\n\n选中元素信息：\n- 标签：button");
         verify(factory, never()).create();
     }
 
     @Test
-    void 本地与模型都确认明确查询时路由为只读模式() {
-        VueReadOnlyIntentPolicy policy = mock(VueReadOnlyIntentPolicy.class);
+    void 首轮和后续回合都交给分类模型() {
         VueTurnModeRoutingServiceFactory factory = mock(
                 VueTurnModeRoutingServiceFactory.class);
         VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
-        when(policy.isExplicitReadOnly("现在页面有哪些组件？")).thenReturn(true);
         when(factory.create()).thenReturn(service);
-        when(service.route("现在页面有哪些组件？"))
-                .thenReturn(VueTurnMode.READ_ONLY);
-        VueTurnModeRouter router = new VueTurnModeRouter(policy, factory);
+        when(service.route("页面都有什么")).thenReturn(VueTurnMode.READ_ONLY);
+        when(service.route("把按钮改成红色"))
+                .thenReturn(VueTurnMode.MUTATION_REQUIRED);
+        VueTurnModeRouter router = new VueTurnModeRouter(factory);
 
         assertEquals(VueTurnMode.READ_ONLY,
-                router.route("现在页面有哪些组件？", true));
-        verify(service).route("现在页面有哪些组件？");
+                router.route("页面都有什么", false));
+        assertEquals(VueTurnMode.MUTATION_REQUIRED,
+                router.route("把按钮改成红色", true));
+        verify(service).route("页面都有什么");
+        verify(service).route("把按钮改成红色");
     }
 
     @Test
-    void 本地拒绝或异常时不调用模型并保守降级为变更模式() {
-        VueReadOnlyIntentPolicy rejected = mock(VueReadOnlyIntentPolicy.class);
-        VueReadOnlyIntentPolicy failed = mock(VueReadOnlyIntentPolicy.class);
-        VueTurnModeRoutingServiceFactory factory = mock(
-                VueTurnModeRoutingServiceFactory.class);
-        when(rejected.isExplicitReadOnly("把按钮改成红色")).thenReturn(false);
-        when(failed.isExplicitReadOnly("读取首页结构"))
-                .thenThrow(new IllegalStateException("策略失败"));
-
-        assertEquals(VueTurnMode.MUTATION_REQUIRED,
-                new VueTurnModeRouter(rejected, factory)
-                        .route("把按钮改成红色", true));
-        assertEquals(VueTurnMode.MUTATION_REQUIRED,
-                new VueTurnModeRouter(failed, factory).route("读取首页结构", true));
-        verify(factory, never()).create();
-    }
-
-    @Test
-    void 模型拒绝空值或异常时保守降级为变更模式() {
-        VueReadOnlyIntentPolicy policy = mock(VueReadOnlyIntentPolicy.class);
+    void 分类模型返回空值时抛出系统内部错误() {
         VueTurnModeRoutingServiceFactory factory = mock(
                 VueTurnModeRoutingServiceFactory.class);
         VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
-        when(policy.isExplicitReadOnly("查询一")).thenReturn(true);
-        when(policy.isExplicitReadOnly("查询二")).thenReturn(true);
-        when(policy.isExplicitReadOnly("查询三")).thenReturn(true);
         when(factory.create()).thenReturn(service);
-        when(service.route("查询一")).thenReturn(VueTurnMode.MUTATION_REQUIRED);
-        when(service.route("查询二")).thenReturn(null);
-        when(service.route("查询三")).thenThrow(new IllegalStateException("模型失败"));
-        VueTurnModeRouter router = new VueTurnModeRouter(policy, factory);
+        when(service.route("页面都有什么")).thenReturn(null);
+        VueTurnModeRouter router = new VueTurnModeRouter(factory);
 
-        assertEquals(VueTurnMode.MUTATION_REQUIRED, router.route("查询一", true));
-        assertEquals(VueTurnMode.MUTATION_REQUIRED, router.route("查询二", true));
-        assertEquals(VueTurnMode.MUTATION_REQUIRED, router.route("查询三", true));
+        VueTurnModeRoutingException exception = assertThrows(
+                VueTurnModeRoutingException.class,
+                () -> router.route("页面都有什么", false));
+        assertEquals("分类模型返回空结果", exception.getMessage());
     }
 
     @Test
-    void 分类日志只记录模式来源耗时和异常类型不记录原始提示词() {
-        VueReadOnlyIntentPolicy policy = mock(VueReadOnlyIntentPolicy.class);
+    void 分类模型调用异常时抛出系统内部错误() {
         VueTurnModeRoutingServiceFactory factory = mock(
                 VueTurnModeRoutingServiceFactory.class);
         VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
-        when(policy.isExplicitReadOnly("读取首页中的全部组件名称"))
-                .thenReturn(true);
         when(factory.create()).thenReturn(service);
-        when(service.route("读取首页中的全部组件名称"))
+        when(service.route("页面都有什么"))
+                .thenThrow(new IllegalStateException("模型调用失败"));
+        VueTurnModeRouter router = new VueTurnModeRouter(factory);
+
+        VueTurnModeRoutingException exception = assertThrows(
+                VueTurnModeRoutingException.class,
+                () -> router.route("页面都有什么", true));
+        assertEquals("分类模型调用失败", exception.getMessage());
+    }
+
+    @Test
+    void 分类日志不记录用户原始提示词() {
+        VueTurnModeRoutingServiceFactory factory = mock(
+                VueTurnModeRoutingServiceFactory.class);
+        VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
+        when(factory.create()).thenReturn(service);
+        when(service.route("页面都有什么"))
                 .thenReturn(VueTurnMode.READ_ONLY);
-        VueTurnModeRouter router = new VueTurnModeRouter(policy, factory);
+        VueTurnModeRouter router = new VueTurnModeRouter(factory);
         Logger logger = (Logger) LoggerFactory.getLogger(
                 VueTurnModeRouter.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         logger.addAppender(appender);
         try {
-            router.route("读取首页中的全部组件名称", true);
+            router.route("页面都有什么", true);
         } finally {
             logger.detachAppender(appender);
         }
@@ -133,13 +110,8 @@ class VueTurnModeRouterTest {
                 () -> org.junit.jupiter.api.Assertions.assertTrue(
                         message.contains("mode=READ_ONLY")),
                 () -> org.junit.jupiter.api.Assertions.assertTrue(
-                        message.contains("source=ROUTING_MODEL_AND_POLICY")),
-                () -> org.junit.jupiter.api.Assertions.assertTrue(
-                        message.matches(".*elapsedMs=\\d+.*")),
-                () -> org.junit.jupiter.api.Assertions.assertTrue(
-                        message.contains("exceptionType=NONE")),
+                        message.contains("source=ROUTING_MODEL")),
                 () -> org.junit.jupiter.api.Assertions.assertFalse(
-                        message.contains("读取首页中的全部组件名称")));
+                        message.contains("页面都有什么")));
     }
-
 }

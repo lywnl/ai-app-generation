@@ -29,6 +29,7 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -1165,6 +1166,55 @@ class AiServiceStreamingResponseHandlerTest {
         assertEquals(1, terminations.get());
         ToolExecutionResultMessage skipped = (ToolExecutionResultMessage) memory.messages().get(2);
         assertTrue(skipped.text().contains("受控跳过"));
+    }
+
+    @Test
+    void 受控终态通知必须排在工具执行信号之后() {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        MessageWindowChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        StreamingRequestController.ModelRequestClaim initialClaim =
+                controller.claimModelRequest(0L);
+        assertNotNull(initialClaim);
+        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
+        GenerationDisclosureBuffer disclosureBuffer =
+                new GenerationDisclosureBuffer();
+        List<String> events = new CopyOnWriteArrayList<>();
+        GenerationSignalPublisher publisher = new GenerationSignalPublisher(
+                disclosureBuffer,
+                signal -> {
+                    if (signal instanceof GenerationStreamSignal.ToolExecuted) {
+                        events.add("tool_executed");
+                    }
+                });
+        controller.onControlledTermination(ignored -> events.add("terminated"));
+        InternalOutputRecoveryPolicy policy =
+                new InternalOutputRecoveryPolicy(
+                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
+                        "[[internal.", Set.of("<internal-ack>"));
+        InternalOutputRecoveryCoordinator coordinator =
+                new InternalOutputRecoveryCoordinator(policy, publisher);
+        AiServiceStreamingResponseHandler handler =
+                new AiServiceStreamingResponseHandler(
+                        new NoopChatExecutor(), context, "mem-1",
+                        null, null, null, null,
+                        response -> fail("构建终态不得走普通完成回调"),
+                        error -> fail("构建终态不得走普通错误回调", error),
+                        memory, new TokenUsage(), List.of(),
+                        Map.of("buildProject", (request, memoryId) -> BUILD_SUCCESS),
+                        null, "method-1", controller,
+                        ToolExecutionGuard.direct(),
+                        initialClaim.generation(),
+                        null, null, null, null,
+                        new com.lyw.appgeneration.ai.memory
+                                .ContextCompressionAttemptState(),
+                        policy, coordinator, publisher);
+
+        handler.onCompleteResponse(responseWithTools(
+                tool("build-terminal-order", "buildProject")));
+
+        assertEquals(List.of("tool_executed", "terminated"), events);
     }
 
     @Test

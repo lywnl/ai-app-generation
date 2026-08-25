@@ -41,6 +41,21 @@ class GenerationPreflightExceptionTest {
     }
 
     @Test
+    void systemPreflightAllowsAStableContextSpecificSafeMessage() {
+        IllegalStateException cause = new IllegalStateException("内部详情");
+
+        GenerationPreflightException exception =
+                GenerationPreflightException.system(
+                        "系统内部错误，请稍后尝试。", cause);
+
+        assertEquals(GenerationPreflightException.Kind.SYSTEM,
+                exception.kind());
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), exception.code());
+        assertEquals("系统内部错误，请稍后尝试。", exception.safeMessage());
+        assertSame(cause, exception.getCause());
+    }
+
+    @Test
     void invalidBusinessContractIsRejected() {
         assertThrows(IllegalArgumentException.class, () ->
                 GenerationPreflightException.business(0, "有效文案", null));

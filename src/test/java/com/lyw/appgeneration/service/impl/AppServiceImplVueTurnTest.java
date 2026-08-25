@@ -37,7 +37,7 @@ import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.VueTurnModeRouter;
-import com.lyw.appgeneration.service.VueReadOnlyIntentPolicy;
+import com.lyw.appgeneration.service.VueTurnModeRoutingException;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
@@ -140,14 +140,12 @@ class AppServiceImplVueTurnTest {
     private final VueTurnCancellationCoordinator cancellationCoordinator =
             mock(VueTurnCancellationCoordinator.class);
     private final VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
-    private final VueReadOnlyIntentPolicy vueReadOnlyIntentPolicy =
-            mock(VueReadOnlyIntentPolicy.class);
     private final VueTurnModeRoutingServiceFactory vueTurnModeRoutingServiceFactory =
             mock(VueTurnModeRoutingServiceFactory.class);
     private final VueTurnModeRoutingService vueTurnModeRoutingService =
             mock(VueTurnModeRoutingService.class);
     private final VueTurnModeRouter vueTurnModeRouter = new VueTurnModeRouter(
-            vueReadOnlyIntentPolicy, vueTurnModeRoutingServiceFactory);
+            vueTurnModeRoutingServiceFactory);
     private AppOperationLeaseManager operationManager;
     private AppServiceImpl service;
     private SimpleMeterRegistry metricsRegistry;
@@ -178,8 +176,10 @@ class AppServiceImplVueTurnTest {
                 new com.lyw.appgeneration.ai.tools.FileToolBudgetGuard());
         ReflectionTestUtils.setField(service, "vueTurnModeRouter",
                 vueTurnModeRouter);
-        when(vueReadOnlyIntentPolicy.isExplicitReadOnly(anyString()))
-                .thenReturn(false);
+        when(vueTurnModeRoutingServiceFactory.create())
+                .thenReturn(vueTurnModeRoutingService);
+        when(vueTurnModeRoutingService.route(anyString()))
+                .thenReturn(VueTurnMode.MUTATION_REQUIRED);
         App app = App.builder().id(APP_ID).userId(USER_ID)
                 .codeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue()).build();
         service = org.mockito.Mockito.spy(service);
@@ -471,6 +471,29 @@ class AppServiceImplVueTurnTest {
                 .tags("operation", "generate", "result", "rejected",
                         "conflict_with", "deploy").counter().count());
         verifyNoInteractions(history, facade, executor);
+    }
+
+    @Test
+    void 分类模型异常在用户消息提交前返回系统内部错误() {
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(vueTurnModeRoutingService.route("页面都有什么"))
+                .thenThrow(new IllegalStateException("分类模型不可用"));
+        when(history.addChatMessage(APP_ID, "页面都有什么", "user", USER_ID))
+                .thenReturn(true);
+
+        GenerationPreflightException exception = assertThrows(
+                GenerationPreflightException.class,
+                () -> service.chatToGenCode(
+                        APP_ID, "页面都有什么",
+                        User.builder().id(USER_ID).build()).blockLast());
+
+        assertEquals(GenerationPreflightException.Kind.SYSTEM,
+                exception.kind());
+        assertEquals("系统内部错误，请稍后尝试。", exception.safeMessage());
+        verify(history, never()).addChatMessage(
+                APP_ID, "页面都有什么", "user", USER_ID);
+        verify(facade, never()).generateVueProjectStream(
+                anyString(), anyLong(), anyBoolean(), any(), any());
     }
 
     @Test

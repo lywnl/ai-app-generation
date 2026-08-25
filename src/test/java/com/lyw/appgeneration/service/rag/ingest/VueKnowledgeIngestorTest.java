@@ -12,6 +12,7 @@ import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnMode;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.rag.RagPromptAssembler;
@@ -267,7 +268,8 @@ class VueKnowledgeIngestorTest {
                 .tryAcquire().orElseThrow();
         VueTurnContext turnContext = new VueTurnContext(
                 9L, 11L, "disabled-hybrid-real-turn", operation, lease,
-                permit, budgetGuard.newSession());
+                permit, budgetGuard.newSession(), true);
+        turnContext.initializeMode(VueTurnMode.MUTATION_REQUIRED);
 
         facade.generateVueProjectStream(
                 "Vue3 基础工程 登录表单", 9L, true,

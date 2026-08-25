@@ -57,6 +57,7 @@ import com.lyw.appgeneration.service.AppDeletionPersistenceService;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.VueTurnModeRouter;
+import com.lyw.appgeneration.service.VueTurnModeRoutingException;
 import com.lyw.appgeneration.service.ProjectDownloadService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -597,6 +598,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (failure instanceof BusinessException business) {
             return GenerationPreflightException.business(
                     business.getCode(), business.getMessage(), business);
+        }
+        if (failure instanceof VueTurnModeRoutingException routingFailure) {
+            return GenerationPreflightException.system(
+                    "系统内部错误，请稍后尝试。", routingFailure);
         }
         return GenerationPreflightException.system(failure);
     }

@@ -80,13 +80,13 @@ body {
     'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
+  overflow-x: clip;
   color: var(--text-primary);
   background: var(--bg-base);
 }
 
 html {
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* 默认聚焦环 */

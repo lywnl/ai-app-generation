@@ -12,6 +12,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnMode;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -378,6 +379,23 @@ class AiCodeGeneratorFacadeTest {
         order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
         verify(retrievalService, never()).retrieve(any(), any());
         verify(promptAssembler, never()).assemble(any(), anyList());
+        turnContext.closeResources();
+    }
+
+    @Test
+    void 首轮只读Vue问答跳过图片增强和代码生成Rag() {
+        stubVueGenerator();
+        properties.setEnabled(true);
+        properties.getHybrid().setEnabled(true);
+        VueTurnContext turnContext = newVueTurnContext(
+                "read-only-first", VueTurnMode.READ_ONLY);
+
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, true, turnContext, generatorService);
+
+        verify(imageCollectionService, never()).enhancePrompt(any());
+        verifyNoInteractions(retrievalService, promptAssembler);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         turnContext.closeResources();
     }
 
@@ -1134,10 +1152,31 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
                 turnId);
         var lease = sessionManager.open(operation, 9L, turnId);
-        return new VueTurnContext(
+        return newVueTurnContext(turnId, operation, lease,
+                VueTurnMode.MUTATION_REQUIRED);
+    }
+
+    private VueTurnContext newVueTurnContext(
+            String turnId, VueTurnMode mode) {
+        AppOperationLeaseManager operationManager =
+                new AppOperationLeaseManager();
+        VueBuildSessionManager sessionManager = new VueBuildSessionManager();
+        var operation = operationManager.acquire(
+                APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                turnId);
+        var lease = sessionManager.open(operation, 9L, turnId);
+        return newVueTurnContext(turnId, operation, lease, mode);
+    }
+
+    private VueTurnContext newVueTurnContext(
+            String turnId, AppOperationLeaseManager.AppOperationLease operation,
+            VueBuildSessionManager.VueBuildLease lease, VueTurnMode mode) {
+        VueTurnContext context = new VueTurnContext(
                 APP_ID, 9L, turnId, operation, lease,
                 admissionPermit(),
-                new FileToolBudgetGuard().newSession());
+                new FileToolBudgetGuard().newSession(), true);
+        context.initializeMode(mode);
+        return context;
     }
 
     private void stubVueGenerator() {

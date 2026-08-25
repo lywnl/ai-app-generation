@@ -24,6 +24,13 @@ public final class GenerationPreflightException extends RuntimeException {
                 SYSTEM_SAFE_MESSAGE, cause);
     }
 
+    public static GenerationPreflightException system(
+            String safeMessage, Throwable cause) {
+        return new GenerationPreflightException(
+                Kind.SYSTEM, ErrorCode.SYSTEM_ERROR.getCode(),
+                safeMessage, cause);
+    }
+
     private GenerationPreflightException(
             Kind kind, int code, String safeMessage, Throwable cause) {
         super(safeMessage, cause);
