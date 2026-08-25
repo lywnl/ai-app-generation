@@ -7,6 +7,7 @@ import {
   getGenerationSessionSnapshot,
   getGenerationStatusText,
   shouldRefreshGenerationPreview,
+  shouldHideCompletedReadOnlyTool,
   shouldShowGenerationStatus,
   startGenerationSession,
   subscribeGenerationSession,
@@ -235,6 +236,22 @@ afterEach(() => {
 })
 
 describe('generationSession generation-stream/v1 状态机', () => {
+  it.each([
+    ['streaming', 'answered', 'readFile', false],
+    ['streaming', 'answered', 'readDir', false],
+    ['done', 'answered', 'readFile', true],
+    ['done', 'answered', 'readDir', true],
+    ['done', 'succeeded', 'modifyFile', false],
+    ['done', 'succeeded', 'buildProject', false],
+    ['done', 'failed', 'readFile', false],
+    ['done', 'system_error', 'readFile', false],
+  ] as const)(
+    '%s + %s + %s 的只读工具卡片隐藏判断为 %s',
+    (status, outcome, toolName, expected) => {
+      expect(shouldHideCompletedReadOnlyTool({ status, outcome }, toolName)).toBe(expected)
+    },
+  )
+
   it.each(['direct', 'throttled'] as const)('%s 模式按 generation 回滚响应开头的正文', async (renderMode) => {
     const snapshot = await runSession(
       [

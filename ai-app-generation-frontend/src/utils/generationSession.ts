@@ -85,6 +85,17 @@ export function shouldRefreshGenerationPreview(
   return snapshot.status === 'done' && snapshot.outcome === 'succeeded'
 }
 
+export function shouldHideCompletedReadOnlyTool(
+  snapshot: Pick<GenerationSessionSnapshot, 'status' | 'outcome'>,
+  toolName: string,
+): boolean {
+  return (
+    snapshot.status === 'done' &&
+    snapshot.outcome === 'answered' &&
+    (toolName === 'readFile' || toolName === 'readDir')
+  )
+}
+
 export function getGenerationStatusText(
   contextCompression: ContextCompressionState,
   internalOutputRecovery: InternalOutputRecoveryState,

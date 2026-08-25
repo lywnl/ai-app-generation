@@ -48,4 +48,12 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).toContain("getBuildProjectDisplayState(view) === 'streaming'")
     expect(pageSource).toContain('执行中')
   })
+
+  it('只读回合完成后仅过滤读取工具卡片且保留原工具面板', () => {
+    expect(pageSource).toContain('shouldHideCompletedReadOnlyTool')
+    expect(pageSource).toContain('const visibleToolCalls = new Map(')
+    expect(pageSource).toContain('aiMessage.toolCalls = visibleToolCalls')
+    expect(pageSource).toContain('v-if="message.toolCalls && message.toolCalls.size > 0"')
+    expect(pageSource).toContain('updatePreview(true)')
+  })
 })

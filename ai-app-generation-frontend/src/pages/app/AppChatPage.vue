@@ -363,6 +363,7 @@ import {
   getBuildProjectDisplayState,
   getBuildProjectVisualState,
   shouldRefreshGenerationPreview,
+  shouldHideCompletedReadOnlyTool,
   getGenerationStatusText,
   shouldShowGenerationStatus,
 } from '@/utils/generationSession'
@@ -629,7 +630,12 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   }
   const aiMessage = messages.value[idx]
   aiMessage.content = snapshot.content
-  aiMessage.toolCalls = new Map(snapshot.toolCalls)
+  const visibleToolCalls = new Map(
+    [...snapshot.toolCalls].filter(
+      ([, view]) => !shouldHideCompletedReadOnlyTool(snapshot, view.name),
+    ),
+  )
+  aiMessage.toolCalls = visibleToolCalls
   aiMessage.contextCompression = snapshot.contextCompression
   aiMessage.internalOutputRecovery = snapshot.internalOutputRecovery
   aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery
