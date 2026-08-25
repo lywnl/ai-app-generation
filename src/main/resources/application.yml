@@ -129,6 +129,7 @@ rag:
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}
   ingest:
     enabled: false            # 只在策展变化时手动改 true 跑一次
+    types: ${RAG_INGEST_TYPES:} # 显式选择 HTML,MULTI_FILE,VUE_PROJECT；空值不摄取
   milvus:
     host: ${RAG_MILVUS_HOST:localhost}
     port: ${RAG_MILVUS_PORT:19530}

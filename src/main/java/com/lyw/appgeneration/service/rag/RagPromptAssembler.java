@@ -30,6 +30,7 @@ public class RagPromptAssembler {
     private static final int MAX_SUMMARY_FIELD_LENGTH = 32;
     private static final int MAX_SUMMARY_DEPENDENCIES_LENGTH = 124;
     private static final int AGGREGATE_DISPLAY_FILE_COUNT = 3;
+    private static final int MAX_NATIVE_DESCRIPTION_LENGTH = 160;
 
     private final RagProperties props;
     private final VueRagMetricsCollector metricsCollector;
@@ -61,22 +62,43 @@ public class RagPromptAssembler {
         }
 
         int budget = props.getPrompt().getMaxContextChars();
-        StringBuilder sb = new StringBuilder(HEADER);
-
-        int count = 0;
+        int contextBudget = budget - USER_REQUEST_HEADER.length();
+        List<NativeTemplateBlock> selected = new ArrayList<>();
+        int usedLength = HEADER.length();
         for (int i = 0; i < snippets.size(); i++) {
-            String block = renderSnippet(i + 1, snippets.get(i));
-            if (sb.length() + block.length() > budget) {
-                break;
+            TemplateDoc document = snippets.get(i) == null ? null : snippets.get(i).getDocument();
+            if (!isNativeTemplate(document)) {
+                continue;
             }
-            sb.append(block);
-            count++;
+            NativeTemplateBlock block = new NativeTemplateBlock(i + 1, document);
+            int minimumLength = block.render().length();
+            if (usedLength + minimumLength <= contextBudget) {
+                selected.add(block);
+                usedLength += minimumLength;
+            }
         }
 
-        if (count == 0) {
+        if (selected.isEmpty()) {
             return userMessage;
         }
 
+        for (NativeTemplateBlock block : selected) {
+            for (int fileIndex = 0; fileIndex < block.fileCount(); fileIndex++) {
+                int currentLength = block.render().length();
+                block.expand(fileIndex);
+                int expandedLength = block.render().length();
+                if (usedLength - currentLength + expandedLength <= contextBudget) {
+                    usedLength = usedLength - currentLength + expandedLength;
+                } else {
+                    block.collapse(fileIndex);
+                }
+            }
+        }
+
+        StringBuilder sb = new StringBuilder(usedLength + USER_REQUEST_HEADER.length()
+                + (userMessage == null ? 0 : userMessage.length()));
+        sb.append(HEADER);
+        selected.forEach(block -> sb.append(block.render()));
         sb.append(USER_REQUEST_HEADER).append(userMessage);
         return sb.toString();
     }
@@ -362,26 +384,85 @@ public class RagPromptAssembler {
         return "│ " + normalizedLineEndings.replace("\n", "\n│ ");
     }
 
-    private String renderSnippet(int idx, RetrievedSnippet s) {
-        double displayScore = s.getRerankScore() != null
-                ? s.getRerankScore()
-                : (s.getScore() == null ? 0.0 : s.getScore());
-        return String.format(
-                """
+    private boolean isNativeTemplate(TemplateDoc document) {
+        if (document == null || safeFiles(document).isEmpty()) {
+            return false;
+        }
+        return document.getDocumentKind() == RagDocumentKind.PAGE_SECTION
+                || document.getDocumentKind() == RagDocumentKind.SINGLE_PAGE_APP;
+    }
 
-                        ### 参考模板 %d · %s (相似度 %.2f)
-                        ```
-                        %s
-                        ```
-                        """,
-                idx,
-                s.getTitle() == null ? "未命名" : s.getTitle(),
-                displayScore,
-                s.getCode() == null ? "" : s.getCode()
-        );
+    private String renderNativeHeader(int rank, TemplateDoc document) {
+        String fileList = safeFiles(document).stream()
+                .map(this::displayPath)
+                .collect(java.util.stream.Collectors.joining("、"));
+        return """
+
+                ### 参考模板 %d
+                模板标题：%s
+                模板说明：%s
+                文件清单：%s
+                """.formatted(
+                rank,
+                boundedMetadata(document.getTitle(), MAX_CONTRACT_FIELD_LENGTH),
+                boundedMetadata(document.getDescription(), MAX_NATIVE_DESCRIPTION_LENGTH),
+                fileList);
+    }
+
+    private String renderNativeFullFile(TemplateDoc.TemplateFile file) {
+        return "--- 文件: %s ---\n%s\n--- 文件结束 ---\n".formatted(
+                displayPath(file), quoteContent(file.getContent() == null ? "" : file.getContent()));
+    }
+
+    private String renderNativeFileSummary(TemplateDoc.TemplateFile file, TemplateDoc document) {
+        return """
+                --- 文件: %s ---
+                因预算未附完整内容；用途：%s
+                --- 文件结束 ---
+                """.formatted(
+                displayPath(file),
+                boundedMetadata(document.getDescription(), MAX_SUMMARY_FIELD_LENGTH));
     }
 
     private record AtomicBlock(String full, String fallback) {
+    }
+
+    private final class NativeTemplateBlock {
+
+        private final int rank;
+        private final TemplateDoc document;
+        private final List<TemplateDoc.TemplateFile> files;
+        private final boolean[] expanded;
+
+        private NativeTemplateBlock(int rank, TemplateDoc document) {
+            this.rank = rank;
+            this.document = document;
+            this.files = safeFiles(document);
+            this.expanded = new boolean[files.size()];
+        }
+
+        private int fileCount() {
+            return files.size();
+        }
+
+        private void expand(int index) {
+            expanded[index] = true;
+        }
+
+        private void collapse(int index) {
+            expanded[index] = false;
+        }
+
+        private String render() {
+            StringBuilder result = new StringBuilder(renderNativeHeader(rank, document));
+            for (int index = 0; index < files.size(); index++) {
+                TemplateDoc.TemplateFile file = files.get(index);
+                result.append(expanded[index]
+                        ? renderNativeFullFile(file)
+                        : renderNativeFileSummary(file, document));
+            }
+            return result.toString();
+        }
     }
 
     private static final class BudgetSection {

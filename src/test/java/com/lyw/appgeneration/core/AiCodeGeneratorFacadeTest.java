@@ -2053,7 +2053,15 @@ class AiCodeGeneratorFacadeTest {
     }
 
     private RetrievedSnippet snippet(String id) {
-        return RetrievedSnippet.builder().id(id).title(id).code("示例代码").score(0.9).build();
+        TemplateDoc document = new TemplateDoc();
+        document.setId(id);
+        document.setTitle(id);
+        document.setDescription("示例模板");
+        TemplateDoc.TemplateFile file = new TemplateDoc.TemplateFile();
+        file.setPath("index.html");
+        file.setContent("示例代码");
+        document.setFiles(List.of(file));
+        return RetrievedSnippet.builder().id(id).title(id).document(document).score(0.9).build();
     }
 
     private VueTurnAdmissionController.AdmissionPermit admissionPermit() {

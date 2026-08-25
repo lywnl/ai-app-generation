@@ -127,7 +127,9 @@ public final class VueRetrievalQualityGateRunner {
                 new VueRagMetricsCollector(new SimpleMeterRegistry()),
                 properties);
         return new RagRetrievalService(
-                embeddingModel, stores, properties, rerankService, hybridService);
+                embeddingModel, stores, properties, rerankService, hybridService,
+                org.mockito.Mockito.mock(
+                        com.lyw.appgeneration.service.rag.retrieval.NativeTemplateCatalogProvider.class));
     }
 
     private void closeOnCreationFailure(

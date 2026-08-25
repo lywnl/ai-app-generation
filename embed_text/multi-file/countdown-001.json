@@ -1,16 +1,40 @@
 {
+  "schemaVersion": 1,
   "id": "multi-countdown-001",
+  "documentKind": "SINGLE_PAGE_APP",
   "type": "multi-file",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html-css-javascript",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "tool",
-  "style": ["minimal", "playful"],
-  "tech": ["html5", "css3", "vanilla-js"],
+  "style": [
+    "minimal",
+    "playful"
+  ],
+  "tech": [
+    "html5",
+    "css3",
+    "vanilla-js"
+  ],
   "title": "倒计时页面(自定义目标时间 · 大数字显示 · 本地存储)",
   "embedText": "倒计时 计时器 目标日期 天数 小时 分钟 秒 活动 发布 还剩多少天 大数字 countdown 纪念日",
   "description": "倒计时工具页,用户输入目标日期时间后保存到本地,大字号显示剩余天/时/分/秒,到期后显示完成状态",
   "files": [
-    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>倒计时</title><link rel=\"stylesheet\" href=\"style.css\"></head><body><div class=\"wrap\"><input id=\"title\" placeholder=\"给这个倒计时起个名字\"><input id=\"target\" type=\"datetime-local\"><button id=\"save\">保存并开始</button><div id=\"show\" class=\"show\"><h1 id=\"t\"></h1><div class=\"nums\" id=\"nums\"></div><button id=\"reset\" class=\"reset\">重新设置</button></div></div><script src=\"script.js\"></script></body></html>"},
-    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{min-height:100vh;background:linear-gradient(135deg,#f97316,#ec4899);color:#fff;display:flex;align-items:center;justify-content:center;padding:16px}.wrap{text-align:center;max-width:720px;width:100%}input,button{width:100%;padding:14px 18px;margin:8px 0;border:none;border-radius:10px;font-size:16px;font-family:inherit}input{background:rgba(255,255,255,.15);color:#fff;backdrop-filter:blur(8px)}input::placeholder{color:rgba(255,255,255,.6)}button{background:#fff;color:#ec4899;font-weight:700;cursor:pointer}button:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(0,0,0,.15)}.show{display:none}.show.on{display:block}h1{margin-bottom:28px;font-size:2rem}.nums{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.cell{background:rgba(255,255,255,.15);padding:20px 8px;border-radius:14px;backdrop-filter:blur(8px)}.cell .n{font-size:clamp(2rem,8vw,4rem);font-weight:800}.cell .l{font-size:13px;opacity:.7;margin-top:4px}.reset{background:rgba(255,255,255,.15);color:#fff;margin-top:16px}"},
-    {"path": "script.js", "content": "const KEY='cd';const t=document.getElementById('t');const title=document.getElementById('title');const target=document.getElementById('target');const save=document.getElementById('save');const show=document.getElementById('show');const nums=document.getElementById('nums');const reset=document.getElementById('reset');let timer=null;function load(){const raw=localStorage.getItem(KEY);if(raw){const d=JSON.parse(raw);start(d.title,d.target);return true}return false}function start(titleText,targetMs){title.style.display='none';target.style.display='none';save.style.display='none';show.classList.add('on');t.textContent=titleText||'倒计时';tick(targetMs);timer=setInterval(()=>tick(targetMs),1000)}function tick(targetMs){const diff=targetMs-Date.now();if(diff<=0){nums.innerHTML='<div class=\"cell\" style=\"grid-column:span 4\"><div class=\"n\">🎉</div><div class=\"l\">时间到!</div></div>';clearInterval(timer);return}const d=Math.floor(diff/86400000);const h=Math.floor(diff/3600000)%24;const m=Math.floor(diff/60000)%60;const s=Math.floor(diff/1000)%60;nums.innerHTML=[[d,'天'],[h,'时'],[m,'分'],[s,'秒']].map(([n,l])=>`<div class=\"cell\"><div class=\"n\">${String(n).padStart(2,'0')}</div><div class=\"l\">${l}</div></div>`).join('')}save.addEventListener('click',()=>{if(!target.value)return alert('请选择目标时间');const d={title:title.value||'倒计时',target:new Date(target.value).getTime()};localStorage.setItem(KEY,JSON.stringify(d));start(d.title,d.target)});reset.addEventListener('click',()=>{localStorage.removeItem(KEY);location.reload()});load();"}
+    {
+      "path": "index.html",
+      "content": "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>倒计时</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <main class=\"countdown\">\n    <section id=\"setup\" aria-labelledby=\"countdown-title\"><h1 id=\"countdown-title\">创建倒计时</h1><form id=\"countdown-form\"><label for=\"event-name\">事件名称</label><input id=\"event-name\" maxlength=\"60\" placeholder=\"例如：产品发布\"><label for=\"target-time\">目标日期与时间</label><input id=\"target-time\" type=\"datetime-local\" required><button type=\"submit\">开始倒计时</button><p id=\"form-error\" role=\"alert\"></p></form></section>\n    <section id=\"display\" hidden aria-labelledby=\"display-title\"><h1 id=\"display-title\">倒计时</h1><div class=\"units\" aria-live=\"polite\"><div><strong id=\"days\">00</strong><span>天</span></div><div><strong id=\"hours\">00</strong><span>时</span></div><div><strong id=\"minutes\">00</strong><span>分</span></div><div><strong id=\"seconds\">00</strong><span>秒</span></div></div><p id=\"countdown-status\" role=\"status\"></p><button id=\"reset\" type=\"button\">重新设置</button></section>\n  </main>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n"
+    },
+    {
+      "path": "style.css",
+      "content": ":root { font-family: system-ui, sans-serif; }\n* { box-sizing: border-box; }\nbody { display: grid; min-height: 100vh; margin: 0; place-items: center; padding: 20px; color: #ffffff; background: linear-gradient(135deg, #c2410c, #be185d); }\n.countdown { width: min(100%, 720px); padding: clamp(24px, 6vw, 48px); border: 1px solid rgba(255,255,255,.2); border-radius: 24px; background: rgba(15, 23, 42, .28); backdrop-filter: blur(12px); text-align: center; }\nh1 { margin: 0 0 28px; }\nform { display: grid; gap: 9px; max-width: 500px; margin: 0 auto; text-align: left; }\nlabel { margin-top: 8px; font-weight: 700; }\ninput, button { min-height: 46px; padding: 12px 14px; border: 0; border-radius: 10px; font: inherit; }\nbutton { color: #9f1239; background: #ffffff; font-weight: 800; cursor: pointer; }\ninput:focus-visible, button:focus-visible { outline: 3px solid #fde68a; outline-offset: 3px; }\n#form-error { min-height: 24px; margin: 0; color: #fef3c7; }\n.units { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }\n.units div { padding: 18px 8px; border-radius: 15px; background: rgba(255,255,255,.14); }\n.units strong, .units span { display: block; }\n.units strong { font-size: clamp(2rem, 9vw, 4rem); font-variant-numeric: tabular-nums; }\n.units span { margin-top: 5px; color: #ffe4e6; }\n#countdown-status { min-height: 28px; }\n#reset { margin-top: 12px; background: rgba(255,255,255,.18); color: #ffffff; }\n@media (max-width: 520px) { .units { grid-template-columns: repeat(2, 1fr); } }\n"
+    },
+    {
+      "path": "script.js",
+      "content": "const storageKey = 'countdown-v1';\nconst setup = document.querySelector('#setup');\nconst display = document.querySelector('#display');\nconst form = document.querySelector('#countdown-form');\nconst error = document.querySelector('#form-error');\nconst status = document.querySelector('#countdown-status');\nconst fields = ['days', 'hours', 'minutes', 'seconds'].map(id => document.querySelector('#' + id));\nlet timerId = null;\n\nfunction showCountdown(data) {\n  window.clearInterval(timerId);\n  setup.hidden = true;\n  display.hidden = false;\n  document.querySelector('#display-title').textContent = data.name || '倒计时';\n  const tick = () => {\n    const remaining = data.target - Date.now();\n    if (remaining <= 0) {\n      fields.forEach(field => { field.textContent = '00'; });\n      status.textContent = '时间到了！';\n      window.clearInterval(timerId);\n      return;\n    }\n    const values = [Math.floor(remaining / 86400000), Math.floor(remaining / 3600000) % 24, Math.floor(remaining / 60000) % 60, Math.floor(remaining / 1000) % 60];\n    fields.forEach((field, index) => { field.textContent = String(values[index]).padStart(2, '0'); });\n    status.textContent = '倒计时进行中';\n  };\n  tick();\n  timerId = window.setInterval(tick, 1000);\n}\n\nform.addEventListener('submit', event => {\n  event.preventDefault();\n  const target = new Date(document.querySelector('#target-time').value).getTime();\n  if (!Number.isFinite(target) || target <= Date.now()) {\n    error.textContent = '请选择一个未来的时间。';\n    return;\n  }\n  const data = { name: document.querySelector('#event-name').value.trim(), target };\n  localStorage.setItem(storageKey, JSON.stringify(data));\n  error.textContent = '';\n  showCountdown(data);\n});\n\ndocument.querySelector('#reset').addEventListener('click', () => {\n  window.clearInterval(timerId);\n  localStorage.removeItem(storageKey);\n  form.reset();\n  display.hidden = true;\n  setup.hidden = false;\n  document.querySelector('#event-name').focus();\n});\n\ntry {\n  const saved = JSON.parse(localStorage.getItem(storageKey));\n  if (saved && Number.isFinite(saved.target)) showCountdown(saved);\n} catch {\n  localStorage.removeItem(storageKey);\n}\n"
+    }
   ],
   "qualityScore": 0.91
 }

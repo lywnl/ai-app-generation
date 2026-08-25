@@ -1,12 +1,31 @@
 {
+  "schemaVersion": 1,
   "id": "html-blog-card-grid-001",
+  "documentKind": "PAGE_SECTION",
   "type": "html",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "blog",
-  "style": ["minimal", "clean"],
-  "tech": ["html5", "css3"],
+  "style": [
+    "minimal",
+    "clean"
+  ],
+  "tech": [
+    "html5",
+    "css3"
+  ],
   "title": "博客文章卡片网格(封面图 + 分类标签 + 标题 + 摘要 + 作者元信息)",
   "embedText": "博客 文章列表 卡片网格 blog cards 封面图 分类标签 文章标题 摘要 作者头像 发布日期 阅读时间 文章展示页 内容型官网",
   "description": "博客首页或资讯站的文章列表区,6 张卡片网格布局,每张含封面图、分类标签、标题、摘要、作者头像、发布时间、阅读时长",
-  "files": [{"path": "index.html", "content": "<section class=\"blog\"><h2>最新文章</h2><p class=\"sub\">深度内容,每周更新</p><div class=\"grid\"><article class=\"card\"><img src=\"https://picsum.photos/seed/b1/400/250\" alt=\"\"><div class=\"body\"><span class=\"tag\">技术</span><h3>Vue3 组合式 API 完全实战指南</h3><p>从 Options API 平滑迁移到 Composition API 的完整路径与踩坑记录...</p><div class=\"meta\"><img src=\"https://i.pravatar.cc/32?img=1\" alt=\"\"><span>张伟</span><span>·</span><span>2026-04-15</span><span>·</span><span>8 分钟</span></div></div></article><article class=\"card\"><img src=\"https://picsum.photos/seed/b2/400/250\" alt=\"\"><div class=\"body\"><span class=\"tag tag-2\">设计</span><h3>2026 年 UI 设计趋势:极简主义与微交互</h3><p>回归本质,用最少的元素传递最强的信息层次感...</p><div class=\"meta\"><img src=\"https://i.pravatar.cc/32?img=5\" alt=\"\"><span>李娜</span><span>·</span><span>2026-04-12</span><span>·</span><span>6 分钟</span></div></div></article><article class=\"card\"><img src=\"https://picsum.photos/seed/b3/400/250\" alt=\"\"><div class=\"body\"><span class=\"tag tag-3\">产品</span><h3>如何设计一个让用户『上瘾』的产品</h3><p>从钩子模型出发,剖析触发、行动、奖励、投入的产品闭环...</p><div class=\"meta\"><img src=\"https://i.pravatar.cc/32?img=8\" alt=\"\"><span>王强</span><span>·</span><span>2026-04-10</span><span>·</span><span>10 分钟</span></div></div></article><article class=\"card\"><img src=\"https://picsum.photos/seed/b4/400/250\" alt=\"\"><div class=\"body\"><span class=\"tag\">技术</span><h3>Rust vs Go:后端选型的深度对比</h3><p>从性能、生态、学习曲线、团队适配四个维度全面评估...</p><div class=\"meta\"><img src=\"https://i.pravatar.cc/32?img=11\" alt=\"\"><span>陈明</span><span>·</span><span>2026-04-08</span><span>·</span><span>12 分钟</span></div></div></article><article class=\"card\"><img src=\"https://picsum.photos/seed/b5/400/250\" alt=\"\"><div class=\"body\"><span class=\"tag tag-3\">产品</span><h3>为什么 MVP 不应该追求『最小』</h3><p>真正的 MVP 是最小可验证产品,验证价值假设而非功能清单...</p><div class=\"meta\"><img src=\"https://i.pravatar.cc/32?img=13\" alt=\"\"><span>赵红</span><span>·</span><span>2026-04-05</span><span>·</span><span>7 分钟</span></div></div></article><article class=\"card\"><img src=\"https://picsum.photos/seed/b6/400/250\" alt=\"\"><div class=\"body\"><span class=\"tag tag-2\">设计</span><h3>色彩心理学:品牌配色的 5 个黄金原则</h3><p>为什么金融品牌偏爱蓝色?为什么餐饮品牌常用红色?...</p><div class=\"meta\"><img src=\"https://i.pravatar.cc/32?img=15\" alt=\"\"><span>林芳</span><span>·</span><span>2026-04-02</span><span>·</span><span>5 分钟</span></div></div></article></div></section><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#f8fafc;padding:60px 20px;color:#0f172a}.blog{max-width:1200px;margin:0 auto}h2{text-align:center;font-size:2.25rem;margin-bottom:8px}.sub{text-align:center;color:#64748b;margin-bottom:40px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:24px}.card{background:#fff;border-radius:14px;overflow:hidden;transition:transform .2s,box-shadow .2s;cursor:pointer}.card:hover{transform:translateY(-4px);box-shadow:0 12px 32px rgba(0,0,0,.08)}.card img{width:100%;aspect-ratio:16/10;object-fit:cover;display:block}.body{padding:20px 22px}.tag{display:inline-block;background:#e0e7ff;color:#4338ca;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:500;margin-bottom:12px}.tag-2{background:#fce7f3;color:#be185d}.tag-3{background:#fef3c7;color:#92400e}.card h3{margin-bottom:10px;font-size:1.125rem;line-height:1.4}.card p{color:#64748b;font-size:14px;line-height:1.6;margin-bottom:16px}.meta{display:flex;align-items:center;gap:6px;font-size:13px;color:#94a3b8}.meta img{width:24px;height:24px;border-radius:50%}</style>"}],
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<section class=\"blog-template\" aria-labelledby=\"blog-title\">\n  <header><p>每周精选</p><h2 id=\"blog-title\">最新文章</h2><span>关注工程实践、产品方法与设计趋势。</span></header>\n  <div class=\"blog-template__grid\">\n    <article><img src=\"https://picsum.photos/seed/b1/640/400\" alt=\"电脑屏幕上的前端代码\"><div><span class=\"blog-template__tag\">技术</span><h3><a href=\"#article-vue\">Vue 组合式 API 实战指南</a></h3><p>从旧写法平滑迁移到组合式 API 的路径与常见问题。</p><small>张伟 · 8 分钟阅读</small></div></article>\n    <article><img src=\"https://picsum.photos/seed/b2/640/400\" alt=\"设计师桌上的配色卡片\"><div><span class=\"blog-template__tag\">设计</span><h3><a href=\"#article-design\">界面设计中的信息层次</a></h3><p>用更少的元素建立更清楚的阅读路径和操作重点。</p><small>李娜 · 6 分钟阅读</small></div></article>\n    <article><img src=\"https://picsum.photos/seed/b3/640/400\" alt=\"团队围绕白板讨论产品\"><div><span class=\"blog-template__tag\">产品</span><h3><a href=\"#article-product\">如何验证一个产品假设</a></h3><p>从问题、证据到实验，建立可复盘的验证闭环。</p><small>王强 · 10 分钟阅读</small></div></article>\n  </div>\n</section>\n<style>\n.blog-template { box-sizing: border-box; padding: 72px 24px; color: #0f172a; background: #ffffff; font-family: system-ui, sans-serif; }\n.blog-template > header { max-width: 680px; margin: 0 auto 38px; text-align: center; }\n.blog-template > header p { margin: 0 0 8px; color: #4f46e5; font-weight: 700; }\n.blog-template h2 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); }\n.blog-template > header span { display: block; margin-top: 12px; color: #64748b; }\n.blog-template__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; max-width: 1120px; margin: 0 auto; }\n.blog-template article { overflow: hidden; border: 1px solid #e2e8f0; border-radius: 18px; background: #ffffff; }\n.blog-template article > img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }\n.blog-template article > div { padding: 22px; }\n.blog-template__tag { display: inline-block; padding: 5px 10px; border-radius: 999px; color: #4338ca; background: #eef2ff; font-size: .78rem; font-weight: 700; }\n.blog-template h3 { margin: 14px 0 10px; line-height: 1.4; }\n.blog-template h3 a { color: #0f172a; text-decoration: none; }\n.blog-template article p { margin: 0 0 18px; color: #475569; line-height: 1.65; }\n.blog-template small { color: #64748b; }\n.blog-template a:focus-visible { outline: 3px solid #818cf8; outline-offset: 3px; }\n</style>\n"
+    }
+  ],
   "qualityScore": 0.93
 }

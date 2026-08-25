@@ -114,6 +114,21 @@ public class RagRerankService {
      * 只拼装父文档检索语义和工程元数据，严禁读取 files[].content。
      */
     String buildVueDocumentText(TemplateDoc document) {
+        return buildDocumentText(document);
+    }
+
+    /**
+     * 只使用本地目录回查出的父文档语义构造原生模板 Rerank 文本。
+     * 源码可能很长且不属于相关性判定所需信息，因此禁止读取 files[].content。
+     */
+    String buildNativeDocumentText(RetrievedSnippet snippet) {
+        if (snippet == null || snippet.getDocument() == null) {
+            throw new RerankException("原生模板候选缺少受校验父文档");
+        }
+        return buildDocumentText(snippet.getDocument());
+    }
+
+    private String buildDocumentText(TemplateDoc document) {
         String dependencies = formatDependencies(document.getDependencies(), document.getDevDependencies());
         String filePaths = document.getFiles() == null ? "" : document.getFiles().stream()
                 .filter(file -> file != null && file.getPath() != null && !file.getPath().isBlank())
@@ -234,18 +249,9 @@ public class RagRerankService {
         return value == null ? "" : value;
     }
 
-    /**
-     * 拼装送入 rerank 的文档文本
-     * 策略:title + 换行 + 截断后的 code;满足 gte-rerank-v2 单条 4000 token 限制
-     */
+    /** 拼装原生模板 Rerank 文本，源码只允许在 Prompt 组装阶段按预算读取。 */
     private String buildDocText(RetrievedSnippet s) {
-        String title = s.getTitle() == null ? "" : s.getTitle();
-        String code = s.getCode() == null ? "" : s.getCode();
-        int limit = props.getRerank().getDocCharLimit();
-        if (code.length() > limit) {
-            code = code.substring(0, limit);
-        }
-        return title + "\n" + code;
+        return buildNativeDocumentText(s);
     }
 
     /** DashScope rerank 响应顶层结构 */

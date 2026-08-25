@@ -1,9 +1,11 @@
 package com.lyw.appgeneration.service.rag.model;
 
 /**
- * Vue RAG 父文档类型。
+ * RAG 父文档类型。
  */
 public enum RagDocumentKind {
     PROJECT_SKELETON,
-    FEATURE_SNIPPET
+    FEATURE_SNIPPET,
+    PAGE_SECTION,
+    SINGLE_PAGE_APP
 }

@@ -20,6 +20,8 @@ public final class VueRagBudgetPolicy {
         return switch (documentKind) {
             case PROJECT_SKELETON -> MAX_SKELETON_FILES;
             case FEATURE_SNIPPET -> MAX_FEATURE_FILES;
+            case PAGE_SECTION, SINGLE_PAGE_APP ->
+                    throw new IllegalArgumentException("原生模板不能使用 Vue 文件预算策略: " + documentKind);
         };
     }
 }

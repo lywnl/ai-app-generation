@@ -1,8 +1,11 @@
 package com.lyw.appgeneration.config;
 
+import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+
+import java.util.Set;
 
 /**
  * RAG 相关配置(与 application.yml 的 rag.* 对应)
@@ -44,6 +47,8 @@ public class RagProperties {
     @Data
     public static class Ingest {
         private boolean enabled = false;
+        /** 本次显式摄取的生成类型；空集合表示不摄取任何类型。 */
+        private Set<CodeGenTypeEnum> types = Set.of();
     }
 
     @Data

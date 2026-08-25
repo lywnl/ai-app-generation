@@ -297,7 +297,8 @@ class VueKnowledgeIngestorTest {
                 mock(VueRagMetricsCollector.class), properties);
         RagRetrievalService retrievalService = new RagRetrievalService(
                 embeddingModel, Map.of(CodeGenTypeEnum.VUE_PROJECT, store),
-                properties, rerank, vueService);
+                properties, rerank, vueService, mock(
+                        com.lyw.appgeneration.service.rag.retrieval.NativeTemplateCatalogProvider.class));
         return new ProductionRetrievalHarness(retrievalService, fusion, rerank);
     }
 

@@ -2,9 +2,12 @@ package com.lyw.appgeneration.service.rag;
 
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
+import com.lyw.appgeneration.service.rag.catalog.NativeTemplateCatalog;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
+import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.retrieval.NativeTemplateCatalogProvider;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -15,12 +18,14 @@ import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -31,33 +36,77 @@ import static org.mockito.Mockito.when;
 class RagRetrievalServiceTest {
 
     @Test
-    void preservesHtmlAndMultiFileDenseRetrievalBehavior() {
+    void filtersCurrentVersionAndResolvesFullDocumentsFromLocalCatalog() {
         EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
         when(embeddingModel.embed(any(String.class)))
                 .thenReturn(Response.from(Embedding.from(new float[]{1.0f, 2.0f})));
-        EmbeddingStore<TextSegment> htmlStore = storeWith("html-1", "HTML 标题", "<main>HTML</main>");
-        EmbeddingStore<TextSegment> multiStore = storeWith("multi-1", "多文件标题", "多文件源码");
+        EmbeddingStore<TextSegment> htmlStore = storeWith(
+                "html-1", "catalog-html", RagDocumentKind.PAGE_SECTION);
         Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> stores =
                 new EnumMap<>(CodeGenTypeEnum.class);
         stores.put(CodeGenTypeEnum.HTML, htmlStore);
-        stores.put(CodeGenTypeEnum.MULTI_FILE, multiStore);
         RagProperties properties = new RagProperties();
         properties.setEnabled(true);
         properties.getRetrieval().setTopK(3);
         properties.getRerank().setEnabled(true);
         RagRerankService rerankService = mock(RagRerankService.class);
         VueHybridRetrievalService vueService = mock(VueHybridRetrievalService.class);
+        TemplateDoc document = document("html-1", RagDocumentKind.PAGE_SECTION, "<main>本地源码</main>");
+        NativeTemplateCatalog htmlCatalog = mock(NativeTemplateCatalog.class);
+        when(htmlCatalog.getCatalogVersion()).thenReturn("catalog-html");
+        when(htmlCatalog.findDocumentById("html-1")).thenReturn(java.util.Optional.of(document));
+        NativeTemplateCatalogProvider catalogProvider = mock(NativeTemplateCatalogProvider.class);
+        when(catalogProvider.current(CodeGenTypeEnum.HTML))
+                .thenReturn(java.util.Optional.of(htmlCatalog));
         RagRetrievalService service = new RagRetrievalService(
-                embeddingModel, stores, properties, rerankService, vueService);
+                embeddingModel, stores, properties, rerankService, vueService, catalogProvider);
 
         List<RetrievedSnippet> html = service.retrieve("官网", CodeGenTypeEnum.HTML);
-        List<RetrievedSnippet> multi = service.retrieve("计时器", CodeGenTypeEnum.MULTI_FILE);
 
         assertEquals(List.of("html-1"), html.stream().map(RetrievedSnippet::getId).toList());
-        assertEquals(List.of("multi-1"), multi.stream().map(RetrievedSnippet::getId).toList());
-        assertEquals("<main>HTML</main>", html.getFirst().getCode());
+        assertEquals(document, html.getFirst().getDocument());
+        ArgumentCaptor<EmbeddingSearchRequest> request =
+                ArgumentCaptor.forClass(EmbeddingSearchRequest.class);
+        verify(htmlStore).search(request.capture());
+        assertTrue(request.getValue().filter() != null, "原生模板检索必须携带目录版本过滤器");
         verify(rerankService, never()).rerank(any(), any(), any(Integer.class));
         verify(vueService, never()).retrieve(any());
+    }
+
+    @Test
+    void skipsCandidatesWithInvalidMetadataOrMissingLocalDocument() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(String.class)))
+                .thenReturn(Response.from(Embedding.from(new float[]{1.0f})));
+        EmbeddingStore<TextSegment> store = store();
+        TextSegment wrongVersion = segment("html-old", "old-version", "PAGE_SECTION");
+        TextSegment missingDocument = segment("html-missing", "catalog-html", "PAGE_SECTION");
+        when(store.search(any(EmbeddingSearchRequest.class))).thenReturn(
+                new EmbeddingSearchResult<>(List.of(
+                        match("old", wrongVersion),
+                        match("missing", missingDocument))));
+        NativeTemplateCatalog catalog = mock(NativeTemplateCatalog.class);
+        when(catalog.getCatalogVersion()).thenReturn("catalog-html");
+        NativeTemplateCatalogProvider provider = mock(NativeTemplateCatalogProvider.class);
+        when(provider.current(CodeGenTypeEnum.HTML)).thenReturn(java.util.Optional.of(catalog));
+        RagRetrievalService service = new RagRetrievalService(
+                embeddingModel, Map.of(CodeGenTypeEnum.HTML, store), new RagProperties(),
+                mock(RagRerankService.class), mock(VueHybridRetrievalService.class), provider);
+
+        assertTrue(service.retrieve("官网", CodeGenTypeEnum.HTML).isEmpty());
+    }
+
+    @Test
+    void unavailableCatalogDegradesOnlyThatNativeType() {
+        NativeTemplateCatalogProvider provider = mock(NativeTemplateCatalogProvider.class);
+        when(provider.current(CodeGenTypeEnum.HTML)).thenReturn(java.util.Optional.empty());
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        RagRetrievalService service = new RagRetrievalService(
+                embeddingModel, Map.of(CodeGenTypeEnum.HTML, store()), new RagProperties(),
+                mock(RagRerankService.class), mock(VueHybridRetrievalService.class), provider);
+
+        assertTrue(service.retrieve("官网", CodeGenTypeEnum.HTML).isEmpty());
+        verifyNoInteractions(embeddingModel);
     }
 
     @Test
@@ -71,7 +120,7 @@ class RagRetrievalServiceTest {
         properties.setEnabled(true);
         RagRetrievalService service = new RagRetrievalService(
                 mock(EmbeddingModel.class), Map.of(), properties,
-                mock(RagRerankService.class), vueService);
+                mock(RagRerankService.class), vueService, mock(NativeTemplateCatalogProvider.class));
 
         VueRagContext actual = service.retrieveVueProject("原始 Vue 需求");
 
@@ -86,7 +135,7 @@ class RagRetrievalServiceTest {
         properties.setEnabled(false);
         RagRetrievalService service = new RagRetrievalService(
                 mock(EmbeddingModel.class), Map.of(), properties,
-                mock(RagRerankService.class), vueService);
+                mock(RagRerankService.class), vueService, mock(NativeTemplateCatalogProvider.class));
 
         VueRagContext hybrid = service.retrieveVueProject("Hybrid 需求");
         VueRagContext denseOnly = service.retrieveVueProjectDenseOnly("Dense 需求");
@@ -105,7 +154,7 @@ class RagRetrievalServiceTest {
         properties.setEnabled(true);
         RagRetrievalService service = new RagRetrievalService(
                 mock(EmbeddingModel.class), Map.of(), properties,
-                mock(RagRerankService.class), vueService);
+                mock(RagRerankService.class), vueService, mock(NativeTemplateCatalogProvider.class));
 
         VueRagContext actual = service.retrieveVueProjectDenseOnly("生产 Dense 需求");
 
@@ -122,7 +171,7 @@ class RagRetrievalServiceTest {
         when(vueService.retrieveDenseOnlyForEvaluation("基线需求")).thenReturn(expected);
         RagRetrievalService service = new RagRetrievalService(
                 mock(EmbeddingModel.class), Map.of(), new RagProperties(),
-                mock(RagRerankService.class), vueService);
+                mock(RagRerankService.class), vueService, mock(NativeTemplateCatalogProvider.class));
 
         VueRagContext actual = service.retrieveVueProjectDenseOnlyForEvaluation("基线需求");
 
@@ -132,18 +181,45 @@ class RagRetrievalServiceTest {
     }
 
     @SuppressWarnings("unchecked")
-    private EmbeddingStore<TextSegment> storeWith(String id, String title, String code) {
+    private EmbeddingStore<TextSegment> storeWith(
+            String id, String catalogVersion, RagDocumentKind documentKind) {
         EmbeddingStore<TextSegment> store = mock(EmbeddingStore.class);
-        Metadata metadata = Metadata.from(Map.of(
-                "id", id,
-                "title", title,
-                "category", "test",
-                "code", code
-        ));
+        TextSegment segment = segment(id, catalogVersion, documentKind.name());
         EmbeddingMatch<TextSegment> match = new EmbeddingMatch<>(
-                0.9, id, Embedding.from(new float[]{1.0f}), TextSegment.from("检索文本", metadata));
+                0.9, id, Embedding.from(new float[]{1.0f}), segment);
         when(store.search(any(EmbeddingSearchRequest.class)))
                 .thenReturn(new EmbeddingSearchResult<>(List.of(match)));
         return store;
+    }
+
+    private TextSegment segment(String id, String catalogVersion, String documentKind) {
+        return TextSegment.from("检索文本", Metadata.from(Map.of(
+                "documentId", id,
+                "documentKind", documentKind,
+                "catalogVersion", catalogVersion,
+                "title", "标题",
+                "category", "test")));
+    }
+
+    private EmbeddingMatch<TextSegment> match(String id, TextSegment segment) {
+        return new EmbeddingMatch<>(0.9, id,
+                Embedding.from(new float[]{1.0f}), segment);
+    }
+
+    private TemplateDoc document(String id, RagDocumentKind kind, String content) {
+        TemplateDoc document = new TemplateDoc();
+        document.setId(id);
+        document.setDocumentKind(kind);
+        document.setTitle("标题");
+        TemplateDoc.TemplateFile file = new TemplateDoc.TemplateFile();
+        file.setPath("index.html");
+        file.setContent(content);
+        document.setFiles(List.of(file));
+        return document;
+    }
+
+    @SuppressWarnings("unchecked")
+    private EmbeddingStore<TextSegment> store() {
+        return mock(EmbeddingStore.class);
     }
 }

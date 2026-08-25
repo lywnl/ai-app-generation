@@ -3,6 +3,7 @@ package com.lyw.appgeneration.service.rag;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
+import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
@@ -13,9 +14,38 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RagRerankServiceVueTest {
+
+    @Test
+    void nativeRerankTextUsesSemanticsAndNeverReadsSourceCode() {
+        RagProperties properties = new RagProperties();
+        RagRerankService service = new RagRerankService(properties, "test-key");
+        TemplateDoc document = new TemplateDoc();
+        document.setTitle("安全 Markdown 编辑器");
+        document.setDescription("实时预览与协议过滤");
+        document.setEmbedText("Markdown 编辑器 链接 安全");
+        document.setFramework("none");
+        document.setLanguage("html-css-javascript");
+        document.setBuildTool("none");
+        document.setTech(List.of("vanilla-js"));
+        TemplateDoc.TemplateFile file = new TemplateDoc.TemplateFile();
+        file.setPath("script.js");
+        file.setContent("SOURCE_SECRET_NEVER_SEND");
+        document.setFiles(List.of(file));
+        RetrievedSnippet snippet = RetrievedSnippet.builder()
+                .id("multi-markdown").document(document).build();
+
+        String text = service.buildNativeDocumentText(snippet);
+
+        assertTrue(text.contains("安全 Markdown 编辑器"));
+        assertTrue(text.contains("Markdown 编辑器 链接 安全"));
+        assertTrue(text.contains("script.js"));
+        assertFalse(text.contains("SOURCE_SECRET_NEVER_SEND"));
+    }
 
     @Test
     void returnsCompleteUniqueVueRerankResults() throws IOException {

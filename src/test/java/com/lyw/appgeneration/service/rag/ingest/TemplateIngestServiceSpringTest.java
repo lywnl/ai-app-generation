@@ -1,7 +1,6 @@
 package com.lyw.appgeneration.service.rag.ingest;
 
 import com.lyw.appgeneration.config.RagProperties;
-import dev.langchain4j.model.embedding.EmbeddingModel;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -17,9 +16,9 @@ class TemplateIngestServiceSpringTest {
     private final ApplicationContextRunner contextRunner =
             new ApplicationContextRunner()
                     .withBean(RagProperties.class, RagProperties::new)
-                    .withBean(EmbeddingModel.class,
-                            () -> mock(EmbeddingModel.class))
                     .withBean("embeddingStoreByType", Map.class, Map::of)
+                    .withBean(NativeTemplateIngestor.class,
+                            () -> mock(NativeTemplateIngestor.class))
                     .withBean(VueKnowledgeIngestor.class,
                             () -> mock(VueKnowledgeIngestor.class))
                     .withUserConfiguration(TemplateIngestService.class);

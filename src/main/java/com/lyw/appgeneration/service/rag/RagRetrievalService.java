@@ -3,8 +3,11 @@ package com.lyw.appgeneration.service.rag;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
+import com.lyw.appgeneration.service.rag.catalog.NativeTemplateCatalog;
+import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.retrieval.NativeTemplateCatalogProvider;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -12,7 +15,6 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -30,7 +32,6 @@ import java.util.Map;
  * @author lyw
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class RagRetrievalService {
 
@@ -39,6 +40,22 @@ public class RagRetrievalService {
     private final RagProperties props;
     private final RagRerankService rerankService;
     private final VueHybridRetrievalService vueHybridRetrievalService;
+    private final NativeTemplateCatalogProvider nativeCatalogProvider;
+
+    public RagRetrievalService(
+            EmbeddingModel ragEmbeddingModel,
+            Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> embeddingStoreByType,
+            RagProperties props,
+            RagRerankService rerankService,
+            VueHybridRetrievalService vueHybridRetrievalService,
+            NativeTemplateCatalogProvider nativeCatalogProvider) {
+        this.ragEmbeddingModel = ragEmbeddingModel;
+        this.embeddingStoreByType = embeddingStoreByType;
+        this.props = props;
+        this.rerankService = rerankService;
+        this.vueHybridRetrievalService = vueHybridRetrievalService;
+        this.nativeCatalogProvider = nativeCatalogProvider;
+    }
 
     /**
      * 使用原始需求执行 Vue 工程双链混合检索。
@@ -90,6 +107,16 @@ public class RagRetrievalService {
         if (userPrompt == null || userPrompt.isBlank() || type == null) {
             return List.of();
         }
+        if (type == CodeGenTypeEnum.VUE_PROJECT) {
+            log.debug("[RAG] 通用原生模板入口不支持 Vue,type={}", type);
+            return List.of();
+        }
+
+        NativeTemplateCatalog catalog = currentNativeCatalog(type);
+        if (catalog == null) {
+            log.debug("[RAG] type={} 本地模板目录不可用,跳过召回", type);
+            return List.of();
+        }
 
         EmbeddingStore<TextSegment> store = embeddingStoreByType.get(type);
         if (store == null) {
@@ -109,11 +136,15 @@ public class RagRetrievalService {
                     .queryEmbedding(queryEmbedding)
                     .maxResults(recallSize)
                     .minScore(props.getRetrieval().getMinScore())
+                    .filter(dev.langchain4j.store.embedding.filter.MetadataFilterBuilder
+                            .metadataKey("catalogVersion")
+                            .isEqualTo(catalog.getCatalogVersion()))
                     .build();
 
             EmbeddingSearchResult<TextSegment> result = store.search(request);
             List<RetrievedSnippet> candidates = result.matches().stream()
-                    .map(this::toSnippet)
+                    .map(match -> toSnippet(match, catalog, type))
+                    .filter(java.util.Objects::nonNull)
                     .toList();
 
             if (candidates.isEmpty()) {
@@ -144,14 +175,43 @@ public class RagRetrievalService {
         }
     }
 
-    private RetrievedSnippet toSnippet(EmbeddingMatch<TextSegment> match) {
+    private NativeTemplateCatalog currentNativeCatalog(CodeGenTypeEnum type) {
+        return nativeCatalogProvider.current(type).orElse(null);
+    }
+
+    private RetrievedSnippet toSnippet(
+            EmbeddingMatch<TextSegment> match,
+            NativeTemplateCatalog catalog,
+            CodeGenTypeEnum type) {
+        if (match == null || match.embedded() == null || match.score() == null
+                || !Double.isFinite(match.score())) {
+            return null;
+        }
         TextSegment seg = match.embedded();
+        String documentId = metadataText(seg, "documentId");
+        String documentKind = metadataText(seg, "documentKind");
+        String catalogVersion = metadataText(seg, "catalogVersion");
+        RagDocumentKind expectedKind = type == CodeGenTypeEnum.HTML
+                ? RagDocumentKind.PAGE_SECTION : RagDocumentKind.SINGLE_PAGE_APP;
+        if (documentId == null || !expectedKind.name().equals(documentKind)
+                || !catalog.getCatalogVersion().equals(catalogVersion)) {
+            return null;
+        }
+        var document = catalog.findDocumentById(documentId).orElse(null);
+        if (document == null || document.getDocumentKind() != expectedKind) {
+            return null;
+        }
         return RetrievedSnippet.builder()
-                .id(seg.metadata().getString("id"))
-                .title(seg.metadata().getString("title"))
-                .category(seg.metadata().getString("category"))
-                .code(seg.metadata().getString("code"))
+                .id(documentId)
+                .title(document.getTitle())
+                .category(document.getCategory())
+                .document(document)
                 .score(match.score())
                 .build();
+    }
+
+    private String metadataText(TextSegment segment, String key) {
+        Object value = segment.metadata().toMap().get(key);
+        return value instanceof String text && !text.isBlank() ? text : null;
     }
 }

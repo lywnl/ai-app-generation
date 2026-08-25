@@ -700,7 +700,9 @@ rag:
   enabled: true
   hybrid: { enabled: true }                         # 默认使用 BM25 + Milvus + RRF + Rerank
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}   # 默认读取项目根目录，可用环境变量覆盖
-  ingest.enabled: false                            # 模板入库开关（手动触发）
+  ingest:
+    enabled: false                                 # 模板入库开关（手动触发）
+    types: ${RAG_INGEST_TYPES:}                    # 显式选择 HTML,MULTI_FILE,VUE_PROJECT；空值不摄取
   milvus: { host: localhost, port: 19530, database: default, username: root }
   # Milvus root 密码默认从 INFRA_SHARED_PASSWORD 注入
   embedding: { model-name: text-embedding-v4, dimension: 1024 }
