@@ -2,6 +2,7 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
+import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.AppOperationLease;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CallbackRegistration;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CancellationRegistration;
@@ -27,9 +28,14 @@ public final class SimpleGenerationTurnContext
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicBoolean stableAiMessagePersisted =
             new AtomicBoolean();
+    private final AtomicBoolean userMessageCommitted = new AtomicBoolean();
     private final AtomicReference<UpstreamCancellation> upstreamCancellation =
             new AtomicReference<>();
     private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
+    private final Sinks.One<GenerationStreamEvent> cancellationOutcome =
+            Sinks.one();
+    private final AtomicReference<Runnable> cancellationFinalizer =
+            new AtomicReference<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CallbackGate callbackGate = new CallbackGate();
     private final TurnProgressChannel progressChannel =
@@ -66,8 +72,28 @@ public final class SimpleGenerationTurnContext
         return operationLease.appId();
     }
 
+    public boolean userMessageCommitted() {
+        return userMessageCommitted.get();
+    }
+
+    public void markUserMessageCommitted() {
+        userMessageCommitted.set(true);
+        if (isCancelled()) {
+            runCancellationFinalizer();
+        }
+    }
+
     public boolean isCancelled() {
         return cancelled.get() || operationLease.isCancellationRequested();
+    }
+
+    /** 主动停止普通生成，并保持与删除/客户端断开相同的取消门语义。 */
+    public boolean requestCancellation() {
+        if (closed.get() || stableAiMessagePersisted.get()) {
+            return false;
+        }
+        boolean changed = operationLease.requestCancellation();
+        return changed;
     }
 
     /** 标记完整 AI 回复已成功写入 MySQL，之后的下游取消不再代表 L0 不可信。 */
@@ -117,6 +143,20 @@ public final class SimpleGenerationTurnContext
         return cancellationSignal.asMono();
     }
 
+    public Mono<GenerationStreamEvent> cancellationOutcome() {
+        return cancellationOutcome.asMono();
+    }
+
+    public void registerCancellationFinalizer(Runnable finalizer) {
+        Objects.requireNonNull(finalizer, "取消终态动作不能为空");
+        if (!cancellationFinalizer.compareAndSet(null, finalizer)) {
+            throw new IllegalStateException("普通回合已经注册取消终态动作");
+        }
+        if (isCancelled()) {
+            runCancellationFinalizer();
+        }
+    }
+
     /** 绑定真实模型订阅；删除已先关门时立即取消这个晚到上游。 */
     public void bindUpstream(Runnable cancellationAction) {
         Objects.requireNonNull(cancellationAction, "上游取消动作不能为空");
@@ -153,6 +193,7 @@ public final class SimpleGenerationTurnContext
         }
         callbackGate.revoke();
         progressChannel.close();
+        cancellationOutcome.tryEmitEmpty();
         RuntimeException failure = closeDeleteTakeoverRegistration();
         try {
             cancellationRegistration.close();
@@ -178,6 +219,7 @@ public final class SimpleGenerationTurnContext
         callbackGate.revoke();
         progressChannel.close();
         cancelled.set(true);
+        runCancellationFinalizer();
         synchronized (cancelled) {
             cancelled.notifyAll();
         }
@@ -188,6 +230,21 @@ public final class SimpleGenerationTurnContext
             }
         } finally {
             cancellationSignal.tryEmitEmpty();
+            cancellationOutcome.tryEmitValue(GenerationStreamEvent.simpleTurnOutcome(
+                    new VueTurnOutcome(
+                            VueBuildPhase.CANCELLED,
+                            VueTurnOutcome.TurnOutcomeType.CANCELLED,
+                            VueTurnFinalizer.CANCELLED_MESSAGE,
+                            VueTurnMemoryProjection.project(java.util.List.of(),
+                                    VueTurnOutcome.TurnOutcomeType.CANCELLED),
+                            false, VueTurnFinalizer.CANCELLED_MESSAGE)));
+        }
+    }
+
+    private void runCancellationFinalizer() {
+        Runnable finalizer = cancellationFinalizer.getAndSet(null);
+        if (finalizer != null) {
+            finalizer.run();
         }
     }
 

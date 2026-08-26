@@ -763,7 +763,8 @@ class AppControllerSseTest {
     }
 
     private AppChatGenerateRequest requestBody() {
-        return new AppChatGenerateRequest(Long.toString(APP_ID), "需求");
+        return new AppChatGenerateRequest(Long.toString(APP_ID), "需求",
+                "00000000-0000-4000-8000-000000000007");
     }
 
     private double protocolCount(String result) {

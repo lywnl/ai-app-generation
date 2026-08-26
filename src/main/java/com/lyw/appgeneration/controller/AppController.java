@@ -96,8 +96,12 @@ public class AppController {
                 }
                 long appId = requestBody.requireAppId();
                 String message = requestBody.requireMessage();
+                String generationId = requestBody.resolveGenerationId();
                 User loginUser = userService.getLoginUser(request);
-                return appService.chatToGenCode(appId, message, loginUser);
+                Flux<GenerationStreamEvent> business = appService.chatToGenCode(
+                        appId, message, generationId, loginUser);
+                return business != null ? business
+                        : appService.chatToGenCode(appId, message, loginUser);
             }).onErrorMap(BusinessException.class, this::toBusinessPreflight)
                     .onErrorMap(error -> !(error instanceof
                                     GenerationPreflightException),
@@ -130,6 +134,19 @@ public class AppController {
                     .doFinally(signal -> publisherObservation.complete(
                             publisherResult(signal)));
         });
+    }
+
+    @PostMapping("/chat/gen/cancel")
+    public BaseResponse<Boolean> cancelChatGeneration(
+            @RequestBody AppChatCancelRequest requestBody,
+            HttpServletRequest request) {
+        ThrowUtils.throwIf(requestBody == null, ErrorCode.PARAMS_ERROR,
+                "请求体不能为空");
+        long appId = requestBody.requireAppId();
+        String generationId = requestBody.requireGenerationId();
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(appService.cancelGeneration(
+                appId, generationId, loginUser));
     }
 
     private AppLifecycleMetricsCollector.SseErrorKind errorKind(

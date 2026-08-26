@@ -86,6 +86,21 @@ export async function chatToGenCode(
   })
 }
 
+/** 停止指定生成回合 */
+export async function cancelChatGeneration(
+  body: API.AppChatCancelRequest,
+  options?: { [key: string]: any },
+) {
+  return request<API.BaseResponseBoolean>('/app/chat/gen/cancel', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    data: body,
+    ...(options || {}),
+  })
+}
+
 /** 此处后端没有提供注释 POST /app/delete */
 export async function deleteApp(body: API.DeleteRequest, options?: { [key: string]: any }) {
   return request<API.BaseResponseBoolean>('/app/delete', {

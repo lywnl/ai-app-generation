@@ -883,6 +883,11 @@ public final class VueTurnContext implements ContextContinuationGate {
         return finalization.join();
     }
 
+    /** 暴露唯一稳定终态，供主动取消接口继续通过原 SSE 返回终态。 */
+    public Mono<VueTurnFinalizer.FinalizationResult> finalizationSignal() {
+        return Mono.fromFuture(finalization);
+    }
+
     public void closeResources() {
         if (!resourcesClosed.compareAndSet(false, true)) {
             return;

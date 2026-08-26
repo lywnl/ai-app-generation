@@ -16,7 +16,7 @@ class AppChatGenerateRequestTest {
     @Test
     void appId只接受Json字符串形式的Long范围内正整数() throws Exception {
         AppChatGenerateRequest request = objectMapper.readValue(
-                "{\"appId\":\"9223372036854775807\",\"message\":\"需求\"}",
+                "{\"appId\":\"9223372036854775807\",\"message\":\"需求\",\"generationId\":\"00000000-0000-4000-8000-000000000007\"}",
                 AppChatGenerateRequest.class);
 
         assertEquals(Long.MAX_VALUE, request.requireAppId());

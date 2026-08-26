@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 应用 服务层。
@@ -50,7 +51,17 @@ public interface AppService extends IService<App> {
      * @return
      */
     Flux<GenerationStreamEvent> chatToGenCode(
-            Long appId, String message, User loginUser);
+            Long appId, String message, String generationId, User loginUser);
+
+    /** 兼容内部旧调用方；新入口必须传入生成任务 ID。 */
+    default Flux<GenerationStreamEvent> chatToGenCode(
+            Long appId, String message, User loginUser) {
+        return chatToGenCode(appId, message, UUID.randomUUID().toString(),
+                loginUser);
+    }
+
+    /** 请求停止指定生成回合。 */
+    boolean cancelGeneration(Long appId, String generationId, User loginUser);
 
     /**
      * 应用部署

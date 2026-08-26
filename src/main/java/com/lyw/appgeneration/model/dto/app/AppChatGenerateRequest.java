@@ -9,21 +9,29 @@ import com.lyw.appgeneration.exception.ErrorCode;
 import java.util.regex.Pattern;
 
 /** 生成代码 POST 请求，应用 ID 保持字符串以避免前端整数精度丢失。 */
-public record AppChatGenerateRequest(String appId, String message) {
+public record AppChatGenerateRequest(String appId, String message,
+                                     String generationId) {
 
     public static final int MAX_MESSAGE_CODE_POINTS = 32_000;
 
     private static final Pattern POSITIVE_DECIMAL =
             Pattern.compile("[0-9]+");
 
+    /** 兼容旧测试和旧调用方；新前端请求会显式携带生成任务 ID。 */
+    public AppChatGenerateRequest(String appId, String message) {
+        this(appId, message, null);
+    }
+
     @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
     public static AppChatGenerateRequest fromJson(
             @JsonProperty("appId") JsonNode appId,
-            @JsonProperty("message") String message) {
+            @JsonProperty("message") String message,
+            @JsonProperty("generationId") String generationId) {
         if (appId == null || !appId.isTextual()) {
             throw paramsError("应用ID必须是字符串");
         }
-        return new AppChatGenerateRequest(appId.textValue(), message);
+        return new AppChatGenerateRequest(appId.textValue(), message,
+                generationId);
     }
 
     public long requireAppId() {
@@ -51,6 +59,17 @@ public record AppChatGenerateRequest(String appId, String message) {
             throw paramsError("用户消息不能超过32000个字符");
         }
         return message;
+    }
+
+    public String resolveGenerationId() {
+        if (generationId == null || generationId.isBlank()) {
+            throw paramsError("生成任务 ID 不能为空");
+        }
+        if (!generationId.matches(
+                "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")) {
+            throw paramsError("生成任务ID格式无效");
+        }
+        return generationId;
     }
 
     private static BusinessException paramsError(String message) {

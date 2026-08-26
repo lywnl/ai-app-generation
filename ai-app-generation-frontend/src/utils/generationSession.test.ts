@@ -188,6 +188,19 @@ function outcome(
   }
 }
 
+function simpleOutcome(sequence: number, value: string): WireFrame {
+  return {
+    event: 'simple-turn-outcome',
+    data: {
+      protocol: 'simple-turn/v1',
+      sequence,
+      outcome: value,
+      message: `回合结果：${value}`,
+      refreshPreview: false,
+    },
+  }
+}
+
 function done(sequence: number): WireFrame {
   return { event: 'done', data: { protocol: 'generation-stream/v1', sequence } }
 }
@@ -217,6 +230,7 @@ async function runSession(
   startGenerationSession({
     appId,
     userMessage: '生成页面',
+    generationId: crypto.randomUUID(),
     baseURL: 'http://localhost/api',
     renderMode: options.renderMode ?? 'direct',
     throttleMs: options.throttleMs,
@@ -236,6 +250,15 @@ afterEach(() => {
 })
 
 describe('generationSession generation-stream/v1 状态机', () => {
+  it('普通模板取消使用独立终态协议且不刷新预览', async () => {
+    const snapshot = await runSession(
+      [simpleMessage(1, '半截代码'), simpleOutcome(2, 'CANCELLED'), done(3)],
+      { vue: false },
+    )
+    expect(snapshot).toMatchObject({ status: 'done', outcome: 'cancelled' })
+    expect(shouldRefreshGenerationPreview(snapshot!)).toBe(false)
+  })
+
   it.each([
     ['streaming', 'answered', 'readFile', false],
     ['streaming', 'answered', 'readDir', false],
@@ -1011,6 +1034,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     startGenerationSession({
       appId,
       userMessage: '生成页面',
+      generationId: crypto.randomUUID(),
       baseURL: 'http://localhost/api/',
       renderMode: 'direct',
       expectVueTurnOutcome: true,
@@ -1018,7 +1042,10 @@ describe('generationSession generation-stream/v1 状态机', () => {
     await vi.waitFor(() => expect(getGenerationSessionSnapshot(appId)?.status).toBe('done'))
     const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('http://localhost/api/app/chat/gen/code')
-    expect(JSON.parse(String(request.body))).toEqual({ appId, message: '生成页面' })
+    expect(JSON.parse(String(request.body))).toMatchObject({ appId, message: '生成页面' })
+    expect(JSON.parse(String(request.body)).generationId).toMatch(
+      /^[0-9a-f-]{36}$/,
+    )
   })
 
   it('未提供会话类型时拒绝发起请求', () => {
@@ -1028,6 +1055,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
       startGenerationSession({
         appId: 'unknown-type',
         userMessage: '生成页面',
+        generationId: crypto.randomUUID(),
         baseURL: 'http://localhost/api',
       } as never),
     ).toThrow('生成会话类型未确定')
@@ -1044,6 +1072,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     startGenerationSession({
       appId,
       userMessage: '生成页面',
+      generationId: crypto.randomUUID(),
       baseURL: 'http://localhost/api',
       renderMode: 'direct',
       expectVueTurnOutcome: true,
@@ -1072,6 +1101,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     startGenerationSession({
       appId,
       userMessage: '生成页面',
+      generationId: crypto.randomUUID(),
       baseURL: 'http://localhost/api',
       renderMode: 'direct',
       expectVueTurnOutcome: true,
@@ -1117,6 +1147,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     startGenerationSession({
       appId,
       userMessage: '生成页面',
+      generationId: crypto.randomUUID(),
       baseURL: 'http://localhost/api',
       renderMode: 'throttled',
       throttleMs: 10_000,

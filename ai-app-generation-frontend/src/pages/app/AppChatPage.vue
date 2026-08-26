@@ -244,12 +244,15 @@
             <div class="input-actions">
               <a-button
                 type="primary"
-                @click="sendMessage"
-                :loading="isGenerating"
-                :disabled="!isOwner"
+                @click="isGenerating ? stopGeneration() : sendMessage()"
+                :loading="isStopping"
+                :disabled="!isOwner || isStopping"
+                :danger="isGenerating"
+                :aria-label="isGenerating ? '停止本轮生成' : '发送消息'"
               >
                 <template #icon>
-                  <SendOutlined />
+                  <StopOutlined v-if="isGenerating" />
+                  <SendOutlined v-else />
                 </template>
               </a-button>
             </div>
@@ -359,6 +362,7 @@ import {
   startGenerationSession,
   subscribeGenerationSession,
   getGenerationSessionSnapshot,
+  getActiveGenerationId,
   clearGenerationSession,
   getBuildProjectDisplayState,
   getBuildProjectVisualState,
@@ -367,6 +371,7 @@ import {
   getGenerationStatusText,
   shouldShowGenerationStatus,
 } from '@/utils/generationSession'
+import { cancelChatGeneration } from '@/api/appController'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
@@ -409,6 +414,7 @@ import { VisualEditor, type ElementInfo } from '@/utils/visualEditor'
 import {
   CloudUploadOutlined,
   SendOutlined,
+  StopOutlined,
   ExportOutlined,
   InfoCircleOutlined,
   DownloadOutlined,
@@ -440,6 +446,7 @@ interface Message {
 const messages = ref<Message[]>([])
 const userInput = ref('')
 const isGenerating = ref(false)
+const isStopping = ref(false)
 const messagesContainer = ref<HTMLElement>()
 const activeSessionAppId = ref<string | null>(null)
 const sessionMessageIndex = ref<number | null>(null)
@@ -739,6 +746,7 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
   startGenerationSession({
     appId: targetAppId,
     userMessage: inputMessage,
+    generationId: crypto.randomUUID(),
     baseURL: request.defaults.baseURL || API_BASE_URL,
     renderMode:
       expectVueTurnOutcome ? 'direct' : 'throttled',
@@ -748,6 +756,25 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
   const snapshot = getGenerationSessionSnapshot(targetAppId)
   if (snapshot) {
     applySessionSnapshot(snapshot)
+  }
+}
+
+const stopGeneration = async () => {
+  const targetAppId = activeSessionAppId.value
+  const generationId = targetAppId ? getActiveGenerationId(targetAppId) : undefined
+  if (!targetAppId || !generationId || isStopping.value) return
+  isStopping.value = true
+  try {
+    const res = await cancelChatGeneration({ appId: targetAppId, generationId })
+    if (res.data.code !== 0 || res.data.data !== true) {
+      throw new Error(res.data.message || '停止请求未生效')
+    }
+    message.info('已请求停止，正在等待生成终态…')
+  } catch (error) {
+    console.error('停止生成失败：', error)
+    message.error('停止生成失败，请重试')
+  } finally {
+    isStopping.value = false
   }
 }
 
@@ -856,6 +883,7 @@ const updatePreview = (forceReload = false) => {
 // 后端回合终态是唯一刷新依据；失败时保留旧预览，便于用户继续对照修复。
 const finalizeGeneration = (snapshot: GenerationSessionSnapshot) => {
   isGenerating.value = false
+  isStopping.value = false
   if (shouldRefreshGenerationPreview(snapshot)) {
     updatePreview(true)
   }

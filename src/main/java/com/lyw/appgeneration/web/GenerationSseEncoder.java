@@ -20,6 +20,7 @@ public final class GenerationSseEncoder {
     public static final String STREAM_PROTOCOL = "generation-stream/v1";
     public static final String ERROR_PROTOCOL = "generation-error/v1";
     private static final String VUE_TURN_PROTOCOL = "vue-turn/v1";
+    private static final String SIMPLE_TURN_PROTOCOL = "simple-turn/v1";
     private static final String ROLLBACK_PROTOCOL =
             "internal-output-rollback/v1";
     private static final String RECOVERY_PROTOCOL =
@@ -113,6 +114,15 @@ public final class GenerationSseEncoder {
                         "message", message.getMessage(),
                         "refreshPreview",
                         message.isShouldRefreshPreview()));
+            }
+            case GenerationStreamEvent.SimpleTurnOutcome turn -> {
+                var message = turn.message();
+                yield event("simple-turn-outcome", object(
+                        "protocol", SIMPLE_TURN_PROTOCOL,
+                        "sequence", next,
+                        "outcome", message.getOutcome().name(),
+                        "message", message.getMessage(),
+                        "refreshPreview", false));
             }
         };
         sequence = next;

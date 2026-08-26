@@ -65,6 +65,13 @@ public sealed interface GenerationStreamEvent {
         }
     }
 
+    record SimpleTurnOutcome(TurnOutcomeMessage message)
+            implements GenerationStreamEvent {
+        public SimpleTurnOutcome {
+            Objects.requireNonNull(message, "普通回合终态控制消息不能为空");
+        }
+    }
+
     record ContextCompression(ContextCompressionMessage message)
             implements GenerationStreamEvent {
         public ContextCompression {
@@ -122,6 +129,11 @@ public sealed interface GenerationStreamEvent {
     static TurnOutcome turnOutcome(VueTurnOutcome outcome) {
         return new TurnOutcome(new TurnOutcomeMessage(
                 Objects.requireNonNull(outcome, "Vue 终态不能为空")));
+    }
+
+    static SimpleTurnOutcome simpleTurnOutcome(VueTurnOutcome outcome) {
+        return new SimpleTurnOutcome(new TurnOutcomeMessage(
+                Objects.requireNonNull(outcome, "普通回合终态不能为空")));
     }
 
     static ContextCompression contextCompression(

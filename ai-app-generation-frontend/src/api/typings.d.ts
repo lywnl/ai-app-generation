@@ -137,6 +137,12 @@ declare namespace API {
   type AppChatGenerateRequest = {
     appId: string
     message: string
+    generationId: string
+  }
+
+  type AppChatCancelRequest = {
+    appId: string
+    generationId: string
   }
 
   type DeleteRequest = {

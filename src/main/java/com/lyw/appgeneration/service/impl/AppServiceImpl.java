@@ -27,6 +27,7 @@ import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.SimpleTextStreamHandler;
+import com.lyw.appgeneration.core.handler.GenerationCancellationRegistry;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
@@ -42,8 +43,10 @@ import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.model.dto.app.AppAddRequest;
 import com.lyw.appgeneration.model.dto.app.AppQueryRequest;
 import com.lyw.appgeneration.model.entity.App;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
+import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
@@ -176,6 +179,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     @Resource
     private VueTurnModeRouter vueTurnModeRouter;
 
+    @Resource
+    private GenerationCancellationRegistry generationCancellationRegistry;
+
     @Override
     public AppVO getAppVO(App app) {
         if (app == null) {
@@ -245,10 +251,12 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     @RateLimit(limitType = RateLimitType.USER, rate = 5, rateInterval = 60, message = "AI请求过于频繁，请稍后再试")
     @PromptSafetyCheck
     public Flux<GenerationStreamEvent> chatToGenCode(
-            Long appId, String message, User loginUser) {
+            Long appId, String message, String generationId, User loginUser) {
         // 1. 参数校验
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用 ID 不能为空");
         ThrowUtils.throwIf(StrUtil.isBlank(message), ErrorCode.PARAMS_ERROR, "用户消息不能为空");
+        ThrowUtils.throwIf(StrUtil.isBlank(generationId), ErrorCode.PARAMS_ERROR,
+                "生成任务 ID 不能为空");
         // 2. 查询应用信息
         App app = this.getById(appId);
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR, "应用不存在");
@@ -263,13 +271,26 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型");
         }
         if (codeGenTypeEnum == CodeGenTypeEnum.VUE_PROJECT) {
-            return generateVueTurn(appId, message, loginUser);
+            return generateVueTurn(appId, message, generationId, loginUser);
         }
-        return generateSimpleTurn(appId, message, loginUser, codeGenTypeEnum);
+        return generateSimpleTurn(appId, message, generationId, loginUser,
+                codeGenTypeEnum);
+    }
+
+    @Override
+    public boolean cancelGeneration(Long appId, String generationId,
+                                    User loginUser) {
+        App app = this.getById(appId);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
+                ErrorCode.NO_AUTH_ERROR, "无权限访问该应用");
+        return generationCancellationRegistry.cancel(
+                appId, generationId, loginUser.getId())
+                == GenerationCancellationRegistry.CancellationResult.REQUESTED;
     }
 
     private Flux<GenerationStreamEvent> generateSimpleTurn(
-            long appId, String message, User loginUser,
+            long appId, String message, String generationId, User loginUser,
             CodeGenTypeEnum codeGenType) {
         return Flux.defer(() -> {
             SimpleGenerationTurnContext context;
@@ -278,6 +299,19 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             } catch (RuntimeException exception) {
                 return Flux.error(toPreflightException(exception));
             }
+            Runnable cancellation = context::requestCancellation;
+            if (!generationCancellationRegistry.register(appId, generationId,
+                    loginUser.getId(), cancellation)) {
+                context.close();
+                return Flux.error(new BusinessException(
+                        ErrorCode.OPERATION_ERROR, "生成任务 ID 已被占用"));
+            }
+                context.registerCancellationFinalizer(() -> {
+                    if (context.userMessageCommitted()) {
+                        persistCancelledSimpleTurn(context, codeGenType,
+                                loginUser);
+                    }
+                });
             boolean userCommitted = false;
             try {
                 PreparedSimpleTurn prepared = prepareSimpleTurn(
@@ -291,11 +325,17 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 Flux<GenerationStreamEvent> business = streamHandlerExecutor
                         .doExecute(codeStream, chatHistoryService, appId,
                                 loginUser, codeGenType, context)
-                        .takeUntilOther(context.cancellationSignal());
-                return context.mergeProgress(business)
+                        ;
+                return Flux.firstWithSignal(context.mergeProgress(business),
+                                context.cancellationOutcome())
+                        .doOnCancel(context::requestCancellation)
                         .doFinally(signal -> finishSimpleTurn(
-                                context, codeGenType, signal));
+                                context, codeGenType, loginUser, generationId,
+                                cancellation,
+                                signal));
             } catch (RuntimeException exception) {
+                generationCancellationRegistry.unregister(
+                        appId, generationId, cancellation);
                 context.close();
                 return Flux.error(userCommitted
                         ? exception : toPreflightException(exception));
@@ -356,6 +396,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     loginUser.getId());
             ThrowUtils.throwIf(!saved,
                     ErrorCode.OPERATION_ERROR, "保存用户消息失败");
+            context.markUserMessageCommitted();
             return new PreparedSimpleTurn(generatorService, firstMessage);
         }
     }
@@ -387,8 +428,16 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private void finishSimpleTurn(
             SimpleGenerationTurnContext context,
             CodeGenTypeEnum codeGenType,
+            User loginUser,
+            String generationId,
+            Runnable cancellation,
             SignalType signal) {
         try {
+            if (!context.hasStableAiMessagePersisted()
+                    && context.isCancelled()
+                    && context.userMessageCommitted()) {
+                persistCancelledSimpleTurn(context, codeGenType, loginUser);
+            }
             if (!context.hasStableAiMessagePersisted()
                     && (signal == SignalType.ON_ERROR
                     || signal == SignalType.CANCEL
@@ -396,7 +445,46 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 invalidateUnstableSimpleMemory(context.appId(), codeGenType);
             }
         } finally {
+            generationCancellationRegistry.unregister(
+                    context.appId(), generationId, cancellation);
             context.close();
+        }
+    }
+
+    private void persistCancelledSimpleTurn(
+            SimpleGenerationTurnContext context,
+            CodeGenTypeEnum codeGenType,
+            User loginUser) {
+        AppDataLifecycleFence.WriterPermit writerPermit =
+                appDataLifecycleFence.tryAcquireWriter(context.appId());
+        if (writerPermit == null) {
+            log.info("普通生成取消终态被删除门拒绝,appId={}", context.appId());
+            return;
+        }
+        try (writerPermit) {
+            if (context.hasStableAiMessagePersisted()) {
+                return;
+            }
+            ChatHistory saved = chatHistoryService.addAiMessageAndReturn(
+                    context.appId(), VueTurnFinalizer.CANCELLED_MESSAGE,
+                    VueTurnMemoryProjection.project(List.of(),
+                            VueTurnOutcome.TurnOutcomeType.CANCELLED),
+                    ChatMemoryOutcome.CANCELLED, loginUser.getId());
+            if (saved != null) {
+                context.markStableAiMessagePersisted();
+                try {
+                    memorySummaryService.triggerSummarizationAsync(
+                            context.appId());
+                    userMemoryService.triggerPreferenceExtractionAsync(
+                            loginUser.getId(), context.appId(), saved.getId());
+                } catch (RuntimeException exception) {
+                    log.warn("普通生成取消后的记忆钩子触发失败,appId={}",
+                            context.appId(), exception);
+                }
+            }
+        } catch (RuntimeException exception) {
+            log.error("普通生成取消终态保存失败,appId={}", context.appId(),
+                    exception);
         }
     }
 
@@ -416,13 +504,21 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     }
 
     private Flux<GenerationStreamEvent> generateVueTurn(
-            long appId, String message, User loginUser) {
+            long appId, String message, String generationId, User loginUser) {
         return Flux.defer(() -> {
             VueTurnContext context;
             try {
                 context = openVueTurn(appId, loginUser.getId());
             } catch (RuntimeException exception) {
                 return Flux.error(toPreflightException(exception));
+            }
+            Runnable cancellation = () -> vueTurnCancellationCoordinator
+                    .requestCancellation(context, () -> "");
+            if (!generationCancellationRegistry.register(appId, generationId,
+                    loginUser.getId(), cancellation)) {
+                context.closeResources();
+                return Flux.error(new BusinessException(
+                        ErrorCode.OPERATION_ERROR, "生成任务 ID 已被占用"));
             }
             Mono<CommittedVueTurn> prepared = Mono.fromCallable(() ->
                             prepareVueTurn(appId, message, loginUser, context))
@@ -432,7 +528,27 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     .doOnCancel(() -> cancelVuePreparation(context));
             Flux<GenerationStreamEvent> turnFlow = prepared
                     .flatMapMany(this::runCommittedVueTurn);
-            return turnFlow.doOnCancel(() -> cancelVuePreparation(context));
+            Flux<GenerationStreamEvent> finalizationFlow = context
+                    .finalizationSignal()
+                    .filter(result -> context.terminalWinner()
+                            .filter(trigger -> trigger
+                                    == VueTurnContext.TerminalTrigger.CANCELLED
+                                    || trigger
+                                    == VueTurnContext.TerminalTrigger.TIMED_OUT)
+                            .isPresent())
+                    .map(result -> GenerationStreamEvent.turnOutcome(
+                            result.outcome()))
+                    .onErrorResume(error -> Flux.empty());
+            return turnFlow
+                    .onErrorResume(error -> context.isUserCommitted()
+                            && context.terminalWinner().isPresent()
+                            ? Flux.empty() : Flux.error(error))
+                    .mergeWith(finalizationFlow)
+                    .takeUntil(event -> event
+                            instanceof GenerationStreamEvent.TurnOutcome)
+                    .doOnCancel(() -> cancelVuePreparation(context))
+                    .doFinally(signal -> generationCancellationRegistry.unregister(
+                            appId, generationId, cancellation));
         });
     }
 

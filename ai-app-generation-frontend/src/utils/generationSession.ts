@@ -133,6 +133,7 @@ export function shouldShowGenerationStatus(
 export interface StartGenerationSessionOptions {
   appId: string
   userMessage: string
+  generationId: string
   baseURL: string
   renderMode?: 'direct' | 'throttled'
   throttleMs?: number
@@ -183,6 +184,7 @@ interface SessionState {
   recovery: InternalRecoveryProtocolState
   toolProtocolRecoveryPhase: AuxiliaryRecoveryPhase
   incompleteToolChainRecoveryPhase: AuxiliaryRecoveryPhase
+  generationId: string
 }
 
 const DEFAULT_THROTTLE_MS = 100
@@ -289,6 +291,7 @@ function getOrCreateSession(appId: string): SessionState {
     recovery: createProtocolState(),
     toolProtocolRecoveryPhase: 'idle',
     incompleteToolChainRecoveryPhase: 'idle',
+    generationId: '',
   }
   sessions.set(appId, created)
   return created
@@ -902,8 +905,10 @@ function handleAuxiliaryRecovery(
 function handleTurnOutcome(appId: string, requestId: number, payload: JsonRecord): void {
   const session = getActiveSession(appId, requestId)
   const outcome = typeof payload.outcome === 'string' ? OUTCOME_MAP[payload.outcome] : undefined
+  const expectedProtocol = session?.expectVueTurnOutcome
+    ? 'vue-turn/v1' : 'simple-turn/v1'
   if (
-    !session || payload.protocol !== 'vue-turn/v1' ||
+    !session || payload.protocol !== expectedProtocol ||
     !hasExactFields(payload, ['protocol', 'sequence', 'outcome', 'message', 'refreshPreview']) ||
     !outcome || !isNonEmptyString(payload.message) || typeof payload.refreshPreview !== 'boolean' ||
     session.snapshot.outcome !== 'pending' ||
@@ -1000,7 +1005,8 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
     handleMessage(appId, requestId, payload)
     return
   }
-  if (!session.expectVueTurnOutcome && eventName !== 'context-compression') {
+  if (!session.expectVueTurnOutcome && eventName !== 'context-compression' &&
+    eventName !== 'simple-turn-outcome') {
     markProtocolError(appId, requestId, '普通生成流包含 Vue 专用事件')
     return
   }
@@ -1024,6 +1030,9 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
       handleAuxiliaryRecovery(appId, requestId, payload, 'incomplete')
       break
     case 'turn-outcome':
+      handleTurnOutcome(appId, requestId, payload)
+      break
+    case 'simple-turn-outcome':
       handleTurnOutcome(appId, requestId, payload)
       break
     default:
@@ -1099,6 +1108,7 @@ async function startSseStream(
   appId: string,
   requestId: number,
   userMessage: string,
+  generationId: string,
   baseURL: string,
   signal: AbortSignal,
 ): Promise<void> {
@@ -1106,7 +1116,7 @@ async function startSseStream(
     method: 'POST',
     credentials: 'include',
     headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json; charset=UTF-8' },
-    body: JSON.stringify({ appId, message: userMessage }),
+    body: JSON.stringify({ appId, message: userMessage, generationId }),
     signal,
   })
   if (!response.ok) {
@@ -1140,6 +1150,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   if (typeof options.expectVueTurnOutcome !== 'boolean') {
     throw new Error('生成会话类型未确定')
   }
+  if (!options.generationId) throw new Error('生成任务 ID 不能为空')
   const { appId, userMessage, baseURL, renderMode = 'throttled' } = options
   const throttleMs =
     typeof options.throttleMs === 'number' && options.throttleMs > 0
@@ -1149,6 +1160,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.requestId += 1
   const requestId = session.requestId
   session.fragments = []
+  session.generationId = options.generationId
   session.renderMode = renderMode
   session.throttleMs = throttleMs
   session.expectVueTurnOutcome = options.expectVueTurnOutcome
@@ -1175,12 +1187,19 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   emit(appId, 'delta', requestId)
   const controller = new AbortController()
   session.controller = controller
-  void startSseStream(appId, requestId, userMessage, baseURL, controller.signal).catch((error: unknown) => {
+  void startSseStream(appId, requestId, userMessage, options.generationId,
+    baseURL, controller.signal).catch((error: unknown) => {
     if (controller.signal.aborted) return
     const streamError = error instanceof GenerationStreamError
       ? error : new GenerationStreamError(SERVICE_UNAVAILABLE_MESSAGE, 'system_error')
     failSession(appId, requestId, streamError.message, streamError.outcome)
   })
+}
+
+export function getActiveGenerationId(appId: string): string | undefined {
+  const session = sessions.get(appId)
+  return session?.snapshot.status === 'streaming' && session.generationId
+    ? session.generationId : undefined
 }
 
 export function subscribeGenerationSession(appId: string, listener: Listener): () => void {

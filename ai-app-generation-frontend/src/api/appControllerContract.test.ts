@@ -15,8 +15,9 @@ describe('生成接口静态契约', () => {
     expect(controllerSource).not.toContain('chatToGenCodeParams')
 
     expect(typingsSource).toMatch(
-      /type AppChatGenerateRequest = \{\s*appId: string\s*message: string\s*\}/,
+      /type AppChatGenerateRequest = \{\s*appId: string\s*message: string\s*generationId: string\s*\}/,
     )
+    expect(typingsSource).toContain('type AppChatCancelRequest')
     expect(typingsSource).not.toContain('type chatToGenCodeParams')
   })
 })
