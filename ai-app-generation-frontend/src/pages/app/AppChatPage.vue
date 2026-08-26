@@ -706,7 +706,11 @@ const attachSessionListener = (targetAppId: string) => {
       return
     }
     if (eventType === 'done') {
-      if (snapshot.outcome !== 'succeeded' && snapshot.outcome !== 'answered') {
+      if (
+        snapshot.outcome !== 'cancelled' &&
+        snapshot.outcome !== 'succeeded' &&
+        snapshot.outcome !== 'answered'
+      ) {
         message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))
       }
       finalizeGeneration(snapshot)
@@ -769,7 +773,7 @@ const stopGeneration = async () => {
     if (res.data.code !== 0 || res.data.data !== true) {
       throw new Error(res.data.message || '停止请求未生效')
     }
-    message.info('已请求停止，正在等待生成终态…')
+    message.info('生成已被暂停')
   } catch (error) {
     console.error('停止生成失败：', error)
     message.error('停止生成失败，请重试')

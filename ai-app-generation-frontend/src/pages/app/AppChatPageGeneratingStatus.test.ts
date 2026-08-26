@@ -49,6 +49,13 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).toContain('执行中')
   })
 
+  it('取消终态只结束生成，不重复弹出错误提示', () => {
+    expect(pageSource).toContain("snapshot.outcome !== 'cancelled'")
+    expect(pageSource).toContain("snapshot.outcome !== 'succeeded'")
+    expect(pageSource).toContain("snapshot.outcome !== 'answered'")
+    expect(pageSource).toContain('message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))')
+  })
+
   it('只读回合完成后仅过滤读取工具卡片且保留原工具面板', () => {
     expect(pageSource).toContain('shouldHideCompletedReadOnlyTool')
     expect(pageSource).toContain('const visibleToolCalls = new Map(')
