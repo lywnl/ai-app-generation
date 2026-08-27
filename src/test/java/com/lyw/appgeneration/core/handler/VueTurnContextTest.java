@@ -10,6 +10,7 @@ import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
+import reactor.core.Disposable;
 import reactor.test.StepVerifier;
 
 import java.util.Arrays;
@@ -39,6 +40,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class VueTurnContextTest {
+
+    @Test
+    void 取消终态观察者不得取消共享终态结果() {
+        VueTurnContext context = context("turn-finalization-observer-cancel");
+        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
+                context.commitUser(() -> true));
+        Disposable observer = context.finalizationSignal().subscribe();
+
+        observer.dispose();
+        assertTrue(context.tryStartFinalization(
+                VueTurnContext.TerminalTrigger.CANCELLED));
+        VueTurnFinalizer.FinalizationResult result = finalizationResult();
+        context.completeFinalization(result);
+
+        assertSame(result, context.awaitFinalization());
+    }
 
     @Test
     void 输出安全封口初始为未判定且值对象约束载荷() {

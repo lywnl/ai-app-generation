@@ -199,13 +199,17 @@ cd ai-app-generation
 ### 2. 初始化数据库
 
 ```bash
-# MySQL：执行 sql/schema.sql
-mysql -u root -p < sql/schema.sql
+# 第一次从旧 Compose 迁移：先做无副作用检查（MinIO 密码至少 8 位）
+bash scripts/migrate-local-compose.sh --dry-run
 
-# Milvus：本地 Docker 启动（MinIO 密码至少 8 位）
-INFRA_SHARED_PASSWORD="请填写本地统一基础设施密码" \
-MILVUS_MINIO_PASSWORD="请填写至少8位的MinIO随机强密码" \
-docker compose -f docker/milvus.yml up -d
+# 确认检查通过后再执行一次迁移；该命令会停止并重建中间件容器，但不会删除数据卷
+bash scripts/migrate-local-compose.sh --confirm
+
+# 迁移完成后的日常启动（前后端和中间件）
+bash scripts/start-local.sh
+
+# 停止前后端和全部本地中间件（不删除容器和数据卷）
+bash scripts/stop-local.sh --confirm
 ```
 
 `INFRA_SHARED_PASSWORD` 只会在全新的 `milvus_etcd_data` 元数据卷中初始化 Milvus `root` 密码。已有数据卷需要变更密码时，必须先在 Milvus 内修改 `root` 密码，再更新环境变量并重启服务；不要通过删除数据卷改密，否则会丢失 Collection 元数据。

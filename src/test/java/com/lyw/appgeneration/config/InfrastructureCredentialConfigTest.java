@@ -27,7 +27,7 @@ class InfrastructureCredentialConfigTest {
                 "src/main/resources/application.yml");
         String ragProperties = readProjectFile(
                 "src/main/java/com/lyw/appgeneration/config/RagProperties.java");
-        String milvusCompose = readProjectFile("docker/milvus.yml");
+        String milvusCompose = readProjectFile("dev/docker-compose.local.yml");
 
         assertEquals(2, occurrences(application,
                 "password: ${" + SHARED_PASSWORD_VARIABLE + "}"));
@@ -51,7 +51,7 @@ class InfrastructureCredentialConfigTest {
 
     @Test
     void 本地Milvus使用固定版本鉴权健康检查和仅本机端口发布() throws IOException {
-        String compose = readProjectFile("docker/milvus.yml");
+        String compose = readProjectFile("dev/docker-compose.local.yml");
 
         assertTrue(compose.contains("image: milvusdb/milvus:v2.5.9"));
         assertTrue(compose.contains("image: quay.io/coreos/etcd:v3.5.18"));
@@ -59,12 +59,12 @@ class InfrastructureCredentialConfigTest {
                 "image: minio/minio:RELEASE.2023-03-20T20-16-18Z"));
         assertTrue(compose.contains(
                 "COMMON_SECURITY_AUTHORIZATIONENABLED: \"true\""));
-        assertEquals(1, occurrences(compose, "    ports:"));
-        assertTrue(compose.contains("- \"127.0.0.1:19530:19530\""));
-        assertTrue(compose.contains("- \"127.0.0.1:9091:9091\""));
-        assertFalse(compose.contains("2379:2379"));
-        assertFalse(compose.contains("9000:9000"));
-        assertFalse(compose.contains("9001:9001"));
+        assertTrue(serviceBlock(compose, "milvus").contains(
+                "- \"127.0.0.1:19530:19530\""));
+        assertTrue(serviceBlock(compose, "milvus").contains(
+                "- \"127.0.0.1:9091:9091\""));
+        assertFalse(serviceBlock(compose, "etcd").contains("ports:"));
+        assertFalse(serviceBlock(compose, "minio").contains("ports:"));
         assertTrue(compose.contains("test: [\"CMD\", \"etcdctl\", \"endpoint\", \"health\"]"));
         assertTrue(compose.contains(
                 "http://localhost:9000/minio/health/live"));
@@ -72,6 +72,7 @@ class InfrastructureCredentialConfigTest {
         assertTrue(compose.contains("milvus_etcd_data:"));
         assertTrue(compose.contains("milvus_minio_data:"));
         assertTrue(compose.contains("milvus_data:"));
+        assertTrue(compose.contains("external: true"));
     }
 
     @Test

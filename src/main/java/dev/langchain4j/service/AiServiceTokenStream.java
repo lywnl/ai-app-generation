@@ -45,6 +45,7 @@ public class AiServiceTokenStream implements TokenStream {
     private final Object memoryId;
     private final GuardrailRequestParams commonGuardrailParams;
     private final Object methodKey;
+    private List<ChatMessage> turnTransientMessages = List.of();
 
     private Consumer<String> partialResponseHandler;
     private Consumer<List<Content>> contentsHandler;
@@ -192,6 +193,13 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream turnTransientMessages(List<ChatMessage> messages) {
+        this.turnTransientMessages = List.copyOf(
+                messages == null ? List.of() : messages);
+        return this;
+    }
+
+    @Override
     public TokenStream toolProtocolRecoveryPolicy(
             ToolProtocolRecoveryPolicy policy) {
         ToolProtocolRecoveryPolicy checkedPolicy = ensureNotNull(
@@ -272,6 +280,7 @@ public class AiServiceTokenStream implements TokenStream {
             return;
         }
 
+        List<ChatMessage> transientSnapshot = turnTransientMessages;
         ChatMemory temporaryMemory = initTemporaryMemory(context, messages);
         ContextCompressionAttemptState compressionAttemptState =
                 new ContextCompressionAttemptState();
@@ -301,26 +310,29 @@ public class AiServiceTokenStream implements TokenStream {
                         () -> activeMemory(temporaryMemory),
                         toolSpecifications,
                         continuationGate,
-                        List.of(),
+                        transientSnapshot,
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.initial(
                         gateRequest,
-                        () -> messages,
+                        () -> messagesWithTransient(
+                                messages, transientSnapshot),
                         this::notifyGateFailure,
                         (preparedMessages, generation) ->
                                 prepareInitialModelRequest(
                                         preparedMessages,
                                         temporaryMemory,
                                         generation,
-                                        compressionAttemptState)));
+                                        compressionAttemptState,
+                                        transientSnapshot)));
     }
 
     private Runnable prepareInitialModelRequest(
             List<ChatMessage> requestMessages,
             ChatMemory temporaryMemory,
             long requestGeneration,
-            ContextCompressionAttemptState compressionAttemptState) {
+            ContextCompressionAttemptState compressionAttemptState,
+            List<ChatMessage> transientSnapshot) {
         ChatRequest.Builder requestBuilder = ChatRequest.builder()
                 .messages(requestMessages)
                 .toolSpecifications(toolSpecifications);
@@ -361,11 +373,24 @@ public class AiServiceTokenStream implements TokenStream {
                 internalOutputRecoveryPolicy,
                 internalOutputRecoveryCoordinator,
                 generationStreamSignalHandler);
+        handler.turnTransientMessages(transientSnapshot);
 
         if (contentsHandler != null && retrievedContents != null) {
             contentsHandler.accept(retrievedContents);
         }
         return () -> context.streamingChatModel.chat(chatRequest, handler);
+    }
+
+    private List<ChatMessage> messagesWithTransient(
+            List<ChatMessage> baseMessages,
+            List<ChatMessage> transientSnapshot) {
+        if (transientSnapshot.isEmpty()) {
+            return baseMessages;
+        }
+        java.util.ArrayList<ChatMessage> result =
+                new java.util.ArrayList<>(baseMessages);
+        result.addAll(transientSnapshot);
+        return List.copyOf(result);
     }
 
     private ChatMemory activeMemory(ChatMemory temporaryMemory) {

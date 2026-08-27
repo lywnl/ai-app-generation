@@ -1,6 +1,7 @@
 package dev.langchain4j.service;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.rag.RetrievalAugmentor;
 import dev.langchain4j.rag.content.Content;
@@ -34,6 +35,12 @@ public interface TokenStream {
     default TokenStream modelRequestGate(
             ModelRequestGate gate,
             ModelRequestGate.ContinuationGate continuationGate) {
+        return this;
+    }
+
+    /** 为当前模型回合安装不会写入 ChatMemory 的临时上下文消息。 */
+    default TokenStream turnTransientMessages(
+            List<ChatMessage> messages) {
         return this;
     }
 

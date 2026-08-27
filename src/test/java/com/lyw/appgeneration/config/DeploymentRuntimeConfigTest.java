@@ -16,7 +16,7 @@ class DeploymentRuntimeConfigTest {
 
     @Test
     void 开发Nginx必须在80端口托管工作树部署目录() throws IOException {
-        String compose = readProjectFile("dev/docker-compose.yml");
+        String compose = readProjectFile("dev/docker-compose.local.yml");
         String nginx = readProjectFile("dev/nginx/nginx.conf");
 
         assertTrue(compose.contains("127.0.0.1:80:80"));

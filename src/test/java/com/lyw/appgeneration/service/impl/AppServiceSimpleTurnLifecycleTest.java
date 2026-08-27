@@ -9,6 +9,7 @@ import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
+import com.lyw.appgeneration.core.handler.GenerationCancellationRegistry;
 import com.lyw.appgeneration.core.handler.SimpleGenerationTurnContext;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
@@ -159,6 +160,8 @@ class AppServiceSimpleTurnLifecycleTest {
         ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
                 new AppLifecycleMetricsCollector(metricsRegistry));
         ReflectionTestUtils.setField(service, "appDataLifecycleFence", fence);
+        ReflectionTestUtils.setField(service, "generationCancellationRegistry",
+                new GenerationCancellationRegistry());
         when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(true);
         when(history.addAiMessageAndReturn(

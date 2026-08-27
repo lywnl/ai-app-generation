@@ -466,6 +466,8 @@ class JsonMessageStreamHandlerTest {
                     recovery.message().message();
             case GenerationStreamEvent.TurnOutcome outcome ->
                     outcome.message().getMessage();
+            case GenerationStreamEvent.SimpleTurnOutcome outcome ->
+                    outcome.message().getMessage();
             case GenerationStreamEvent.ContextCompression ignored -> "";
             case GenerationStreamEvent.IncompleteToolChainRecovery recovery ->
                     recovery.message().message();

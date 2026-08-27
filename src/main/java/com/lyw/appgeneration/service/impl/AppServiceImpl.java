@@ -530,20 +530,22 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     .flatMapMany(this::runCommittedVueTurn);
             Flux<GenerationStreamEvent> finalizationFlow = context
                     .finalizationSignal()
-                    .filter(result -> context.terminalWinner()
+                    .flatMapMany(result -> context.terminalWinner()
                             .filter(trigger -> trigger
                                     == VueTurnContext.TerminalTrigger.CANCELLED
                                     || trigger
                                     == VueTurnContext.TerminalTrigger.TIMED_OUT)
-                            .isPresent())
-                    .map(result -> GenerationStreamEvent.turnOutcome(
-                            result.outcome()))
-                    .onErrorResume(error -> Flux.empty());
-            return turnFlow
-                    .onErrorResume(error -> context.isUserCommitted()
-                            && context.terminalWinner().isPresent()
-                            ? Flux.empty() : Flux.error(error))
-                    .mergeWith(finalizationFlow)
+                            .<Flux<GenerationStreamEvent>>map(ignored ->
+                                    Flux.just(GenerationStreamEvent.turnOutcome(
+                                            result.outcome())))
+                            .orElseGet(Flux::never))
+                    .onErrorResume(error -> Flux.never());
+            return Flux.firstWithSignal(
+                            turnFlow.onErrorResume(error ->
+                                    context.isUserCommitted()
+                                            && context.terminalWinner().isPresent()
+                                            ? Flux.empty() : Flux.error(error)),
+                            finalizationFlow)
                     .takeUntil(event -> event
                             instanceof GenerationStreamEvent.TurnOutcome)
                     .doOnCancel(() -> cancelVuePreparation(context))

@@ -8,6 +8,7 @@ import com.lyw.appgeneration.ai.VueToolNames;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
 import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
+import com.lyw.appgeneration.ai.skill.SkillCatalog;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
@@ -102,6 +103,8 @@ public class AiCodeGeneratorFacade {
 
     @Resource
     private ModelRequestGate modelRequestGate;
+
+    private final SkillCatalog skillCatalog = new SkillCatalog();
 
     /**
      * 生成并保存代码
@@ -330,6 +333,10 @@ public class AiCodeGeneratorFacade {
                         appId, request));
         tokenStream.initialToolChoiceRequired(
                 turnContext.requiresInitialToolCall());
+        if (mutationTurn) {
+            tokenStream.turnTransientMessages(
+                    skillCatalog.vueFrontendDesignMessages());
+        }
         tokenStream.modelRequestGate(modelRequestGate, turnContext);
         tokenStream.toolProtocolRecoveryPolicy(new ToolProtocolRecoveryPolicy(
                 Set.copyOf(VueToolNames.ONLINE),

@@ -84,6 +84,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final Consumer<GenerationStreamSignal>
             generationStreamSignalHandler;
     private final ContextCompressionAttemptState compressionAttemptState;
+    private List<ChatMessage> turnTransientMessages = List.of();
     private final ToolProtocolRecoveryDetector recoveryDetector;
     private final boolean recoveryGeneration;
     private final boolean incompleteRecoveryGeneration;
@@ -520,7 +521,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     internalRecoveryPrepared);
         }
         if (internalRecoveryPrepared.get()) {
-            prepareInternalRecoveryRequest(new TokenUsage());
+            scheduleInternalRecoveryRequest(new TokenUsage());
         } else if (protocolRecoveryPrepared.get()) {
             prepareRecoveryRequest(new TokenUsage());
         }
@@ -807,7 +808,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             }
         }
         if (recoveryPrepared.get()) {
-            prepareInternalRecoveryRequest(new TokenUsage());
+            scheduleInternalRecoveryRequest(new TokenUsage());
         }
     }
 
@@ -899,7 +900,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             }
         }
         if (recoveryPrepared.get()) {
-            prepareInternalRecoveryRequest(new TokenUsage());
+            scheduleInternalRecoveryRequest(new TokenUsage());
         }
     }
 
@@ -1056,7 +1057,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     continuationResponse);
         }
         if (internalRecoveryPrepared.get()) {
-            prepareInternalRecoveryRequest(TokenUsage.sum(
+            scheduleInternalRecoveryRequest(TokenUsage.sum(
                     tokenUsage, completeResponse.metadata().tokenUsage()));
         } else if (protocolRecoveryPrepared.get()) {
             prepareRecoveryRequest(TokenUsage.sum(
@@ -1646,7 +1647,12 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 continuationResponse);
         ChatResponse continuation = continuationResponse.get();
         if (continuation != null) {
-            submitNextModelRequest(continuation);
+            callbackSequencer.submitAfterBatch(() -> {
+                if (requestController.isCurrentGeneration(
+                        requestGeneration)) {
+                    submitNextModelRequest(continuation);
+                }
+            });
         }
     }
 
@@ -1820,13 +1826,15 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        recoveryCoordinator.transientMessages(),
+                        withTurnTransientMessages(
+                                recoveryCoordinator.transientMessages()),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
                         requestGeneration,
                         gateRequest,
-                        () -> messagesToSend(memoryId),
+                        () -> messagesToSendWithTransient(
+                                memoryId, recoveryCoordinator.transientMessages()),
                         recoveryCoordinator::failIfRecovering,
                         this::notifyRecoveryFailure,
                         (messages, generation) -> startModelRequest(
@@ -1846,15 +1854,19 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        internalOutputRecoveryCoordinator
-                                .transientMessages(),
+                        withTurnTransientMessages(
+                                internalOutputRecoveryCoordinator
+                                        .transientMessages()),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator
                         .internalProtocolRecovery(
                         requestGeneration,
                         gateRequest,
-                        () -> messagesToSend(memoryId),
+                        () -> messagesToSendWithTransient(
+                                memoryId,
+                                internalOutputRecoveryCoordinator
+                                        .transientMessages()),
                         this::failInternalRecoveryBeforeStart,
                         internalOutputRecoveryCoordinator::closeSilently,
                         internalOutputRecoveryCoordinator
@@ -1866,6 +1878,16 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 generation,
                                 recoveryGeneration,
                                 incompleteRecoveryGeneration)));
+    }
+
+    private void scheduleInternalRecoveryRequest(
+            TokenUsage accumulatedUsage) {
+        callbackSequencer.submitAfterBatch(() -> {
+            if (requestController.isRecoverySourceGeneration(
+                    requestGeneration)) {
+                prepareInternalRecoveryRequest(accumulatedUsage);
+            }
+        });
     }
 
     private void failInternalRecoveryBeforeStart() {
@@ -1887,13 +1909,16 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        incompleteRecoveryCoordinator.transientMessages(),
+                        withTurnTransientMessages(
+                                incompleteRecoveryCoordinator.transientMessages()),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
                         requestGeneration,
                         gateRequest,
-                        () -> messagesToSend(memoryId),
+                        () -> messagesToSendWithTransient(
+                                memoryId,
+                                incompleteRecoveryCoordinator.transientMessages()),
                         incompleteRecoveryCoordinator::failIfRecovering,
                         this::notifyIncompleteRecoveryFailure,
                         (messages, generation) -> startModelRequest(
@@ -1923,7 +1948,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        transientMessages,
+                        withTurnTransientMessages(transientMessages),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.continuation(
@@ -1943,8 +1968,16 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private List<ChatMessage> messagesToSendWithTransient(
             Object memId, List<ChatMessage> transientMessages) {
         List<ChatMessage> messages = new ArrayList<>(messagesToSend(memId));
+        messages.addAll(turnTransientMessages);
         messages.addAll(transientMessages);
         return List.copyOf(messages);
+    }
+
+    private List<ChatMessage> withTurnTransientMessages(
+            List<ChatMessage> transientMessages) {
+        List<ChatMessage> result = new ArrayList<>(turnTransientMessages);
+        result.addAll(transientMessages == null ? List.of() : transientMessages);
+        return List.copyOf(result);
     }
 
     private Runnable startModelRequest(
@@ -2009,7 +2042,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 internalOutputRecoveryPolicy,
                 internalOutputRecoveryCoordinator,
                 generationStreamSignalHandler);
+        child.turnTransientMessages(turnTransientMessages);
         return child;
+    }
+
+    void turnTransientMessages(List<ChatMessage> messages) {
+        this.turnTransientMessages = List.copyOf(
+                messages == null ? List.of() : messages);
     }
 
     private void completeOrdinaryResponse(

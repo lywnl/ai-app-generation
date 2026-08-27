@@ -170,6 +170,22 @@ class GenerationCallbackSequencerTest {
     }
 
     @Test
+    void 结束钩子期间提交的批次结束动作必须等待结束钩子完成() {
+        List<String> order = new CopyOnWriteArrayList<>();
+        GenerationCallbackSequencer[] holder = new GenerationCallbackSequencer[1];
+        holder[0] = new GenerationCallbackSequencer(
+                () -> { },
+                () -> {
+                    order.add("结束钩子");
+                    holder[0].submitAfterBatch(() -> order.add("结束动作"));
+                });
+
+        holder[0].submit(() -> order.add("状态动作"));
+
+        assertEquals(List.of("状态动作", "结束钩子", "结束动作"), order);
+    }
+
+    @Test
     void 动作与结束钩子都失败时必须保留首个异常并追加受抑制异常() {
         IllegalStateException actionFailure =
                 new IllegalStateException("状态提交失败");

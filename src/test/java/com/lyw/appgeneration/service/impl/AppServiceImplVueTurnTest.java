@@ -18,6 +18,7 @@ import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnMode;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
+import com.lyw.appgeneration.core.handler.GenerationCancellationRegistry;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
 import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
 import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
@@ -176,6 +177,8 @@ class AppServiceImplVueTurnTest {
                 new com.lyw.appgeneration.ai.tools.FileToolBudgetGuard());
         ReflectionTestUtils.setField(service, "vueTurnModeRouter",
                 vueTurnModeRouter);
+        ReflectionTestUtils.setField(service, "generationCancellationRegistry",
+                new GenerationCancellationRegistry());
         when(vueTurnModeRoutingServiceFactory.create())
                 .thenReturn(vueTurnModeRoutingService);
         when(vueTurnModeRoutingService.route(anyString()))

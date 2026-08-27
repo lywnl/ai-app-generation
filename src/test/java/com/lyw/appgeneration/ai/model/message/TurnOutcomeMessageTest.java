@@ -57,7 +57,7 @@ class TurnOutcomeMessageTest {
         assertEquals(java.util.Set.of(
                 "SimpleText", "AiText", "StructuredToolEvent",
                 "TrustedToolDisplay", "Rollback", "InternalRecovery",
-                "TurnOutcome", "ContextCompression",
+                "TurnOutcome", "SimpleTurnOutcome", "ContextCompression",
                 "ToolProtocolRecovery", "IncompleteToolChainRecovery"),
                 nestedTypes);
         assertNotNull(GenerationStreamEvent.class.getMethod(

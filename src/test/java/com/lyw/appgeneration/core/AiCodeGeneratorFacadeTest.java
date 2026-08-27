@@ -209,6 +209,32 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
+    void Vue变更回合安装前端设计Skill而只读回合不安装() {
+        properties.setEnabled(false);
+        stubVueGenerator();
+        VueTurnContext mutation = newVueTurnContext(
+                "skill-mutation", VueTurnMode.MUTATION_REQUIRED);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, false, mutation, generatorService);
+        var skillCaptor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(tokenStream).turnTransientMessages(skillCaptor.capture());
+        assertEquals(1, skillCaptor.getValue().size());
+        assertTrue(((dev.langchain4j.data.message.SystemMessage)
+                skillCaptor.getValue().get(0)).text().contains("Vue 前端设计"));
+        mutation.closeResources();
+
+        TokenStream readOnlyStream = org.mockito.Mockito.mock(TokenStream.class);
+        when(generatorService.generateVueProjectCodeStream(APP_ID, RAW_QUERY))
+                .thenReturn(readOnlyStream);
+        VueTurnContext readOnly = newVueTurnContext(
+                "skill-read-only", VueTurnMode.READ_ONLY);
+        facade.generateVueProjectStream(
+                RAW_QUERY, APP_ID, false, readOnly, generatorService);
+        verify(readOnlyStream, never()).turnTransientMessages(anyList());
+        readOnly.closeResources();
+    }
+
+    @Test
     void Vue统一信号必须按generation序列化为在线内部消息() {
         properties.setEnabled(false);
         UnifiedGenerationTokenStream stream =
