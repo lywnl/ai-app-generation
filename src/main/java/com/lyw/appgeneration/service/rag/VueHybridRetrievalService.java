@@ -10,8 +10,8 @@ import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
-import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
+import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
@@ -52,6 +52,7 @@ public class VueHybridRetrievalService {
             Pattern.compile("^>=\\s*(\\d+)(?:\\.\\d+){0,2}$");
 
     private final VueRetrievalResourceProvider resourceProvider;
+    private final MilvusBm25Retriever bm25Retriever;
     private final DenseRetriever denseRetriever;
     private final RrfFusionService fusionService;
     private final RagRerankService rerankService;
@@ -59,12 +60,14 @@ public class VueHybridRetrievalService {
     private final RagProperties properties;
 
     public VueHybridRetrievalService(VueRetrievalResourceProvider resourceProvider,
+                                     MilvusBm25Retriever bm25Retriever,
                                      DenseRetriever denseRetriever,
                                      RrfFusionService fusionService,
                                      RagRerankService rerankService,
                                      VueRagMetricsCollector metricsCollector,
                                      RagProperties properties) {
         this.resourceProvider = resourceProvider;
+        this.bm25Retriever = bm25Retriever;
         this.denseRetriever = denseRetriever;
         this.fusionService = fusionService;
         this.rerankService = rerankService;
@@ -250,9 +253,8 @@ public class VueHybridRetrievalService {
                                       VueRetrievalResources resources,
                                       Map<String, Double> qualityScores) {
         ChannelResult bm25 = recall(VueRagDegradationReason.BM25_FAILED,
-                () -> resources.bm25Retriever()
-                        .orElseThrow(() -> new IllegalStateException("BM25 索引不可用"))
-                        .retrieve(rawQuery, documentKind, CHANNEL_TOP_K));
+                () -> bm25Retriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
+                        documentKind, CHANNEL_TOP_K));
         ChannelResult dense = recall(VueRagDegradationReason.DENSE_FAILED,
                 () -> denseRetriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
                         documentKind, CHANNEL_TOP_K));

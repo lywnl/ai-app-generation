@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.rag.store;
 
 import com.google.gson.JsonObject;
+import com.lyw.appgeneration.constants.RagConstants;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -15,6 +16,10 @@ import io.milvus.param.R;
 import io.milvus.param.collection.FlushParam;
 import io.milvus.param.dml.InsertParam;
 import io.milvus.param.dml.UpsertParam;
+import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.service.utility.request.FlushReq;
+import io.milvus.v2.service.vector.request.UpsertReq;
+import io.milvus.v2.service.vector.response.UpsertResp;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -36,7 +41,7 @@ import static org.mockito.Mockito.when;
 
 class MilvusEmbeddingStoreAdapterTest {
 
-    private static final String COLLECTION_NAME = "templates_vue";
+    private static final String COLLECTION_NAME = RagConstants.VUE_BM25_COLLECTION;
 
     @Test
     void 非显式标识入口全部委托且不调用原生写入或刷新() {
@@ -100,6 +105,33 @@ class MilvusEmbeddingStoreAdapterTest {
         assertEquals("{}", upsert.getFields().get(2).getValues().getFirst().toString());
         assertEquals(List.of(0.1F, 0.2F), upsert.getFields().get(3).getValues().getFirst());
         assertEquals(List.of(COLLECTION_NAME), flushCaptor.getValue().getCollectionNames());
+    }
+
+    @Test
+    void BM25显式标识批量写入使用V2行协议且不提交稀疏输出字段() {
+        MilvusServiceClient legacyClient = mock(MilvusServiceClient.class);
+        MilvusClientV2 v2Client = mock(MilvusClientV2.class);
+        when(v2Client.upsert(any(UpsertReq.class))).thenReturn(UpsertResp.builder().upsertCnt(2).build());
+        MilvusEmbeddingStoreAdapter adapter = new MilvusEmbeddingStoreAdapter(
+                legacyClient, COLLECTION_NAME, mock(MilvusEmbeddingStore.class), v2Client);
+        List<TextSegment> segments = List.of(
+                TextSegment.from("第一段", Metadata.from("类型", "页面")),
+                TextSegment.from("第二段", Metadata.from("类型", "功能")));
+
+        adapter.addAll(List.of("标识一", "标识二"), List.of(
+                Embedding.from(new float[]{0.1F}), Embedding.from(new float[]{0.2F})), segments);
+
+        ArgumentCaptor<UpsertReq> upsertCaptor = ArgumentCaptor.forClass(UpsertReq.class);
+        verify(v2Client).upsert(upsertCaptor.capture());
+        assertEquals(COLLECTION_NAME, upsertCaptor.getValue().getCollectionName());
+        assertEquals(List.of("id", "text", "metadata", "vector"),
+                upsertCaptor.getValue().getData().getFirst().keySet().stream().toList());
+        assertEquals("第一段", upsertCaptor.getValue().getData().getFirst().get("text").getAsString());
+        assertEquals("标识二", upsertCaptor.getValue().getData().get(1).get("id").getAsString());
+        assertTrue(upsertCaptor.getValue().getData().stream()
+                .noneMatch(row -> row.has("bm25_sparse_vector")));
+        verify(v2Client).flush(any(FlushReq.class));
+        verifyNoInteractions(legacyClient);
     }
 
     @Test
@@ -270,7 +302,7 @@ class MilvusEmbeddingStoreAdapterTest {
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> adapter.add("固定标识", Embedding.from(new float[]{0.1F})));
 
-        assertEquals("Milvus upsert 失败，Collection=templates_vue", exception.getMessage());
+        assertEquals("Milvus upsert 失败，Collection=templates_vue_bm25", exception.getMessage());
         assertNull(exception.getCause());
         assertTrue(!exception.toString().contains("敏感密码"));
     }

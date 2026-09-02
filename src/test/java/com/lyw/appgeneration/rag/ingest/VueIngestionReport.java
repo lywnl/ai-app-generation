@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.rag.ingest;
 
 import com.lyw.appgeneration.rag.eval.EvaluationReportSanitizer;
+import com.lyw.appgeneration.constants.RagConstants;
 
 import java.util.Comparator;
 import java.util.List;
@@ -13,7 +14,7 @@ import java.util.Objects;
  */
 public final class VueIngestionReport {
 
-    private static final String TARGET = "Milvus/templates_vue";
+    private static final String TARGET = "Milvus/" + RagConstants.VUE_BM25_COLLECTION;
 
     private enum Status {
         NOT_EXECUTED,
@@ -121,7 +122,8 @@ public final class VueIngestionReport {
         }
         if (reason.equals("RAG_VUE_INGEST 未设置为 true")
                 || reason.equals("缺少环境变量 DASHSCOPE_API_KEY")
-                || reason.equals("缺少环境变量 RAG_MILVUS_PASSWORD")) {
+                || reason.equals("缺少环境变量 RAG_MILVUS_PASSWORD")
+                || reason.equals("缺少表 templates_vue_bm25")) {
             return EvaluationReportSanitizer.sanitize(reason);
         }
         if (reason.startsWith("Milvus 端口不可达: ")

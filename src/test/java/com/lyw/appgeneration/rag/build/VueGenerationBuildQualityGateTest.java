@@ -14,7 +14,7 @@ import com.lyw.appgeneration.rag.ingest.VueMilvusTarget;
 import com.lyw.appgeneration.rag.vue.VueRetrievalQualityGateRunner;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
-import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
+import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.utils.SpringContextUtil;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import org.junit.jupiter.api.Test;
@@ -126,7 +126,7 @@ class VueGenerationBuildQualityGateTest {
     void 真实生成Spring复用同一目录快照并在关闭时释放资源() {
         TemplateCatalog catalog = new TemplateCatalog(
                 Path.of("embed_text/vue-project"), new ObjectMapper());
-        Bm25Retriever bm25;
+        MilvusBm25Retriever bm25;
 
         try (ConfigurableApplicationContext context = startEvaluationApplication(
                 catalog,
@@ -136,11 +136,12 @@ class VueGenerationBuildQualityGateTest {
             VueRetrievalResourceProvider provider =
                     context.getBean(VueRetrievalResourceProvider.class);
             assertSame(catalog, provider.current().orElseThrow().catalog());
-            bm25 = provider.current().orElseThrow().bm25Retriever().orElseThrow();
+            bm25 = context.getBean(MilvusBm25Retriever.class);
         }
 
         assertThrows(RuntimeException.class, () -> bm25.retrieve(
                 "Vue 基础站点",
+                catalog.getCatalogVersion(),
                 com.lyw.appgeneration.service.rag.model.RagDocumentKind.PROJECT_SKELETON,
                 1));
     }
@@ -197,7 +198,7 @@ class VueGenerationBuildQualityGateTest {
                 Map.entry("DEEPSEEK_API_KEY", "host-deepseek-key"),
                 Map.entry("DASHSCOPE_API_KEY", "host-dashscope-key"),
                 Map.entry("PEXELS_API_KEY", "host-pexels-key"));
-        Bm25Retriever bm25;
+        MilvusBm25Retriever bm25;
 
         try (ConfigurableApplicationContext context = startEvaluationApplication(
                 catalog,
@@ -222,11 +223,12 @@ class VueGenerationBuildQualityGateTest {
             VueRetrievalResourceProvider provider =
                     context.getBean(VueRetrievalResourceProvider.class);
             assertSame(catalog, provider.current().orElseThrow().catalog());
-            bm25 = provider.current().orElseThrow().bm25Retriever().orElseThrow();
+            bm25 = context.getBean(MilvusBm25Retriever.class);
         }
 
         assertThrows(RuntimeException.class, () -> bm25.retrieve(
                 "Vue 基础站点",
+                catalog.getCatalogVersion(),
                 com.lyw.appgeneration.service.rag.model.RagDocumentKind.PROJECT_SKELETON,
                 1));
     }

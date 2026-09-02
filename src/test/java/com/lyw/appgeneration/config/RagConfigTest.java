@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
 import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -47,7 +48,7 @@ class RagConfigTest {
         EmbeddingStore<TextSegment> store = mock(EmbeddingStore.class);
         when(factory.create("templates_html")).thenReturn(store);
         when(factory.create("templates_multi")).thenThrow(new IllegalStateException("schema 不匹配"));
-        when(factory.create("templates_vue")).thenReturn(store);
+        when(factory.create(RagConstants.VUE_BM25_COLLECTION)).thenReturn(store);
 
         var stores = new RagConfig(properties, factory).embeddingStoreByType();
 

@@ -3,8 +3,11 @@ package com.lyw.appgeneration.rag.ingest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.JsonElement;
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.catalog.NativeTemplateCatalog;
+import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
+import com.lyw.appgeneration.service.rag.model.KnowledgeChunk;
 import com.lyw.appgeneration.service.rag.ingest.NativeTemplateIngestor;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
@@ -40,6 +43,8 @@ class NativeMilvusIngestionVerificationTest {
     private static final int EMBEDDING_DIMENSION = 1024;
     private static final Set<String> METADATA_KEYS = Set.of(
             "documentId", "documentKind", "catalogVersion", "title", "category");
+    private static final Set<String> VUE_METADATA_KEYS = Set.of(
+            "chunkId", "documentId", "documentKind", "chunkKind", "catalogVersion");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Test
@@ -48,10 +53,13 @@ class NativeMilvusIngestionVerificationTest {
                 Path.of("embed_text", "html"), CodeGenTypeEnum.HTML, OBJECT_MAPPER);
         NativeTemplateCatalog multiCatalog = new NativeTemplateCatalog(
                 Path.of("embed_text", "multi-file"), CodeGenTypeEnum.MULTI_FILE, OBJECT_MAPPER);
+        TemplateCatalog vueCatalog = new TemplateCatalog(
+                Path.of("embed_text", "vue-project"), OBJECT_MAPPER);
         MilvusServiceClient client = createClient();
         try {
             verifyCollection(client, "templates_html", htmlCatalog);
             verifyCollection(client, "templates_multi", multiCatalog);
+            verifyVueBm25Collection(client, vueCatalog);
             new MilvusCollectionSchemaVerifier().verify(
                     client, "templates_vue", EMBEDDING_DIMENSION);
             assertEquals(23L, count(client, "templates_vue", "id != \"\""),
@@ -59,6 +67,52 @@ class NativeMilvusIngestionVerificationTest {
         } finally {
             close(client);
         }
+    }
+
+    private void verifyVueBm25Collection(
+            MilvusServiceClient client,
+            TemplateCatalog catalog) throws Exception {
+        new MilvusCollectionSchemaVerifier().verify(
+                client, RagConstants.VUE_BM25_COLLECTION, EMBEDDING_DIMENSION);
+        List<QueryResultsWrapper.RowRecord> rows = query(client, QueryParam.newBuilder()
+                .withCollectionName(RagConstants.VUE_BM25_COLLECTION)
+                .withConsistencyLevel(ConsistencyLevelEnum.STRONG)
+                .withExpr(catalogVersionExpression(catalog.getCatalogVersion(), true))
+                .withOutFields(List.of("id", "text", "metadata", "vector"))
+                .withLimit(1000L)
+                .build());
+        assertEquals(catalog.getChunks().size(), rows.size(),
+                "Vue BM25 当前目录版本行数不一致");
+        assertEquals(catalog.getChunks().size(), count(
+                client, RagConstants.VUE_BM25_COLLECTION, "id != \"\""),
+                "Vue BM25 总行数不一致");
+        assertEquals(0L, count(client, RagConstants.VUE_BM25_COLLECTION,
+                        catalogVersionExpression(catalog.getCatalogVersion(), false)),
+                "Vue BM25 仍存在历史目录版本");
+
+        Map<String, KnowledgeChunk> expectedByChunkId = catalog.getChunks().stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        KnowledgeChunk::chunkId, chunk -> chunk));
+        Set<String> actualChunkIds = new HashSet<>();
+        Set<Integer> vectorDimensions = new HashSet<>();
+        for (QueryResultsWrapper.RowRecord row : rows) {
+            Map<String, String> metadata = readMetadata(row.get("metadata"));
+            assertEquals(VUE_METADATA_KEYS, metadata.keySet(), "Vue BM25 metadata 键不一致");
+            String chunkId = metadata.get("chunkId");
+            assertTrue(actualChunkIds.add(chunkId), "Vue BM25 存在重复 chunkId: " + chunkId);
+            KnowledgeChunk expected = expectedByChunkId.get(chunkId);
+            assertNotNull(expected, "Vue BM25 存在未声明 chunkId: " + chunkId);
+            assertEquals(expected.documentId(), metadata.get("documentId"));
+            assertEquals(expected.documentKind().name(), metadata.get("documentKind"));
+            assertEquals(expected.chunkKind().name(), metadata.get("chunkKind"));
+            assertEquals(catalog.getCatalogVersion(), metadata.get("catalogVersion"));
+            assertEquals(expected.searchText(), row.get("text"));
+            assertEquals(stableId(chunkId), row.get("id"));
+            assertTrue(row.get("vector") instanceof List<?>, "Vue BM25 向量字段协议错误");
+            vectorDimensions.add(((List<?>) row.get("vector")).size());
+        }
+        assertEquals(expectedByChunkId.keySet(), actualChunkIds, "Vue BM25 知识块集合不一致");
+        assertEquals(Set.of(EMBEDDING_DIMENSION), vectorDimensions, "Vue BM25 向量维度不一致");
     }
 
     private void verifyCollection(

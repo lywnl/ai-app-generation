@@ -18,7 +18,7 @@ class VueIngestionReportTest {
     void 未执行失败和通过状态不会互相混淆() {
         String notExecuted = VueIngestionReport.notExecuted(
                 List.of("缺少环境变量 DASHSCOPE_API_KEY")).renderMarkdown();
-        String failed = VueIngestionReport.failed(null, List.of("缺少表 templates_vue"))
+        String failed = VueIngestionReport.failed(null, List.of("缺少表 templates_vue_bm25"))
                 .renderMarkdown();
         VueIngestionExpectedSnapshot expected = expectedSnapshot();
         String passed = VueIngestionReport.verified(
@@ -28,7 +28,7 @@ class VueIngestionReportTest {
 
         assertTrue(notExecuted.contains("状态：未执行"));
         assertTrue(failed.contains("状态：未通过"));
-        assertTrue(notExecuted.contains("目标：Milvus/templates_vue"));
+        assertTrue(notExecuted.contains("目标：Milvus/templates_vue_bm25"));
         assertFalse(failed.contains("目录版本："));
         assertTrue(passed.contains("状态：通过"));
         assertTrue(passed.contains("当前版本行数：23/23"));

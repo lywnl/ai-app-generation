@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.rag.store;
 
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.constants.RagConstants;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.milvus.MilvusEmbeddingStore;
@@ -11,6 +12,7 @@ import io.milvus.param.IndexType;
 import io.milvus.param.MetricType;
 import io.milvus.param.R;
 import io.milvus.param.collection.HasCollectionParam;
+import io.milvus.v2.client.MilvusClientV2;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,8 @@ public class MilvusEmbeddingStoreFactory {
     private final MilvusCollectionVerifier collectionVerifier;
     private final MilvusClientProvider clientProvider;
     private final MilvusStoreBuilder storeBuilder;
+    private final MilvusV2ClientProvider v2ClientProvider;
+    private final MilvusVueBm25CollectionProvisioner bm25CollectionProvisioner;
     private final Map<String, EmbeddingStore<TextSegment>> stores = new ConcurrentHashMap<>();
     private MilvusServiceClient client;
     private boolean closed;
@@ -37,9 +41,19 @@ public class MilvusEmbeddingStoreFactory {
     @Autowired
     public MilvusEmbeddingStoreFactory(
             RagProperties properties,
+            MilvusCollectionSchemaVerifier schemaVerifier,
+            MilvusV2ClientProvider v2ClientProvider,
+            MilvusVueBm25CollectionProvisioner bm25CollectionProvisioner) {
+        this(properties, schemaVerifier::verify, MilvusEmbeddingStoreFactory::createClient,
+                MilvusEmbeddingStoreFactory::buildStore, v2ClientProvider, bm25CollectionProvisioner);
+    }
+
+    public MilvusEmbeddingStoreFactory(
+            RagProperties properties,
             MilvusCollectionSchemaVerifier schemaVerifier) {
         this(properties, schemaVerifier::verify, MilvusEmbeddingStoreFactory::createClient,
-                MilvusEmbeddingStoreFactory::buildStore);
+                MilvusEmbeddingStoreFactory::buildStore,
+                new MilvusV2ClientProvider(properties), new MilvusVueBm25CollectionProvisioner());
     }
 
     MilvusEmbeddingStoreFactory(
@@ -47,10 +61,22 @@ public class MilvusEmbeddingStoreFactory {
             MilvusCollectionVerifier collectionVerifier,
             MilvusClientProvider clientProvider,
             MilvusStoreBuilder storeBuilder) {
+        this(properties, collectionVerifier, clientProvider, storeBuilder, null, null);
+    }
+
+    MilvusEmbeddingStoreFactory(
+            RagProperties properties,
+            MilvusCollectionVerifier collectionVerifier,
+            MilvusClientProvider clientProvider,
+            MilvusStoreBuilder storeBuilder,
+            MilvusV2ClientProvider v2ClientProvider,
+            MilvusVueBm25CollectionProvisioner bm25CollectionProvisioner) {
         this.properties = properties;
         this.collectionVerifier = collectionVerifier;
         this.clientProvider = clientProvider;
         this.storeBuilder = storeBuilder;
+        this.v2ClientProvider = v2ClientProvider;
+        this.bm25CollectionProvisioner = bm25CollectionProvisioner;
     }
 
     public EmbeddingStore<TextSegment> create(String collectionName) {
@@ -74,21 +100,28 @@ public class MilvusEmbeddingStoreFactory {
             client = null;
             stores.clear();
         }
-        if (clientToClose == null) {
-            return;
+        if (clientToClose != null) {
+            try {
+                clientToClose.close(5L);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                log.warn("[RAG] 关闭 Milvus Client 时被中断");
+            } catch (RuntimeException exception) {
+                log.warn("[RAG] 关闭 Milvus Client 失败,errorType={}", exception.getClass().getSimpleName());
+            }
         }
-        try {
-            clientToClose.close(5L);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            log.warn("[RAG] 关闭 Milvus Client 时被中断");
-        } catch (RuntimeException exception) {
-            log.warn("[RAG] 关闭 Milvus Client 失败,errorType={}", exception.getClass().getSimpleName());
+        if (v2ClientProvider != null) {
+            v2ClientProvider.close();
         }
     }
 
     private EmbeddingStore<TextSegment> createStore(String collectionName) {
         MilvusServiceClient client = getClient();
+        if (RagConstants.VUE_BM25_COLLECTION.equals(collectionName)) {
+            MilvusClientV2 v2Client = provisionBm25Collection();
+            collectionVerifier.verify(client, collectionName, properties.getEmbedding().getDimension());
+            return buildAdapter(client, collectionName, v2Client);
+        }
         boolean existed = collectionExists(client, collectionName);
         if (existed) {
             collectionVerifier.verify(client, collectionName, properties.getEmbedding().getDimension());
@@ -99,6 +132,24 @@ public class MilvusEmbeddingStoreFactory {
             collectionVerifier.verify(client, collectionName, properties.getEmbedding().getDimension());
         }
         return new MilvusEmbeddingStoreAdapter(client, collectionName, delegate);
+    }
+
+    private EmbeddingStore<TextSegment> buildAdapter(
+            MilvusServiceClient client,
+            String collectionName,
+            MilvusClientV2 v2Client) {
+        MilvusEmbeddingStore delegate = storeBuilder.build(client, collectionName,
+                properties.getEmbedding().getDimension());
+        return new MilvusEmbeddingStoreAdapter(client, collectionName, delegate, v2Client);
+    }
+
+    private MilvusClientV2 provisionBm25Collection() {
+        if (v2ClientProvider == null || bm25CollectionProvisioner == null) {
+            throw new IllegalStateException("Vue BM25 Collection Provisioner 不可用");
+        }
+        MilvusClientV2 v2Client = v2ClientProvider.getClient();
+        bm25CollectionProvisioner.ensureCollection(v2Client, properties.getEmbedding().getDimension());
+        return v2Client;
     }
 
     private MilvusServiceClient getClient() {

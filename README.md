@@ -446,12 +446,18 @@ ai-app-generation/
 完整流水线：
 
 ```
-用户 prompt ──► [Embedding: text-embedding-v4 (1024 维)]
-                       │
-                       ▼
-              [Milvus FLAT/COSINE 召回 top-K=10] (RagRetrievalService)
-                       │
-                       ▼
+用户 prompt ──┬─► [Milvus 原生 BM25 top-K=10]
+              │       │（服务端 Analyzer + BM25 Function）
+              │       ▼
+              └─► [Embedding: text-embedding-v4 (1024 维)]
+                      │
+                      ▼
+              [Milvus FLAT/COSINE 召回 top-K=10]
+                      │
+                      ▼
+              [RRF 融合两路候选]
+                      │
+                      ▼
               [gte-rerank-v2 重排 → top-K=3] (RagRerankService)
                        │
                        ▼
@@ -462,6 +468,10 @@ ai-app-generation/
 ```
 
 **关键决策**：
+- Vue 工程使用 Milvus 原生 BM25 与 Dense 双路召回，再经过 RRF 和 Rerank；HTML、MULTI_FILE 继续使用原有 Dense 链路
+- BM25 的 `text`、Milvus 生成的 `bm25_sparse_vector` 和 `SPARSE_INVERTED_INDEX` 倒排索引都持久化在 Milvus；应用层不再创建 Lucene 内存索引，也不在应用侧分词
+- `text` 仅开启 `enable_analyzer=true`，未显式指定 tokenizer，由 Milvus 服务端默认 Analyzer 处理查询和文档文本
+- 应用重启或 Milvus 服务重启（保留 Milvus/MinIO 持久化卷）不会为 BM25 重新构建进程内存倒排索引
 - 召回阶段最低分阈值放宽到 `0.30`，给 rerank 足够候选池
 - 整条链路有降级保护：检索/重排任意一步失败都不影响主生成（`RagRetrievalService` 内部 try-catch）
 - 模板提示词上下文预算 `4000` 字符（约 2000 token），避免挤占用户 prompt 空间
@@ -649,8 +659,11 @@ LayeredChatMemory.messages()：
 
 **Milvus 向量库** `default`：
 
-- 三个独立 Collection：`templates_html`、`templates_multi`、`templates_vue`
-- 1024 维 FloatVector，使用 `COSINE` 度量、`FLAT` 索引和 `STRONG` 一致性
+- `templates_html`、`templates_multi`：保留四字段 Dense 协议（`id`、`text`、`metadata`、`vector`），1024 维 FloatVector，使用 `COSINE` 度量、`FLAT` 索引和 `STRONG` 一致性
+- `templates_vue_bm25`：在上述四字段之外增加 `bm25_sparse_vector`，由 `text -> bm25_sparse_vector` 的 Milvus BM25 Function 生成，并使用 `SPARSE_INVERTED_INDEX/BM25`（`drop_ratio_build=0.2`）
+- 旧 `templates_vue` 仅作为迁移期间的兼容数据保留，应用运行时不再访问；完成回灌和核验后由人工决定是否清理
+
+Vue BM25 集合中，应用每次摄取只写入 `id`、`text`、`metadata` 和 `vector`；稀疏向量及其倒排索引由 Milvus 生成，并随当前部署的 Milvus/MinIO 持久化卷保存。
 
 ---
 
@@ -705,7 +718,7 @@ rag:
   hybrid: { enabled: true }                         # 默认使用 BM25 + Milvus + RRF + Rerank
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}   # 默认读取项目根目录，可用环境变量覆盖
   ingest:
-    enabled: false                                 # 模板入库开关（手动触发）
+    enabled: ${RAG_INGEST_ENABLED:false}           # 模板入库开关（手动触发）
     types: ${RAG_INGEST_TYPES:}                    # 显式选择 HTML,MULTI_FILE,VUE_PROJECT；空值不摄取
   milvus: { host: localhost, port: 19530, database: default, username: root }
   # Milvus root 密码默认从 INFRA_SHARED_PASSWORD 注入
@@ -726,6 +739,23 @@ ai:
 
 Vue Hybrid 检索默认开启。需要临时绕过 BM25、RRF 或 Rerank 时，可设置
 `RAG_HYBRID_ENABLED=false` 并重启后端，恢复仅使用 Milvus 的 Dense-only 召回。
+
+### Vue BM25 一次性回灌
+
+新版本首次切换前，必须在保留原有 Milvus `milvus_data` 数据卷的前提下回灌 Vue 知识块。旧
+`templates_vue` 不会被代码删除或覆盖。
+
+1. 临时在运行环境设置以下配置，仅摄取 Vue 工程：
+
+```bash
+RAG_INGEST_ENABLED=true
+RAG_INGEST_TYPES=VUE_PROJECT
+```
+
+   等价的 Spring 配置是 `rag.ingest.enabled=true` 和
+   `rag.ingest.types=VUE_PROJECT`。重启后端，等待日志中的摄取完成。
+2. 执行 Vue 摄取物理核验和检索质量门禁，确认 `templates_vue_bm25` 的行数、文本、metadata、向量维度、BM25 Function 和稀疏倒排索引均符合协议。
+3. 核验通过后恢复 `RAG_INGEST_ENABLED=false` 并清空 `RAG_INGEST_TYPES`，再重启后端；后续应用重启不需要重新计算 BM25。
 
 Vue 业务层使用 30 分钟绝对截止，Spring 的 30 分 45 秒用于终态收尾；生产 Nginx 对精确生成路径设置 `client_max_body_size 272k`，读写超时均为 31 分钟。三层顺序必须保持“业务 < Spring < Nginx”，不能把 Reactor 空闲超时当作绝对回合时限。
 

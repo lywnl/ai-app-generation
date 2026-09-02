@@ -11,6 +11,9 @@ import java.util.Map;
  */
 public final class RagConstants {
 
+    /** Vue 召回同时使用稠密向量和 Milvus 原生 BM25。 */
+    public static final String VUE_BM25_COLLECTION = "templates_vue_bm25";
+
     private RagConstants() {
     }
 
@@ -20,7 +23,7 @@ public final class RagConstants {
     public static final Map<CodeGenTypeEnum, String> TYPE_TO_COLLECTION = Map.of(
             CodeGenTypeEnum.HTML, "templates_html",
             CodeGenTypeEnum.MULTI_FILE, "templates_multi",
-            CodeGenTypeEnum.VUE_PROJECT, "templates_vue"
+            CodeGenTypeEnum.VUE_PROJECT, VUE_BM25_COLLECTION
     );
 
     public static final Map<CodeGenTypeEnum, String> TYPE_TO_DIR = Map.of(

@@ -15,6 +15,10 @@ import io.milvus.param.R;
 import io.milvus.param.collection.FlushParam;
 import io.milvus.param.dml.InsertParam;
 import io.milvus.param.dml.UpsertParam;
+import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.service.utility.request.FlushReq;
+import io.milvus.v2.service.vector.request.UpsertReq;
+import io.milvus.v2.service.vector.response.UpsertResp;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -35,14 +39,27 @@ public final class MilvusEmbeddingStoreAdapter implements EmbeddingStore<TextSeg
     private final MilvusServiceClient client;
     private final String collectionName;
     private final MilvusEmbeddingStore delegate;
+    private final MilvusClientV2 v2Client;
 
     public MilvusEmbeddingStoreAdapter(
             MilvusServiceClient client,
             String collectionName,
             MilvusEmbeddingStore delegate) {
+        this(client, collectionName, delegate, null);
+    }
+
+    /**
+     * V2 客户端仅用于带 Milvus Function 的 Collection；传空时保留普通 Collection 的旧写入协议。
+     */
+    MilvusEmbeddingStoreAdapter(
+            MilvusServiceClient client,
+            String collectionName,
+            MilvusEmbeddingStore delegate,
+            MilvusClientV2 v2Client) {
         this.client = Objects.requireNonNull(client, "Milvus 客户端不能为空");
         this.collectionName = Objects.requireNonNull(collectionName, "Collection 名称不能为空");
         this.delegate = Objects.requireNonNull(delegate, "Milvus 存储不能为空");
+        this.v2Client = v2Client;
     }
 
     @Override
@@ -107,6 +124,10 @@ public final class MilvusEmbeddingStoreAdapter implements EmbeddingStore<TextSeg
         if (ids.isEmpty()) {
             return;
         }
+        if (v2Client != null) {
+            upsertV2(ids, embeddings, segments);
+            return;
+        }
         UpsertParam upsertParam = UpsertParam.newBuilder()
                 .withCollectionName(collectionName)
                 .withFields(buildFields(ids, embeddings, segments))
@@ -116,6 +137,46 @@ public final class MilvusEmbeddingStoreAdapter implements EmbeddingStore<TextSeg
                 .withCollectionNames(List.of(collectionName))
                 .build();
         requireSuccess(invokeFlush(flushParam), "flush");
+    }
+
+    private void upsertV2(List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {
+        UpsertReq request = UpsertReq.builder()
+                .collectionName(collectionName)
+                .data(buildRows(ids, embeddings, segments))
+                .build();
+        UpsertResp response;
+        try {
+            response = v2Client.upsert(request);
+        } catch (RuntimeException exception) {
+            throw dependencyFailure("upsert");
+        }
+        if (response == null || response.getUpsertCnt() != ids.size()) {
+            throw dependencyFailure("upsert");
+        }
+        try {
+            v2Client.flush(FlushReq.builder()
+                    .collectionNames(List.of(collectionName))
+                    .build());
+        } catch (RuntimeException exception) {
+            throw dependencyFailure("flush");
+        }
+    }
+
+    private List<JsonObject> buildRows(
+            List<String> ids,
+            List<Embedding> embeddings,
+            List<TextSegment> segments) {
+        List<JsonObject> rows = new ArrayList<>(ids.size());
+        for (int index = 0; index < ids.size(); index++) {
+            TextSegment segment = segments == null ? null : segments.get(index);
+            JsonObject row = new JsonObject();
+            row.addProperty(ID_FIELD, ids.get(index));
+            row.addProperty(TEXT_FIELD, segment == null ? "" : segment.text());
+            row.add(METADATA_FIELD, toMetadata(segment));
+            row.add(VECTOR_FIELD, GSON.toJsonTree(embeddings.get(index).vectorAsList()));
+            rows.add(row);
+        }
+        return List.copyOf(rows);
     }
 
     private void validateInput(List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {

@@ -2,6 +2,7 @@ package com.lyw.appgeneration.rag.vue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.rag.ingest.VueIngestionVerification;
 import com.lyw.appgeneration.rag.ingest.VueMilvusTarget;
@@ -11,10 +12,13 @@ import com.lyw.appgeneration.service.rag.VueHybridRetrievalService;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
+import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
 import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
+import com.lyw.appgeneration.service.rag.store.MilvusV2ClientProvider;
+import com.lyw.appgeneration.service.rag.store.MilvusVueBm25CollectionProvisioner;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
@@ -83,15 +87,19 @@ public final class VueRetrievalQualityGateRunner {
             TemplateCatalog catalog) {
         RagProperties properties = evaluationProperties(target, password);
         EmbeddingModel embeddingModel = createEmbeddingModel(properties, apiKey);
+        MilvusV2ClientProvider v2ClientProvider = new MilvusV2ClientProvider(properties);
         MilvusEmbeddingStoreFactory factory = new MilvusEmbeddingStoreFactory(
-                properties, new MilvusCollectionSchemaVerifier());
+                properties, new MilvusCollectionSchemaVerifier(), v2ClientProvider,
+                new MilvusVueBm25CollectionProvisioner());
         VueRetrievalResourceProvider resourceProvider = null;
         try {
-            EmbeddingStore<TextSegment> store = factory.create("templates_vue");
+            EmbeddingStore<TextSegment> store = factory.create(RagConstants.VUE_BM25_COLLECTION);
             resourceProvider = VueRetrievalResourceProvider.forEvaluation(catalog);
             RagRerankService rerankService = new RagRerankService(properties, apiKey);
             RagRetrievalService retrievalService = createRetrievalService(
-                    embeddingModel, store, resourceProvider, rerankService, properties);
+                    embeddingModel, store, resourceProvider, rerankService, properties,
+                    new MilvusBm25Retriever(new com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClient(
+                            v2ClientProvider.getClient())));
             return new EvaluationServices(retrievalService, resourceProvider, factory);
         } catch (RuntimeException | Error exception) {
             closeOnCreationFailure(resourceProvider, factory, exception);
@@ -116,12 +124,14 @@ public final class VueRetrievalQualityGateRunner {
             EmbeddingStore<TextSegment> store,
             VueRetrievalResourceProvider resourceProvider,
             RagRerankService rerankService,
-            RagProperties properties) {
+            RagProperties properties,
+            MilvusBm25Retriever bm25Retriever) {
         Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> stores = Map.of(
                 CodeGenTypeEnum.VUE_PROJECT, store);
-        VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
-                resourceProvider,
-                new DenseRetriever(embeddingModel, stores, properties),
+            VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
+                    resourceProvider,
+                    bm25Retriever,
+                    new DenseRetriever(embeddingModel, stores, properties),
                 new RrfFusionService(),
                 rerankService,
                 new VueRagMetricsCollector(new SimpleMeterRegistry()),

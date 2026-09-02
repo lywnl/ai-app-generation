@@ -9,8 +9,8 @@ import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
-import com.lyw.appgeneration.service.rag.retrieval.Bm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
+import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
@@ -55,12 +55,12 @@ class VueHybridRetrievalServiceTest {
                 compatibleFeature("feature-3"), compatibleFeature("feature-4"),
                 compatibleFeature("feature-5"), compatibleFeature("feature-6"));
         Harness harness = harness(join(List.of(skeleton), features));
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenReturn(candidates(features, RagDocumentKind.FEATURE_SNIPPET));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
@@ -97,14 +97,14 @@ class VueHybridRetrievalServiceTest {
         TemplateDoc dashboardSkeleton = compatibleSkeleton("skeleton-dashboard");
         dashboardSkeleton.getDependencies().put("echarts", "5.5.1");
         Harness harness = harness(List.of(shopSkeleton, dashboardSkeleton));
-        when(harness.bm25.retrieve(eq(query), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(query), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(candidates(
                         List.of(shopSkeleton, dashboardSkeleton),
                         RagDocumentKind.PROJECT_SKELETON));
         when(harness.dense.retrieve(eq(query), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
-        when(harness.bm25.retrieve(eq(query), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(query), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenReturn(List.of());
         when(harness.dense.retrieve(eq(query), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
@@ -315,7 +315,7 @@ class VueHybridRetrievalServiceTest {
     void degradesToDenseWhenBm25Fails() {
         TemplateDoc skeleton = compatibleSkeleton("dense-skeleton");
         Harness harness = harness(List.of(skeleton));
-        when(harness.bm25.retrieve(any(), any(), anyInt()))
+        when(harness.bm25.retrieve(any(), any(), any(), anyInt()))
                 .thenThrow(new IllegalStateException("BM25 unavailable"));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION), any(), eq(10)))
                 .thenAnswer(invocation -> candidatesForKind(List.of(skeleton), invocation.getArgument(2)));
@@ -332,8 +332,8 @@ class VueHybridRetrievalServiceTest {
     void degradesToBm25WhenDenseFails() {
         TemplateDoc skeleton = compatibleSkeleton("bm25-skeleton");
         Harness harness = harness(List.of(skeleton));
-        when(harness.bm25.retrieve(eq(QUERY), any(), eq(10)))
-                .thenAnswer(invocation -> candidatesForKind(List.of(skeleton), invocation.getArgument(1)));
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), any(), eq(10)))
+                .thenAnswer(invocation -> candidatesForKind(List.of(skeleton), invocation.getArgument(2)));
         when(harness.dense.retrieve(any(), any(), any(), anyInt()))
                 .thenThrow(new IllegalStateException("Dense unavailable"));
 
@@ -394,12 +394,12 @@ class VueHybridRetrievalServiceTest {
     void doesNotRecordRerankCandidatesWhenRrfOrParentDocumentsAreEmpty() {
         TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
         Harness harness = harness(List.of(basic));
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenReturn(List.of(new RankedCandidate(
                         "missing-feature", RagDocumentKind.FEATURE_SNIPPET, 1, 1.0)));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
@@ -418,7 +418,7 @@ class VueHybridRetrievalServiceTest {
     void fallsBackToBasicSkeletonWhenBothChannelsHaveNoResults() {
         TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
         Harness harness = harness(List.of(basic));
-        when(harness.bm25.retrieve(any(), any(), anyInt())).thenReturn(List.of());
+        when(harness.bm25.retrieve(any(), any(), any(), anyInt())).thenReturn(List.of());
         when(harness.dense.retrieve(any(), any(), any(), anyInt())).thenReturn(List.of());
 
         VueRagContext context = harness.service.retrieve(QUERY);
@@ -437,12 +437,12 @@ class VueHybridRetrievalServiceTest {
         TemplateDoc basic = compatibleSkeleton(BASIC_SKELETON_ID);
         TemplateDoc feature = compatibleFeature("surviving-feature");
         Harness harness = harness(List.of(basic, feature));
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenReturn(candidates(List.of(feature), RagDocumentKind.FEATURE_SNIPPET));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
@@ -460,12 +460,12 @@ class VueHybridRetrievalServiceTest {
     void marksDegradedWhenFeatureChannelsBothReturnNoResults() {
         TemplateDoc skeleton = compatibleSkeleton("skeleton-only");
         Harness harness = harness(List.of(skeleton));
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenReturn(List.of());
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
@@ -484,7 +484,7 @@ class VueHybridRetrievalServiceTest {
         when(provider.current()).thenReturn(Optional.empty());
         VueRagMetricsCollector metrics = mock(VueRagMetricsCollector.class);
         VueHybridRetrievalService service = new VueHybridRetrievalService(
-                provider, mock(DenseRetriever.class), mock(RrfFusionService.class),
+                provider, mock(MilvusBm25Retriever.class), mock(DenseRetriever.class), mock(RrfFusionService.class),
                 mock(RagRerankService.class), metrics, new RagProperties());
 
         VueRagContext context = service.retrieve(QUERY);
@@ -502,12 +502,12 @@ class VueHybridRetrievalServiceTest {
     void featureChainFailureDoesNotBlockSkeleton() {
         TemplateDoc skeleton = compatibleSkeleton("surviving-skeleton");
         Harness harness = harness(List.of(skeleton));
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(candidates(List.of(skeleton), RagDocumentKind.PROJECT_SKELETON));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenThrow(new IllegalStateException("feature BM25 failed"));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
@@ -556,7 +556,7 @@ class VueHybridRetrievalServiceTest {
         assertEquals(List.of("dense-compatible"), context.features().stream()
                 .map(TemplateDoc::getId).toList());
         assertFalse(context.degraded());
-        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.bm25, never()).retrieve(any(), any(), any(), anyInt());
         verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
         verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
     }
@@ -582,7 +582,7 @@ class VueHybridRetrievalServiceTest {
         assertEquals(List.of(compatible), context.features());
         assertEquals(CATALOG_VERSION, context.catalogVersion());
         assertFalse(context.degraded());
-        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.bm25, never()).retrieve(any(), any(), any(), anyInt());
         verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
         verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
     }
@@ -603,7 +603,7 @@ class VueHybridRetrievalServiceTest {
         assertTrue(production.degraded());
         assertNull(evaluation.skeleton());
         assertTrue(evaluation.features().isEmpty());
-        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.bm25, never()).retrieve(any(), any(), any(), anyInt());
         verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
         verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
     }
@@ -621,7 +621,7 @@ class VueHybridRetrievalServiceTest {
         assertTrue(context.features().isEmpty());
         assertEquals(CATALOG_VERSION, context.catalogVersion());
         assertTrue(context.degraded());
-        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.bm25, never()).retrieve(any(), any(), any(), anyInt());
         verify(harness.fusion, never()).fuse(anyList(), anyList(), anyMap(), anyInt());
         verify(harness.rerank, never()).rerankVue(any(), anyList(), anyInt());
     }
@@ -657,18 +657,18 @@ class VueHybridRetrievalServiceTest {
         assertTrue(context.features().isEmpty());
         assertEquals(CATALOG_VERSION, context.catalogVersion());
         assertTrue(context.degraded());
-        verify(harness.bm25, never()).retrieve(any(), any(), anyInt());
+        verify(harness.bm25, never()).retrieve(any(), any(), any(), anyInt());
     }
 
     private void stubSuccessfulRecall(Harness harness,
                                       List<TemplateDoc> skeletons,
                                       List<TemplateDoc> features) {
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(candidates(skeletons, RagDocumentKind.PROJECT_SKELETON));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.PROJECT_SKELETON), eq(10)))
                 .thenReturn(List.of());
-        when(harness.bm25.retrieve(eq(QUERY), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+        when(harness.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
                 .thenReturn(candidates(features, RagDocumentKind.FEATURE_SNIPPET));
         when(harness.dense.retrieve(eq(QUERY), eq(CATALOG_VERSION),
                 eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
@@ -684,7 +684,7 @@ class VueHybridRetrievalServiceTest {
         when(catalog.findDocumentById(any())).thenAnswer(invocation ->
                 Optional.ofNullable(byId.get(invocation.getArgument(0))));
 
-        Bm25Retriever bm25 = mock(Bm25Retriever.class);
+        MilvusBm25Retriever bm25 = mock(MilvusBm25Retriever.class);
         DenseRetriever dense = mock(DenseRetriever.class);
         RrfFusionService fusion = spy(new RrfFusionService());
         RagRerankService rerank = mock(RagRerankService.class);
@@ -696,9 +696,9 @@ class VueHybridRetrievalServiceTest {
             return candidates.stream().limit(topK).toList();
         });
         VueRetrievalResourceProvider provider = mock(VueRetrievalResourceProvider.class);
-        when(provider.current()).thenReturn(Optional.of(new VueRetrievalResources(catalog, bm25)));
+        when(provider.current()).thenReturn(Optional.of(new VueRetrievalResources(catalog)));
         VueHybridRetrievalService service = new VueHybridRetrievalService(
-                provider, dense, fusion, rerank, metrics, properties);
+                provider, bm25, dense, fusion, rerank, metrics, properties);
         return new Harness(service, bm25, dense, fusion, rerank, metrics, properties);
     }
 
@@ -772,7 +772,7 @@ class VueHybridRetrievalServiceTest {
 
     private record Harness(
             VueHybridRetrievalService service,
-            Bm25Retriever bm25,
+            MilvusBm25Retriever bm25,
             DenseRetriever dense,
             RrfFusionService fusion,
             RagRerankService rerank,

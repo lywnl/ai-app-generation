@@ -111,11 +111,40 @@ Milvus 说明：
 - 服务端固定使用 `milvusdb/milvus:v2.5.9`，依赖 etcd `v3.5.18` 与固定版本 MinIO。
 - 生产环境不发布 Milvus、etcd 或 MinIO 宿主端口；后端通过 `ai_net` 内部 DNS 连接 `milvus`。
 - Compose 固定设置 `QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX=-1`，仅取消单 Collection Flush QPS 上限，以支持稳定 ID 每次 upsert 后立即 flush；其他配额与保护保持 Milvus 默认值。
+- Milvus 的 `milvus_data`、`milvus_minio_data` 和 `milvus_etcd_data` 数据卷必须持续复用。Vue BM25 的 `text`、服务端生成的 `bm25_sparse_vector` 及 `SPARSE_INVERTED_INDEX` 倒排索引由 Milvus/MinIO 持久化，后端重启不会重建倒排索引。
 - 如需仅启动 RAG 向量基础设施：
 
 ```bash
 docker compose --env-file .env -f docker-compose.yml up -d milvus-etcd milvus-minio milvus
 ```
+
+### Vue BM25 一次性回灌
+
+从旧版本地 Lucene BM25 切换到 Milvus 原生 BM25 时，先保留旧
+`templates_vue`，不要删除或重建 `milvus_data`、`milvus_minio_data` 或
+`milvus_etcd_data` 数据卷。临时编辑 `prod/.env`：
+
+```dotenv
+RAG_INGEST_ENABLED=true
+RAG_INGEST_TYPES=VUE_PROJECT
+```
+
+然后只重建 backend：
+
+```bash
+docker compose --env-file .env -f docker-compose.yml up -d --force-recreate backend
+```
+
+等待日志显示 Vue 知识块摄取完成后，执行项目提供的 Vue 摄取物理核验和检索质量门禁，确认
+`templates_vue_bm25` 的文本、metadata、Dense 向量、BM25 Function 和
+`SPARSE_INVERTED_INDEX/BM25` 索引均通过。核验通过后，将上述两个变量恢复为：
+
+```dotenv
+RAG_INGEST_ENABLED=false
+RAG_INGEST_TYPES=
+```
+
+再次重建 backend。旧 `templates_vue` 的清理必须由人工在确认回滚窗口结束后执行，应用不会自动删除它。
 
 ## 4. 常用检查
 

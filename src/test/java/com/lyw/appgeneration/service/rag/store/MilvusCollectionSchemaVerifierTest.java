@@ -8,6 +8,7 @@ import io.milvus.grpc.FieldSchema;
 import io.milvus.grpc.IndexDescription;
 import io.milvus.grpc.KeyValuePair;
 import io.milvus.grpc.CollectionSchema;
+import io.milvus.grpc.FunctionSchema;
 import io.milvus.param.R;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,63 @@ class MilvusCollectionSchemaVerifierTest {
     @Test
     void 四字段维度索引和度量全部匹配时通过() {
         assertDoesNotThrow(() -> verifier.verify(client, "templates_vue", 1024));
+    }
+
+    @Test
+    void VueBm25五字段Function和双索引全部匹配时通过() {
+        when(client.describeCollection(any())).thenReturn(R.success(validBm25Collection()));
+        when(client.describeIndex(any())).thenAnswer(invocation -> {
+            io.milvus.param.index.DescribeIndexParam param = invocation.getArgument(0);
+            String fieldName = param.getFieldName();
+            return R.success("bm25_sparse_vector".equals(fieldName)
+                    ? bm25Index()
+                    : validIndex());
+        });
+
+        assertDoesNotThrow(() -> verifier.verify(client, "templates_vue_bm25", 1024));
+    }
+
+    @Test
+    void VueBm25文本字段未开启Analyzer时拒绝复用() {
+        FieldSchema invalidText = bm25TextField().toBuilder().clearTypeParams()
+                .addTypeParams(pair("max_length", "65535"))
+                .build();
+        when(client.describeCollection(any())).thenReturn(R.success(bm25Collection(List.of(
+                idField(), invalidText, metadataField(), vectorField(1024), sparseVectorField()))));
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> verifier.verify(client, "templates_vue_bm25", 1024));
+
+        assertTrue(exception.getMessage().contains("enable_analyzer"));
+    }
+
+    @Test
+    void VueBm25缺少Function时拒绝复用() {
+        DescribeCollectionResponse collection = validBm25Collection();
+        when(client.describeCollection(any())).thenReturn(R.success(collection.toBuilder().setSchema(
+                collection.getSchema().toBuilder().clearFunctions()).build()));
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> verifier.verify(client, "templates_vue_bm25", 1024));
+
+        assertTrue(exception.getMessage().contains("BM25 Function"));
+    }
+
+    @Test
+    void VueBm25稀疏索引协议错误时拒绝复用() {
+        when(client.describeCollection(any())).thenReturn(R.success(validBm25Collection()));
+        when(client.describeIndex(any())).thenAnswer(invocation -> {
+            io.milvus.param.index.DescribeIndexParam param = invocation.getArgument(0);
+            String fieldName = param.getFieldName();
+            return R.success("bm25_sparse_vector".equals(fieldName)
+                    ? indexForField("bm25_sparse_vector", "INVERTED", "BM25")
+                    : validIndex());
+        });
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> verifier.verify(client, "templates_vue_bm25", 1024));
+
+        assertTrue(exception.getMessage().contains("SPARSE_INVERTED_INDEX"));
     }
 
     @Test
@@ -190,11 +248,29 @@ class MilvusCollectionSchemaVerifierTest {
         return collection(List.of(idField(), textField(), metadataField(), vectorField(1024)));
     }
 
+    private DescribeCollectionResponse validBm25Collection() {
+        return bm25Collection(List.of(
+                idField(), bm25TextField(), metadataField(), vectorField(1024), sparseVectorField()));
+    }
+
     private DescribeCollectionResponse collection(List<FieldSchema> fields) {
         return DescribeCollectionResponse.newBuilder()
                 .setSchema(CollectionSchema.newBuilder()
                         .setName("templates_vue")
                         .addAllFields(fields))
+                .build();
+    }
+
+    private DescribeCollectionResponse bm25Collection(List<FieldSchema> fields) {
+        return DescribeCollectionResponse.newBuilder()
+                .setSchema(CollectionSchema.newBuilder()
+                        .setName("templates_vue_bm25")
+                        .addAllFields(fields)
+                        .addFunctions(FunctionSchema.newBuilder()
+                                .setName("text_bm25_emb")
+                                .setType(io.milvus.grpc.FunctionType.BM25)
+                                .addInputFieldNames("text")
+                                .addOutputFieldNames("bm25_sparse_vector")))
                 .build();
     }
 
@@ -216,6 +292,15 @@ class MilvusCollectionSchemaVerifierTest {
                 .build();
     }
 
+    private FieldSchema bm25TextField() {
+        return FieldSchema.newBuilder()
+                .setName("text")
+                .setDataType(DataType.VarChar)
+                .addTypeParams(pair("max_length", "65535"))
+                .addTypeParams(pair("enable_analyzer", "true"))
+                .build();
+    }
+
     private FieldSchema metadataField() {
         return FieldSchema.newBuilder()
                 .setName("metadata")
@@ -231,14 +316,36 @@ class MilvusCollectionSchemaVerifierTest {
                 .build();
     }
 
+    private FieldSchema sparseVectorField() {
+        return FieldSchema.newBuilder()
+                .setName("bm25_sparse_vector")
+                .setDataType(DataType.SparseFloatVector)
+                .build();
+    }
+
     private DescribeIndexResponse validIndex() {
         return index("FLAT", "COSINE");
     }
 
-    private DescribeIndexResponse index(String indexType, String metricType) {
+    private DescribeIndexResponse bm25Index() {
         return DescribeIndexResponse.newBuilder()
                 .addIndexDescriptions(IndexDescription.newBuilder()
-                        .setFieldName("vector")
+                        .setFieldName("bm25_sparse_vector")
+                        .setIndexName("bm25_idx")
+                        .addParams(pair("index_type", "SPARSE_INVERTED_INDEX"))
+                        .addParams(pair("metric_type", "BM25"))
+                        .addParams(pair("drop_ratio_build", "0.2")))
+                .build();
+    }
+
+    private DescribeIndexResponse index(String indexType, String metricType) {
+        return indexForField("vector", indexType, metricType);
+    }
+
+    private DescribeIndexResponse indexForField(String fieldName, String indexType, String metricType) {
+        return DescribeIndexResponse.newBuilder()
+                .addIndexDescriptions(IndexDescription.newBuilder()
+                        .setFieldName(fieldName)
                         .setIndexName("vector_idx")
                         .addParams(pair("index_type", indexType))
                         .addParams(pair("metric_type", metricType)))

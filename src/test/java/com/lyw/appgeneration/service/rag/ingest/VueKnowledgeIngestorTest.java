@@ -26,6 +26,7 @@ import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
+import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
@@ -291,11 +292,11 @@ class VueKnowledgeIngestorTest {
             RagProperties properties) {
         VueRetrievalResourceProvider provider = mock(VueRetrievalResourceProvider.class);
         when(provider.current()).thenReturn(java.util.Optional.of(
-                new VueRetrievalResources(catalog, java.util.Optional.empty())));
+                new VueRetrievalResources(catalog)));
         RrfFusionService fusion = mock(RrfFusionService.class);
         RagRerankService rerank = mock(RagRerankService.class);
         VueHybridRetrievalService vueService = new VueHybridRetrievalService(
-                provider, denseRetriever, fusion, rerank,
+                provider, mock(MilvusBm25Retriever.class), denseRetriever, fusion, rerank,
                 mock(VueRagMetricsCollector.class), properties);
         RagRetrievalService retrievalService = new RagRetrievalService(
                 embeddingModel, Map.of(CodeGenTypeEnum.VUE_PROJECT, store),

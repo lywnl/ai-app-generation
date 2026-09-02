@@ -3,6 +3,7 @@ package com.lyw.appgeneration.rag.ingest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import io.milvus.common.clientenum.ConsistencyLevelEnum;
 import io.milvus.param.dml.QueryParam;
@@ -75,7 +76,7 @@ class VueMilvusIngestionVerifierTest {
     void 历史版本聚合查询不得设置分页参数() {
         QueryParam query = VueMilvusIngestionVerifier.historicalCountQuery("catalog-v1");
 
-        assertEquals("templates_vue", query.getCollectionName());
+        assertEquals(RagConstants.VUE_BM25_COLLECTION, query.getCollectionName());
         assertEquals(ConsistencyLevelEnum.STRONG, query.getConsistencyLevel());
         assertEquals(List.of("count(*)"), query.getOutFields());
         assertEquals("metadata[\"catalogVersion\"] != \"catalog-v1\"", query.getExpr());

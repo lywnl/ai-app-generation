@@ -5,6 +5,7 @@ import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestor;
 import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
 import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
+import com.lyw.appgeneration.constants.RagConstants;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
@@ -411,7 +412,7 @@ class VueKnowledgeIngestionQualityGateTest {
         properties.getMilvus().setUsername(target.username());
         properties.getMilvus().setPassword(password);
         liveStoreFactory = new MilvusEmbeddingStoreFactory(properties, new MilvusCollectionSchemaVerifier());
-        return liveStoreFactory.create("templates_vue");
+        return liveStoreFactory.create(RagConstants.VUE_BM25_COLLECTION);
     }
 
     private void closeLiveStoreFactory() {

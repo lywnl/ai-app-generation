@@ -21,7 +21,7 @@ class VueRetrievalIngestionPrerequisiteTest {
     void 摄取核验失败时不创建模型或检索服务() {
         AtomicInteger serviceCreations = new AtomicInteger();
         VueIngestionVerification failed = new VueIngestionVerification(
-                false, "catalog", 23, 0, 0, Set.of(), List.of("缺少表 templates_vue"));
+                false, "catalog", 23, 0, 0, Set.of(), List.of("缺少表 templates_vue_bm25"));
 
         VueRetrievalEvaluationReport report = new VueRetrievalQualityGateRunner().evaluateWhenIngested(
                 () -> failed,

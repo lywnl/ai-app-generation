@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.JsonElement;
 import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
+import com.lyw.appgeneration.constants.RagConstants;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.common.clientenum.ConsistencyLevelEnum;
 import io.milvus.grpc.QueryResults;
@@ -26,7 +27,7 @@ import java.util.stream.Collectors;
  */
 public final class VueMilvusIngestionVerifier {
 
-    private static final String COLLECTION_NAME = "templates_vue";
+    private static final String COLLECTION_NAME = RagConstants.VUE_BM25_COLLECTION;
     private static final List<String> ROW_FIELDS = List.of("id", "text", "metadata", "vector");
     private static final long PAGE_SIZE = 1000L;
     private final MilvusClientProvider clientProvider;

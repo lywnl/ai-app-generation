@@ -4,9 +4,15 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.constants.RagConstants;
 import dev.langchain4j.store.embedding.milvus.MilvusEmbeddingStore;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import io.milvus.v2.service.vector.request.UpsertReq;
+import io.milvus.v2.service.vector.response.UpsertResp;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.param.R;
+import io.milvus.v2.client.MilvusClientV2;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -23,6 +29,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -111,6 +118,21 @@ class MilvusEmbeddingStoreFactoryTest {
     }
 
     @Test
+    void 未创建旧Client时关闭工厂仍释放V2ClientProvider() throws Exception {
+        MilvusV2ClientProvider v2Provider = mock(MilvusV2ClientProvider.class);
+        MilvusVueBm25CollectionProvisioner provisioner = mock(MilvusVueBm25CollectionProvisioner.class);
+        MilvusEmbeddingStoreFactory factoryWithOnlyV2Provider = new MilvusEmbeddingStoreFactory(
+                properties(), (verifiedClient, collectionName, dimension) -> { },
+                ignored -> client, (builtClient, collectionName, dimension) -> delegate,
+                v2Provider, provisioner);
+
+        factoryWithOnlyV2Provider.close();
+
+        verify(v2Provider).close();
+        verify(client, never()).close(any(Long.class));
+    }
+
+    @Test
     void 关闭Client被中断时恢复线程中断标记() throws Exception {
         when(client.hasCollection(any())).thenReturn(R.success(true));
         factory.create("templates_html");
@@ -192,6 +214,66 @@ class MilvusEmbeddingStoreFactoryTest {
         assertEquals(1, providerCalls.get());
         assertEquals(2, builderCalls.get());
         verify(client).close(5L);
+    }
+
+    @Test
+    void VueBm25创建前先Provision并在工厂关闭时释放V2Client() throws Exception {
+        MilvusV2ClientProvider v2Provider = mock(MilvusV2ClientProvider.class);
+        MilvusVueBm25CollectionProvisioner provisioner = mock(MilvusVueBm25CollectionProvisioner.class);
+        MilvusClientV2 v2Client = mock(MilvusClientV2.class);
+        when(v2Provider.getClient()).thenReturn(v2Client);
+        when(client.hasCollection(any())).thenReturn(R.success(true));
+        MilvusEmbeddingStoreFactory bm25Factory = new MilvusEmbeddingStoreFactory(
+                properties(), (verifiedClient, collectionName, dimension) -> events.add("校验:" + collectionName),
+                ignored -> client, (builtClient, collectionName, dimension) -> delegate,
+                v2Provider, provisioner);
+
+        bm25Factory.create(RagConstants.VUE_BM25_COLLECTION);
+        bm25Factory.close();
+
+        verify(provisioner).ensureCollection(v2Client, 1024);
+        verify(v2Provider).getClient();
+        verify(v2Provider).close();
+    }
+
+    @Test
+    void VueBm25Store显式写入使用V2客户端() {
+        MilvusV2ClientProvider v2Provider = mock(MilvusV2ClientProvider.class);
+        MilvusVueBm25CollectionProvisioner provisioner = mock(MilvusVueBm25CollectionProvisioner.class);
+        MilvusClientV2 v2Client = mock(MilvusClientV2.class);
+        when(v2Provider.getClient()).thenReturn(v2Client);
+        when(v2Client.upsert(any(UpsertReq.class))).thenReturn(UpsertResp.builder().upsertCnt(1).build());
+        when(client.hasCollection(any())).thenReturn(R.success(true));
+        MilvusEmbeddingStoreFactory bm25Factory = new MilvusEmbeddingStoreFactory(
+                properties(), (verifiedClient, collectionName, dimension) -> { },
+                ignored -> client, (builtClient, collectionName, dimension) -> delegate,
+                v2Provider, provisioner);
+
+        @SuppressWarnings("unchecked")
+        var store = (dev.langchain4j.store.embedding.EmbeddingStore<TextSegment>)
+                bm25Factory.create(RagConstants.VUE_BM25_COLLECTION);
+        store.addAll(List.of("固定标识"), List.of(Embedding.from(new float[]{0.1F})),
+                List.of(TextSegment.from("片段")));
+
+        verify(v2Client).upsert(any(UpsertReq.class));
+        verify(client, never()).upsert(any());
+        bm25Factory.close();
+    }
+
+    @Test
+    void HTML和旧兼容Collection创建时不触发BM25Provision() {
+        MilvusV2ClientProvider v2Provider = mock(MilvusV2ClientProvider.class);
+        MilvusVueBm25CollectionProvisioner provisioner = mock(MilvusVueBm25CollectionProvisioner.class);
+        when(client.hasCollection(any())).thenReturn(R.success(true));
+        MilvusEmbeddingStoreFactory denseFactory = new MilvusEmbeddingStoreFactory(
+                properties(), (verifiedClient, collectionName, dimension) -> { },
+                ignored -> client, (builtClient, collectionName, dimension) -> delegate,
+                v2Provider, provisioner);
+
+        denseFactory.create("templates_html");
+
+        verifyNoInteractions(v2Provider, provisioner);
+        denseFactory.close();
     }
 
     private RagProperties properties() {
