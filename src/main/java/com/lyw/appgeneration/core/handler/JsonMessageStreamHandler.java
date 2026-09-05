@@ -43,7 +43,8 @@ import java.util.function.Supplier;
 public final class JsonMessageStreamHandler {
 
     private static final Set<String> CLIENT_REDACTED_FILE_TOOLS = Set.of(
-            "readFile", "readDir", "writeFile", "modifyFile", "deleteFile");
+            "readFile", "readDir", "writeFile", "modifyFile", "deleteFile",
+            "readSkill");
 
     static final String SUCCESS_MESSAGE = VueTurnFinalizer.SUCCESS_MESSAGE;
     static final String BUILD_FAILED_MESSAGE = VueTurnFinalizer.BUILD_FAILED_MESSAGE;

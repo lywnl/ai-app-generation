@@ -104,7 +104,8 @@ public class AiCodeGeneratorFacade {
     @Resource
     private ModelRequestGate modelRequestGate;
 
-    private final SkillCatalog skillCatalog = new SkillCatalog();
+    @Resource
+    private SkillCatalog skillCatalog = new SkillCatalog();
 
     /**
      * 生成并保存代码
@@ -335,7 +336,7 @@ public class AiCodeGeneratorFacade {
                 turnContext.requiresInitialToolCall());
         if (mutationTurn) {
             tokenStream.turnTransientMessages(
-                    skillCatalog.vueFrontendDesignMessages());
+                    List.of(skillCatalog.metadataMessage()));
         }
         tokenStream.modelRequestGate(modelRequestGate, turnContext);
         tokenStream.toolProtocolRecoveryPolicy(new ToolProtocolRecoveryPolicy(

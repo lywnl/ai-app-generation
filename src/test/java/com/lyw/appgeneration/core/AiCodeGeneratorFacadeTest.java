@@ -197,7 +197,7 @@ class AiCodeGeneratorFacadeTest {
         verify(tokenStream).toolProtocolRecoveryPolicy(policyCaptor.capture());
         assertEquals(Set.of(
                         "writeFile", "readFile", "modifyFile", "deleteFile",
-                        "readDir", "buildProject"),
+                        "readDir", "buildProject", "readSkill"),
                 policyCaptor.getValue().registeredToolNames());
         var internalPolicyCaptor = org.mockito.ArgumentCaptor.forClass(
                 InternalOutputRecoveryPolicy.class);

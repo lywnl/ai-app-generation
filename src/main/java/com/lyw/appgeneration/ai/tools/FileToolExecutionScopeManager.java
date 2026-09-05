@@ -4,6 +4,7 @@ import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildFailureKind;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
+import com.lyw.appgeneration.ai.skill.SkillReadSession;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -51,7 +52,7 @@ public final class FileToolExecutionScopeManager {
         }
         return new FileToolScope(
                 ScopeType.ONLINE, appId, ownerToken, Set.copyOf(allowedTools), lease,
-                null, budgetSession, scopeAuthority);
+                null, budgetSession, new SkillReadSession(), scopeAuthority);
     }
 
     public FileToolScope evaluation(
@@ -62,7 +63,7 @@ public final class FileToolExecutionScopeManager {
         return new FileToolScope(
                 ScopeType.EVALUATION, appId, requireToken(ownerToken),
                 Set.copyOf(allowedTools), null, new EvaluationGate(),
-                budgetGuard.newSession(), scopeAuthority);
+                budgetGuard.newSession(), null, scopeAuthority);
     }
 
     public <T> T callInScope(
@@ -226,6 +227,7 @@ public final class FileToolExecutionScopeManager {
                 VueBuildLease lease,
                 EvaluationGate evaluationGate,
                 FileToolBudgetGuard.Session budgetSession,
+                SkillReadSession skillReadSession,
                 ScopeAuthority authority) {
 
         public FileToolScope {
@@ -235,6 +237,12 @@ public final class FileToolExecutionScopeManager {
                     Objects.requireNonNull(allowedTools, "allowedTools 不能为空"));
             Objects.requireNonNull(authority, "authority 不能为空");
             Objects.requireNonNull(budgetSession, "文件工具预算会话不能为空");
+            if (type == ScopeType.ONLINE && skillReadSession == null) {
+                throw new IllegalArgumentException("在线作用域必须绑定 Skill 读取会话");
+            }
+            if (type == ScopeType.EVALUATION && skillReadSession != null) {
+                throw new IllegalArgumentException("评测作用域不能绑定 Skill 读取会话");
+            }
             if (type == ScopeType.ONLINE && lease == null) {
                 throw new IllegalArgumentException("在线作用域必须绑定精确 Vue 租约");
             }
@@ -245,6 +253,13 @@ public final class FileToolExecutionScopeManager {
                     && (lease != null || evaluationGate == null)) {
                 throw new IllegalArgumentException("评测作用域必须绑定独立生命周期门且不能绑定在线租约");
             }
+        }
+
+        public SkillReadSession skillReadSession() {
+            if (skillReadSession == null) {
+                throw new ScopeViolationException("评测作用域不支持 Skill 读取");
+            }
+            return skillReadSession;
         }
     }
 

@@ -62,6 +62,19 @@ class VueToolExecutionFactTest {
                 .isEmpty());
     }
 
+    @Test
+    void Skill事实只保留名称和状态不保留正文() {
+        String result = SkillToolProtocolSupport.json(
+                SkillToolResult.applied("vue-frontend-design", "绝密Skill正文"));
+
+        VueToolExecutionFact fact = VueToolExecutionFact.parse(
+                "readSkill", result).orElseThrow();
+
+        assertEquals("vue-frontend-design", fact.skillName());
+        assertEquals(VueToolExecutionFact.ExecutionStatus.SUCCEEDED, fact.status());
+        assertNull(fact.relativePath());
+    }
+
     private String fileResult(
             String operation, String path, boolean changed, String content) {
         return "{\"protocol\":\"file-tool/v1\","

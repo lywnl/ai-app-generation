@@ -10,21 +10,14 @@ import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.regex.Pattern;
 
 /** 从 classpath 加载并校验内置 SKILL.md；不读取外部路径或远程资源。 */
 public final class SkillLoader {
 
     private static final int MAX_SKILL_BYTES = 64 * 1024;
-    private static final Pattern VALID_NAME =
-            Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
-
+    private static final int MAX_FRONTMATTER_BYTES = 8 * 1024;
     public SkillDefinition loadFromClasspath(String resourcePath) {
-        Objects.requireNonNull(resourcePath, "Skill 资源路径不能为空");
-        if (!resourcePath.endsWith("/SKILL.md")) {
-            throw new IllegalArgumentException(
-                    "Skill 资源必须指向 SKILL.md：" + resourcePath);
-        }
+        validateResourcePath(resourcePath);
         try (InputStream input = SkillLoader.class.getClassLoader()
                 .getResourceAsStream(resourcePath)) {
             if (input == null) {
@@ -38,16 +31,48 @@ public final class SkillLoader {
             }
             SkillDefinition definition = parse(
                     decodeUtf8(bytes));
-            String directoryName = skillDirectoryName(resourcePath);
-            if (!directoryName.equals(definition.name())) {
-                throw new IllegalArgumentException(
-                        "Skill name 必须与目录名一致：" + directoryName);
-            }
+            validateDirectoryName(resourcePath, definition.name());
             return definition;
         } catch (IOException exception) {
             throw new UncheckedIOException("读取 Skill 资源失败：" + resourcePath,
                     exception);
         }
+    }
+
+    /** 只读取有界 frontmatter，启动注册流程不得加载正文。 */
+    public SkillMetadata loadMetadataFromClasspath(String resourcePath) {
+        validateResourcePath(resourcePath);
+        try (InputStream input = SkillLoader.class.getClassLoader()
+                .getResourceAsStream(resourcePath)) {
+            if (input == null) {
+                throw new IllegalArgumentException("Skill 资源不存在：" + resourcePath);
+            }
+            byte[] bytes = input.readNBytes(MAX_FRONTMATTER_BYTES + 1);
+            if (bytes.length > MAX_FRONTMATTER_BYTES) {
+                throw new IllegalArgumentException("Skill frontmatter 超过大小上限");
+            }
+            String source = decodeUtf8(bytes);
+            int end = source.indexOf("\n---\n", 4);
+            if (!source.startsWith("---\n") || end < 0) {
+                throw new IllegalArgumentException("Skill frontmatter 不完整");
+            }
+            SkillMetadata metadata = parseMetadata(source.substring(4, end), resourcePath);
+            validateDirectoryName(resourcePath, metadata.name());
+            return metadata;
+        } catch (IOException exception) {
+            throw new UncheckedIOException("读取 Skill 元数据失败：" + resourcePath,
+                    exception);
+        }
+    }
+
+    public SkillDefinition loadDefinitionFromClasspath(SkillMetadata metadata) {
+        Objects.requireNonNull(metadata, "Skill 元数据不能为空");
+        SkillDefinition definition = loadFromClasspath(metadata.resourcePath());
+        if (!metadata.name().equals(definition.name())
+                || !metadata.description().equals(definition.description())) {
+            throw new IllegalArgumentException("Skill 元数据与正文不一致：" + metadata.name());
+        }
+        return definition;
     }
 
     private String decodeUtf8(byte[] bytes) {
@@ -84,6 +109,14 @@ public final class SkillLoader {
         }
         String frontmatter = source.substring(4, end);
         String body = source.substring(end + 5).strip();
+        SkillMetadata metadata = parseMetadata(frontmatter, null);
+        if (body.isBlank()) {
+            throw new IllegalArgumentException("Skill 正文不能为空");
+        }
+        return SkillDefinition.of(metadata.name(), metadata.description(), body);
+    }
+
+    private SkillMetadata parseMetadata(String frontmatter, String resourcePath) {
         String name = null;
         String description = null;
         List<String> descriptionLines = new ArrayList<>();
@@ -93,11 +126,10 @@ public final class SkillLoader {
                 name = value(line.substring("name:".length()));
                 collectingDescription = false;
             } else if (line.startsWith("description:")) {
-                String value = line.substring("description:".length()).strip();
-                collectingDescription = value.equals(">")
-                        || value.equals("|");
+                String raw = line.substring("description:".length()).strip();
+                collectingDescription = raw.equals(">") || raw.equals("|");
                 if (!collectingDescription) {
-                    description = value(value);
+                    description = value(raw);
                 }
             } else if (collectingDescription && !line.isBlank()) {
                 descriptionLines.add(line.strip());
@@ -106,16 +138,23 @@ public final class SkillLoader {
         if (description == null && !descriptionLines.isEmpty()) {
             description = String.join(" ", descriptionLines);
         }
-        if (name == null || !VALID_NAME.matcher(name).matches()) {
-            throw new IllegalArgumentException("Skill name 不合法：" + name);
+        String path = resourcePath == null ? "skills/" + name + "/SKILL.md" : resourcePath;
+        return new SkillMetadata(name, description, path);
+    }
+
+    private void validateResourcePath(String resourcePath) {
+        Objects.requireNonNull(resourcePath, "Skill 资源路径不能为空");
+        if (!resourcePath.endsWith("/SKILL.md") || resourcePath.startsWith("/")
+                || resourcePath.contains("\\") || resourcePath.contains("..")) {
+            throw new IllegalArgumentException("Skill 资源路径不合法：" + resourcePath);
         }
-        if (description == null || description.isBlank()) {
-            throw new IllegalArgumentException("Skill description 不能为空");
+    }
+
+    private void validateDirectoryName(String resourcePath, String name) {
+        if (!skillDirectoryName(resourcePath).equals(name)) {
+            throw new IllegalArgumentException("Skill name 必须与目录名一致："
+                    + skillDirectoryName(resourcePath));
         }
-        if (body.isBlank()) {
-            throw new IllegalArgumentException("Skill 正文不能为空");
-        }
-        return SkillDefinition.of(name, description, body);
     }
 
     private String value(String raw) {

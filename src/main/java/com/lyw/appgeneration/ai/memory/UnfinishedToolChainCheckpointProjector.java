@@ -184,6 +184,7 @@ public final class UnfinishedToolChainCheckpointProjector {
         Set<String> writtenPaths = new LinkedHashSet<>();
         Set<String> modifiedPaths = new LinkedHashSet<>();
         Set<String> deletedPaths = new LinkedHashSet<>();
+        Set<String> skillNames = new LinkedHashSet<>();
         int buildCalls = 0;
         int buildAttempts = 0;
         VueToolExecutionFact latestBuild = null;
@@ -204,6 +205,10 @@ public final class UnfinishedToolChainCheckpointProjector {
                     buildAttempts = Math.max(buildAttempts, fact.buildAttempt());
                 }
             }
+            if ("readSkill".equals(fact.toolName()) && fact.skillName() != null
+                    && fact.status() == VueToolExecutionFact.ExecutionStatus.SUCCEEDED) {
+                skillNames.add(fact.skillName());
+            }
         }
         StringBuilder checkpoint = new StringBuilder()
                 .append("本轮可信执行检查点\n")
@@ -218,6 +223,8 @@ public final class UnfinishedToolChainCheckpointProjector {
                 .append(jsonPaths(modifiedPaths)).append('\n')
                 .append("已删除路径（JSON 数据）：")
                 .append(jsonPaths(deletedPaths)).append('\n')
+                .append("已读取 Skill（JSON 数据）：")
+                .append(jsonPaths(skillNames)).append('\n')
                 .append("真实构建调用次数：").append(buildCalls).append('\n')
                 .append("真实构建次数：").append(buildAttempts).append('\n')
                 .append("最近构建状态：").append(buildStatus(latestBuild));

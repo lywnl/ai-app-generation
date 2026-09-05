@@ -13,6 +13,7 @@ export interface ToolArgView {
   oldContent?: string
   newContent?: string
   content?: string
+  skillName?: string
   [key: string]: unknown
 }
 
@@ -488,6 +489,7 @@ function displayArgument(value: unknown): unknown {
 function isVisibleToolArgument(toolName: string, key: string): boolean {
   if (toolName === 'readFile') return key === 'relativeFilePath'
   if (toolName === 'readDir') return key === 'relativeDirPath'
+  if (toolName === 'readSkill') return key === 'skillName'
   return true
 }
 
@@ -532,6 +534,30 @@ function matchingToolCall(
 }
 
 function sanitizeToolResult(toolName: string, result: string): string | undefined {
+  if (toolName === 'readSkill') {
+    const parsed = parseRecord(result)
+    if (
+      !parsed || !hasExactFields(parsed, [
+        'protocol', 'operation', 'status', 'skillName',
+        'message', 'failureReason', 'content',
+      ]) ||
+      parsed.protocol !== 'skill-tool/v1' || parsed.operation !== 'readSkill' ||
+      !['APPLIED', 'NOT_FOUND', 'REJECTED', 'FAILED'].includes(String(parsed.status)) ||
+      !isNonEmptyString(parsed.skillName) ||
+      !isNonEmptyString(parsed.message) ||
+      (parsed.failureReason !== null && typeof parsed.failureReason !== 'string') ||
+      parsed.content !== null
+    ) return undefined
+    return JSON.stringify({
+      protocol: parsed.protocol,
+      operation: parsed.operation,
+      status: parsed.status,
+      skillName: parsed.skillName,
+      message: parsed.message,
+      failureReason: parsed.failureReason,
+      content: null,
+    })
+  }
   if (toolName !== 'readFile' && toolName !== 'readDir') return result
   const parsed = parseRecord(result)
   if (

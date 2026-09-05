@@ -319,6 +319,30 @@ describe('generationSession generation-stream/v1 状态机', () => {
     expect(snapshot?.content).toBe('保留工具已执行')
   })
 
+  it('readSkill 工具卡片只显示名称并丢弃正文', async () => {
+    const snapshot = await runSession([
+      structuredTool(1, '1', {
+        type: 'tool_request', id: 'skill-1', name: 'readSkill',
+      }),
+      structuredTool(2, '1', {
+        type: 'tool_executed', id: 'skill-1', name: 'readSkill',
+        arguments: '{"skillName":"vue-frontend-design"}',
+        result: JSON.stringify({
+          protocol: 'skill-tool/v1', operation: 'readSkill', status: 'APPLIED',
+          skillName: 'vue-frontend-design', message: 'Skill 正文已加载',
+          failureReason: null, content: null,
+        }),
+      }),
+      outcome(3, 'ANSWERED', false),
+      done(4),
+    ])
+
+    const card = snapshot?.toolCalls.get('skill-1')
+    expect(card?.args.skillName).toBe('vue-frontend-design')
+    expect(card?.result).toContain('"content":null')
+    expect(card?.result).not.toContain('SKILL.md')
+  })
+
   it('按 Unicode 码点回滚 emoji 且 codePoints=0 合法', async () => {
     const emoji = await runSession([
       vueMessage(1, 'ai_text', '保留😀泄漏', '1'),

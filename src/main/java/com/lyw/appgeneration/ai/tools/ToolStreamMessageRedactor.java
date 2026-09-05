@@ -13,6 +13,7 @@ public final class ToolStreamMessageRedactor {
     private static final Map<String, String> SAFE_PATH_ARGUMENTS = Map.of(
             "readFile", "relativeFilePath",
             "readDir", "relativeDirPath",
+            "readSkill", "skillName",
             "writeFile", "relativeFilePath",
             "modifyFile", "relativeFilePath",
             "deleteFile", "relativeFilePath");
@@ -44,7 +45,8 @@ public final class ToolStreamMessageRedactor {
     public static String safeResult(
             String toolName, String safeArguments, String rawResult) {
         if (!READ_TOOLS.contains(toolName)) {
-            return rawResult;
+            return "readSkill".equals(toolName)
+                    ? safeSkillResult(rawResult) : rawResult;
         }
         String pathArgument = SAFE_PATH_ARGUMENTS.get(toolName);
         String relativePath = null;
@@ -55,5 +57,13 @@ public final class ToolStreamMessageRedactor {
         }
         return FileToolProtocolSupport.clientSafeReadResult(
                 rawResult, toolName, relativePath);
+    }
+
+    private static String safeSkillResult(String rawResult) {
+        try {
+            return SkillToolProtocolSupport.clientSafeResult(rawResult);
+        } catch (RuntimeException exception) {
+            return null;
+        }
     }
 }

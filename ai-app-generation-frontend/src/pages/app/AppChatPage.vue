@@ -84,9 +84,11 @@
                     }"
                   >
                     <div class="tool-call-header">
-                      <span class="tool-call-name">{{ view.name }}</span>
-                      <span v-if="view.args.relativeFilePath" class="tool-call-path">
-                        {{ view.args.relativeFilePath }}
+                      <span class="tool-call-name">{{
+                        view.name === 'readSkill' ? '读取 Skill' : view.name
+                      }}</span>
+                      <span v-if="view.args.relativeFilePath || view.args.skillName" class="tool-call-path">
+                        {{ view.args.relativeFilePath || view.args.skillName }}
                       </span>
                       <span
                         v-if="view.name !== 'buildProject'"

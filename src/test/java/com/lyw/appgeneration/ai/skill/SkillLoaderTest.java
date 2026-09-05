@@ -13,6 +13,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SkillLoaderTest {
 
     @Test
+    void 元数据加载只返回frontmatter而不包含正文() {
+        SkillMetadata metadata = new SkillLoader()
+                .loadMetadataFromClasspath("skills/vue-frontend-design/SKILL.md");
+
+        assertEquals("vue-frontend-design", metadata.name());
+        assertTrue(metadata.description().contains("Vue 3"));
+        assertEquals("skills/vue-frontend-design/SKILL.md", metadata.resourcePath());
+        assertFalse(metadata.description().contains("把用户的业务主题"));
+    }
+
+    @Test
     void 能读取内置Vue前端设计Skill并保留项目边界() {
         SkillDefinition definition = new SkillLoader()
                 .loadFromClasspath("skills/vue-frontend-design/SKILL.md");

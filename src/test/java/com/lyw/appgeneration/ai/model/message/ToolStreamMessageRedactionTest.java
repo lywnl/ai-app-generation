@@ -76,6 +76,22 @@ class ToolStreamMessageRedactionTest {
         assertFalse(JSONUtil.toJsonStr(client).contains("泄漏正文"));
     }
 
+    @Test
+    void readSkillClientCopyKeepsOnlyNameAndRemoves正文() {
+        String secret = "Skill正文机密-3a9f";
+        ToolExecutedMessage client = message(
+                "readSkill", "{\"skillName\":\"vue-frontend-design\"}",
+                "{\"protocol\":\"skill-tool/v1\",\"operation\":\"readSkill\","
+                + "\"status\":\"APPLIED\",\"skillName\":\"vue-frontend-design\","
+                + "\"message\":\"Skill 正文已加载\",\"failureReason\":null,\"content\":\""
+                + secret + "\"}").toClientSafeCopy();
+
+        assertTrue(client.getArguments().contains("vue-frontend-design"));
+        assertEquals(cn.hutool.json.JSONNull.NULL,
+                JSONUtil.parseObj(client.getResult()).get("content"));
+        assertFalse(JSONUtil.toJsonStr(client).contains(secret));
+    }
+
     private ToolExecutedMessage message(
             String name, String arguments, String result) {
         ToolExecutionRequest request = ToolExecutionRequest.builder()

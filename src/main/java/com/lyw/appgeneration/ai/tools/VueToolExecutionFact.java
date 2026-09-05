@@ -21,6 +21,7 @@ public final class VueToolExecutionFact {
     private final ExecutionStatus status;
     private final Integer buildAttempt;
     private final String buildErrorSummary;
+    private final String skillName;
 
     private VueToolExecutionFact(
             String toolName,
@@ -28,13 +29,15 @@ public final class VueToolExecutionFact {
             String changedRelativePath,
             ExecutionStatus status,
             Integer buildAttempt,
-            String buildErrorSummary) {
+            String buildErrorSummary,
+            String skillName) {
         this.toolName = Objects.requireNonNull(toolName, "工具名不能为空");
         this.relativePath = relativePath;
         this.changedRelativePath = changedRelativePath;
         this.status = Objects.requireNonNull(status, "工具状态不能为空");
         this.buildAttempt = buildAttempt;
         this.buildErrorSummary = buildErrorSummary;
+        this.skillName = skillName;
     }
 
     public static Optional<VueToolExecutionFact> parse(
@@ -43,6 +46,10 @@ public final class VueToolExecutionFact {
             if ("buildProject".equals(toolName)) {
                 return Optional.of(fromBuildResult(
                         BuildProjectProtocolSupport.parse(rawResult)));
+            }
+            if ("readSkill".equals(toolName)) {
+                return Optional.of(fromSkillResult(
+                        SkillToolProtocolSupport.parse(rawResult)));
             }
             if (!FILE_TOOLS.contains(toolName)) {
                 return Optional.empty();
@@ -59,7 +66,7 @@ public final class VueToolExecutionFact {
         String changedPath = result.changed() ? path : null;
         return new VueToolExecutionFact(
                 result.operation(), path, changedPath,
-                fileStatus(result.status()), null, null);
+                fileStatus(result.status()), null, null, null);
     }
 
     private static String trustedObservedPath(FileToolResult result) {
@@ -81,7 +88,22 @@ public final class VueToolExecutionFact {
             BuildProjectToolResult result) {
         return new VueToolExecutionFact(
                 "buildProject", null, null, buildStatus(result),
-                result.attempt(), structuredBuildErrorSummary(result));
+                result.attempt(), structuredBuildErrorSummary(result), null);
+    }
+
+    private static VueToolExecutionFact fromSkillResult(SkillToolResult result) {
+        return new VueToolExecutionFact(
+                "readSkill", null, null, skillStatus(result.status()), null,
+                null, result.skillName());
+    }
+
+    private static ExecutionStatus skillStatus(SkillToolResult.Status status) {
+        return switch (status) {
+            case APPLIED -> ExecutionStatus.SUCCEEDED;
+            case NOT_FOUND -> ExecutionStatus.NOT_FOUND;
+            case REJECTED -> ExecutionStatus.REJECTED;
+            case FAILED -> ExecutionStatus.FAILED;
+        };
     }
 
     private static ExecutionStatus fileStatus(
@@ -182,6 +204,10 @@ public final class VueToolExecutionFact {
 
     public String buildErrorSummary() {
         return buildErrorSummary;
+    }
+
+    public String skillName() {
+        return skillName;
     }
 
     public boolean isRead() {
