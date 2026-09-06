@@ -12,6 +12,7 @@ import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import com.mybatisflex.core.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -979,12 +980,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     }
 
     @Override
-    public String getRequiredSummary(
-            Long appId, long summarizedThroughId) {
+    public MemorySummarySnapshot readSnapshot(Long appId) {
         requirePositiveId(appId, "应用 ID");
-        if (summarizedThroughId <= 0L) {
-            throw new IllegalArgumentException("摘要边界必须为正数");
-        }
         AppDataLifecycleFence.WriterPermit writerPermit =
                 lifecycleFence.tryAcquireWriter(appId);
         if (writerPermit == null) {
@@ -997,12 +994,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             String summary = current == null
                     ? "" : StrUtil.nullToEmpty(current.getSummary());
             long cursor = currentCursor(current);
-            if (cursor < summarizedThroughId
-                    || !MemorySummaryContract.isUsablePersistedState(
-                    summary, cursor, tokenEstimator)) {
-                throw new IllegalStateException("L1 摘要未覆盖指定边界");
-            }
-            return summary;
+            return cursor == 0L ? MemorySummarySnapshot.empty()
+                    : new MemorySummarySnapshot(summary, cursor);
         }
     }
 
@@ -1017,20 +1010,11 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
 
     @Override
     public long lastSummarizedId(Long appId) {
-        requirePositiveId(appId, "应用 ID");
-        AppDataLifecycleFence.WriterPermit writerPermit =
-                lifecycleFence.tryAcquireWriter(appId);
-        if (writerPermit == null) {
-            throw new IllegalStateException("应用删除流程已接管，无法读取摘要游标");
-        }
-        try (writerPermit) {
-            try {
-                return currentCursor(selectCurrentSummary(appId));
-            } catch (RuntimeException exception) {
-                throw new IllegalStateException(
-                        "读取 L1 摘要游标失败，appId=" + appId,
-                        exception);
-            }
+        try {
+            return readSnapshot(appId).lastSummarizedId();
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(
+                    "读取 L1 摘要游标失败，appId=" + appId, exception);
         }
     }
 

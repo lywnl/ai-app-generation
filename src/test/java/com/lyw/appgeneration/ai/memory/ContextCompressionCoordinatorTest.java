@@ -10,6 +10,7 @@ import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import com.lyw.appgeneration.service.UserMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -1464,8 +1465,8 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void nextAdmissionAppliesCompletedL1CursorBeforeThresholdDecision() {
         try (Fixture fixture = fixture(29_000, 29_000)) {
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenAnswer(invocation -> {
                         List<ChatMessage> messages = invocation.getArgument(0);
@@ -1503,14 +1504,14 @@ class ContextCompressionCoordinatorTest {
             fixture.properties().setBlockingTimeout(Duration.ofMillis(50L));
             DeadlineMemory deadlineMemory = deadlineMemory(
                     fixture.summaryService(), mock(UserMemoryService.class));
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             LockBeforeInvocationGate gate = new LockBeforeInvocationGate(
                     deadlineMemory.store(), lockOwner);
             org.mockito.Mockito.doAnswer(invocation -> {
                 gate.lockBeforeNextInvocation();
-                return VALID_SUMMARY;
-            }).when(fixture.summaryService()).getRequiredSummary(7L, 2L);
+                return 29_000;
+            }).when(fixture.estimator()).estimateRequest(anyList(), anyList());
             List<ChatMessage> before = deadlineMemory.delegate().messages();
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -1533,8 +1534,8 @@ class ContextCompressionCoordinatorTest {
                     .messages();
             assertTrue(fixture.memory()
                     .removeCompletedPrefixIfMatches(coveredPrefix));
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 1)).thenReturn(List.of(
                     new ChatHistoryService.StableTurnBoundary(
@@ -1558,7 +1559,7 @@ class ContextCompressionCoordinatorTest {
                     .map(UserMessage.class::cast)
                     .anyMatch(message -> message.hasSingleText()
                             && "新问题".equals(message.singleText())));
-            verify(fixture.summaryService()).getRequiredSummary(7L, 2L);
+            verify(fixture.summaryService()).readSnapshot(7L);
             verify(fixture.summaryService(), never()).getCurrentSummary(7L);
         }
     }
@@ -1566,7 +1567,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void cursorReadFailureStopsAdmissionBeforeAnyThresholdDecision() {
         try (Fixture fixture = fixture(49_151, 49_151)) {
-            when(fixture.summaryService().lastSummarizedId(7L))
+            when(fixture.summaryService().readSnapshot(7L))
                     .thenThrow(new IllegalStateException("database down"));
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -1586,8 +1587,8 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void initialAlignmentMysqlReadFailureIsDependencyFailure() {
         try (Fixture fixture = fixture(27_000, 27_000)) {
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             when(fixture.historyService().listRecentCompleteTurnBoundaries(
                     7L, 2)).thenThrow(new IllegalStateException("mysql down"));
 
@@ -1599,7 +1600,7 @@ class ContextCompressionCoordinatorTest {
                     result.failureReason());
             assertFalse(result.canProceed());
             verify(fixture.summaryService(), never())
-                    .getRequiredSummary(anyLong(), anyLong());
+                    .readRequiredSnapshot(anyLong(), anyLong());
         }
     }
 
@@ -1620,28 +1621,27 @@ class ContextCompressionCoordinatorTest {
     }
 
     @org.junit.jupiter.api.Test
-    void initialStrictSummaryReadFailureIsDependencyFailure() {
+    void initialInvalidSummaryFailsClosedBeforeTrimming() {
         try (Fixture fixture = fixture(27_000, 27_000)) {
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
-            when(fixture.summaryService().getRequiredSummary(7L, 2L))
-                    .thenThrow(new IllegalStateException("database down"));
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot("无效摘要", 2L));
 
             ContextAdmissionResult result = fixture.coordinator().admit(
                     fixture.memory(), List.of());
 
             assertEquals(ContextCompressionMode.ADMISSION_FAILED, result.mode());
-            assertEquals(ContextAdmissionResult.FailureReason.DEPENDENCY_FAILED,
+            assertEquals(ContextAdmissionResult.FailureReason.SUMMARY_READ_FAILED,
                     result.failureReason());
             assertFalse(result.canProceed());
+            assertEquals(2, fixture.memory().completeTurnSnapshot().completedTurns().size());
         }
     }
 
     @org.junit.jupiter.api.Test
     void initialRequestEstimateFailureIsDependencyFailure() {
         try (Fixture fixture = fixture(27_000, 27_000)) {
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             when(fixture.estimator().estimateRequest(anyList(), anyList()))
                     .thenThrow(new IllegalStateException("tokenizer down"));
 
@@ -1658,16 +1658,16 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void initialPrefixChangeIsNotMisreportedAsSummaryReadFailure() {
         try (Fixture fixture = fixture(27_000, 27_000)) {
-            when(fixture.summaryService().lastSummarizedId(7L))
-                    .thenReturn(2L);
+            when(fixture.summaryService().readSnapshot(7L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             org.mockito.Mockito.doAnswer(invocation -> {
                 List<ChatMessage> completedPrefix = fixture.memory()
                         .completeTurnSnapshot().completedTurns().getFirst()
                         .messages();
                 assertTrue(fixture.memory()
                         .removeCompletedPrefixIfMatches(completedPrefix));
-                return VALID_SUMMARY;
-            }).when(fixture.summaryService()).getRequiredSummary(7L, 2L);
+                return 27_000;
+            }).when(fixture.estimator()).estimateRequest(anyList(), anyList());
 
             ContextAdmissionResult result = fixture.coordinator().admit(
                     fixture.memory(), List.of());
@@ -1807,7 +1807,7 @@ class ContextCompressionCoordinatorTest {
                     result.failureReason());
             assertFalse(result.canProceed());
             assertTrue(transitions.isEmpty());
-            verify(fixture.summaryService(), never()).lastSummarizedId(7L);
+            verify(fixture.summaryService(), never()).readSnapshot(7L);
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
             verify(fixture.estimator(), never())
@@ -1829,7 +1829,7 @@ class ContextCompressionCoordinatorTest {
                     result.failureReason());
             assertFalse(result.canProceed());
             assertTrue(transitions.isEmpty());
-            verify(fixture.summaryService(), never()).lastSummarizedId(7L);
+            verify(fixture.summaryService(), never()).readSnapshot(7L);
             verify(fixture.summaryService(), never()).compressNow(
                     any(), any(Long.class), any(Duration.class));
             verify(fixture.estimator(), never())
@@ -1878,10 +1878,10 @@ class ContextCompressionCoordinatorTest {
         try (Fixture fixture = fixture(29_000, 29_000)) {
             TestContinuationGate continuationGate =
                     new TestContinuationGate();
-            when(fixture.summaryService().lastSummarizedId(7L))
+            when(fixture.summaryService().readSnapshot(7L))
                     .thenAnswer(invocation -> {
                         continuationGate.revoke();
-                        return 2L;
+                        return new MemorySummarySnapshot(VALID_SUMMARY, 2L);
                     });
             List<ChatMessage> before = fixture.memory()
                     .completeTurnSnapshot().completedTurns().stream()
@@ -2137,8 +2137,8 @@ class ContextCompressionCoordinatorTest {
                     deadlineMemory.store(), lockOwner);
             org.mockito.Mockito.doAnswer(invocation -> {
                 gate.lockBeforeNextInvocation();
-                return VALID_SUMMARY;
-            }).when(fixture.summaryService()).getRequiredSummary(7L, 2L);
+                return new MemorySummarySnapshot(VALID_SUMMARY, 2L);
+            }).when(fixture.summaryService()).readRequiredSnapshot(7L, 2L);
             List<ChatMessage> before = deadlineMemory.delegate().messages();
             Future<ContextAdmissionResult> admission = admissionExecutor.submit(
                     () -> coordinator.admit(deadlineMemory.memory(), List.of(),
@@ -2201,8 +2201,8 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void strictSummaryBlankNeverTrimsL0() {
         try (Fixture fixture = fixture(57_344, 27_000)) {
-            when(fixture.summaryService().getRequiredSummary(7L, 2L))
-                    .thenReturn(" ");
+            when(fixture.summaryService().readRequiredSnapshot(7L, 2L))
+                    .thenReturn(MemorySummarySnapshot.empty());
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
                     .completedTurns().stream()
                     .flatMap(turn -> turn.messages().stream())
@@ -2223,8 +2223,8 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void strictSummaryInvalidFormatNeverTrimsL0() {
         try (Fixture fixture = fixture(57_344, 27_000)) {
-            when(fixture.summaryService().getRequiredSummary(7L, 2L))
-                    .thenReturn("不是五段式摘要");
+            when(fixture.summaryService().readRequiredSnapshot(7L, 2L))
+                    .thenReturn(new MemorySummarySnapshot("不是五段式摘要", 2L));
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
                     .completedTurns().stream()
                     .flatMap(turn -> turn.messages().stream())
@@ -2244,7 +2244,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void strictSummaryReadExceptionNeverTrimsL0() {
         try (Fixture fixture = fixture(57_344, 27_000)) {
-            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+            when(fixture.summaryService().readRequiredSnapshot(7L, 2L))
                     .thenThrow(new IllegalStateException("database down"));
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
                     .completedTurns().stream()
@@ -2347,7 +2347,7 @@ class ContextCompressionCoordinatorTest {
                     new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch releaseRead =
                     new java.util.concurrent.CountDownLatch(1);
-            when(fixture.summaryService().getRequiredSummary(7L, 2L))
+            when(fixture.summaryService().readRequiredSnapshot(7L, 2L))
                     .thenAnswer(invocation -> {
                         readStarted.countDown();
                         boolean interrupted = false;
@@ -2364,7 +2364,7 @@ class ContextCompressionCoordinatorTest {
                         if (interrupted) {
                             Thread.currentThread().interrupt();
                         }
-                        return VALID_SUMMARY;
+                        return new MemorySummarySnapshot(VALID_SUMMARY, 2L);
                     });
             List<ChatMessage> before = fixture.memory().completeTurnSnapshot()
                     .completedTurns().stream()
@@ -2500,7 +2500,7 @@ class ContextCompressionCoordinatorTest {
             String userText = ((UserMessage) messages.getFirst()).singleText();
             return "旧问题".equals(userText) ? 13_000 : 12_000;
         });
-        when(summaryService.lastSummarizedId(7L)).thenReturn(0L);
+        when(summaryService.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
         when(historyService.listRecentCompleteTurnBoundaries(7L, 2))
                 .thenReturn(List.of(
                         new ChatHistoryService.StableTurnBoundary(
@@ -2512,8 +2512,8 @@ class ContextCompressionCoordinatorTest {
                 .thenReturn(new MemoryCompressionResult(
                         MemoryCompressionResult.Status.COMPRESSED,
                         2L, 800, "完成"));
-        when(summaryService.getRequiredSummary(7L, 2L))
-                .thenReturn(VALID_SUMMARY);
+        when(summaryService.readRequiredSnapshot(7L, 2L))
+                .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
         MemoryCompressionMetricsCollector metricsCollector =
                 new MemoryCompressionMetricsCollector(registry);
         ContextCompressionCoordinator coordinator =

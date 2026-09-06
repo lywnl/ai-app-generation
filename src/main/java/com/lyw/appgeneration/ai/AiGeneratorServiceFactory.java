@@ -197,7 +197,7 @@ public class AiGeneratorServiceFactory {
         // 冷启动按完整回合回填到 30K；L1/L2 由最外层装饰器注入。
         long lastSummarizedId;
         try {
-            lastSummarizedId = memorySummaryService.lastSummarizedId(appId);
+            lastSummarizedId = memorySummaryService.readSnapshot(appId).lastSummarizedId();
         } catch (RuntimeException exception) {
             recordVueColdRebuild(
                     VueBuildRepairMetricsCollector.MemoryResult.FAILED,

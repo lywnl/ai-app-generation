@@ -36,6 +36,7 @@ import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.V;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import com.lyw.appgeneration.service.UserMemoryService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -101,7 +102,7 @@ class ContextCompressionModelRequestGateTest {
         MemorySummaryService summaryService = mock(MemorySummaryService.class);
         UserMemoryService userMemoryService = mock(UserMemoryService.class);
         when(summaryService.getCurrentSummary(appId)).thenReturn("");
-        when(summaryService.lastSummarizedId(appId)).thenReturn(0L);
+        when(summaryService.readSnapshot(appId)).thenReturn(MemorySummarySnapshot.empty());
         when(userMemoryService.recallByApp(appId)).thenReturn("");
         CompressionAwareChatMemory memory = new CompressionAwareChatMemory(
                 new TokenAwareChatMemory(delegate), summaryService,
@@ -739,8 +740,7 @@ class ContextCompressionModelRequestGateTest {
                         request.messages(), "冷启动后的当前问题"));
                 assertFalse(containsText(
                         request.messages(), fixture.oldUser()));
-                verify(fixture.summaryService()).getRequiredSummary(
-                        RealGateFixture.APP_ID, 2L);
+                verify(fixture.summaryService()).readSnapshot(RealGateFixture.APP_ID);
             } finally {
                 stream.cancel();
             }
@@ -960,7 +960,7 @@ class ContextCompressionModelRequestGateTest {
                     "真实协调器必须裁剪已摘要的旧完整回合");
             assertTrue(containsText(request.messages(), fixture.recentUser()));
             assertTrue(containsText(request.messages(), "本轮问题"));
-            verify(fixture.summaryService()).getRequiredSummary(7L, 2L);
+            verify(fixture.summaryService()).readRequiredSnapshot(7L, 2L);
             stream.cancel();
         }
     }
@@ -1022,7 +1022,7 @@ class ContextCompressionModelRequestGateTest {
             assertTrue(containsTextFragment(
                             secondRequest.messages(), VALID_SUMMARY),
                     "工具续调必须复用协调器审核过的严格 L1 快照");
-            verify(fixture.summaryService()).getRequiredSummary(7L, 2L);
+            verify(fixture.summaryService()).readRequiredSnapshot(7L, 2L);
             stream.cancel();
         }
     }
@@ -1315,9 +1315,9 @@ class ContextCompressionModelRequestGateTest {
                     recentTurnTokens - recentUser.length());
             properties.setBlockingTimeout(Duration.ofSeconds(5));
             when(summaryService.getCurrentSummary(APP_ID)).thenReturn("");
-            when(summaryService.getRequiredSummary(APP_ID, 2L))
-                    .thenReturn(VALID_SUMMARY);
-            when(summaryService.lastSummarizedId(APP_ID)).thenReturn(0L);
+            when(summaryService.readRequiredSnapshot(APP_ID, 2L))
+                    .thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
+            when(summaryService.readSnapshot(APP_ID)).thenReturn(MemorySummarySnapshot.empty());
             when(userMemoryService.recallByApp(APP_ID)).thenReturn("");
             when(historyService.listRecentCompleteTurnBoundaries(APP_ID, 2))
                     .thenReturn(List.of(
@@ -1401,7 +1401,7 @@ class ContextCompressionModelRequestGateTest {
             List<ChatMessage> oldTurn = memory.completeTurnSnapshot()
                     .completedTurns().getFirst().messages();
             assertTrue(memory.removeCompletedPrefixIfMatches(oldTurn));
-            when(summaryService.lastSummarizedId(APP_ID)).thenReturn(2L);
+            when(summaryService.readSnapshot(APP_ID)).thenReturn(new MemorySummarySnapshot(VALID_SUMMARY, 2L));
             when(historyService.listRecentCompleteTurnBoundaries(APP_ID, 1))
                     .thenReturn(List.of(
                             new ChatHistoryService.StableTurnBoundary(

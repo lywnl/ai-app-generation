@@ -14,6 +14,7 @@ import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import dev.langchain4j.model.chat.ChatModel;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -1215,6 +1216,94 @@ class MemorySummaryServiceImplTest {
                         .build());
 
         assertEquals(databaseSummary, service.getCurrentSummary(1L));
+    }
+
+    @Test
+    void 摘要快照从同一次数据库读取获取正文与游标且不访问缓存() {
+        String summary = textWithTokens("同版摘要", 800);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(
+                currentSummary(42L, summary, 800, 0),
+                currentSummary(50L, textWithTokens("下一版摘要", 900), 900, 0));
+
+        MemorySummarySnapshot snapshot = service.readSnapshot(1L);
+
+        assertEquals(new MemorySummarySnapshot(summary, 42L), snapshot);
+        verify(summaryMapper, times(1)).selectOneByQuery(any());
+        verifyNoInteractions(redisTemplate, valueOps);
+    }
+
+    @Test
+    void 无持久化摘要时返回空快照() {
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+
+        assertEquals(MemorySummarySnapshot.empty(), service.readSnapshot(1L));
+        verifyNoInteractions(redisTemplate, valueOps);
+    }
+
+    @Test
+    void 损坏或超预算摘要必须同时清空正文与有效游标() {
+        for (String summary : List.of("损坏的摘要", textWithTokens("超预算摘要", 4_000))) {
+            AppMemorySummary persisted = currentSummary(42L, summary, 100, 0);
+            persisted.setSummary(summary);
+            when(summaryMapper.selectOneByQuery(any())).thenReturn(persisted);
+
+            assertEquals(MemorySummarySnapshot.empty(), service.readSnapshot(1L));
+        }
+    }
+
+    @Test
+    void 严格快照允许覆盖超过目标边界但必须返回实际游标() {
+        String summary = textWithTokens("已覆盖更多回合", 800);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(
+                currentSummary(50L, summary, 800, 0));
+
+        assertEquals(new MemorySummarySnapshot(summary, 50L),
+                service.readRequiredSnapshot(1L, 42L));
+        verify(summaryMapper, times(1)).selectOneByQuery(any());
+        verifyNoInteractions(redisTemplate, valueOps);
+    }
+
+    @Test
+    void 严格快照未覆盖目标时必须拒绝且不能回退到缓存() {
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(
+                currentSummary(40L, textWithTokens("尚未覆盖", 800), 800, 0));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.readRequiredSnapshot(1L, 42L));
+        verifyNoInteractions(redisTemplate, valueOps);
+    }
+
+    @Test
+    void 严格快照拒绝无摘要或非法目标() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.readRequiredSnapshot(1L, 0L));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.readRequiredSnapshot(1L, -1L));
+        verifyNoInteractions(summaryMapper);
+        when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
+
+        assertThrows(IllegalStateException.class,
+                () -> service.readRequiredSnapshot(1L, 42L));
+    }
+
+    @Test
+    void 摘要快照读取失败必须传播而不是伪装成空摘要() {
+        IllegalStateException databaseFailure = new IllegalStateException("database down");
+        when(summaryMapper.selectOneByQuery(any())).thenThrow(databaseFailure);
+
+        assertSame(databaseFailure, assertThrows(IllegalStateException.class,
+                () -> service.readSnapshot(1L)));
+        verifyNoInteractions(redisTemplate, valueOps);
+    }
+
+    @Test
+    void 应用已删除时摘要快照拒绝读取() {
+        AppDataLifecycleFence.DeletePermit deletion = lifecycleFence.beginDelete(1L, Duration.ZERO);
+        assertNotNull(deletion);
+        deletion.commitTombstone();
+
+        assertThrows(IllegalStateException.class, () -> service.readSnapshot(1L));
+        verifyNoInteractions(summaryMapper, redisTemplate, valueOps);
     }
 
     @Test

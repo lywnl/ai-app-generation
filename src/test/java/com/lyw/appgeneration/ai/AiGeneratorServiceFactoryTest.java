@@ -15,6 +15,7 @@ import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
@@ -197,14 +198,14 @@ class AiGeneratorServiceFactoryTest {
         when(history.loadRecentCompleteTurnsToMemory(
                 any(), any(Long.class), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.empty());
-        when(summary.lastSummarizedId(7L)).thenReturn(4L);
+        when(summary.readSnapshot(7L)).thenReturn(new MemorySummarySnapshot("已有摘要", 4L));
 
         LayeredChatMemory layered = factory.createOnlineChatMemory(
                 7L, CodeGenTypeEnum.HTML);
 
         ArgumentCaptor<ChatMemory> memoryCaptor =
                 ArgumentCaptor.forClass(ChatMemory.class);
-        verify(summary).lastSummarizedId(7L);
+        verify(summary).readSnapshot(7L);
         verify(history).loadRecentCompleteTurnsToMemory(
                 eq(7L), eq(4L), memoryCaptor.capture(),
                 eq(properties.getBlockingCompressionThreshold()),
@@ -242,7 +243,7 @@ class AiGeneratorServiceFactoryTest {
                         ChatMemoryOutcome.SUCCEEDED),
                 history(1L, "user", "不得配对的历史需求", null, null));
         doReturn(mysqlRows).when(historyService).list(any(QueryWrapper.class));
-        when(summaryService.lastSummarizedId(7L)).thenReturn(0L);
+        when(summaryService.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
         when(summaryService.getCurrentSummary(7L)).thenReturn("");
         when(estimator.estimateMessages(anyList())).thenReturn(100);
         ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
@@ -301,7 +302,7 @@ class AiGeneratorServiceFactoryTest {
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
-        when(summary.lastSummarizedId(7L)).thenReturn(0L);
+        when(summary.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
         when(history.loadRecentCompleteTurnsToMemory(
                 any(), any(Long.class), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
@@ -334,7 +335,7 @@ class AiGeneratorServiceFactoryTest {
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
-        when(summary.lastSummarizedId(7L))
+        when(summary.readSnapshot(7L))
                 .thenThrow(new IllegalStateException("cursor read failed"));
 
         assertThrows(IllegalStateException.class, () ->
@@ -365,7 +366,7 @@ class AiGeneratorServiceFactoryTest {
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
-        when(summary.lastSummarizedId(7L)).thenReturn(0L);
+        when(summary.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
         when(history.loadRecentCompleteTurnsToMemory(
                 any(), any(Long.class), any(), any(Integer.class), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());

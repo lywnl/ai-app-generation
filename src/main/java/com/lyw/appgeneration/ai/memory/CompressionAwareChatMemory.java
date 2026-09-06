@@ -44,7 +44,12 @@ public final class CompressionAwareChatMemory extends LayeredChatMemory {
     }
 
     ConversationTurnSnapshotParser.Snapshot completeTurnSnapshot() {
-        return snapshotParser.parse(l0Memory().messages());
+        return snapshotParser.parse(l0Messages());
+    }
+
+    /** 复检实际 L0，不重新召回 L1/L2，避免把摘要更新误判为本轮工具轨迹变化。 */
+    List<ChatMessage> l0Messages() {
+        return l0Memory().messages();
     }
 
     boolean removeCompletedPrefixIfMatches(

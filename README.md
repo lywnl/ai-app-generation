@@ -614,6 +614,8 @@ LayeredChatMemory.messages()：
 - 压缩时从最新稳定 `USER → AI` 回合向前累计，保留不超过 `12288 Token` 的完整回合；下一个回合会越界时整轮进入 L1 候选，不拆分 User/AI，也不留下孤立 tool 消息。
 - L1 成功落库后才通过 Redis Lua 比较并替换任务启动时确认的旧完整前缀；两个后端连接并发裁剪同一 L0 快照时，跨实例 CAS 只能有一个提交成功。摘要失败、游标对齐失败、截止到期或前缀竞争都保留原始 L0。当前未完成工具回合无论多大都不裁剪，由 56K/64K 门禁决定能否继续请求模型。
 - 冷启动只回填 `lastSummarizedId` 之后尚未摘要的稳定回合，并按完整回合读取到 56K 阻塞阈值；全部历史不足 56K 时完整回填，不再按固定消息条数截断。
+- 冷启动和模型请求门禁使用 `MemorySummarySnapshot(summary, lastSummarizedId)`：正文与游标来自同一次数据库查询，按这份快照裁剪已覆盖的完整回合，再组装请求。游标为 0 时固定不注入 L1；请求准备期间异步摘要推进，不会把新正文拼到旧裁剪边界上。冷启动快照只决定回填边界，实际请求仍会重新读取一致快照。
+- Redis L0 可以暂时包含已摘要历史，去重在请求门禁完成；阻塞压缩后按实际返回快照的覆盖边界裁剪，工具链检查点复用已审核的分层快照，只复检原始 L0 是否变化，不重新召回 L1/L2。
 - Vue 终态仍把本轮原始 AI/tool 尾部折叠为稳定 `canonicalAiText`；可信文件变更、构建日志和读取正文边界保持不变。
 
 **L1 · 唯一 3K 硬上限滚动摘要**
@@ -655,7 +657,7 @@ LayeredChatMemory.messages()：
 | `app_memory` | userId / type / name / content / appId / status / evidenceType / evidenceCount / lastEvidenceTurnId | `uk_userId_type_name` 偏好去重键 —— **L2 候选、活跃状态与证据** |
 | `app_memory_extract_cursor` | appId / userId / lastExtractedId / failCount / nextRetryTime | `uk_appId` 每应用一行 —— **L2 抽取游标与持久化退避** |
 
-> **记忆存储分工**：L0 窗口本身存于 **Redis**（`MessageWindowChatMemory`）；Vue 每轮原始可见 User 与折叠后的 `canonicalAiText` 同时写入 MySQL `chat_history`，作为刷新回放和 L0 冷重建的稳定来源。L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:v2:{userId}`，TTL 1h）堵住工具循环内的高频读；旧 `mem:pref:{userId}` 只在失效清理时兼容删除，不再作为召回事实源。
+> **记忆存储分工**：L0 窗口本身存于 **Redis**（`MessageWindowChatMemory`）；Vue 每轮原始可见 User 与折叠后的 `canonicalAiText` 同时写入 MySQL `chat_history`，作为刷新回放和 L0 冷重建的稳定来源。L1 / L2 落 **MySQL** 上述三表，并各带一层 Redis 缓存（`mem:summary:{appId}` / `mem:pref:v2:{userId}`，TTL 1h）用于普通召回。L1 模型请求门禁不使用只含正文的缓存，而是直接读取数据库中的正文与游标快照；旧 `mem:pref:{userId}` 只在失效清理时兼容删除，不再作为召回事实源。
 
 **Milvus 向量库** `default`：
 

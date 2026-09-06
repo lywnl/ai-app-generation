@@ -51,27 +51,37 @@ public interface MemorySummaryService {
      */
     String getCurrentSummary(Long appId);
 
+    /** 一次读取同一持久化版本的正文与游标；没有可用摘要时返回空快照，依赖失败必须传播。 */
+    MemorySummarySnapshot readSnapshot(Long appId);
+
+    /** 严格读取已覆盖目标边界的快照，调用方必须按返回的实际游标裁剪。 */
+    default MemorySummarySnapshot readRequiredSnapshot(Long appId, long summarizedThroughId) {
+        if (summarizedThroughId <= 0L) {
+            throw new IllegalArgumentException("摘要边界必须为正数");
+        }
+        MemorySummarySnapshot snapshot = readSnapshot(appId);
+        if (snapshot.lastSummarizedId() < summarizedThroughId) {
+            throw new IllegalStateException("L1 摘要未覆盖指定边界");
+        }
+        return snapshot;
+    }
+
     /**
      * 严格读取至少覆盖指定稳定边界的当前摘要。
      *
-     * <p>与 best-effort 的 {@link #getCurrentSummary(Long)} 不同，缓存、数据库、
-     * 格式或游标任一异常都必须向调用方传播；返回值可安全用于“先验证最终请求、
-     * 后裁剪 L0”的提交协议。</p>
+     * <p>仅供只需要正文的调用方兼容使用。需要裁剪 L0 时必须使用
+     * {@link #readRequiredSnapshot(Long, long)} 返回的正文和实际游标，
+     * 不能将此正文与另一次读取的游标组合。</p>
      */
     default String getRequiredSummary(
             Long appId, long summarizedThroughId) {
-        String summary = getCurrentSummary(appId);
-        if (summary == null || summary.isBlank()
-                || lastSummarizedId(appId) < summarizedThroughId) {
-            throw new IllegalStateException("L1 摘要尚未覆盖指定边界");
-        }
-        return summary;
+        return readRequiredSnapshot(appId, summarizedThroughId).summary();
     }
 
     /**
      * 读取 L1 已确认覆盖到的 chat_history.id；尚无摘要时返回 0。
      *
-     * <p>该游标决定冷启动与 L0 裁剪边界，读取失败必须向调用方传播。</p>
+     * <p>只读游标的兼容接口，读取失败必须传播。请求组装应使用完整快照。</p>
      */
     long lastSummarizedId(Long appId);
 
