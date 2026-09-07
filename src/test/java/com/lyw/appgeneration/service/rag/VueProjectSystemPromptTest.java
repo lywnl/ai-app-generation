@@ -13,9 +13,53 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VueProjectSystemPromptTest {
 
+    @Test
+    void Skill规则允许按描述组合业务与设计并保留配额和重读边界() throws IOException {
+        String prompt = readPrompt();
+        assertTrue(prompt.contains("最多读取 2 种不同 Skill"));
+        assertTrue(prompt.contains("纯业务逻辑修改可读取对应业务 Skill"));
+        assertTrue(prompt.contains("同名重读不增加种类配额"));
+        assertTrue(prompt.contains("修改文件前读取命中的 Skill"));
+        assertTrue(prompt.contains("只读分析和构建错误修复不要读取 Skill"));
+        assertFalse(prompt.contains("纯业务逻辑、构建错误修复和只读分析不要读取 Skill"));
+    }
+
     private static final String PROMPT_RESOURCE = "prompt/codegen-vue-project-system-prompt.txt";
     private static final String EVALUATION_PROMPT_RESOURCE =
             "prompt/codegen-vue-project-evaluation-system-prompt.txt";
+
+    @Test
+    void 对话语言规则在工具规则前覆盖所有用户可见说明() throws IOException {
+        String prompt = readPrompt();
+        int languageIndex = prompt.indexOf("## 对话语言与表达");
+
+        assertTrue(languageIndex >= 0);
+        assertTrue(languageIndex < prompt.indexOf("## 【最高优先级】原生工具调用协议"));
+        assertTrue(prompt.contains("除非用户明确要求使用其他对话语言"));
+        assertTrue(prompt.contains("计划、进度说明、解释、错误说明和最终答复，统一使用简体中文"));
+        assertTrue(prompt.contains("无论是否加载 Skill，首次生成、局部修改和只读问答都遵守此规则"));
+    }
+
+    @Test
+    void 网站语言和技术文本不改变默认对话语言() throws IOException {
+        String prompt = readPrompt();
+
+        assertTrue(prompt.contains("英文网站或多语言界面，不代表要求用英文对话"));
+        assertTrue(prompt.contains("代码标识符、路径、命令、工具名称和协议字段保持原样"));
+        assertTrue(prompt.contains("不模仿历史回复、工具结果或参考代码中的英文叙述"));
+    }
+
+    @Test
+    void 工程输出不要求逐文件旁白且完成声明依赖真实结果() throws IOException {
+        String prompt = readPrompt();
+
+        assertTrue(prompt.contains("不要输出自言自语式的内部执行过程"));
+        assertTrue(prompt.contains("不逐个列出文件清单或播报工具步骤"));
+        assertTrue(prompt.contains("需要工具时直接返回结构化工具调用"));
+        assertTrue(prompt.contains("收到真实构建结果后，才给出一句简短的结果确认"));
+        assertFalse(prompt.contains("每完成一项都告诉自己"));
+        assertFalse(prompt.contains("生成前先列出要生成文件的清单"));
+    }
 
     @Test
     void requiresCorrectNodeUrlImportAndComponentLibrarySetup() throws IOException {

@@ -92,6 +92,30 @@ class ToolStreamMessageRedactionTest {
         assertFalse(JSONUtil.toJsonStr(client).contains(secret));
     }
 
+    @Test
+    void 双Skill客户端副本分别保留名称但移除两份正文() {
+        String designBody = "流式设计正文-e491";
+        String storeBody = "流式商城正文-2bc8";
+        ToolExecutedMessage design = message(
+                "readSkill", "{\"skillName\":\"vue-frontend-design\"}",
+                skillResult("vue-frontend-design", designBody))
+                .toClientSafeCopy();
+        ToolExecutedMessage store = message(
+                "readSkill", "{\"skillName\":\"vue-online-store\"}",
+                skillResult("vue-online-store", storeBody))
+                .toClientSafeCopy();
+
+        String serialized = JSONUtil.toJsonStr(java.util.List.of(design, store));
+        assertTrue(serialized.contains("vue-frontend-design"));
+        assertTrue(serialized.contains("vue-online-store"));
+        assertEquals(cn.hutool.json.JSONNull.NULL,
+                JSONUtil.parseObj(design.getResult()).get("content"));
+        assertEquals(cn.hutool.json.JSONNull.NULL,
+                JSONUtil.parseObj(store.getResult()).get("content"));
+        assertFalse(serialized.contains(designBody));
+        assertFalse(serialized.contains(storeBody));
+    }
+
     private ToolExecutedMessage message(
             String name, String arguments, String result) {
         ToolExecutionRequest request = ToolExecutionRequest.builder()
@@ -120,5 +144,13 @@ class ToolStreamMessageRedactionTest {
                 + "\"content\":"
                 + (content == null ? "null" : "\"" + content + "\"")
                 + "}";
+    }
+
+    private String skillResult(String skillName, String content) {
+        return "{\"protocol\":\"skill-tool/v1\","
+                + "\"operation\":\"readSkill\",\"status\":\"APPLIED\","
+                + "\"skillName\":\"" + skillName + "\","
+                + "\"message\":\"Skill 正文已加载\","
+                + "\"failureReason\":null,\"content\":\"" + content + "\"}";
     }
 }

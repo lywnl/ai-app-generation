@@ -3,6 +3,7 @@ package com.lyw.appgeneration.ai.skill;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.CharacterCodingException;
@@ -16,9 +17,19 @@ public final class SkillLoader {
 
     private static final int MAX_SKILL_BYTES = 64 * 1024;
     private static final int MAX_FRONTMATTER_BYTES = 8 * 1024;
+    private final ClassLoader classLoader;
+
+    public SkillLoader() {
+        this(SkillLoader.class.getClassLoader());
+    }
+
+    SkillLoader(ClassLoader classLoader) {
+        this.classLoader = Objects.requireNonNull(classLoader, "ClassLoader 不能为空");
+    }
+
     public SkillDefinition loadFromClasspath(String resourcePath) {
         validateResourcePath(resourcePath);
-        try (InputStream input = SkillLoader.class.getClassLoader()
+        try (InputStream input = classLoader
                 .getResourceAsStream(resourcePath)) {
             if (input == null) {
                 throw new IllegalArgumentException(
@@ -42,16 +53,12 @@ public final class SkillLoader {
     /** 只读取有界 frontmatter，启动注册流程不得加载正文。 */
     public SkillMetadata loadMetadataFromClasspath(String resourcePath) {
         validateResourcePath(resourcePath);
-        try (InputStream input = SkillLoader.class.getClassLoader()
+        try (InputStream input = classLoader
                 .getResourceAsStream(resourcePath)) {
             if (input == null) {
                 throw new IllegalArgumentException("Skill 资源不存在：" + resourcePath);
             }
-            byte[] bytes = input.readNBytes(MAX_FRONTMATTER_BYTES + 1);
-            if (bytes.length > MAX_FRONTMATTER_BYTES) {
-                throw new IllegalArgumentException("Skill frontmatter 超过大小上限");
-            }
-            String source = decodeUtf8(bytes);
+            String source = decodeUtf8(readFrontmatter(input));
             int end = source.indexOf("\n---\n", 4);
             if (!source.startsWith("---\n") || end < 0) {
                 throw new IllegalArgumentException("Skill frontmatter 不完整");
@@ -62,7 +69,28 @@ public final class SkillLoader {
         } catch (IOException exception) {
             throw new UncheckedIOException("读取 Skill 元数据失败：" + resourcePath,
                     exception);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("Skill 元数据非法：" + resourcePath
+                    + "，" + exception.getMessage(), exception);
         }
+    }
+
+    private byte[] readFrontmatter(InputStream input) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        long tail = 0;
+        // 按字节识别 ASCII 结束线，避免读入正文或截断 UTF-8 多字节字符。
+        for (int index = 0; index < MAX_FRONTMATTER_BYTES; index++) {
+            int value = input.read();
+            if (value == -1) {
+                throw new IllegalArgumentException("Skill frontmatter 不完整");
+            }
+            bytes.write(value);
+            tail = ((tail << 8) | value) & 0xffffffffffL;
+            if (index >= 8 && tail == 0x0a2d2d2d0aL) {
+                return bytes.toByteArray();
+            }
+        }
+        throw new IllegalArgumentException("Skill frontmatter 超过大小上限");
     }
 
     public SkillDefinition loadDefinitionFromClasspath(SkillMetadata metadata) {

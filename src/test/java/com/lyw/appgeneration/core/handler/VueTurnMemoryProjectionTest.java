@@ -129,6 +129,26 @@ class VueTurnMemoryProjectionTest {
     }
 
     @Test
+    void 终态投影折叠双Skill工具事实且不保留正文() {
+        String designBody = "终态设计正文-f031";
+        String storeBody = "终态商城正文-417b";
+        VueToolExecutionFact design = parse("readSkill", skillResult(
+                "vue-frontend-design", designBody));
+        VueToolExecutionFact store = parse("readSkill", skillResult(
+                "vue-online-store", storeBody));
+
+        String projection = VueTurnMemoryProjection.project(
+                List.of(design, store), SUCCEEDED);
+
+        assertTrue(projection.contains("实际执行工具：readSkill"));
+        assertFalse(projection.contains(designBody));
+        assertFalse(projection.contains(storeBody));
+        assertFalse(projection.contains("vue-frontend-design"));
+        assertFalse(projection.contains("vue-online-store"));
+        assertEquals(1, projection.split("readSkill", -1).length - 1);
+    }
+
+    @Test
     void 两类可信协议都拒绝非标准Json和尾随内容() {
         assertStrictJsonRejected("writeFile",
                 fileResult("writeFile", "src/App.vue", true, null));
@@ -216,5 +236,13 @@ class VueTurnMemoryProjectionTest {
                 + "\"message\":\"构建成功\",\"errorSummary\":null,"
                 + "\"terminateToolLoop\":true,"
                 + "\"finalResponse\":\"项目已生成并构建成功。\"}";
+    }
+
+    private String skillResult(String skillName, String content) {
+        return "{\"protocol\":\"skill-tool/v1\","
+                + "\"operation\":\"readSkill\",\"status\":\"APPLIED\","
+                + "\"skillName\":\"" + skillName + "\","
+                + "\"message\":\"Skill 正文已加载\","
+                + "\"failureReason\":null,\"content\":\"" + content + "\"}";
     }
 }

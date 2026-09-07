@@ -75,7 +75,7 @@ langchain4j:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
       model-name: deepseek-v4-flash
-      max-tokens: 16
+      max-tokens: 256
       temperature: 0
       log-requests: ${AI_MODEL_LOG_REQUESTS:false}
       log-responses: ${AI_MODEL_LOG_RESPONSES:false}

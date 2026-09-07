@@ -209,7 +209,7 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void Vue变更回合安装前端设计Skill而只读回合不安装() {
+    void Vue变更回合安装五个Skill元数据而只读回合不安装() {
         properties.setEnabled(false);
         stubVueGenerator();
         VueTurnContext mutation = newVueTurnContext(
@@ -219,8 +219,13 @@ class AiCodeGeneratorFacadeTest {
         var skillCaptor = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(tokenStream).turnTransientMessages(skillCaptor.capture());
         assertEquals(1, skillCaptor.getValue().size());
-        assertTrue(((dev.langchain4j.data.message.SystemMessage)
-                skillCaptor.getValue().get(0)).text().contains("Vue 前端设计"));
+        String metadata = ((dev.langchain4j.data.message.SystemMessage)
+                skillCaptor.getValue().get(0)).text();
+        for (String name : List.of("vue-frontend-design", "vue-personal-blog",
+                "vue-corporate-website", "vue-online-store", "vue-portfolio")) {
+            assertTrue(metadata.contains(name));
+        }
+        assertFalse(metadata.contains("把用户的业务主题转成"));
         mutation.closeResources();
 
         TokenStream readOnlyStream = org.mockito.Mockito.mock(TokenStream.class);

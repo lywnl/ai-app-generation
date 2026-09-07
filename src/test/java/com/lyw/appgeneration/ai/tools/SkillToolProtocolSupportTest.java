@@ -43,4 +43,20 @@ class SkillToolProtocolSupportTest {
         assertNull(SkillToolProtocolSupport.parse(
                 raw, "readSkill", "vue-frontend-design").content());
     }
+
+    @Test
+    void 观测摘要保留状态元数据但不泄露正文() {
+        String content = "正文哨兵";
+
+        String summary = SkillToolProtocolSupport.observabilitySummary(
+                SkillToolResult.applied("vue-frontend-design", content));
+
+        org.junit.jupiter.api.Assertions.assertTrue(summary.contains("status=APPLIED"));
+        org.junit.jupiter.api.Assertions.assertTrue(summary.contains(
+                "skillName=vue-frontend-design"));
+        org.junit.jupiter.api.Assertions.assertTrue(summary.contains("bodyCodePoints=4"));
+        org.junit.jupiter.api.Assertions.assertTrue(summary.contains(
+                "bodySha256=a5bfbf6bb7b216d7e4723ae958388445c2dab2326b7d82457fabdb314aae4e04"));
+        org.junit.jupiter.api.Assertions.assertFalse(summary.contains(content));
+    }
 }

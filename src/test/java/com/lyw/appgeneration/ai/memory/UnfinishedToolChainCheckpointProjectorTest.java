@@ -23,7 +23,7 @@ class UnfinishedToolChainCheckpointProjectorTest {
 
     private static final Set<String> REGISTERED_TOOLS = Set.of(
             "readFile", "readDir", "writeFile", "modifyFile",
-            "deleteFile", "buildProject", "exit");
+            "deleteFile", "buildProject", "readSkill", "exit");
 
     private final ConversationTurnSnapshotParser parser =
             new ConversationTurnSnapshotParser();
@@ -139,6 +139,36 @@ class UnfinishedToolChainCheckpointProjectorTest {
                         UserMessage.from("读取后执行构建"),
                         result.checkpointMessage().orElseThrow()),
                 result.requestMessages());
+    }
+
+    @Test
+    void 双Skill检查点只保留成功名称并提示同名可重新读取() {
+        ToolExecutionRequest design = request(
+                "read-design", "readSkill",
+                "{\"skillName\":\"vue-frontend-design\"}");
+        ToolExecutionRequest store = request(
+                "read-store", "readSkill",
+                "{\"skillName\":\"vue-online-store\"}");
+        String designBody = "检查点设计正文-18d2";
+        String storeBody = "检查点商城正文-a73e";
+
+        ToolChainCheckpointResult result = projector.project(snapshot(List.of(
+                UserMessage.from("生成商城"),
+                AiMessage.from(design),
+                ToolExecutionResultMessage.from(design, skillResult(
+                        "vue-frontend-design", "APPLIED", designBody)),
+                AiMessage.from(store),
+                ToolExecutionResultMessage.from(store, skillResult(
+                        "vue-online-store", "APPLIED", storeBody)))), REGISTERED_TOOLS);
+
+        assertTrue(result.complete());
+        String checkpoint = result.checkpointMessage().orElseThrow().text();
+        assertTrue(checkpoint.contains(
+                "已读取 Skill（JSON 数据）：[\"vue-frontend-design\",\"vue-online-store\"]"));
+        assertTrue(checkpoint.contains(
+                "Skill 正文未保留，需要时重新调用 readSkill，同名重读不增加种类配额"));
+        assertFalse(checkpoint.contains(designBody));
+        assertFalse(checkpoint.contains(storeBody));
     }
 
     @Test
@@ -398,6 +428,17 @@ class UnfinishedToolChainCheckpointProjectorTest {
                 + "\"message\":\"构建失败\","
                 + "\"errorSummary\":" + jsonString(errorSummary) + ","
                 + "\"terminateToolLoop\":false,\"finalResponse\":null}";
+    }
+
+    private String skillResult(
+            String skillName, String status, String content) {
+        return "{\"protocol\":\"skill-tool/v1\","
+                + "\"operation\":\"readSkill\","
+                + "\"status\":\"" + status + "\","
+                + "\"skillName\":" + jsonString(skillName) + ","
+                + "\"message\":\"Skill 正文已加载\","
+                + "\"failureReason\":null,"
+                + "\"content\":" + jsonString(content) + "}";
     }
 
     private String jsonString(String value) {

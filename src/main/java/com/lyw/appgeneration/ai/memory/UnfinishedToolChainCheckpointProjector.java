@@ -234,6 +234,7 @@ public final class UnfinishedToolChainCheckpointProjector {
         }
         return checkpoint.append("\n约束：文件已落盘，以当前工程文件为准；")
                 .append("源码正文未保留，需要时重新调用 readFile；")
+                .append("Skill 正文未保留，需要时重新调用 readSkill，同名重读不增加种类配额；")
                 .append("当前任务尚未完成，请继续完成剩余修改并执行真实构建。")
                 .toString();
     }

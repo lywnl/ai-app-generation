@@ -7,6 +7,9 @@ import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Set;
 
 /** readSkill 协议序列化、严格解析和客户端脱敏。 */
@@ -68,6 +71,23 @@ public final class SkillToolProtocolSupport {
                 result.skillName(), result.message(), result.failureReason(), null));
     }
 
+    /**
+     * 生成不包含 Skill 正文的观测摘要，供服务端日志使用。
+     */
+    public static String observabilitySummary(SkillToolResult result) {
+        String content = result.content();
+        int bodyCodePoints = content == null
+                ? 0 : content.codePointCount(0, content.length());
+        String bodySha256 = content == null ? "-" : sha256(content);
+        String failureReason = result.failureReason() == null
+                ? "-" : result.failureReason();
+        return "status=" + result.status()
+                + ",skillName=" + sanitizeLogValue(result.skillName())
+                + ",bodyCodePoints=" + bodyCodePoints
+                + ",bodySha256=" + bodySha256
+                + ",failureReason=" + sanitizeLogValue(failureReason);
+    }
+
     public static String stableSummary(BaseTool tool, String rawResult, String skillName) {
         SkillToolResult result;
         try {
@@ -105,5 +125,19 @@ public final class SkillToolProtocolSupport {
             case REJECTED -> "已拒绝";
             case FAILED -> "失败";
         };
+    }
+
+    private static String sha256(String content) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(content.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("JVM 不支持 SHA-256", exception);
+        }
+    }
+
+    private static String sanitizeLogValue(String value) {
+        return value == null ? "-" : value.replaceAll("[\\r\\n\\t]", "_");
     }
 }
