@@ -149,6 +149,13 @@ class AppServiceImplVueTurnTest {
             vueTurnModeRoutingServiceFactory);
     private AppOperationLeaseManager operationManager;
     private AppServiceImpl service;
+    private final com.lyw.appgeneration.service.AppNameService naming =
+            mock(com.lyw.appgeneration.service.AppNameService.class);
+
+    @org.junit.jupiter.api.AfterEach
+    void 生成回合不能触发创建命名() {
+        org.mockito.Mockito.verifyNoInteractions(naming);
+    }
     private SimpleMeterRegistry metricsRegistry;
     private VueTurnAdmissionController admissionController;
 
@@ -159,6 +166,7 @@ class AppServiceImplVueTurnTest {
         admissionController = new VueTurnAdmissionController(
                 new VueBuildRepairMetricsCollector(metricsRegistry));
         service = new AppServiceImpl();
+        ReflectionTestUtils.setField(service, "appNameService", naming);
         ReflectionTestUtils.setField(service, "aiCodeGeneratorFacade", facade);
         ReflectionTestUtils.setField(service, "aiGeneratorServiceFactory", factory);
         ReflectionTestUtils.setField(service, "chatHistoryService", history);

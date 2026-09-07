@@ -53,6 +53,7 @@ import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
+import com.lyw.appgeneration.service.AppNameService;
 import com.lyw.appgeneration.service.AppDeploymentFileService;
 import com.lyw.appgeneration.service.AppDeployUrlBuilder;
 import com.lyw.appgeneration.service.AppDeletionFileService;
@@ -101,6 +102,9 @@ import java.util.concurrent.CancellationException;
 public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppService {
 
     private static final int DELETE_CACHE_MAX_ATTEMPTS = 3;
+
+    @Resource
+    private AppNameService appNameService;
 
     @Resource
     private UserService userService;
@@ -1092,12 +1096,11 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         App app = new App();
         BeanUtil.copyProperties(appAddRequest, app);
         app.setUserId(loginUser.getId());
-        // 应用名称暂时为 initPrompt 前 12 位
-        app.setAppName(initPrompt.substring(0, Math.min(initPrompt.length(), 12)));
         // 根据 AI 选择代码生成类型
         AiCodeGenTypeRoutingService routingService = aiCodeGenTypeRoutingServiceFactory.createAiCodeGenTypeRoutingService();
         CodeGenTypeEnum selectGenType = routingService.routeCodeGenType(initPrompt);
         app.setCodeGenType(selectGenType.getValue());
+        app.setAppName(appNameService.generateName(initPrompt));
         // 插入数据库
         boolean result = save(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);

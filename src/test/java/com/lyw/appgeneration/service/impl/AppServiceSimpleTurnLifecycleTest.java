@@ -137,6 +137,13 @@ class AppServiceSimpleTurnLifecycleTest {
     private AppOperationLeaseManager leases;
     private AppDataLifecycleFence fence;
     private AppServiceImpl service;
+    private final com.lyw.appgeneration.service.AppNameService naming =
+            mock(com.lyw.appgeneration.service.AppNameService.class);
+
+    @org.junit.jupiter.api.AfterEach
+    void 原生生成回合不能触发创建命名() {
+        org.mockito.Mockito.verifyNoInteractions(naming);
+    }
     private SimpleMeterRegistry metricsRegistry;
 
     @BeforeEach
@@ -151,6 +158,7 @@ class AppServiceSimpleTurnLifecycleTest {
         ReflectionTestUtils.setField(
                 streamExecutor, "appDataLifecycleFence", fence);
         service = spy(new AppServiceImpl());
+        ReflectionTestUtils.setField(service, "appNameService", naming);
         ReflectionTestUtils.setField(service, "aiCodeGeneratorFacade", facade);
         ReflectionTestUtils.setField(service, "aiGeneratorServiceFactory", aiFactory);
         ReflectionTestUtils.setField(service, "chatHistoryService", history);

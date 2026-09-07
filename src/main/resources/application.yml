@@ -70,6 +70,14 @@ langchain4j:
       temperature: 0.1
       log-requests: ${AI_MODEL_LOG_REQUESTS:false}
       log-responses: ${AI_MODEL_LOG_RESPONSES:false}
+    # 新应用命名复用路由接入，但独立限制等待和输出，禁止自动重试。
+    app-name-chat-model:
+      base-url: ${langchain4j.open-ai.routing-chat-model.base-url}
+      api-key: ${langchain4j.open-ai.routing-chat-model.api-key}
+      model-name: ${langchain4j.open-ai.routing-chat-model.model-name}
+      timeout: 5s
+      max-tokens: 256
+      temperature: 0
     # 智能路由 AI 模型配置（用于简单的分类任务）
     routing-chat-model:
       base-url: https://api.deepseek.com
