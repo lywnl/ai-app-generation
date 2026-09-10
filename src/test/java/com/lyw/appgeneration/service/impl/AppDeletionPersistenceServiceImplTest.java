@@ -6,11 +6,15 @@ import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -65,18 +69,41 @@ class AppDeletionPersistenceServiceImplTest {
                     context.getBean(RecordingTransactionManager.class);
             AppMemoryExtractCursorMapper cursor =
                     context.getBean(AppMemoryExtractCursorMapper.class);
+            Cache featured = context.getBean(CacheManager.class).getCache(GoodAppCacheService.CACHE_NAME);
+            featured.put("page", "old");
+            doAnswer(call -> {
+                assertNotNull(featured.get("page"));
+                assertEquals(0, transactions.commits);
+                return 1;
+            }).when(context.getBean(AppMapper.class)).deleteById(7L);
             assertTrue(AopUtils.isAopProxy(service));
 
             service.deleteAppData(7L);
             assertEquals(TransactionDefinition.PROPAGATION_REQUIRES_NEW,
                     transactions.propagation);
             assertEquals(1, transactions.commits);
+            assertNull(featured.get("page"));
 
+            featured.put("page", "old");
             doThrow(new IllegalStateException("cursor down"))
                     .when(cursor).deleteByQuery(any());
             assertThrows(IllegalStateException.class,
                     () -> service.deleteAppData(8L));
             assertEquals(1, transactions.rollbacks);
+            assertNotNull(featured.get("page"));
+        }
+    }
+
+    @Test
+    void databaseCommitFailureDoesNotRunRegisteredEviction() {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext(TestConfig.class)) {
+            Cache featured = context.getBean(CacheManager.class).getCache(GoodAppCacheService.CACHE_NAME);
+            featured.put("page", "old");
+            context.getBean(RecordingTransactionManager.class).failCommit = true;
+            assertThrows(IllegalStateException.class,
+                    () -> context.getBean(AppDeletionPersistenceService.class).deleteAppData(7L));
+            assertNotNull(featured.get("page"));
         }
     }
 
@@ -102,7 +129,7 @@ class AppDeletionPersistenceServiceImplTest {
 
         private AppDeletionPersistenceService service() {
             return new AppDeletionPersistenceServiceImpl(
-                    chatHistory, summary, cursor, memory, app);
+                    chatHistory, summary, cursor, memory, app, mock(GoodAppCacheService.class));
         }
 
         private void failAt(int step) {
@@ -133,6 +160,10 @@ class AppDeletionPersistenceServiceImplTest {
     @EnableTransactionManagement
     @EnableAspectJAutoProxy
     static class TestConfig {
+        @Bean CacheManager cacheManager() { return new ConcurrentMapCacheManager(); }
+        @Bean GoodAppCacheService goodAppCacheService(CacheManager caches) {
+            return new GoodAppCacheService(caches);
+        }
         @Bean RecordingTransactionManager transactionManager() {
             return new RecordingTransactionManager();
         }
@@ -148,9 +179,11 @@ class AppDeletionPersistenceServiceImplTest {
                 AppMemorySummaryMapper summaryMapper,
                 AppMemoryExtractCursorMapper cursorMapper,
                 AppMemoryMapper memoryMapper,
-                AppMapper appMapper) {
+                AppMapper appMapper,
+                GoodAppCacheService goodAppCacheService) {
             return new AppDeletionPersistenceServiceImpl(chatHistoryMapper,
-                    summaryMapper, cursorMapper, memoryMapper, appMapper);
+                    summaryMapper, cursorMapper, memoryMapper, appMapper,
+                    goodAppCacheService);
         }
     }
 
@@ -159,13 +192,17 @@ class AppDeletionPersistenceServiceImplTest {
         private int propagation = Integer.MIN_VALUE;
         private int commits;
         private int rollbacks;
+        private boolean failCommit;
 
         @Override protected Object doGetTransaction() { return new Object(); }
         @Override protected void doBegin(Object transaction,
                                          TransactionDefinition definition) {
             propagation = definition.getPropagationBehavior();
         }
-        @Override protected void doCommit(DefaultTransactionStatus status) { commits++; }
+        @Override protected void doCommit(DefaultTransactionStatus status) {
+            if (failCommit) throw new IllegalStateException("提交失败");
+            commits++;
+        }
         @Override protected void doRollback(DefaultTransactionStatus status) { rollbacks++; }
     }
 }

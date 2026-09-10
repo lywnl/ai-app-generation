@@ -12,6 +12,10 @@ import com.lyw.appgeneration.monitor.ThrowingMeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.lyw.appgeneration.service.AppDeletionFileService;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.MemoryCacheInvalidationResult;
 import com.lyw.appgeneration.service.MemorySummaryService;
@@ -33,6 +37,7 @@ import org.mockito.InOrder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -274,6 +279,27 @@ class AppServiceDeletionLifecycleTest {
         verify(summaries, org.mockito.Mockito.times(3)).invalidateCache(APP_ID);
         verify(userMemory, org.mockito.Mockito.times(3))
                 .invalidateCaches(APP_ID, USER_ID);
+    }
+
+    @Test
+    void committedDeletionEvictsFeaturedPagesEvenWhenMemoryCleanupFails() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(
+                AppDeletionPersistenceServiceImplTest.TestConfig.class)) {
+            Cache featured = context.getBean(CacheManager.class).getCache(GoodAppCacheService.CACHE_NAME);
+            featured.put("page", "old");
+            ReflectionTestUtils.setField(service, "appDeletionPersistenceService",
+                    context.getBean(AppDeletionPersistenceService.class));
+            when(aiFactory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
+                    .thenAnswer(call -> {
+                        assertNull(featured.get("page"));
+                        throw new IllegalStateException("记忆清理失败");
+                    });
+
+            assertTrue(service.deleteApp(APP_ID, owner()));
+
+            assertNull(featured.get("page"));
+            verify(aiFactory, times(3)).invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
+        }
     }
 
     @Test

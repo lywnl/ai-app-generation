@@ -11,6 +11,7 @@ import com.lyw.appgeneration.service.AppNameService;
 import com.lyw.appgeneration.controller.AppController;
 import com.lyw.appgeneration.model.dto.app.AppUpdateRequest;
 import com.lyw.appgeneration.service.UserService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -99,6 +100,8 @@ class AppServiceNamingTest {
     @Test
     void 用户手动改名保留输入且不触发自动命名() {
         AppController controller = new AppController();
+        ReflectionTestUtils.setField(controller, "goodAppCacheService",
+                mock(GoodAppCacheService.class));
         UserService users = mock(UserService.class);
         var http = new MockHttpServletRequest();
         when(users.getLoginUser(http)).thenReturn(user);

@@ -2,12 +2,15 @@ package com.lyw.appgeneration.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import jakarta.annotation.Resource;
 import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.cache.BatchStrategies;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
+import org.springframework.data.redis.cache.RedisCacheWriter;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
@@ -37,12 +40,14 @@ public class RedisCacheManagerConfig {
 //                .serializeValuesWith(RedisSerializationContext.SerializationPair
 //                        .fromSerializer(new GenericJackson2JsonRedisSerializer(objectMapper)));
 
-        return RedisCacheManager.builder(redisConnectionFactory)
+        // 按缓存前缀分批扫描删除，避免使用 KEYS 阻塞 Redis。
+        RedisCacheWriter cacheWriter = RedisCacheWriter.nonLockingRedisCacheWriter(
+                redisConnectionFactory, BatchStrategies.scan(1000));
+        return RedisCacheManager.builder(cacheWriter)
                 .cacheDefaults(defaultConfig)
                 // 针对 good_app_page 配置5分钟过期
-                .withCacheConfiguration("good_app_page",
+                .withCacheConfiguration(GoodAppCacheService.CACHE_NAME,
                         defaultConfig.entryTtl(Duration.ofMinutes(5)))
                 .build();
     }
 }
-

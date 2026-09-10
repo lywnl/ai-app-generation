@@ -21,6 +21,7 @@ import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.web.GenerationSseEncoder;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.service.AppService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import com.lyw.appgeneration.service.UserService;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.ModelRequestGateException;
@@ -58,6 +59,9 @@ public class AppController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private GoodAppCacheService goodAppCacheService;
 
     @Resource
     private AppLifecycleMetricsCollector appLifecycleMetricsCollector;
@@ -305,6 +309,7 @@ public class AppController {
         app.setEditTime(LocalDateTime.now());
         boolean result = appService.updateById(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        goodAppCacheService.evictAfterCommit(id, "用户更新应用");
         return ResultUtils.success(true);
     }
 
@@ -377,7 +382,7 @@ public class AppController {
      */
     @PostMapping("/good/list/page/vo")
     @Cacheable(
-            value = "good_app_page",
+            value = GoodAppCacheService.CACHE_NAME,
             key = "@appDeployUrlBuilder.cacheNamespace() + ':' + "
                     + "T(com.lyw.appgeneration.utils.CacheKeyUtils)"
                     + ".generateKey(#appQueryRequest)",
@@ -443,6 +448,7 @@ public class AppController {
         app.setEditTime(LocalDateTime.now());
         boolean result = appService.updateById(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        goodAppCacheService.evictAfterCommit(id, "管理员更新应用");
         return ResultUtils.success(true);
     }
 

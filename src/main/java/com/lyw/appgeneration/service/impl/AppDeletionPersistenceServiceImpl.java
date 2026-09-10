@@ -6,6 +6,7 @@ import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import com.mybatisflex.core.query.QueryWrapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -20,18 +21,21 @@ public class AppDeletionPersistenceServiceImpl
     private final AppMemoryExtractCursorMapper cursorMapper;
     private final AppMemoryMapper memoryMapper;
     private final AppMapper appMapper;
+    private final GoodAppCacheService goodAppCacheService;
 
     public AppDeletionPersistenceServiceImpl(
             ChatHistoryMapper chatHistoryMapper,
             AppMemorySummaryMapper summaryMapper,
             AppMemoryExtractCursorMapper cursorMapper,
             AppMemoryMapper memoryMapper,
-            AppMapper appMapper) {
+            AppMapper appMapper,
+            GoodAppCacheService goodAppCacheService) {
         this.chatHistoryMapper = chatHistoryMapper;
         this.summaryMapper = summaryMapper;
         this.cursorMapper = cursorMapper;
         this.memoryMapper = memoryMapper;
         this.appMapper = appMapper;
+        this.goodAppCacheService = goodAppCacheService;
     }
 
     @Override
@@ -44,6 +48,7 @@ public class AppDeletionPersistenceServiceImpl
         cursorMapper.deleteByQuery(appIdQuery(appId));
         memoryMapper.unlinkAppId(appId);
         appMapper.deleteById(appId);
+        goodAppCacheService.evictAfterCommit(appId, "删除应用");
     }
 
     private QueryWrapper appIdQuery(Long appId) {

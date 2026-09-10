@@ -17,6 +17,7 @@ import com.lyw.appgeneration.service.AppDeployUrlBuilder;
 import com.lyw.appgeneration.service.AppStoragePathResolver;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.ScreenshotService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -88,6 +89,8 @@ class AppServiceDeploymentLifecycleTest {
                 new AppStoragePathResolver(sourceRoot, deployRoot);
 
         service = spy(new AppServiceImpl());
+        ReflectionTestUtils.setField(service, "goodAppCacheService",
+                mock(GoodAppCacheService.class));
         ReflectionTestUtils.setField(service, "appOperationLeaseManager", leaseManager);
         ReflectionTestUtils.setField(service, "appLifecycleMetricsCollector",
                 new AppLifecycleMetricsCollector(metricsRegistry));

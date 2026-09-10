@@ -53,6 +53,7 @@ import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.lyw.appgeneration.ratelimiter.annotation.RateLimit;
 import com.lyw.appgeneration.ratelimiter.enums.RateLimitType;
 import com.lyw.appgeneration.service.AppService;
+import com.lyw.appgeneration.service.GoodAppCacheService;
 import com.lyw.appgeneration.service.AppNameService;
 import com.lyw.appgeneration.service.AppDeploymentFileService;
 import com.lyw.appgeneration.service.AppDeployUrlBuilder;
@@ -105,6 +106,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private AppNameService appNameService;
+
+    @Resource
+    private GoodAppCacheService goodAppCacheService;
 
     @Resource
     private UserService userService;
@@ -816,6 +820,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         boolean updated = updateById(updateApp);
         ThrowUtils.throwIf(!updated,
                 ErrorCode.OPERATION_ERROR, "更新部署失败");
+        goodAppCacheService.evictAfterCommit(app.getId(), "更新部署信息");
         String formatUrl = appDeployUrlBuilder.buildUrl(deployKey);
         tryGenerateAppScreenshot(app.getId(), formatUrl);
         return formatUrl;
@@ -1085,6 +1090,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         updateApp.setCover(screenshotUrl);
         boolean result = updateById(updateApp);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新应用封面失败");
+        goodAppCacheService.evictAfterCommit(appId, "更新应用封面");
     }
 
     @Override
