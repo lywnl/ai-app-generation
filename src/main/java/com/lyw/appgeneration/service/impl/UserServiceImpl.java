@@ -12,6 +12,7 @@ import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.mapper.UserMapper;
 import com.lyw.appgeneration.service.UserService;
+import com.lyw.appgeneration.service.UserDisplayIdentityService;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
 
     @Resource
     private UserMapper userMapper;
+
+    @Resource
+    private UserDisplayIdentityService displayIdentityService;
 
     @Override
     public Long userRegister(String userAccount, String userPassword, String checkPassword) {
@@ -64,14 +68,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         User user = new User();
         user.setUserAccount(userAccount);
         user.setUserPassword(encryptPassword);
-        user.setUserName("无名");
         user.setUserRole(UserRoleEnum.USER.getValue());
-        boolean save = save(user);
+        boolean save = createUser(user);
         if (!save) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "注册失败");
         }
 
         return user.getId();
+    }
+
+    @Override
+    public boolean createUser(User user) {
+        return displayIdentityService.createUser(user);
     }
 
     @Override

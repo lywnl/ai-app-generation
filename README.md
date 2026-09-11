@@ -272,6 +272,35 @@ npm run dev
 
 前端默认 <http://localhost:5173>，已通过 Vite 代理转发到后端 `/api`。
 
+### 用户展示身份迁移
+
+新用户（包括管理员创建的用户）统一保存 `用户_` 加 8 位随机数字作为昵称，
+登录账号和权限不变。昵称一次生成后保持稳定，更新资料不能覆盖昵称或统一头像。
+数据库保存的头像地址为 `/api/default-user-avatar.jpg`，由后端静态资源提供；
+前端统一使用 `UserAvatar` 组件，原图同时保存在前端资源目录中。
+
+升级已有数据库时暂停用户写入，使用 MySQL 客户端在目标数据库执行
+`sql/migrations/2026-09-10-user-display-identity.sql`。迁移覆盖旧管理员、普通用户和逻辑删除记录，
+仅修改昵称和头像；`user_display_identity_backup_20260910` 保存旧展示字段及新昵称映射。
+符合新规则的用户及已迁移记录不会在重跑时重新命名。迁移会添加 `uk_userName` 唯一索引，
+服务端先查重并在并发唯一键冲突时有限重试。需先完成数据库迁移再开放新版用户创建接口。
+
+迁移后清理 `good_app_page` 缓存前缀，再刷新页面。无需清空 Redis 或注销用户；
+获取当前用户信息时后端会重新查询数据库。前后端应同步发布。
+回退展示数据前需停止用户写入并移除 `uk_userName` 约束，将昵称与头像列恢复为可空，
+再按备份表的用户 ID 恢复 `oldUserName`、`oldUserAvatar`，重新建立普通昵称索引。
+不要删除备份表，也不要覆盖账号、密码、角色和迁移后新增用户的数据。
+
+本地迁移演练可执行 `bash scripts/test-user-display-identity-migration.sh`，
+默认在现有 MySQL 容器内创建独立测试数据库，验证结束后自动删除，不使用真实用户作为样本。
+
+注册数据库回归测试：配置 `USER_IDENTITY_MYSQL_URL`、`USER_IDENTITY_MYSQL_USER`、
+`USER_IDENTITY_MYSQL_PASSWORD` 后，执行
+`bash mvnw -q -Dtest=UserRegistrationMysqlIntegrationTest test`。
+测试通过同连接临时表复制目标库的用户表约束，验证注册、登录、管理员新增和数据库默认值，
+连接关闭后自动清理测试数据；未设置连接地址时跳过。创建用户须使用 `insertSelective`，
+避免空时间字段覆盖数据库默认值而导致注册失败。
+
 ---
 
 ## 项目结构
@@ -650,7 +679,7 @@ LayeredChatMemory.messages()：
 
 | 表 | 关键字段 | 索引设计 |
 | :--- | :--- | :--- |
-| `user` | userAccount(uk) / userRole / userAvatar | `uk_userAccount` 唯一，`idx_userName` 提速搜索 |
+| `user` | userAccount(uk) / userRole / userAvatar | `uk_userAccount` 与 `uk_userName` 唯一 |
 | `app` | initPrompt / codeGenType / deployKey(uk) / priority / userId | `uk_deployKey` 保证部署标识唯一，`idx_userId` 加速我的列表 |
 | `chat_history` | message / messageType (user/ai) / appId / userId | **`idx_appId_createTime` 联合索引** —— 游标分页核心 |
 | `app_memory_summary` | summary(MEDIUMTEXT 5 段) / lastSummarizedId / summaryTokens / failCount / nextRetryTime | `uk_appId` 每应用一行 —— **L1 滚动摘要与持久化退避** |
@@ -709,7 +738,7 @@ langchain4j:
   open-ai:
     chat-model:                       # 主生成
       base-url: https://api.deepseek.com
-      model-name: deepseek-v4-flash
+      model-name: deepseek-flash
     streaming-chat-model:             # 流式生成
     reasoning-streaming-chat-model:   # 推理任务
     routing-chat-model:               # 路由分类（Qwen-Turbo）

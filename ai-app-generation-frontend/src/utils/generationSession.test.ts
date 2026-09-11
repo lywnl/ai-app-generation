@@ -8,10 +8,12 @@ import {
   getGenerationStatusText,
   shouldRefreshGenerationPreview,
   shouldHideCompletedReadOnlyTool,
+  shouldHideToolCall,
   shouldShowGenerationStatus,
   startGenerationSession,
   subscribeGenerationSession,
   type SessionEventType,
+  type GenerationSessionSnapshot,
 } from './generationSession'
 
 const encoder = new TextEncoder()
@@ -247,6 +249,182 @@ afterEach(() => {
   appIds.forEach(clearGenerationSession)
   appIds.clear()
   vi.unstubAllGlobals()
+})
+
+function fileExecuted(sequence: number, name: string, id = 'file-1', generation = '1', status = 'APPLIED') {
+  return structuredTool(sequence, generation, {
+    type: 'tool_executed', id, name,
+    arguments: JSON.stringify({ relativeFilePath: 'index.html', content: '<main>商城</main>' }),
+    result: JSON.stringify({
+      protocol: 'file-tool/v1', operation: name, status, relativePath: 'index.html',
+      changed: status === 'APPLIED' && !['readFile', 'readDir'].includes(name),
+      message: status, failureReason: null, content: null,
+    }),
+  })
+}
+
+function openFileSession(renderMode: 'direct' | 'throttled') {
+  const appId = `file-session-${appIds.size + 1}`
+  appIds.add(appId)
+  let stream!: ReadableStreamDefaultController<Uint8Array>
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) { stream = controller },
+  }), { headers: { 'Content-Type': 'text/event-stream' } })
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+  startGenerationSession({
+    appId, userMessage: '生成页面', generationId: crypto.randomUUID(),
+    baseURL: 'http://localhost/api', renderMode, throttleMs: 10_000,
+    expectVueTurnOutcome: true,
+  })
+  return {
+    appId,
+    push: (...frames: WireFrame[]) => stream.enqueue(encoder.encode(wire(frames))),
+    close: () => stream.close(),
+    snapshot: () => getGenerationSessionSnapshot(appId)!,
+  }
+}
+
+describe('文件工具卡片与完成正文交接', () => {
+  const tools = ['writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile']
+
+  describe.each(['direct', 'throttled'] as const)('%s 模式', (renderMode) => {
+    it.each(tools)('%s 仅在对应完成正文提交后隐藏卡片', async (name) => {
+      vi.useFakeTimers()
+      const session = openFileSession(renderMode)
+      const observed: GenerationSessionSnapshot[] = []
+      const unsubscribe = subscribeGenerationSession(session.appId, (snapshot) => observed.push(snapshot))
+      session.push(
+        structuredTool(1, '1', { type: 'tool_request', id: 'file-1', name }),
+        trustedDisplay(2, '1', 'file-1', 'REQUESTED', '准备文件'),
+      )
+      await vi.waitFor(() => expect(session.snapshot().toolCalls.has('file-1')).toBe(true))
+      expect(session.snapshot().toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
+      expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('file-1')!)).toBe(false)
+
+      session.push(fileExecuted(3, name))
+      await vi.waitFor(() => expect(session.snapshot().toolCalls.get('file-1')?.status).toBe('done'))
+      expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('file-1')!)).toBe(false)
+      session.push(trustedDisplay(4, '1', 'file-1', 'EXECUTED', '文件操作已完成'))
+      if (renderMode === 'throttled') {
+        await vi.advanceTimersByTimeAsync(100)
+        expect(session.snapshot().content).not.toContain('文件操作已完成')
+        expect(session.snapshot().toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
+        await vi.advanceTimersByTimeAsync(10_000)
+      }
+      await vi.waitFor(() => expect(session.snapshot().content).toContain('文件操作已完成'))
+      expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('file-1')!)).toBe(true)
+      for (const snapshot of observed) {
+        const view = snapshot.toolCalls.get('file-1')
+        if (view) expect(view.executedDisplayCommitted).toBe(snapshot.content.includes('文件操作已完成'))
+      }
+      unsubscribe()
+      const resumed: GenerationSessionSnapshot[] = []
+      const unsubscribeAgain = subscribeGenerationSession(session.appId, (snapshot) => resumed.push(snapshot))
+      expect(resumed.at(-1)?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(true)
+      session.push(outcome(5, 'SUCCEEDED'), done(6))
+      session.close()
+      await vi.waitFor(() => expect(session.snapshot().status).toBe('done'))
+      unsubscribeAgain()
+    })
+  })
+
+  it('同一文件不同调用各自交接且保留两条操作正文', async () => {
+    const session = openFileSession('direct')
+    session.push(
+      fileExecuted(1, 'writeFile', 'first'),
+      trustedDisplay(2, '1', 'first', 'EXECUTED', '第一次写 index.html\n'),
+      fileExecuted(3, 'writeFile', 'second', '2'),
+    )
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.has('second')).toBe(true))
+    expect(session.snapshot().toolCalls.get('first')?.executedDisplayCommitted).toBe(true)
+    expect(session.snapshot().toolCalls.get('second')?.executedDisplayCommitted).toBe(false)
+    session.push(
+      trustedDisplay(4, '2', 'second', 'EXECUTED', '第二次写 index.html\n'),
+      outcome(5, 'SUCCEEDED'), done(6),
+    )
+    session.close()
+    await vi.waitFor(() => expect(session.snapshot().status).toBe('done'))
+    expect(session.snapshot().content.match(/index.html/g)).toHaveLength(2)
+    expect(session.snapshot().toolCalls.size).toBe(2)
+    expect(session.snapshot().toolCalls.get('second')?.executedDisplayCommitted).toBe(true)
+  })
+
+  it.each(['NO_CHANGE', 'FAILED', 'REJECTED', 'CANCELLED'])('%s 结果正文保留原状态', async (status) => {
+    const snapshot = await runSession([
+      fileExecuted(1, 'writeFile', 'file-1', '1', status),
+      trustedDisplay(2, '1', 'file-1', 'EXECUTED', `文件结果：${status}`),
+      outcome(3, 'FAILED', false), done(4),
+    ])
+    expect(snapshot?.content).toContain(status)
+    expect(shouldHideToolCall(snapshot!, snapshot!.toolCalls.get('file-1')!)).toBe(true)
+    expect(snapshot?.toolCalls.get('file-1')?.result).toContain(status)
+  })
+
+  it.each(['FAILED', 'CANCELLED', 'TIMED_OUT', 'disconnect'])('%s 丢弃未显示正文时卡片仍保留', async (terminal) => {
+    const frames = [fileExecuted(1, 'writeFile'), trustedDisplay(2, '1', 'file-1', 'EXECUTED', '未显示正文')]
+    if (terminal !== 'disconnect') frames.push(outcome(3, terminal, false), done(4))
+    const snapshot = await runSession(frames, { renderMode: 'throttled', throttleMs: 10_000 })
+    expect(snapshot?.content).not.toContain('未显示正文')
+    expect(snapshot?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
+    expect(shouldHideToolCall(snapshot!, snapshot!.toolCalls.get('file-1')!)).toBe(false)
+  })
+
+  it.each([['other-id', '1'], ['file-1', '2']])('错误调用来源 %s/%s 不得隐藏卡片', async (id, generation) => {
+    const snapshot = await runSession([
+      fileExecuted(1, 'writeFile'), trustedDisplay(2, generation, id, 'EXECUTED', '错误来源'),
+    ])
+    expect(snapshot?.outcome).toBe('protocol_error')
+    expect(snapshot?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
+  })
+
+  it('回滚临时工具时保留已执行工具及其完成正文标记', async () => {
+    const snapshot = await runSession([
+      fileExecuted(1, 'writeFile'),
+      trustedDisplay(2, '1', 'file-1', 'EXECUTED', '已执行文件'),
+      structuredTool(3, '2', { type: 'tool_request', id: 'temp', name: 'writeFile' }),
+      trustedDisplay(4, '2', 'temp', 'REQUESTED', '临时文件'),
+      rollback(5, '2', 0, ['temp']), recovery(6, 'FAILED', '2', null, '2'),
+      outcome(7, 'PROTOCOL_ERROR', false), done(8),
+    ])
+    expect(snapshot?.toolCalls.has('temp')).toBe(false)
+    expect(snapshot?.content).toContain('已执行文件')
+    expect(snapshot?.content).not.toContain('临时文件')
+    expect(snapshot?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(true)
+  })
+
+  it.each(['direct', 'throttled'] as const)('%s 模式下 Skill 加载记录提交后才隐藏卡片', async (renderMode) => {
+    vi.useFakeTimers()
+    const session = openFileSession(renderMode)
+    session.push(structuredTool(1, '1', {
+      type: 'tool_executed', id: 'skill-1', name: 'readSkill',
+      arguments: '{"skillName":"vue-frontend-design"}',
+      result: JSON.stringify({
+        protocol: 'skill-tool/v1', operation: 'readSkill', status: 'APPLIED',
+        skillName: 'vue-frontend-design', message: 'Skill 正文已加载',
+        failureReason: null, content: null,
+      }),
+    }))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.get('skill-1')?.status).toBe('done'))
+    expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('skill-1')!)).toBe(false)
+    session.push(trustedDisplay(2, '1', 'skill-1', 'EXECUTED', '读取 Skill vue-frontend-design（已加载）'))
+    if (renderMode === 'throttled') {
+      await vi.advanceTimersByTimeAsync(100)
+      expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('skill-1')!)).toBe(false)
+      await vi.advanceTimersByTimeAsync(10_000)
+    }
+    await vi.waitFor(() => expect(session.snapshot().content).toContain('已加载'))
+    expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('skill-1')!)).toBe(true)
+    expect(session.snapshot().toolCalls.get('skill-1')?.args.skillName).toBe('vue-frontend-design')
+    session.push(outcome(3, 'SUCCEEDED'), done(4))
+    session.close()
+    await vi.waitFor(() => expect(session.snapshot().status).toBe('done'))
+  })
+
+  it('构建工具不受隐藏规则影响', () => {
+    expect(shouldHideToolCall({ status: 'done', outcome: 'succeeded' }, {
+      name: 'buildProject', status: 'done', executedDisplayCommitted: true,
+    })).toBe(false)
+  })
 })
 
 describe('generationSession generation-stream/v1 状态机', () => {

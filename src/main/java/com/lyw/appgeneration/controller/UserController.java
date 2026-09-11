@@ -14,6 +14,7 @@ import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.vo.user.LoginUserVO;
 import com.lyw.appgeneration.model.vo.user.UserVO;
 import com.lyw.appgeneration.service.UserService;
+import com.lyw.appgeneration.service.UserDisplayIdentityService;
 import com.mybatisflex.core.paginate.Page;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +33,9 @@ public class UserController {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private UserDisplayIdentityService displayIdentityService;
 
 
     @PostMapping("/register")
@@ -95,7 +99,7 @@ public class UserController {
         final String DEFAULT_PASSWORD = "12345678";
         String encryptPassword = userService.getEncryptPassword(DEFAULT_PASSWORD);
         user.setUserPassword(encryptPassword);
-        boolean result = userService.save(user);
+        boolean result = userService.createUser(user);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(user.getId());
     }
@@ -148,6 +152,9 @@ public class UserController {
         }
         User user = new User();
         BeanUtil.copyProperties(userUpdateRequest, user);
+        User existing = userService.getById(userUpdateRequest.getId());
+        ThrowUtils.throwIf(existing == null, ErrorCode.NOT_FOUND_ERROR);
+        displayIdentityService.validateUpdate(user, existing);
         boolean result = userService.updateById(user);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(true);
@@ -182,7 +189,8 @@ public class UserController {
     @PostMapping("save")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public boolean save(@RequestBody User user) {
-        return userService.save(user);
+        ThrowUtils.throwIf(user == null, ErrorCode.PARAMS_ERROR);
+        return userService.createUser(user);
     }
 
     /**
@@ -203,7 +211,12 @@ public class UserController {
      * @return {@code true} 更新成功，{@code false} 更新失败
      */
     @PutMapping("update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public boolean update(@RequestBody User user) {
+        ThrowUtils.throwIf(user == null || user.getId() == null, ErrorCode.PARAMS_ERROR);
+        User existing = userService.getById(user.getId());
+        ThrowUtils.throwIf(existing == null, ErrorCode.NOT_FOUND_ERROR);
+        displayIdentityService.validateUpdate(user, existing);
         return userService.updateById(user);
     }
 

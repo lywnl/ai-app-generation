@@ -19,7 +19,7 @@ class Json {
             .enable(SerializationFeature.INDENT_OUTPUT)
             .disable(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES);
 
-    private static final String DEEPSEEK_V4_FLASH_MODEL_KEYWORD = "deepseek-v4-flash";
+    private static final String DEEPSEEK_FLASH_MODEL_KEYWORD = "deepseek-flash";
 
     static String toJson(Object o) {
         try {
@@ -57,7 +57,9 @@ class Json {
         if (modelName == null || modelName.isBlank()) {
             return false;
         }
-        return modelName.toLowerCase(Locale.ROOT).contains(DEEPSEEK_V4_FLASH_MODEL_KEYWORD);
+        String normalized = modelName.toLowerCase(Locale.ROOT);
+        return normalized.contains(DEEPSEEK_FLASH_MODEL_KEYWORD)
+                || normalized.contains("deepseek-v4-flash");
     }
 
     static <T> T fromJson(String json, Class<T> clazz) {
@@ -68,4 +70,3 @@ class Json {
         }
     }
 }
-

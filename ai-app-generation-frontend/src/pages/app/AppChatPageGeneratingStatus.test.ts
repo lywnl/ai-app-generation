@@ -56,8 +56,8 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).toContain('message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))')
   })
 
-  it('只读回合完成后仅过滤读取工具卡片且保留原工具面板', () => {
-    expect(pageSource).toContain('shouldHideCompletedReadOnlyTool')
+  it('通过统一规则交接文件工具卡片且保留原工具面板', () => {
+    expect(pageSource).toContain('!shouldHideToolCall(snapshot, view)')
     expect(pageSource).toContain('const visibleToolCalls = new Map(')
     expect(pageSource).toContain('aiMessage.toolCalls = visibleToolCalls')
     expect(pageSource).toContain('v-if="message.toolCalls && message.toolCalls.size > 0"')

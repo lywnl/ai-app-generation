@@ -17,6 +17,9 @@ import java.util.List;
  */
 public interface UserService extends IService<User> {
 
+    /** 新建用户时统一生成并持久化展示身份。 */
+    boolean createUser(User user);
+
     /**
      * 用户注册
      * @param userAccount

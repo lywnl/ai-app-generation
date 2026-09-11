@@ -39,7 +39,7 @@ import static java.time.Duration.ofSeconds;
  */
 public class OpenAiStreamingChatModel implements StreamingChatModel {
 
-    private static final String DEEPSEEK_V4_FLASH_MODEL_KEYWORD = "deepseek-v4-flash";
+    private static final String DEEPSEEK_FLASH_MODEL_KEYWORD = "deepseek-flash";
 
     private final OpenAiClient client;
     private final OpenAiChatRequestParameters defaultRequestParameters;
@@ -214,7 +214,9 @@ public class OpenAiStreamingChatModel implements StreamingChatModel {
         if (isNullOrEmpty(modelName)) {
             return false;
         }
-        return modelName.toLowerCase(Locale.ROOT).contains(DEEPSEEK_V4_FLASH_MODEL_KEYWORD);
+        String normalized = modelName.toLowerCase(Locale.ROOT);
+        return normalized.contains(DEEPSEEK_FLASH_MODEL_KEYWORD)
+                || normalized.contains("deepseek-v4-flash");
     }
 
     private static void handle(ChatCompletionResponse partialResponse,

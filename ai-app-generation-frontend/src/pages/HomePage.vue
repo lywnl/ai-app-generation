@@ -72,6 +72,15 @@ const createApp = async () => {
   }
 }
 
+// 普通 Enter 直接提交，Shift + Enter 保留多行输入。
+const handlePromptKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Enter' || event.shiftKey) {
+    return
+  }
+  event.preventDefault()
+  createApp()
+}
+
 // 加载我的应用
 const loadMyApps = async () => {
   if (!loginUserStore.loginUser.id) {
@@ -180,6 +189,7 @@ onBeforeUnmount(() => {
           :rows="4"
           :maxlength="1000"
           class="prompt-input"
+          @keydown="handlePromptKeydown"
         />
         <div class="input-actions">
           <a-button

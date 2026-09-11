@@ -52,7 +52,7 @@
             <div v-if="message.type === 'user'" class="user-message">
               <div class="message-content">{{ message.content }}</div>
               <div class="message-avatar">
-                <a-avatar :src="loginUserStore.loginUser.userAvatar" />
+                <UserAvatar />
               </div>
             </div>
             <div v-else class="ai-message">
@@ -345,6 +345,7 @@ import { ref, onMounted, nextTick, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser'
+import UserAvatar from '@/components/UserAvatar.vue'
 import {
   getAppVoById,
   deployApp as deployAppApi,
@@ -369,7 +370,7 @@ import {
   getBuildProjectDisplayState,
   getBuildProjectVisualState,
   shouldRefreshGenerationPreview,
-  shouldHideCompletedReadOnlyTool,
+  shouldHideToolCall,
   getGenerationStatusText,
   shouldShowGenerationStatus,
 } from '@/utils/generationSession'
@@ -641,7 +642,7 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.content = snapshot.content
   const visibleToolCalls = new Map(
     [...snapshot.toolCalls].filter(
-      ([, view]) => !shouldHideCompletedReadOnlyTool(snapshot, view.name),
+      ([, view]) => !shouldHideToolCall(snapshot, view),
     ),
   )
   aiMessage.toolCalls = visibleToolCalls

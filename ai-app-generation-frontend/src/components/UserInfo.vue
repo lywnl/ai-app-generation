@@ -1,13 +1,14 @@
 <template>
   <div class="user-info">
-    <a-avatar :src="user?.userAvatar" :size="size">
-      {{ user?.userName?.charAt(0) || 'U' }}
-    </a-avatar>
-    <span v-if="showName" class="user-name">{{ user?.userName || '未知用户' }}</span>
+    <UserAvatar :size="size" />
+    <span v-if="showName" class="user-name">{{ formatUserDisplayName(user?.userName) }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue'
+import { formatUserDisplayName } from '@/utils/userDisplay'
+
 interface Props {
   user?: API.UserVO
   size?: number | 'small' | 'default' | 'large'
@@ -25,10 +26,12 @@ withDefaults(defineProps<Props>(), {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .user-name {
   font-size: 14px;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 </style>

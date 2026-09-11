@@ -2,7 +2,7 @@
   <a-layout-header class="header">
     <a-row :wrap="false" align="middle">
       <!-- 左侧：Logo和标题 -->
-      <a-col flex="220px">
+      <a-col class="brand-column">
         <RouterLink to="/" aria-label="返回主页">
           <div class="header-left">
             <img class="logo" src="@/assets/logo.png" alt="AI 应用生成 Logo" />
@@ -26,8 +26,7 @@
           <div v-if="loginUserStore.loginUser.id">
             <a-dropdown>
               <a-space class="user-trigger">
-                <a-avatar :src="loginUserStore.loginUser.userAvatar" />
-                <span class="user-name">{{ loginUserStore.loginUser.userName ?? '无名' }}</span>
+                <UserInfo :user="loginUserStore.loginUser" />
               </a-space>
               <template #overlay>
                 <a-menu>
@@ -50,6 +49,7 @@
 
 <script setup lang="ts">
 import { computed, h, ref } from 'vue'
+import UserInfo from '@/components/UserInfo.vue'
 import { useRouter } from 'vue-router'
 import { type MenuProps, message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser.ts'
@@ -138,6 +138,29 @@ const doLogout = async () => {
 .header {
   background: #fff;
   padding: 0 24px;
+}
+
+.brand-column {
+  flex: 0 0 220px;
+}
+
+@media (max-width: 640px) {
+  .header {
+    padding: 0 12px;
+  }
+
+  .brand-column {
+    flex-basis: 44px;
+  }
+
+  .header .site-title {
+    display: none;
+  }
+
+  .header .logo {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .header-left {

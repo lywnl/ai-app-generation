@@ -47,7 +47,7 @@ langchain4j:
     chat-model:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-v4-flash
+      model-name: deepseek-flash
       log-requests: ${AI_MODEL_LOG_REQUESTS:false}
       log-responses: ${AI_MODEL_LOG_RESPONSES:false}
       max-tokens: 8192
@@ -57,7 +57,7 @@ langchain4j:
     streaming-chat-model:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-v4-flash
+      model-name: deepseek-flash
       max-tokens: 8192
       log-requests: ${AI_MODEL_LOG_REQUESTS:false}
       log-responses: ${AI_MODEL_LOG_RESPONSES:false}
@@ -65,7 +65,7 @@ langchain4j:
     reasoning-streaming-chat-model:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-v4-flash
+      model-name: deepseek-flash
       max-tokens: 8192
       temperature: 0.1
       log-requests: ${AI_MODEL_LOG_REQUESTS:false}
@@ -82,7 +82,7 @@ langchain4j:
     routing-chat-model:
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
-      model-name: deepseek-v4-flash
+      model-name: deepseek-flash
       max-tokens: 256
       temperature: 0
       log-requests: ${AI_MODEL_LOG_REQUESTS:false}

@@ -21,14 +21,12 @@
     </div>
     <div class="app-info">
       <div class="app-info-left">
-        <a-avatar :src="app.user?.userAvatar" :size="40">
-          {{ app.user?.userName?.charAt(0) || 'U' }}
-        </a-avatar>
+        <UserAvatar :size="40" />
       </div>
       <div class="app-info-right">
         <h3 class="app-title">{{ app.appName || '未命名应用' }}</h3>
         <p class="app-author">
-          {{ app.user?.userName || (featured ? '官方' : '未知用户') }}
+          {{ formatUserDisplayName(app.user?.userName) }}
         </p>
       </div>
     </div>
@@ -36,6 +34,9 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue'
+import { formatUserDisplayName } from '@/utils/userDisplay'
+
 interface Props {
   app: API.AppVO
   featured?: boolean

@@ -24,6 +24,7 @@ public interface UserConstant {
      */
     String ADMIN_ROLE = "admin";
 
+    String DISPLAY_NAME_PATTERN = "用户_[0-9]{8}";
+
     // endregion
 }
-

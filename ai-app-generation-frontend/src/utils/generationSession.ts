@@ -23,6 +23,7 @@ export interface ToolCallView {
   generation: string
   provisional: boolean
   status: ToolCallStatus
+  executedDisplayCommitted: boolean
   args: ToolArgView
   result?: string
   build?: BuildProjectToolView
@@ -94,6 +95,19 @@ export function shouldHideCompletedReadOnlyTool(
     snapshot.status === 'done' &&
     snapshot.outcome === 'answered' &&
     (toolName === 'readFile' || toolName === 'readDir')
+  )
+}
+
+const DISPLAY_HANDOFF_TOOL_NAMES = new Set([
+  'writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile', 'readSkill',
+])
+
+export function shouldHideToolCall(
+  snapshot: Pick<GenerationSessionSnapshot, 'status' | 'outcome'>,
+  view: Pick<ToolCallView, 'name' | 'status' | 'executedDisplayCommitted'>,
+): boolean {
+  return shouldHideCompletedReadOnlyTool(snapshot, view.name) || (
+    DISPLAY_HANDOFF_TOOL_NAMES.has(view.name) && view.status === 'done' && view.executedDisplayCommitted
   )
 }
 
@@ -323,6 +337,15 @@ function cancelFlushTimer(session: SessionState): void {
 }
 
 function rebuildContent(session: SessionState): void {
+  session.snapshot.toolCalls.forEach((view) => {
+    view.executedDisplayCommitted = false
+  })
+  // 与可见正文同时派生，避免节流或失败丢弃正文时提前隐藏卡片。
+  for (const fragment of session.fragments) {
+    if (!fragment.committed || fragment.source !== 'trusted_tool_display' || fragment.stage !== 'EXECUTED') continue
+    const view = session.snapshot.toolCalls.get(fragment.toolRequestId)
+    if (view?.generation === fragment.generation) view.executedDisplayCommitted = true
+  }
   session.snapshot.content = session.fragments
     .filter((fragment) => fragment.committed)
     .map((fragment) => fragment.text)
@@ -600,6 +623,7 @@ function handleStructuredTool(
     }
     session.snapshot.toolCalls.set(id, {
       id, name, generation, provisional: true, status: 'streaming', args: {},
+      executedDisplayCommitted: false,
     })
   } else if (payload.type === 'tool_executed') {
     const existing = session.snapshot.toolCalls.get(id)
@@ -609,6 +633,7 @@ function handleStructuredTool(
     }
     const view = existing ?? {
       id, name, generation, provisional: true, status: 'streaming' as const, args: {},
+      executedDisplayCommitted: false,
     }
     mergeToolArguments(view, parseArgumentObject(payload.arguments as string))
     const result = sanitizeToolResult(name, payload.result as string)
