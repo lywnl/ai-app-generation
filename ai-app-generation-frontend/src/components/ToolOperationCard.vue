@@ -38,7 +38,7 @@
           </a-radio-group>
           <span class="operation-code-label">{{ codeLabel }}</span>
         </div>
-        <pre v-auto-scroll class="operation-code"><code><template v-if="renderedTokens"><span v-for="(token, index) in renderedTokens" :key="index" :class="[token.syntax ? `code-${token.syntax}` : undefined, token.change ? `code-${token.change}` : undefined]">{{ token.text }}</span></template><template v-else>{{ displayedCode }}</template></code></pre>
+        <pre class="operation-code"><code><template v-if="renderedTokens"><span v-for="(token, index) in renderedTokens" :key="index" :class="[token.syntax ? `code-${token.syntax}` : undefined, token.change ? `code-${token.change}` : undefined]">{{ token.text }}</span></template><template v-else>{{ displayedCode }}</template></code></pre>
       </template>
     </div>
   </div>
@@ -49,7 +49,6 @@ import { computed, useId } from 'vue'
 import { DownOutlined, RightOutlined, LoadingOutlined } from '@ant-design/icons-vue'
 import type { GenerationStatus, ToolCallView, ToolCardState } from '@/utils/generationSession'
 import { getToolOperationCode, getToolOperationResult, getToolOperationTarget, TOOL_OPERATION_LABELS } from '@/utils/toolOperationDisplay'
-import { vAutoScroll } from '@/directives/autoScroll'
 import { createModifyCodePresenter } from '@/utils/modifyCodePresentation'
 
 const props = defineProps<{
@@ -181,8 +180,9 @@ function updateState(patch: Partial<ToolCardState>) {
 .code-removed { background: #fee2e2; box-shadow: inset 0 -1px #c35a5a; }
 .operation-code {
   box-sizing: border-box;
-  height: 240px;
-  overflow: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
   margin: 0;
   padding: 12px;
   border: 1px solid var(--border-light);
@@ -192,13 +192,12 @@ function updateState(patch: Partial<ToolCardState>) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  overscroll-behavior: contain;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overscroll-behavior-x: contain;
 }
 @media (max-width: 768px) {
-  .operation-code { height: 180px; }
   .operation-header { padding: 0 4px; gap: 4px; }
   .operation-details { padding: 4px 8px 8px; }
 }

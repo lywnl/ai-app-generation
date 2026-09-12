@@ -1208,7 +1208,7 @@ onUnmounted(() => {
 }
 
 .message-content {
-  max-width: 70%;
+  max-width: 80%;
   padding: 12px 16px;
   border-radius: 12px;
   line-height: 1.5;
