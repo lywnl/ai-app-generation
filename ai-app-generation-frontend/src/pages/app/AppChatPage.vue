@@ -48,7 +48,7 @@
               加载更多历史消息
             </a-button>
           </div>
-          <div v-for="(message, index) in messages" :key="index" class="message-item">
+          <div v-for="message in messages" :key="message.id" class="message-item">
             <div v-if="message.type === 'user'" class="user-message">
               <div class="message-content">{{ message.content }}</div>
               <div class="message-avatar">
@@ -60,14 +60,28 @@
                 <a-avatar :src="aiAvatar" />
               </div>
               <div class="message-content">
-                <MarkdownRenderer v-if="message.content" :content="message.content" />
+                <template v-if="message.displayBlocks">
+                  <template v-for="block in message.displayBlocks" :key="block.key">
+                    <MarkdownRenderer v-if="block.kind === 'markdown'" :content="block.text" />
+                    <template v-else>
+                      <ToolOperationCard
+                        v-for="view in toolViewsForBlock(message, block)" :key="view.id"
+                        :tool-key="block.key" :view="view"
+                        :session-status="message.generationStatus ?? 'done'"
+                        :state="message.toolCardStates?.[block.key] ?? DEFAULT_TOOL_CARD_STATE"
+                        @update:state="updateToolCardState(message, block.key, $event)"
+                      />
+                    </template>
+                  </template>
+                </template>
+                <MarkdownRenderer v-else-if="message.content" :content="message.content" />
                 <!-- 工具调用实时视图:文件路径 + 流式内容预览 -->
                 <div
-                  v-if="message.toolCalls && message.toolCalls.size > 0"
+                  v-if="legacyToolCalls(message).size > 0"
                   class="tool-calls-panel"
                 >
                   <div
-                    v-for="[id, view] in message.toolCalls"
+                    v-for="[id, view] in legacyToolCalls(message)"
                     :key="id"
                     class="tool-call-card"
                     :class="{
@@ -356,6 +370,9 @@ import { CodeGenTypeEnum, formatCodeGenType } from '@/utils/codeGenTypes'
 import request from '@/request'
 import {
   type ToolCallView,
+  type GenerationDisplayBlock,
+  type GenerationStatus,
+  type ToolCardState,
   type GenerationSessionSnapshot,
   type GenerationOutcome,
   type ContextCompressionState,
@@ -371,43 +388,16 @@ import {
   getBuildProjectVisualState,
   shouldRefreshGenerationPreview,
   shouldHideToolCall,
+  isOperationTool,
+  setGenerationToolCardState,
   getGenerationStatusText,
   shouldShowGenerationStatus,
 } from '@/utils/generationSession'
 import { cancelChatGeneration } from '@/api/appController'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
-
-/**
- * 代码块自动贴底滚动指令:
- * - 只在"用户没有手动向上滚"时才贴底(阈值 16px);否则让用户保持阅读位置,避免骚扰。
- * - 绑定到 pre 元素,每次 updated(即 DELTA 追加后 DOM 重排)尝试滚到底。
- */
-const vAutoScroll = {
-  mounted(el: HTMLElement) {
-    el.scrollTop = el.scrollHeight
-    el.dataset.stickBottom = '1'
-    const onScroll = () => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 16
-      el.dataset.stickBottom = atBottom ? '1' : '0'
-    }
-    ;(el as HTMLElement & { __autoScrollHandler__?: () => void }).__autoScrollHandler__ = onScroll
-    el.addEventListener('scroll', onScroll)
-  },
-  updated(el: HTMLElement) {
-    if (el.dataset.stickBottom === '1') {
-      el.scrollTop = el.scrollHeight
-    }
-  },
-  beforeUnmount(el: HTMLElement) {
-    const handler = (el as HTMLElement & { __autoScrollHandler__?: () => void })
-      .__autoScrollHandler__
-    if (handler) {
-      el.removeEventListener('scroll', handler)
-      delete (el as HTMLElement & { __autoScrollHandler__?: () => void }).__autoScrollHandler__
-    }
-  },
-}
+import ToolOperationCard from '@/components/ToolOperationCard.vue'
+import { vAutoScroll } from '@/directives/autoScroll'
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
 import aiAvatar from '@/assets/aiAvatar.png'
@@ -434,6 +424,7 @@ const appId = ref<string>()
 
 // 对话相关
 interface Message {
+  id: string
   type: 'user' | 'ai'
   content: string
   loading?: boolean
@@ -444,6 +435,27 @@ interface Message {
   createTime?: string
   /** tool call id → 当前调用参数视图;保持插入顺序用 Map */
   toolCalls?: Map<string, ToolCallView>
+  displayBlocks?: GenerationDisplayBlock[]
+  toolCardStates?: Record<string, ToolCardState>
+  generationStatus?: GenerationStatus
+}
+
+const DEFAULT_TOOL_CARD_STATE: ToolCardState = { expanded: true, codeVersion: 'after' }
+
+function toolViewsForBlock(item: Message, block: Extract<GenerationDisplayBlock, { kind: 'tool' }>): ToolCallView[] {
+  const view = item.toolCalls?.get(block.toolRequestId)
+  return view?.generation === block.generation ? [view] : []
+}
+
+function legacyToolCalls(item: Message): Map<string, ToolCallView> {
+  return new Map([...item.toolCalls ?? []].filter(([, view]) =>
+    !item.displayBlocks || !isOperationTool(view.name)))
+}
+
+function updateToolCardState(item: Message, key: string, state: ToolCardState) {
+  item.toolCardStates ??= {}
+  item.toolCardStates[key] = { ...state }
+  if (appId.value) setGenerationToolCardState(appId.value, key, state)
 }
 
 const messages = ref<Message[]>([])
@@ -452,7 +464,7 @@ const isGenerating = ref(false)
 const isStopping = ref(false)
 const messagesContainer = ref<HTMLElement>()
 const activeSessionAppId = ref<string | null>(null)
-const sessionMessageIndex = ref<number | null>(null)
+const sessionMessageKey = ref<string | null>(null)
 const detachSession = ref<null | (() => void)>(null)
 const contextCompression = ref<ContextCompressionState>('idle')
 const internalOutputRecovery = ref<InternalOutputRecoveryState>('idle')
@@ -533,6 +545,7 @@ const loadChatHistory = async (isLoadMore = false) => {
         // 将对话历史转换为消息格式，并按时间正序排列（老消息在前）
         const historyMessages: Message[] = chatHistories
           .map((chat) => ({
+            id: chat.id ? `history-${chat.id}` : crypto.randomUUID(),
             type: (chat.messageType === 'user' ? 'user' : 'ai') as 'user' | 'ai',
             content: chat.message || '',
             createTime: chat.createTime,
@@ -634,11 +647,8 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   internalOutputRecovery.value = snapshot.internalOutputRecovery
   toolProtocolRecovery.value = snapshot.toolProtocolRecovery
   incompleteToolChainRecovery.value = snapshot.incompleteToolChainRecovery
-  const idx = sessionMessageIndex.value
-  if (idx === null || !messages.value[idx]) {
-    return
-  }
-  const aiMessage = messages.value[idx]
+  const aiMessage = messages.value.find((item) => item.id === sessionMessageKey.value)
+  if (!aiMessage) return
   aiMessage.content = snapshot.content
   const visibleToolCalls = new Map(
     [...snapshot.toolCalls].filter(
@@ -646,6 +656,9 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
     ),
   )
   aiMessage.toolCalls = visibleToolCalls
+  aiMessage.displayBlocks = snapshot.displayBlocks
+  aiMessage.toolCardStates = snapshot.toolCardStates
+  aiMessage.generationStatus = snapshot.status
   aiMessage.contextCompression = snapshot.contextCompression
   aiMessage.internalOutputRecovery = snapshot.internalOutputRecovery
   aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery
@@ -667,11 +680,13 @@ const createSessionMessage = (snapshot: GenerationSessionSnapshot) => {
   const canReuseLastAiMessage =
     snapshot.status !== 'streaming' && messages.value[lastMessageIndex]?.type === 'ai'
   if (canReuseLastAiMessage) {
-    sessionMessageIndex.value = lastMessageIndex
+    sessionMessageKey.value = messages.value[lastMessageIndex]?.id ?? null
     return
   }
-  sessionMessageIndex.value = messages.value.length
+  const id = crypto.randomUUID()
+  sessionMessageKey.value = id
   messages.value.push({
+    id,
     type: 'ai',
     content: '',
     loading: true,
@@ -746,7 +761,7 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
     return
   }
   activeSessionAppId.value = targetAppId
-  sessionMessageIndex.value = aiMessageIndex
+  sessionMessageKey.value = messages.value[aiMessageIndex]?.id ?? null
   isGenerating.value = true
 
   attachSessionListener(targetAppId)
@@ -787,7 +802,7 @@ const stopGeneration = async () => {
 
 const restoreActiveSessionIfNeeded = () => {
   const targetAppId = appId.value
-  if (!targetAppId || isGenerating.value || sessionMessageIndex.value !== null) {
+  if (!targetAppId || isGenerating.value || sessionMessageKey.value !== null) {
     return
   }
   const snapshot = getGenerationSessionSnapshot(targetAppId)
@@ -805,6 +820,7 @@ const restoreActiveSessionIfNeeded = () => {
 const sendInitialMessage = async (prompt: string) => {
   // 添加用户消息
   messages.value.push({
+    id: crypto.randomUUID(),
     type: 'user',
     content: prompt,
   })
@@ -812,6 +828,7 @@ const sendInitialMessage = async (prompt: string) => {
   // 添加AI消息占位符
   const aiMessageIndex = messages.value.length
   messages.value.push({
+    id: crypto.randomUUID(),
     type: 'ai',
     content: '',
     loading: true,
@@ -847,6 +864,7 @@ const sendMessage = async () => {
   userInput.value = ''
   // 添加用户消息（包含元素信息）
   messages.value.push({
+    id: crypto.randomUUID(),
     type: 'user',
     content: message,
   })
@@ -862,6 +880,7 @@ const sendMessage = async () => {
   // 添加AI消息占位符
   const aiMessageIndex = messages.value.length
   messages.value.push({
+    id: crypto.randomUUID(),
     type: 'ai',
     content: '',
     loading: true,
@@ -899,7 +918,7 @@ const finalizeGeneration = (snapshot: GenerationSessionSnapshot) => {
     clearGenerationSession(currentAppId)
   }
   activeSessionAppId.value = null
-  sessionMessageIndex.value = null
+  sessionMessageKey.value = null
   detachSession.value?.()
   detachSession.value = null
 }

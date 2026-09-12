@@ -24,6 +24,7 @@ export interface ToolCallView {
   provisional: boolean
   status: ToolCallStatus
   executedDisplayCommitted: boolean
+  executedDisplayText?: string
   args: ToolArgView
   result?: string
   build?: BuildProjectToolView
@@ -67,6 +68,15 @@ export type GenerationOutcome =
   | 'protocol_error'
   | 'incomplete_tool_chain'
 
+export type GenerationDisplayBlock =
+  | { kind: 'markdown'; key: string; text: string }
+  | { kind: 'tool'; key: string; generation: string; toolRequestId: string }
+
+export interface ToolCardState {
+  expanded: boolean
+  codeVersion: 'before' | 'after'
+}
+
 export interface GenerationSessionSnapshot {
   appId: string
   content: string
@@ -79,6 +89,8 @@ export interface GenerationSessionSnapshot {
   incompleteToolChainRecovery: IncompleteToolChainRecoveryState
   errorMessage?: string
   toolCalls: Map<string, ToolCallView>
+  displayBlocks?: GenerationDisplayBlock[]
+  toolCardStates: Record<string, ToolCardState>
 }
 
 export function shouldRefreshGenerationPreview(
@@ -98,17 +110,19 @@ export function shouldHideCompletedReadOnlyTool(
   )
 }
 
-const DISPLAY_HANDOFF_TOOL_NAMES = new Set([
-  'writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile', 'readSkill',
+const OPERATION_TOOL_NAMES = new Set([
+  'writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile', 'readSkill', 'buildProject',
 ])
+
+export function isOperationTool(name: string): boolean {
+  return OPERATION_TOOL_NAMES.has(name)
+}
 
 export function shouldHideToolCall(
   snapshot: Pick<GenerationSessionSnapshot, 'status' | 'outcome'>,
   view: Pick<ToolCallView, 'name' | 'status' | 'executedDisplayCommitted'>,
 ): boolean {
-  return shouldHideCompletedReadOnlyTool(snapshot, view.name) || (
-    DISPLAY_HANDOFF_TOOL_NAMES.has(view.name) && view.status === 'done' && view.executedDisplayCommitted
-  )
+  return shouldHideCompletedReadOnlyTool(snapshot, view.name)
 }
 
 export function getGenerationStatusText(
@@ -155,7 +169,7 @@ export interface StartGenerationSessionOptions {
   expectVueTurnOutcome: boolean
 }
 
-type ContentFragment =
+type IncomingContentFragment =
   | { source: 'simple_text'; text: string; committed: boolean }
   | { source: 'ai'; generation: string; text: string; committed: boolean }
   | {
@@ -166,6 +180,8 @@ type ContentFragment =
       text: string
       committed: boolean
     }
+
+type ContentFragment = IncomingContentFragment & { sequence: number }
 
 type Listener = (snapshot: GenerationSessionSnapshot, eventType: SessionEventType) => void
 type JsonRecord = Record<string, unknown>
@@ -184,6 +200,7 @@ interface InternalRecoveryProtocolState {
 interface SessionState {
   snapshot: GenerationSessionSnapshot
   fragments: ContentFragment[]
+  toolPositions: Map<string, number>
   listeners: Set<Listener>
   controller?: AbortController
   flushTimer?: ReturnType<typeof setTimeout>
@@ -268,6 +285,7 @@ function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
     toolProtocolRecovery: 'idle',
     incompleteToolChainRecovery: 'idle',
     toolCalls: new Map(),
+    toolCardStates: {},
   }
 }
 
@@ -280,7 +298,14 @@ function cloneSnapshot(snapshot: GenerationSessionSnapshot): GenerationSessionSn
       build: value.build ? { ...value.build } : undefined,
     })
   })
-  return { ...snapshot, toolCalls }
+  return {
+    ...snapshot,
+    toolCalls,
+    displayBlocks: snapshot.displayBlocks?.map((block) => ({ ...block })),
+    toolCardStates: Object.fromEntries(
+      Object.entries(snapshot.toolCardStates).map(([key, state]) => [key, { ...state }]),
+    ),
+  }
 }
 
 function createProtocolState(): InternalRecoveryProtocolState {
@@ -293,6 +318,7 @@ function getOrCreateSession(appId: string): SessionState {
   const created: SessionState = {
     snapshot: createEmptySnapshot(appId),
     fragments: [],
+    toolPositions: new Map(),
     listeners: new Set(),
     renderMode: 'throttled',
     throttleMs: DEFAULT_THROTTLE_MS,
@@ -320,6 +346,7 @@ function getActiveSession(appId: string, requestId: number): SessionState | unde
 function emit(appId: string, eventType: SessionEventType, requestId?: number): void {
   const session = sessions.get(appId)
   if (!session || (requestId !== undefined && session.requestId !== requestId)) return
+  rebuildDisplayBlocks(session)
   const snapshot = cloneSnapshot(session.snapshot)
   session.listeners.forEach((listener) => listener(snapshot, eventType))
 }
@@ -339,17 +366,58 @@ function cancelFlushTimer(session: SessionState): void {
 function rebuildContent(session: SessionState): void {
   session.snapshot.toolCalls.forEach((view) => {
     view.executedDisplayCommitted = false
+    view.executedDisplayText = ''
   })
-  // 与可见正文同时派生，避免节流或失败丢弃正文时提前隐藏卡片。
+  // 详情与正文使用相同提交边界，不能显示节流中或已丢弃的内容。
   for (const fragment of session.fragments) {
     if (!fragment.committed || fragment.source !== 'trusted_tool_display' || fragment.stage !== 'EXECUTED') continue
     const view = session.snapshot.toolCalls.get(fragment.toolRequestId)
-    if (view?.generation === fragment.generation) view.executedDisplayCommitted = true
+    if (view?.generation === fragment.generation) {
+      view.executedDisplayCommitted = true
+      view.executedDisplayText += fragment.text
+    }
   }
   session.snapshot.content = session.fragments
     .filter((fragment) => fragment.committed)
     .map((fragment) => fragment.text)
     .join('')
+}
+
+function rebuildDisplayBlocks(session: SessionState): void {
+  if (!session.expectVueTurnOutcome) return
+  const entries: { sequence: number; block: GenerationDisplayBlock }[] = []
+  const activeKeys = new Set<string>()
+  for (const view of session.snapshot.toolCalls.values()) {
+    if (!isOperationTool(view.name)) continue
+    const key = JSON.stringify([session.generationId, view.generation, view.id])
+    activeKeys.add(key)
+    if (shouldHideToolCall(session.snapshot, view)) continue
+    entries.push({
+      sequence: session.toolPositions.get(view.id) ?? 0,
+      block: { kind: 'tool', key, generation: view.generation, toolRequestId: view.id },
+    })
+  }
+  for (const fragment of session.fragments) {
+    if (!fragment.committed) continue
+    if (fragment.source === 'trusted_tool_display') {
+      const view = session.snapshot.toolCalls.get(fragment.toolRequestId)
+      if (view?.generation === fragment.generation && isOperationTool(view.name)) continue
+    }
+    entries.push({
+      sequence: fragment.sequence,
+      block: { kind: 'markdown', key: `text-${fragment.sequence}`, text: fragment.text },
+    })
+  }
+  const blocks: GenerationDisplayBlock[] = []
+  for (const { block } of entries.sort((a, b) => a.sequence - b.sequence)) {
+    const previous = blocks.at(-1)
+    if (previous?.kind === 'markdown' && block.kind === 'markdown') previous.text += block.text
+    else blocks.push(block)
+  }
+  session.snapshot.displayBlocks = blocks
+  for (const key of Object.keys(session.snapshot.toolCardStates)) {
+    if (!activeKeys.has(key)) delete session.snapshot.toolCardStates[key]
+  }
 }
 
 function discardPendingFragments(session: SessionState): void {
@@ -379,13 +447,13 @@ function hideAuxiliaryRecoveryStatuses(session: SessionState): boolean {
   return changed
 }
 
-function appendFragment(appId: string, requestId: number, fragment: ContentFragment): void {
+function appendFragment(appId: string, requestId: number, fragment: IncomingContentFragment): void {
   if (!fragment.text) return
   const session = getActiveSession(appId, requestId)
   if (!session) return
   hideAuxiliaryRecoveryStatuses(session)
   fragment.committed = session.renderMode === 'direct'
-  session.fragments.push(fragment)
+  session.fragments.push({ ...fragment, sequence: session.lastSequence })
   if (fragment.committed) {
     rebuildContent(session)
     emit(appId, 'delta', requestId)
@@ -659,6 +727,8 @@ function handleStructuredTool(
       }
     }
   }
+  if (!session.toolPositions.has(id)) session.toolPositions.set(id, session.lastSequence)
+  rebuildContent(session)
   hideAuxiliaryRecoveryStatuses(session)
   emit(appId, 'delta', requestId)
 }
@@ -809,6 +879,7 @@ function handleRollback(appId: string, requestId: number, payload: JsonRecord): 
     if (view?.provisional) {
       removableIds.add(id)
       session.snapshot.toolCalls.delete(id)
+      session.toolPositions.delete(id)
     }
   }
   session.fragments = session.fragments.filter(
@@ -1211,6 +1282,7 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.requestId += 1
   const requestId = session.requestId
   session.fragments = []
+  session.toolPositions.clear()
   session.generationId = options.generationId
   session.renderMode = renderMode
   session.throttleMs = throttleMs
@@ -1234,6 +1306,8 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
     toolProtocolRecovery: 'idle',
     incompleteToolChainRecovery: 'idle',
     toolCalls: new Map(),
+    displayBlocks: options.expectVueTurnOutcome ? [] : undefined,
+    toolCardStates: {},
   }
   emit(appId, 'delta', requestId)
   const controller = new AbortController()
@@ -1251,6 +1325,13 @@ export function getActiveGenerationId(appId: string): string | undefined {
   const session = sessions.get(appId)
   return session?.snapshot.status === 'streaming' && session.generationId
     ? session.generationId : undefined
+}
+
+export function setGenerationToolCardState(appId: string, key: string, state: ToolCardState): void {
+  const session = sessions.get(appId)
+  if (!session?.snapshot.displayBlocks?.some((block) => block.kind === 'tool' && block.key === key)) return
+  session.snapshot.toolCardStates[key] = { ...state }
+  // 展开状态在下次快照和重新订阅时恢复，不触发页面的自动吸底。
 }
 
 export function subscribeGenerationSession(appId: string, listener: Listener): () => void {

@@ -133,6 +133,8 @@ const renderedMarkdown = computed(() => {
   border-collapse: collapse;
   margin: 1em 0;
   width: 100%;
+  table-layout: fixed;
+  overflow-wrap: anywhere;
 }
 
 .markdown-content :deep(table th),
@@ -140,6 +142,7 @@ const renderedMarkdown = computed(() => {
   border: 1px solid var(--border-light);
   padding: 0.5em 0.8em;
   text-align: left;
+  vertical-align: top;
 }
 
 .markdown-content :deep(table th) {

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const pageSource = readFileSync(new URL('./AppChatPage.vue', import.meta.url), 'utf8')
+const cardSource = readFileSync(new URL('../../components/ToolOperationCard.vue', import.meta.url), 'utf8')
 
 describe('代码生成阶段提示文案', () => {
   it('两个加载区共用五级恢复提示派生函数并可被辅助技术感知', () => {
@@ -43,10 +44,11 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).toContain('expectVueTurnOutcome')
   })
 
-  it('左侧对话区继续渲染构建工具的执行中状态', () => {
-    expect(pageSource).toContain("view.name === 'buildProject'")
-    expect(pageSource).toContain("getBuildProjectDisplayState(view) === 'streaming'")
-    expect(pageSource).toContain('执行中')
+  it('构建工具使用统一卡片并保留阶段和错误摘要', () => {
+    expect(cardSource).toContain("view.name === 'buildProject' && view.build")
+    expect(cardSource).toContain('buildStageLabel')
+    expect(cardSource).toContain('view.build.errorSummary')
+    expect(cardSource).toContain("result.status === 'streaming'")
   })
 
   it('取消终态只结束生成，不重复弹出错误提示', () => {
@@ -56,11 +58,14 @@ describe('代码生成阶段提示文案', () => {
     expect(pageSource).toContain('message.error(outcomeMessage(snapshot.outcome, snapshot.errorMessage))')
   })
 
-  it('通过统一规则交接文件工具卡片且保留原工具面板', () => {
+  it('实时消息使用有序工具块，历史正文和构建面板保留原入口', () => {
     expect(pageSource).toContain('!shouldHideToolCall(snapshot, view)')
-    expect(pageSource).toContain('const visibleToolCalls = new Map(')
-    expect(pageSource).toContain('aiMessage.toolCalls = visibleToolCalls')
-    expect(pageSource).toContain('v-if="message.toolCalls && message.toolCalls.size > 0"')
+    expect(pageSource).toContain('aiMessage.displayBlocks = snapshot.displayBlocks')
+    expect(pageSource).toContain('ToolOperationCard')
+    expect(pageSource).toContain('v-for="block in message.displayBlocks"')
+    expect(pageSource).toContain(':key="message.id"')
+    expect(pageSource).toContain('setGenerationToolCardState(')
+    expect(pageSource).toContain('!isOperationTool(view.name)')
     expect(pageSource).toContain('updatePreview(true)')
   })
 })

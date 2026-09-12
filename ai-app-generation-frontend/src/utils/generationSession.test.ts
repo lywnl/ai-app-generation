@@ -12,6 +12,7 @@ import {
   shouldShowGenerationStatus,
   startGenerationSession,
   subscribeGenerationSession,
+  setGenerationToolCardState,
   type SessionEventType,
   type GenerationSessionSnapshot,
 } from './generationSession'
@@ -284,11 +285,11 @@ function openFileSession(renderMode: 'direct' | 'throttled') {
   }
 }
 
-describe('文件工具卡片与完成正文交接', () => {
+describe('文件工具卡片原位置更新', () => {
   const tools = ['writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile']
 
   describe.each(['direct', 'throttled'] as const)('%s 模式', (renderMode) => {
-    it.each(tools)('%s 仅在对应完成正文提交后隐藏卡片', async (name) => {
+    it.each(tools)('%s 完成正文提交前后保留同一工具块', async (name) => {
       vi.useFakeTimers()
       const session = openFileSession(renderMode)
       const observed: GenerationSessionSnapshot[] = []
@@ -299,6 +300,8 @@ describe('文件工具卡片与完成正文交接', () => {
       )
       await vi.waitFor(() => expect(session.snapshot().toolCalls.has('file-1')).toBe(true))
       expect(session.snapshot().toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
+      const initialBlock = session.snapshot().displayBlocks?.[0]
+      expect(initialBlock).toMatchObject({ kind: 'tool', toolRequestId: 'file-1', generation: '1' })
       expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('file-1')!)).toBe(false)
 
       session.push(fileExecuted(3, name))
@@ -312,7 +315,9 @@ describe('文件工具卡片与完成正文交接', () => {
         await vi.advanceTimersByTimeAsync(10_000)
       }
       await vi.waitFor(() => expect(session.snapshot().content).toContain('文件操作已完成'))
-      expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('file-1')!)).toBe(true)
+      expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('file-1')!)).toBe(false)
+      expect(session.snapshot().displayBlocks).toEqual([initialBlock])
+      expect(session.snapshot().toolCalls.get('file-1')?.executedDisplayText).toBe('文件操作已完成')
       for (const snapshot of observed) {
         const view = snapshot.toolCalls.get('file-1')
         if (view) expect(view.executedDisplayCommitted).toBe(snapshot.content.includes('文件操作已完成'))
@@ -356,7 +361,7 @@ describe('文件工具卡片与完成正文交接', () => {
       outcome(3, 'FAILED', false), done(4),
     ])
     expect(snapshot?.content).toContain(status)
-    expect(shouldHideToolCall(snapshot!, snapshot!.toolCalls.get('file-1')!)).toBe(true)
+    expect(shouldHideToolCall(snapshot!, snapshot!.toolCalls.get('file-1')!)).toBe(false)
     expect(snapshot?.toolCalls.get('file-1')?.result).toContain(status)
   })
 
@@ -367,6 +372,8 @@ describe('文件工具卡片与完成正文交接', () => {
     expect(snapshot?.content).not.toContain('未显示正文')
     expect(snapshot?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
     expect(shouldHideToolCall(snapshot!, snapshot!.toolCalls.get('file-1')!)).toBe(false)
+    expect(snapshot?.displayBlocks).toHaveLength(1)
+    expect(snapshot?.toolCalls.get('file-1')?.executedDisplayText).toBe('')
   })
 
   it.each([['other-id', '1'], ['file-1', '2']])('错误调用来源 %s/%s 不得隐藏卡片', async (id, generation) => {
@@ -375,6 +382,7 @@ describe('文件工具卡片与完成正文交接', () => {
     ])
     expect(snapshot?.outcome).toBe('protocol_error')
     expect(snapshot?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(false)
+    expect(snapshot?.toolCalls.get('file-1')?.executedDisplayText).toBe('')
   })
 
   it('回滚临时工具时保留已执行工具及其完成正文标记', async () => {
@@ -392,7 +400,7 @@ describe('文件工具卡片与完成正文交接', () => {
     expect(snapshot?.toolCalls.get('file-1')?.executedDisplayCommitted).toBe(true)
   })
 
-  it.each(['direct', 'throttled'] as const)('%s 模式下 Skill 加载记录提交后才隐藏卡片', async (renderMode) => {
+  it.each(['direct', 'throttled'] as const)('%s 模式下 Skill 加载后保留原卡片', async (renderMode) => {
     vi.useFakeTimers()
     const session = openFileSession(renderMode)
     session.push(structuredTool(1, '1', {
@@ -413,7 +421,7 @@ describe('文件工具卡片与完成正文交接', () => {
       await vi.advanceTimersByTimeAsync(10_000)
     }
     await vi.waitFor(() => expect(session.snapshot().content).toContain('已加载'))
-    expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('skill-1')!)).toBe(true)
+    expect(shouldHideToolCall(session.snapshot(), session.snapshot().toolCalls.get('skill-1')!)).toBe(false)
     expect(session.snapshot().toolCalls.get('skill-1')?.args.skillName).toBe('vue-frontend-design')
     session.push(outcome(3, 'SUCCEEDED'), done(4))
     session.close()
@@ -424,6 +432,156 @@ describe('文件工具卡片与完成正文交接', () => {
     expect(shouldHideToolCall({ status: 'done', outcome: 'succeeded' }, {
       name: 'buildProject', status: 'done', executedDisplayCommitted: true,
     })).toBe(false)
+  })
+})
+
+describe('实时展示块', () => {
+  describe.each(['direct', 'throttled'] as const)('%s 参数流', (renderMode) => {
+    it.each([
+      ['writeFile', 'content'], ['modifyFile', 'oldContent'], ['modifyFile', 'newContent'],
+    ])('%s.%s 每段增量立即更新同一个工具块', async (name, key) => {
+      const session = openFileSession(renderMode)
+      session.push(structuredTool(1, '1', { type: 'tool_request', id: 'stream', name }))
+      await vi.waitFor(() => expect(session.snapshot().toolCalls.has('stream')).toBe(true))
+      const block = session.snapshot().displayBlocks?.[0]
+      session.push(structuredTool(2, '1', { type: 'tool_argument_delta', id: 'stream', name, key, delta: 'const title = ' }))
+      await vi.waitFor(() => expect(session.snapshot().toolCalls.get('stream')?.args[key]).toBe('const title = '))
+      const firstSnapshot = session.snapshot()
+      session.push(structuredTool(3, '1', { type: 'tool_argument_delta', id: 'stream', name, key, delta: '"中文"\n' }))
+      await vi.waitFor(() => expect(session.snapshot().toolCalls.get('stream')?.args[key]).toBe('const title = "中文"\n'))
+      expect(session.snapshot().displayBlocks).toEqual([block])
+      expect(firstSnapshot.toolCalls.get('stream')?.args[key]).toBe('const title = ')
+      expect(session.snapshot().toolCalls.get('stream')?.status).toBe('streaming')
+    })
+  })
+
+  it('普通 AI 文字即使包含工具标记和代码围栏也仍是文字块', async () => {
+    const content = '[工具调用] 写入文件 index.html\n```html\n示例代码\n```'
+    const snapshot = await runSession([vueMessage(1, 'ai_text', content), outcome(2, 'ANSWERED', false), done(3)])
+    expect(snapshot?.displayBlocks).toMatchObject([{ kind: 'markdown', text: content }])
+    expect(snapshot?.toolCalls.size).toBe(0)
+  })
+
+  it('只读问答结束沿用隐藏规则，保留模型回答，Skill 不跟随隐藏', async () => {
+    const snapshot = await runSession([
+      fileExecuted(1, 'readFile'), trustedDisplay(2, '1', 'file-1', 'EXECUTED', '读取结果'),
+      structuredTool(3, '1', { type: 'tool_request', id: 'skill', name: 'readSkill' }),
+      vueMessage(4, 'ai_text', '这是回答'), outcome(5, 'ANSWERED', false), done(6),
+    ])
+    expect(snapshot?.displayBlocks).toMatchObject([
+      { kind: 'tool', toolRequestId: 'skill' }, { kind: 'markdown', text: '这是回答' },
+    ])
+    expect(snapshot?.toolCalls.has('file-1')).toBe(true)
+  })
+
+  it('按事件顺序交错文字与工具，相邻文字合并且不把工具正文重复渲染', async () => {
+    const snapshot = await runSession([
+      vueMessage(1, 'ai_text', '准备'), vueMessage(2, 'ai_text', '修改'),
+      structuredTool(3, '1', { type: 'tool_request', id: 'one', name: 'writeFile' }),
+      trustedDisplay(4, '1', 'one', 'REQUESTED', '选择工具'),
+      vueMessage(5, 'ai_text', '继续说明'),
+      fileExecuted(6, 'writeFile', 'one'),
+      trustedDisplay(7, '1', 'one', 'EXECUTED', '第一份代码'),
+      fileExecuted(8, 'writeFile', 'two'),
+      trustedDisplay(9, '1', 'two', 'EXECUTED', '第二份代码'),
+      outcome(10, 'SUCCEEDED'), done(11),
+    ])
+    expect(snapshot?.displayBlocks).toMatchObject([
+      { kind: 'markdown', text: '准备修改' },
+      { kind: 'tool', toolRequestId: 'one' },
+      { kind: 'markdown', text: '继续说明' },
+      { kind: 'tool', toolRequestId: 'two' },
+    ])
+    expect(snapshot?.content).toContain('第一份代码')
+    expect(snapshot?.toolCalls.get('two')?.executedDisplayText).toBe('第二份代码')
+  })
+
+  it('节流文字晚提交不会改变已占位工具的键或展开状态，重新订阅保留状态', async () => {
+    vi.useFakeTimers()
+    const session = openFileSession('throttled')
+    session.push(vueMessage(1, 'ai_text', '稍后显示'), fileExecuted(2, 'writeFile'))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.size).toBe(1))
+    const key = session.snapshot().displayBlocks![0]!.key
+    setGenerationToolCardState(session.appId, key, { expanded: true, codeVersion: 'before' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(session.snapshot().displayBlocks?.[1]?.key).toBe(key)
+    let resumed: GenerationSessionSnapshot | undefined
+    const off = subscribeGenerationSession(session.appId, (value) => { resumed = value })
+    expect(resumed?.toolCardStates[key]).toEqual({ expanded: true, codeVersion: 'before' })
+    resumed!.toolCardStates[key]!.expanded = false
+    expect(session.snapshot().toolCardStates[key]?.expanded).toBe(true)
+    off()
+  })
+
+  it('回滚删除临时工具块及展开状态，保留已执行块', async () => {
+    const session = openFileSession('direct')
+    session.push(fileExecuted(1, 'writeFile'),
+      structuredTool(2, '1', { type: 'tool_request', id: 'temp', name: 'modifyFile' }))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.size).toBe(2))
+    const key = session.snapshot().displayBlocks![1]!.key
+    setGenerationToolCardState(session.appId, key, { expanded: true, codeVersion: 'after' })
+    session.push(rollback(3, '1', 0, ['temp']), recovery(4, 'FAILED', '1', null, '1'))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.size).toBe(1))
+    expect(session.snapshot().displayBlocks).toHaveLength(1)
+    expect(session.snapshot().toolCardStates[key]).toBeUndefined()
+  })
+
+  it('修改版本按调用隔离，重新订阅保留选择且快照不共享状态', async () => {
+    const session = openFileSession('direct')
+    session.push(fileExecuted(1, 'modifyFile', 'first'), fileExecuted(2, 'modifyFile', 'second'))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.size).toBe(2))
+    const first = session.snapshot().displayBlocks?.[0]?.key
+    const second = session.snapshot().displayBlocks?.[1]?.key
+    if (!first || !second) throw new Error('缺少工具引用')
+    setGenerationToolCardState(session.appId, first, {
+      expanded: true, codeVersion: 'before',
+    })
+    let resumed: GenerationSessionSnapshot | undefined
+    const off = subscribeGenerationSession(session.appId, (value) => { resumed = value })
+    expect(resumed?.toolCardStates[first]).toEqual({ expanded: true, codeVersion: 'before' })
+    expect(resumed?.toolCardStates[second]).toBeUndefined()
+    const state = resumed?.toolCardStates[first]
+    if (!state) throw new Error('缺少恢复状态')
+    state.codeVersion = 'after'
+    expect(session.snapshot().toolCardStates[first]?.codeVersion).toBe('before')
+    off()
+  })
+
+  it('失败丢弃待提交完成正文后仍有工具记录，但没有泄漏待显示详情', async () => {
+    const snapshot = await runSession([
+      fileExecuted(1, 'writeFile'), trustedDisplay(2, '1', 'file-1', 'EXECUTED', '待显示代码'),
+      outcome(3, 'FAILED', false), done(4),
+    ], { renderMode: 'throttled', throttleMs: 10_000 })
+    expect(snapshot?.displayBlocks).toHaveLength(1)
+    expect(snapshot?.toolCalls.get('file-1')?.executedDisplayText).toBe('')
+  })
+
+  it('普通消息不启用展示块，构建工具归入卡片而不重复显示正文', async () => {
+    const simple = await runSession([simpleMessage(1, '普通文本'), done(2)], { vue: false })
+    expect(simple?.displayBlocks).toBeUndefined()
+    const build = await runSession([
+      structuredTool(1, '1', { type: 'tool_request', id: 'build', name: 'buildProject' }),
+      trustedDisplay(2, '1', 'build', 'REQUESTED', '开始构建'),
+      outcome(3, 'FAILED', false), done(4),
+    ])
+    expect(build?.displayBlocks).toMatchObject([{ kind: 'tool', toolRequestId: 'build' }])
+    expect(build?.content).toBe('开始构建')
+  })
+
+  it('构建完成后保持同一个工具块和手动收起状态', async () => {
+    const session = openFileSession('direct')
+    session.push(structuredTool(1, '1', { type: 'tool_request', id: 'build', name: 'buildProject' }),
+      trustedDisplay(2, '1', 'build', 'REQUESTED', '[选择工具] 构建项目'))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.size).toBe(1))
+    const block = session.snapshot().displayBlocks![0]!
+    setGenerationToolCardState(session.appId, block.key, { expanded: false, codeVersion: 'after' })
+    session.push(structuredTool(3, '1', {
+      type: 'tool_executed', id: 'build', name: 'buildProject', arguments: '{}', result: '{}',
+    }), trustedDisplay(4, '1', 'build', 'EXECUTED', '构建结果说明'))
+    await vi.waitFor(() => expect(session.snapshot().toolCalls.get('build')?.executedDisplayCommitted).toBe(true))
+    expect(session.snapshot().displayBlocks).toEqual([block])
+    expect(session.snapshot().toolCardStates[block.key]?.expanded).toBe(false)
+    expect(session.snapshot().toolCalls.get('build')?.executedDisplayText).toBe('构建结果说明')
   })
 })
 
