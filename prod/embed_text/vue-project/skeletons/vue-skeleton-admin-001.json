@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "vue-skeleton-admin-001",
+  "documentKind": "PROJECT_SKELETON",
+  "type": "vue-project",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "vue-router": "4.2.4",
+    "element-plus": "2.8.8",
+    "@element-plus/icons-vue": "2.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  },
+  "category": "admin",
+  "style": ["corporate", "sidebar", "data-dense"],
+  "tech": ["vue3", "vue-router", "element-plus", "element-icons", "vite"],
+  "title": "Element Plus 企业管理后台",
+  "embedText": "Vue3 Element Plus 管理后台 企业中台 侧边导航 数据概览 用户管理 表格 权限运营 Dashboard",
+  "description": "面向企业运营和内部系统的管理后台骨架，包含侧边菜单、顶部工作区、数据概览和用户表格页面。",
+  "files": [
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"vue-admin-console\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"vue\": \"3.3.4\",\n    \"vue-router\": \"4.2.4\",\n    \"element-plus\": \"2.8.8\",\n    \"@element-plus/icons-vue\": \"2.3.1\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-vue\": \"4.2.3\",\n    \"vite\": \"4.4.5\"\n  }\n}"
+    },
+    {
+      "path": "index.html",
+      "content": "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>启明运营中心</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>"
+    },
+    {
+      "path": "vite.config.js",
+      "content": "import { defineConfig } from 'vite'\nimport vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({ base: './', plugins: [vue()] })\n"
+    },
+    {
+      "path": "src/main.js",
+      "content": "import { createApp } from 'vue'\nimport ElementPlus from 'element-plus'\nimport 'element-plus/dist/index.css'\nimport App from './App.vue'\nimport router from './router/index.js'\nimport './style.css'\n\ncreateApp(App).use(ElementPlus).use(router).mount('#app')\n"
+    },
+    {
+      "path": "src/App.vue",
+      "content": "<template>\n  <el-container class=\"layout\">\n    <el-aside width=\"220px\">\n      <div class=\"logo\">启明运营中心</div>\n      <el-menu router :default-active=\"route.path\">\n        <el-menu-item index=\"/\"><el-icon><DataLine /></el-icon><span>经营概览</span></el-menu-item>\n        <el-menu-item index=\"/users\"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>\n      </el-menu>\n    </el-aside>\n    <el-container>\n      <el-header><span>企业工作台</span><el-tag type=\"success\">系统运行正常</el-tag></el-header>\n      <el-main><RouterView /></el-main>\n    </el-container>\n  </el-container>\n</template>\n\n<script setup>\nimport { DataLine, User } from '@element-plus/icons-vue'\nimport { useRoute } from 'vue-router'\n\nconst route = useRoute()\n</script>\n"
+    },
+    {
+      "path": "src/router/index.js",
+      "content": "import { createRouter, createWebHashHistory } from 'vue-router'\nimport DashboardView from '../views/DashboardView.vue'\nimport UserListView from '../views/UserListView.vue'\n\nexport default createRouter({\n  history: createWebHashHistory(),\n  routes: [\n    { path: '/', component: DashboardView },\n    { path: '/users', component: UserListView }\n  ]\n})\n"
+    },
+    {
+      "path": "src/views/DashboardView.vue",
+      "content": "<template>\n  <div>\n    <div class=\"heading\"><div><h1>经营概览</h1><p>查看今日核心业务指标</p></div><el-button type=\"primary\">下载日报</el-button></div>\n    <div class=\"metrics\">\n      <el-card v-for=\"item in metrics\" :key=\"item.label\" shadow=\"never\"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>{{ item.change }}</small></el-card>\n    </div>\n    <el-card shadow=\"never\"><template #header>待办事项</template><el-table :data=\"tasks\"><el-table-column prop=\"name\" label=\"任务\"/><el-table-column prop=\"owner\" label=\"负责人\"/><el-table-column prop=\"status\" label=\"状态\"/></el-table></el-card>\n  </div>\n</template>\n\n<script setup>\nconst metrics = [\n  { label: '今日成交额', value: '¥ 286,420', change: '较昨日 +12.8%' },\n  { label: '新增客户', value: '328', change: '较昨日 +8.1%' },\n  { label: '待处理工单', value: '24', change: '优先处理 5 项' }\n]\nconst tasks = [\n  { name: '审核渠道活动', owner: '陈晨', status: '进行中' },\n  { name: '整理本周客户反馈', owner: '林晓', status: '待开始' }\n]\n</script>\n"
+    },
+    {
+      "path": "src/views/UserListView.vue",
+      "content": "<template>\n  <el-card shadow=\"never\">\n    <template #header><div class=\"heading\"><div><h1>用户管理</h1><p>维护企业账号与状态</p></div><el-button type=\"primary\">新增用户</el-button></div></template>\n    <el-table :data=\"users\"><el-table-column prop=\"name\" label=\"姓名\"/><el-table-column prop=\"department\" label=\"部门\"/><el-table-column prop=\"role\" label=\"角色\"/><el-table-column prop=\"status\" label=\"状态\"/></el-table>\n  </el-card>\n</template>\n\n<script setup>\nconst users = [\n  { name: '周思远', department: '产品部', role: '管理员', status: '正常' },\n  { name: '许安然', department: '客户成功部', role: '成员', status: '正常' },\n  { name: '韩冬', department: '财务部', role: '审计员', status: '待激活' }\n]\n</script>\n"
+    },
+    {
+      "path": "src/style.css",
+      "content": ":root { font-family: Inter, system-ui, sans-serif; color: #24324a; background: #f3f6fb; }\n* { box-sizing: border-box; }\nbody { margin: 0; }\n.layout { min-height: 100vh; }\n.el-aside { background: #fff; border-right: 1px solid #e6eaf0; }\n.logo { height: 64px; display: flex; align-items: center; padding: 0 22px; font-weight: 800; color: #3157d5; }\n.el-menu { border-right: 0; }\n.el-header { display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid #e6eaf0; }\n.el-main { padding: 28px; }\n.heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }\nh1 { margin: 0 0 6px; font-size: 24px; }\np { margin: 0; color: #8791a3; }\n.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 18px; }\n.metrics .el-card__body { display: grid; gap: 10px; }\n.metrics strong { font-size: 28px; }\n.metrics small { color: #42a66a; }\n@media (max-width: 800px) { .el-aside { width: 72px !important; } .logo { font-size: 0; } .logo::after { content: '启明'; font-size: 15px; } .metrics { grid-template-columns: 1fr; } }\n"
+    }
+  ],
+  "qualityScore": 0.97
+}

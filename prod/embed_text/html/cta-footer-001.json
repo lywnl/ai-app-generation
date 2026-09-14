@@ -1,12 +1,31 @@
 {
+  "schemaVersion": 1,
   "id": "html-cta-footer-001",
+  "documentKind": "PAGE_SECTION",
   "type": "html",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "landing",
-  "style": ["minimal", "dark"],
-  "tech": ["html5", "css3"],
+  "style": [
+    "minimal",
+    "dark"
+  ],
+  "tech": [
+    "html5",
+    "css3"
+  ],
   "title": "最终 CTA + 完整页脚(订阅框 + 多列链接 + 社交图标 + 版权)",
   "embedText": "页脚 Footer CTA 订阅 邮件订阅 Newsletter 社交链接 微信 微博 GitHub 多列导航 版权信息 网站底部 订阅表单",
   "description": "landing 页底部 CTA 区 + 完整 footer,包含醒目的邮件订阅输入框、四列导航链接(产品/公司/资源/法律)、社交图标、底部版权",
-  "files": [{"path": "index.html", "content": "<section class=\"cta\"><h2>准备好开始了吗?</h2><p>订阅获取每周产品更新与最佳实践</p><form class=\"subscribe\" onsubmit=\"event.preventDefault();alert('订阅成功')\"><input type=\"email\" placeholder=\"输入你的邮箱\" required><button type=\"submit\">立即订阅</button></form></section><footer class=\"footer\"><div class=\"cols\"><div class=\"col\"><div class=\"logo\">✦ Brand</div><p class=\"tagline\">让创造更简单</p><div class=\"social\"><a href=\"#\">🐙</a><a href=\"#\">𝕏</a><a href=\"#\">📘</a></div></div><div class=\"col\"><h4>产品</h4><a href=\"#\">功能</a><a href=\"#\">定价</a><a href=\"#\">更新日志</a></div><div class=\"col\"><h4>公司</h4><a href=\"#\">关于我们</a><a href=\"#\">招聘</a><a href=\"#\">博客</a></div><div class=\"col\"><h4>资源</h4><a href=\"#\">文档</a><a href=\"#\">API</a><a href=\"#\">帮助中心</a></div><div class=\"col\"><h4>法律</h4><a href=\"#\">服务条款</a><a href=\"#\">隐私政策</a></div></div><div class=\"bottom\">© 2026 Brand Inc. · 沪ICP备000000号</div></footer><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#0b1220;color:#cbd5e1}.cta{text-align:center;padding:80px 20px;background:linear-gradient(135deg,#1e1b4b,#4c1d95);color:#fff}.cta h2{font-size:2.5rem;margin-bottom:12px}.cta p{opacity:.8;margin-bottom:32px}.subscribe{display:flex;max-width:480px;margin:0 auto;gap:8px;flex-wrap:wrap}.subscribe input{flex:1;min-width:200px;padding:14px 18px;border:none;border-radius:10px;font-size:15px}.subscribe button{padding:14px 28px;border:none;border-radius:10px;background:#fff;color:#4c1d95;font-weight:600;cursor:pointer}.footer{padding:60px 20px 24px}.cols{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:2fr repeat(4,1fr);gap:32px}@media(max-width:720px){.cols{grid-template-columns:1fr 1fr}}.logo{font-size:20px;color:#fff;margin-bottom:8px}.tagline{opacity:.7;margin-bottom:16px}.social a{display:inline-block;margin-right:8px;font-size:20px;text-decoration:none;opacity:.7}.social a:hover{opacity:1}.col h4{color:#fff;margin-bottom:12px;font-size:14px}.col a{display:block;color:#94a3b8;text-decoration:none;padding:4px 0;font-size:14px}.col a:hover{color:#fff}.bottom{max-width:1200px;margin:32px auto 0;padding-top:20px;border-top:1px solid #1e293b;font-size:13px;opacity:.6;text-align:center}</style>"}],
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<div class=\"footer-template\">\n  <section class=\"footer-template__cta\" aria-labelledby=\"footer-cta-title\">\n    <h2 id=\"footer-cta-title\">准备好开始了吗？</h2>\n    <p>订阅每周产品更新与实践建议。</p>\n    <form class=\"footer-template__subscribe\">\n      <label for=\"footer-email\">电子邮箱</label>\n      <div><input id=\"footer-email\" type=\"email\" autocomplete=\"email\" placeholder=\"name@example.com\" required><button type=\"submit\">立即订阅</button></div>\n      <p role=\"status\" aria-live=\"polite\"></p>\n    </form>\n  </section>\n  <footer class=\"footer-template__footer\">\n    <div class=\"footer-template__cols\">\n      <section><h3>✦ Brand</h3><p>让创造更简单。</p></section>\n      <nav aria-label=\"产品\"><h3>产品</h3><a href=\"#features\">功能</a><a href=\"#pricing\">定价</a><a href=\"#changes\">更新日志</a></nav>\n      <nav aria-label=\"公司\"><h3>公司</h3><a href=\"#about\">关于我们</a><a href=\"#jobs\">招聘</a><a href=\"#blog\">博客</a></nav>\n      <nav aria-label=\"资源\"><h3>资源</h3><a href=\"#docs\">文档</a><a href=\"#api\">API</a><a href=\"#help\">帮助中心</a></nav>\n    </div>\n    <p class=\"footer-template__copyright\">© 2026 Brand Inc. 保留所有权利。</p>\n  </footer>\n</div>\n<script>\n(() => {\n  const form = document.querySelector('.footer-template__subscribe');\n  const status = form.querySelector('[role=\"status\"]');\n  form.addEventListener('submit', event => {\n    event.preventDefault();\n    if (!form.reportValidity()) return;\n    status.textContent = '订阅成功，请留意确认邮件。';\n    form.reset();\n  });\n})();\n</script>\n<style>\n.footer-template { box-sizing: border-box; color: #cbd5e1; background: #0b1220; font-family: system-ui, sans-serif; }\n.footer-template__cta { padding: 64px 20px; color: #ffffff; background: linear-gradient(135deg, #312e81, #6d28d9); text-align: center; }\n.footer-template__cta h2 { margin: 0; font-size: clamp(2rem, 5vw, 3.2rem); }\n.footer-template__cta > p { margin: 12px 0 26px; color: #e0e7ff; }\n.footer-template__subscribe { max-width: 520px; margin: 0 auto; text-align: left; }\n.footer-template__subscribe label { display: block; margin-bottom: 8px; font-weight: 700; }\n.footer-template__subscribe > div { display: flex; flex-wrap: wrap; gap: 8px; }\n.footer-template input { box-sizing: border-box; flex: 1 1 240px; min-height: 46px; padding: 12px 14px; border: 0; border-radius: 10px; font: inherit; }\n.footer-template button { min-height: 46px; padding: 12px 22px; border: 0; border-radius: 10px; color: #312e81; background: #ffffff; font: inherit; font-weight: 800; cursor: pointer; }\n.footer-template [role=\"status\"] { min-height: 24px; margin: 8px 0 0; color: #fef3c7; }\n.footer-template__footer { padding: 48px 24px 24px; }\n.footer-template__cols { display: grid; grid-template-columns: 2fr repeat(3, 1fr); gap: 32px; max-width: 1120px; margin: 0 auto; }\n.footer-template h3 { margin: 0 0 12px; color: #ffffff; font-size: 1rem; }\n.footer-template nav a { display: block; min-height: 38px; padding: 7px 0; color: #94a3b8; text-decoration: none; }\n.footer-template__copyright { max-width: 1120px; margin: 32px auto 0; padding-top: 20px; border-top: 1px solid #263247; color: #94a3b8; text-align: center; }\n.footer-template input:focus-visible, .footer-template button:focus-visible, .footer-template a:focus-visible { outline: 3px solid #fde68a; outline-offset: 3px; }\n@media (max-width: 720px) { .footer-template__cols { grid-template-columns: 1fr 1fr; } }\n</style>\n"
+    }
+  ],
   "qualityScore": 0.89
 }

@@ -1,16 +1,39 @@
 {
+  "schemaVersion": 1,
   "id": "multi-markdown-editor-001",
+  "documentKind": "SINGLE_PAGE_APP",
   "type": "multi-file",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html-css-javascript",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "tool",
-  "style": ["minimal"],
-  "tech": ["html5", "css3", "vanilla-js"],
+  "style": [
+    "minimal"
+  ],
+  "tech": [
+    "html5",
+    "css3",
+    "vanilla-js"
+  ],
   "title": "实时 Markdown 编辑器(左编辑右预览 + 字数统计 + 极简渲染)",
   "embedText": "Markdown 编辑器 实时预览 左右分屏 笔记 编辑器 MD 渲染 字数统计 行数 粗体 标题 列表 代码",
   "description": "三文件分离的 Markdown 编辑器,左侧 textarea 输入、右侧实时预览,支持 # 标题、**粗体**、- 列表、`代码`、[链接] 渲染,顶部显示字数和行数",
   "files": [
-    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>Markdown 编辑器</title><link rel=\"stylesheet\" href=\"style.css\"></head><body><header><h1>Markdown 编辑器</h1><span id=\"stats\">字数: 0 · 行数: 1</span></header><main><textarea id=\"md\" placeholder=\"在这里开始你的创作...\"># 欢迎使用\n\n这是一个 **Markdown 编辑器**,支持实时预览。\n\n## 主要功能\n\n- 左侧编辑,右侧预览\n- 字数统计\n- 极简渲染\n\n## 示例\n\n行内代码 `const x = 1`\n\n[点击访问 GitHub](https://github.com)</textarea><article id=\"preview\"></article></main><script src=\"script.js\"></script></body></html>"},
-    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{height:100vh;display:flex;flex-direction:column;background:#0f172a;color:#e2e8f0}header{display:flex;justify-content:space-between;align-items:center;padding:14px 24px;background:#1e293b;border-bottom:1px solid #334155}header h1{font-size:1rem;font-weight:500}#stats{color:#94a3b8;font-size:13px}main{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#334155;overflow:hidden}#md{padding:20px;background:#1e293b;color:#e2e8f0;border:none;outline:none;resize:none;font-family:ui-monospace,monospace;font-size:14px;line-height:1.7}#preview{padding:20px;background:#0f172a;color:#e2e8f0;overflow-y:auto;line-height:1.7}#preview h1{font-size:1.75rem;margin:12px 0;color:#fff}#preview h2{font-size:1.35rem;margin:10px 0;color:#fff}#preview h3{font-size:1.1rem;margin:8px 0;color:#fff}#preview p{margin:10px 0}#preview strong{color:#fbbf24}#preview code{background:#334155;color:#fbbf24;padding:2px 6px;border-radius:4px;font-size:13px}#preview ul{padding-left:24px;margin:10px 0}#preview a{color:#60a5fa}@media(max-width:720px){main{grid-template-columns:1fr;grid-template-rows:1fr 1fr}}"},
-    {"path": "script.js", "content": "const md=document.getElementById('md');const pv=document.getElementById('preview');const stats=document.getElementById('stats');function render(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/^### (.+)$/gm,'<h3>$1</h3>').replace(/^## (.+)$/gm,'<h2>$1</h2>').replace(/^# (.+)$/gm,'<h1>$1</h1>').replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g,'<a href=\"$2\" target=\"_blank\">$1</a>').replace(/^- (.+)$/gm,'<li>$1</li>').replace(/(<li>.*<\\/li>\\n?)+/g,m=>`<ul>${m}</ul>`).replace(/^(?!<[hlua])(.+)$/gm,'<p>$1</p>').replace(/<p>\\s*<\\/p>/g,'')}function update(){const s=md.value;pv.innerHTML=render(s);stats.textContent=`字数: ${s.length} · 行数: ${s.split('\\n').length}`}md.addEventListener('input',update);update();"}
+    {
+      "path": "index.html",
+      "content": "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Markdown 编辑器</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <header class=\"toolbar\"><h1>Markdown 编辑器</h1><p id=\"stats\" role=\"status\" aria-live=\"polite\">字数：0 · 行数：1</p></header>\n  <main><section aria-labelledby=\"editor-title\"><h2 id=\"editor-title\">编辑区</h2><label for=\"markdown-input\">Markdown 内容</label><textarea id=\"markdown-input\" spellcheck=\"true\"># 欢迎使用\n\n这是一个 **安全的 Markdown 编辑器**。\n\n- 支持标题\n- 支持列表\n- 支持行内代码\n\n[访问 GitHub](https://github.com)</textarea></section><section aria-labelledby=\"preview-title\"><h2 id=\"preview-title\">实时预览</h2><article id=\"preview\"></article></section></main>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n"
+    },
+    {
+      "path": "style.css",
+      "content": ":root { color-scheme: dark; font-family: system-ui, sans-serif; }\n* { box-sizing: border-box; }\nbody { display: flex; min-height: 100vh; margin: 0; flex-direction: column; color: #e2e8f0; background: #0f172a; }\n.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 22px; border-bottom: 1px solid #334155; background: #1e293b; }\n.toolbar h1 { margin: 0; font-size: 1rem; }\n.toolbar p { margin: 0; color: #94a3b8; font-size: .85rem; }\nmain { display: grid; flex: 1; grid-template-columns: 1fr 1fr; gap: 1px; background: #334155; }\nmain > section { display: flex; min-width: 0; flex-direction: column; background: #0f172a; }\nmain h2, main label { padding: 0 20px; }\nmain h2 { margin: 14px 0 4px; font-size: 1rem; }\nmain label { color: #94a3b8; font-size: .82rem; }\ntextarea, #preview { flex: 1; min-height: 360px; padding: 20px; overflow: auto; border: 0; color: #e2e8f0; background: #172033; font: 14px/1.7 ui-monospace, monospace; }\ntextarea { resize: none; }\ntextarea:focus-visible, #preview a:focus-visible { outline: 3px solid #fbbf24; outline-offset: -3px; }\n#preview { background: #0f172a; font-family: system-ui, sans-serif; }\n#preview h1, #preview h2, #preview h3 { padding: 0; color: #ffffff; }\n#preview code { padding: 2px 5px; border-radius: 4px; color: #fde68a; background: #334155; }\n#preview a { color: #93c5fd; }\n@media (max-width: 760px) { main { grid-template-columns: 1fr; } textarea, #preview { min-height: 300px; } }\n"
+    },
+    {
+      "path": "script.js",
+      "content": "const input = document.querySelector('#markdown-input');\nconst preview = document.querySelector('#preview');\nconst stats = document.querySelector('#stats');\n\nfunction appendInline(parent, text) {\n  const tokenPattern = /(\\*\\*[^*]+\\*\\*|\\x60[^\\x60]+\\x60|\\[[^\\]]+\\]\\([^)]+\\))/g;\n  let cursor = 0;\n  for (const match of text.matchAll(tokenPattern)) {\n    parent.append(document.createTextNode(text.slice(cursor, match.index)));\n    const token = match[0];\n    if (token.startsWith('**')) {\n      const strong = document.createElement('strong');\n      strong.textContent = token.slice(2, -2);\n      parent.append(strong);\n    } else if (token.startsWith(String.fromCharCode(96))) {\n      const code = document.createElement('code');\n      code.textContent = token.slice(1, -1);\n      parent.append(code);\n    } else {\n      const parts = token.match(/^\\[([^\\]]+)\\]\\(([^)]+)\\)$/);\n      try {\n        const url = new URL(parts[2], window.location.href);\n        if (!['http:', 'https:'].includes(url.protocol)) throw new Error('不支持的链接协议');\n        const link = document.createElement('a');\n        link.textContent = parts[1];\n        link.href = url.href;\n        link.target = '_blank';\n        link.rel = 'noopener noreferrer';\n        parent.append(link);\n      } catch {\n        parent.append(document.createTextNode(parts[1]));\n      }\n    }\n    cursor = match.index + token.length;\n  }\n  parent.append(document.createTextNode(text.slice(cursor)));\n}\n\nfunction renderMarkdown(value) {\n  const fragment = new DocumentFragment();\n  let list = null;\n  value.split('\\n').forEach(line => {\n    if (line.startsWith('- ')) {\n      if (!list) { list = document.createElement('ul'); fragment.append(list); }\n      const item = document.createElement('li');\n      appendInline(item, line.slice(2));\n      list.append(item);\n      return;\n    }\n    list = null;\n    const heading = line.match(/^(#{1,3})\\s+(.+)$/);\n    const element = document.createElement(heading ? 'h' + heading[1].length : 'p');\n    appendInline(element, heading ? heading[2] : line);\n    fragment.append(element);\n  });\n  preview.replaceChildren(fragment);\n}\n\nfunction update() {\n  renderMarkdown(input.value);\n  stats.textContent = '字数：' + input.value.length + ' · 行数：' + input.value.split('\\n').length;\n}\ninput.addEventListener('input', update);\nupdate();\n"
+    }
   ],
   "qualityScore": 0.89
 }

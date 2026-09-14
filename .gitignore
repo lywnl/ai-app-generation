@@ -40,7 +40,7 @@ docker/.data
 
 tmp
 
-prod/artifacts/backend/
+/prod/artifacts/
 /logs/
 /prod/.env
 /dev/.env

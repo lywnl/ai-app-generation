@@ -2,8 +2,15 @@
   "id": "vue-login-form-001",
   "type": "vue-project",
   "category": "auth",
-  "style": ["minimal", "corporate"],
-  "tech": ["vue3", "composition-api", "element-plus"],
+  "style": [
+    "minimal",
+    "corporate"
+  ],
+  "tech": [
+    "vue3",
+    "composition-api",
+    "element-plus"
+  ],
   "title": "Vue3 + Element Plus 登录表单(邮箱密码 + 校验 + 记住我)",
   "embedText": "Vue3 Composition API Element Plus 登录表单 邮箱密码校验 异步校验 记住我 忘记密码 卡片式布局 el-form el-form-item el-input el-button",
   "description": "基于 Vue3 Composition API 和 Element Plus 的标准登录页,包含邮箱格式校验、密码长度校验、记住我复选框、找回密码链接,提交后显示 loading 状态",
@@ -13,5 +20,19 @@
       "content": "<template>\n  <div class=\"login-wrap\">\n    <el-card class=\"login-card\" shadow=\"hover\">\n      <h2 class=\"title\">欢迎回来</h2>\n      <el-form ref=\"formRef\" :model=\"form\" :rules=\"rules\" label-position=\"top\">\n        <el-form-item label=\"邮箱\" prop=\"email\">\n          <el-input v-model=\"form.email\" placeholder=\"you@example.com\" prefix-icon=\"Message\" />\n        </el-form-item>\n        <el-form-item label=\"密码\" prop=\"password\">\n          <el-input v-model=\"form.password\" type=\"password\" show-password prefix-icon=\"Lock\" />\n        </el-form-item>\n        <el-form-item>\n          <div class=\"row\">\n            <el-checkbox v-model=\"form.remember\">记住我</el-checkbox>\n            <el-link type=\"primary\" :underline=\"false\">忘记密码?</el-link>\n          </div>\n        </el-form-item>\n        <el-form-item>\n          <el-button type=\"primary\" :loading=\"loading\" style=\"width:100%\" @click=\"onSubmit\">登录</el-button>\n        </el-form-item>\n      </el-form>\n    </el-card>\n  </div>\n</template>\n\n<script setup>\nimport { reactive, ref } from 'vue'\nimport { ElMessage } from 'element-plus'\nconst formRef = ref()\nconst loading = ref(false)\nconst form = reactive({ email: '', password: '', remember: false })\nconst rules = {\n  email: [\n    { required: true, message: '请输入邮箱', trigger: 'blur' },\n    { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }\n  ],\n  password: [\n    { required: true, message: '请输入密码', trigger: 'blur' },\n    { min: 6, message: '密码至少 6 位', trigger: 'blur' }\n  ]\n}\nasync function onSubmit() {\n  await formRef.value.validate()\n  loading.value = true\n  setTimeout(() => { loading.value = false; ElMessage.success('登录成功') }, 800)\n}\n</script>\n\n<style scoped>\n.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 16px; }\n.login-card { width: 100%; max-width: 420px; border-radius: 16px; }\n.title { margin: 0 0 24px; text-align: center; color: #303133; }\n.row { display: flex; justify-content: space-between; width: 100%; }\n</style>"
     }
   ],
-  "qualityScore": 0.95
+  "qualityScore": 0.95,
+  "schemaVersion": 1,
+  "documentKind": "FEATURE_SNIPPET",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "element-plus": "2.8.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  }
 }

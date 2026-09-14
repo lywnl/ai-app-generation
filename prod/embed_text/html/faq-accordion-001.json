@@ -1,12 +1,30 @@
 {
+  "schemaVersion": 1,
   "id": "html-faq-accordion-001",
+  "documentKind": "PAGE_SECTION",
   "type": "html",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "landing",
-  "style": ["minimal"],
-  "tech": ["html5", "css3"],
+  "style": [
+    "minimal"
+  ],
+  "tech": [
+    "html5",
+    "css3"
+  ],
   "title": "FAQ 折叠问答(原生 details 标签 · 无需 JS)",
   "embedText": "FAQ 常见问题 折叠 手风琴 accordion 问答 Q&A 展开收起 details summary 标签 帮助中心 产品疑问",
   "description": "常见问题折叠组件,使用 HTML5 原生 details/summary 标签实现展开收起,无需 JS,包含展开箭头动画和高亮",
-  "files": [{"path": "index.html", "content": "<section class=\"faq\"><h2>常见问题</h2><p class=\"sub\">没有找到答案?可 <a href=\"#\">联系我们</a></p><div class=\"list\"><details><summary>如何开始使用?<span class=\"arrow\">+</span></summary><div class=\"ans\">注册账号后,在工作台点击\"新建项目\"即可。首次使用建议先阅读 5 分钟快速入门指南,也可以直接从模板库选择一个场景试用。</div></details><details><summary>付费方案有什么区别?<span class=\"arrow\">+</span></summary><div class=\"ans\">基础版适合个人使用,包含 10GB 存储和社区支持;专业版适合小团队协作,支持高级分析和优先邮件支持;企业版提供定制化服务和专属经理。</div></details><details><summary>数据存储在哪里?安全吗?<span class=\"arrow\">+</span></summary><div class=\"ans\">数据存储在阿里云 / 腾讯云国内多区域 IDC,采用 AES-256 加密,通过 ISO27001 和等保三级认证,支持数据出口合规审查。</div></details><details><summary>可以随时取消订阅吗?<span class=\"arrow\">+</span></summary><div class=\"ans\">可以。在账户设置 → 订阅管理中随时取消,取消后当前周期仍可正常使用,不会续费。数据会为你保留 30 天以便再次订阅时恢复。</div></details><details><summary>有开发文档和 API 吗?<span class=\"arrow\">+</span></summary><div class=\"ans\">有完整的中英文开发文档和 REST / gRPC 两种 API,专业版以上免费使用,也提供 Python / JS / Java 三种 SDK。</div></details></div></section><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#f8fafc;padding:60px 20px;color:#0f172a}.faq{max-width:760px;margin:0 auto}h2{text-align:center;font-size:2rem;margin-bottom:8px}.sub{text-align:center;color:#64748b;margin-bottom:36px}.sub a{color:#6366f1;text-decoration:none}details{background:#fff;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:12px;overflow:hidden;transition:border .2s}details[open]{border-color:#6366f1}summary{padding:18px 22px;cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;font-weight:500}summary::-webkit-details-marker{display:none}.arrow{font-size:20px;color:#6366f1;transition:transform .2s}details[open] .arrow{transform:rotate(45deg)}.ans{padding:0 22px 20px;color:#475569;line-height:1.7}</style>"}],
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<section class=\"faq-template\" aria-labelledby=\"faq-title\">\n  <header><h2 id=\"faq-title\">常见问题</h2><p>没有找到答案？<a href=\"#contact\">联系我们</a></p></header>\n  <div class=\"faq-template__list\">\n    <details><summary>如何开始使用？<span aria-hidden=\"true\">＋</span></summary><p>注册后在工作台创建项目，也可以从一个接近目标的模板开始。</p></details>\n    <details><summary>付费方案有什么区别？<span aria-hidden=\"true\">＋</span></summary><p>不同方案主要在存储、协作人数、分析能力与支持方式上有所区别。</p></details>\n    <details><summary>数据如何保护？<span aria-hidden=\"true\">＋</span></summary><p>系统采用传输与存储加密，并提供分层权限、操作审计和备份能力。</p></details>\n    <details><summary>可以随时取消订阅吗？<span aria-hidden=\"true\">＋</span></summary><p>可以。取消后当前计费周期仍可使用，之后不会继续扣费。</p></details>\n  </div>\n</section>\n<style>\n.faq-template { box-sizing: border-box; max-width: 820px; margin: 0 auto; padding: 72px 24px; color: #0f172a; background: #f8fafc; font-family: system-ui, sans-serif; }\n.faq-template > header { margin-bottom: 32px; text-align: center; }\n.faq-template h2 { margin: 0; font-size: clamp(2rem, 5vw, 3rem); }\n.faq-template > header p { color: #64748b; }\n.faq-template a { color: #4338ca; font-weight: 700; }\n.faq-template details { margin-bottom: 12px; overflow: hidden; border: 1px solid #dbe3ef; border-radius: 14px; background: #ffffff; }\n.faq-template summary { display: flex; min-height: 52px; align-items: center; justify-content: space-between; padding: 16px 20px; cursor: pointer; font-weight: 700; }\n.faq-template summary span { color: #4f46e5; font-size: 1.4rem; transition: transform .2s; }\n.faq-template details[open] summary span { transform: rotate(45deg); }\n.faq-template details p { margin: 0; padding: 0 20px 20px; color: #475569; line-height: 1.7; }\n.faq-template summary:focus-visible, .faq-template a:focus-visible { outline: 3px solid #818cf8; outline-offset: 3px; }\n@media (prefers-reduced-motion: reduce) { .faq-template summary span { transition: none; } }\n</style>\n"
+    }
+  ],
   "qualityScore": 0.93
 }

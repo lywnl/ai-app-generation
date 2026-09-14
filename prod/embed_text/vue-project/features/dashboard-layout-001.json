@@ -2,8 +2,15 @@
   "id": "vue-dashboard-layout-001",
   "type": "vue-project",
   "category": "dashboard",
-  "style": ["minimal", "corporate"],
-  "tech": ["vue3", "composition-api", "element-plus"],
+  "style": [
+    "minimal",
+    "corporate"
+  ],
+  "tech": [
+    "vue3",
+    "composition-api",
+    "element-plus"
+  ],
   "title": "Vue3 后台管理 Dashboard 布局(侧边栏 + 顶部导航 + 内容区)",
   "embedText": "Vue3 后台管理 Dashboard 布局 侧边栏 导航菜单 顶部栏 面包屑 用户头像 下拉菜单 三栏式布局 el-container el-aside el-header el-main",
   "description": "后台管理系统的经典三栏布局:左侧侧边栏含折叠菜单、顶部导航栏含面包屑和用户操作、中间内容区展示卡片数据。基于 Element Plus 的 el-container 系列组件",
@@ -13,5 +20,21 @@
       "content": "<template>\n  <el-container class=\"layout\">\n    <el-aside :width=\"collapse ? '64px' : '220px'\" class=\"aside\">\n      <div class=\"logo\">{{ collapse ? 'A' : 'Admin' }}</div>\n      <el-menu :default-active=\"active\" :collapse=\"collapse\" background-color=\"#001529\" text-color=\"#fff\" active-text-color=\"#409eff\">\n        <el-menu-item index=\"1\"><el-icon><HomeFilled /></el-icon><template #title>首页</template></el-menu-item>\n        <el-sub-menu index=\"2\">\n          <template #title><el-icon><User /></el-icon><span>用户管理</span></template>\n          <el-menu-item index=\"2-1\">用户列表</el-menu-item>\n          <el-menu-item index=\"2-2\">角色管理</el-menu-item>\n        </el-sub-menu>\n        <el-menu-item index=\"3\"><el-icon><Document /></el-icon><template #title>内容管理</template></el-menu-item>\n      </el-menu>\n    </el-aside>\n    <el-container>\n      <el-header class=\"header\">\n        <el-icon class=\"toggle\" @click=\"collapse = !collapse\"><Fold /></el-icon>\n        <el-breadcrumb separator=\"/\"><el-breadcrumb-item>工作台</el-breadcrumb-item><el-breadcrumb-item>概览</el-breadcrumb-item></el-breadcrumb>\n        <div class=\"right\">\n          <el-dropdown>\n            <span class=\"user\"><el-avatar :size=\"32\" src=\"https://picsum.photos/64\" /> admin</span>\n            <template #dropdown><el-dropdown-menu><el-dropdown-item>个人中心</el-dropdown-item><el-dropdown-item divided>退出登录</el-dropdown-item></el-dropdown-menu></template>\n          </el-dropdown>\n        </div>\n      </el-header>\n      <el-main class=\"main\"><router-view /></el-main>\n    </el-container>\n  </el-container>\n</template>\n\n<script setup>\nimport { ref } from 'vue'\nconst collapse = ref(false)\nconst active = ref('1')\n</script>\n\n<style scoped>\n.layout { min-height: 100vh; }\n.aside { background: #001529; transition: width .2s; overflow: hidden; }\n.logo { height: 56px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 18px; }\n.header { background: #fff; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; gap: 16px; }\n.toggle { font-size: 20px; cursor: pointer; }\n.right { margin-left: auto; }\n.user { display: flex; align-items: center; gap: 8px; cursor: pointer; }\n.main { background: #f5f7fa; }\n</style>"
     }
   ],
-  "qualityScore": 0.93
+  "qualityScore": 0.93,
+  "schemaVersion": 1,
+  "documentKind": "FEATURE_SNIPPET",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "element-plus": "2.8.8",
+    "vue-router": "4.2.4",
+    "@element-plus/icons-vue": "2.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  }
 }

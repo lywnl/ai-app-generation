@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "vue-skeleton-content-001",
+  "documentKind": "PROJECT_SKELETON",
+  "type": "vue-project",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "vue-router": "4.2.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  },
+  "category": "content-portal",
+  "style": ["editorial", "magazine", "reading-focused"],
+  "tech": ["vue3", "vue-router", "composition-api", "vite"],
+  "title": "Vue3 中文内容资讯门户",
+  "embedText": "Vue3 内容门户 资讯站 新闻 杂志 专栏 文章阅读 编辑精选 分类导航 原生 CSS",
+  "description": "面向媒体、知识社区和品牌内容运营的资讯门户骨架，包含头条、分类卡片、编辑精选与长文阅读页面。",
+  "files": [
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"vue-content-portal\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"vue\": \"3.3.4\",\n    \"vue-router\": \"4.2.4\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-vue\": \"4.2.3\",\n    \"vite\": \"4.4.5\"\n  }\n}"
+    },
+    {
+      "path": "index.html",
+      "content": "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>见山周刊</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>"
+    },
+    {
+      "path": "vite.config.js",
+      "content": "import { defineConfig } from 'vite'\nimport vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({ base: './', plugins: [vue()] })\n"
+    },
+    {
+      "path": "src/main.js",
+      "content": "import { createApp } from 'vue'\nimport App from './App.vue'\nimport router from './router/index.js'\nimport './style.css'\n\ncreateApp(App).use(router).mount('#app')\n"
+    },
+    {
+      "path": "src/App.vue",
+      "content": "<template>\n  <header>\n    <RouterLink class=\"logo\" to=\"/\">见山周刊</RouterLink>\n    <nav><a href=\"#cities\">城市</a><a href=\"#culture\">文化</a><a href=\"#ideas\">新知</a></nav>\n    <button>订阅周报</button>\n  </header>\n  <RouterView />\n  <footer>见山周刊 · 记录真实、具体而有温度的中文故事</footer>\n</template>\n"
+    },
+    {
+      "path": "src/router/index.js",
+      "content": "import { createRouter, createWebHashHistory } from 'vue-router'\nimport PortalView from '../views/PortalView.vue'\nimport ArticleView from '../views/ArticleView.vue'\n\nexport default createRouter({\n  history: createWebHashHistory(),\n  routes: [\n    { path: '/', component: PortalView },\n    { path: '/article/:slug', component: ArticleView }\n  ]\n})\n"
+    },
+    {
+      "path": "src/views/PortalView.vue",
+      "content": "<template>\n  <main>\n    <p class=\"issue\">第 126 期 · 城市与人的关系</p>\n    <RouterLink class=\"lead\" to=\"/article/walkable-city\"><div class=\"lead-image\">城市漫步</div><section><small>本期封面</small><h1>重新发现一座适合步行的城市</h1><p>当速度慢下来，街巷、店铺与人的关系开始重新显现。</p><strong>阅读全文 →</strong></section></RouterLink>\n    <div class=\"section-title\"><h2>编辑精选</h2><span>用一杯咖啡的时间，读懂三个故事</span></div>\n    <section class=\"cards\"><article v-for=\"item in articles\" :key=\"item.title\"><div class=\"picture\">{{ item.mark }}</div><small>{{ item.category }}</small><h3>{{ item.title }}</h3><p>{{ item.summary }}</p></article></section>\n  </main>\n</template>\n\n<script setup>\nconst articles = [\n  { mark: '山野', category: '自然', title: '在溪谷里寻找消失的声音', summary: '跟随声音采集者，记录季节变化。' },\n  { mark: '手艺', category: '人物', title: '年轻木匠与一把老刨子', summary: '传统技艺如何进入当代生活。' },\n  { mark: '夜航', category: '城市', title: '凌晨四点，港口仍然醒着', summary: '一座港口城市的夜班故事。' }\n]\n</script>\n"
+    },
+    {
+      "path": "src/views/ArticleView.vue",
+      "content": "<template>\n  <article class=\"article\">\n    <small>城市观察 · 12 分钟阅读</small><h1>重新发现一座适合步行的城市</h1><p class=\"intro\">步行不仅是一种移动方式，也是理解城市最直接的方法。</p>\n    <div class=\"article-image\">街道、树影与行人</div>\n    <p>清晨七点，沿河的第一家早餐铺刚刚揭开蒸笼。路边的长椅还带着露水，骑车送孩子上学的人从树荫下经过。</p>\n    <p>一条友好的街道不会催促人离开。它用连续的店面、舒适的尺度和随处可停留的地方，邀请人们观察、交谈和参与公共生活。</p>\n    <blockquote>好的城市不只解决从甲地到乙地的问题，也让途中发生的事情值得记住。</blockquote>\n  </article>\n</template>\n"
+    },
+    {
+      "path": "src/style.css",
+      "content": ":root { font-family: Georgia, 'Noto Serif SC', serif; color: #24231f; background: #fcfbf7; }\n* { box-sizing: border-box; }\nbody { margin: 0; }\na { color: inherit; text-decoration: none; }\nheader { height: 82px; display: flex; align-items: center; padding: 0 max(24px, calc((100% - 1080px) / 2)); border-bottom: 1px solid #dcd8cd; gap: 36px; }\n.logo { font-size: 25px; font-weight: 800; letter-spacing: .08em; margin-right: auto; }\nnav { display: flex; gap: 28px; }\nbutton { border: 1px solid #24231f; background: transparent; padding: 9px 16px; }\nmain { width: min(1080px, calc(100% - 40px)); margin: 0 auto; }\n.issue { margin: 34px 0 18px; color: #857d70; }\n.lead { display: grid; grid-template-columns: 1.3fr 1fr; background: #e7e0d1; }\n.lead-image { min-height: 410px; display: grid; place-items: center; background: #52655a; color: #e9eee8; font-size: 45px; letter-spacing: .2em; }\n.lead section { padding: 60px 50px; }\nh1 { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1.14; margin: 15px 0 22px; }\np { color: #625e56; line-height: 1.85; }\n.section-title { display: flex; align-items: end; justify-content: space-between; margin: 64px 0 22px; border-bottom: 2px solid #24231f; }\n.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px; padding-bottom: 72px; }\n.picture { aspect-ratio: 4/3; display: grid; place-items: center; margin-bottom: 18px; color: #fff; background: #8b6d58; font-size: 30px; }\n.cards h3 { font-size: 23px; margin: 8px 0; }\n.article { width: min(720px, calc(100% - 40px)); margin: 80px auto; font-size: 18px; }\n.intro { font-size: 22px; }\n.article-image { min-height: 330px; display: grid; place-items: center; margin: 40px -100px; background: #52655a; color: #fff; font-size: 26px; }\nblockquote { margin: 35px 0; padding-left: 24px; border-left: 4px solid #bd5a3f; font-size: 24px; line-height: 1.6; }\nfooter { padding: 36px; text-align: center; border-top: 1px solid #dcd8cd; color: #857d70; }\n@media (max-width: 760px) { nav { display: none; } .lead, .cards { grid-template-columns: 1fr; } .lead section { padding: 34px; } .article-image { margin: 30px 0; } }\n"
+    }
+  ],
+  "qualityScore": 0.96
+}

@@ -64,7 +64,7 @@ create table chat_history
 ) comment '对话历史' collate = utf8mb4_unicode_ci;
 
 
--- L1 滚动摘要表（每 app 一行）
+-- L1 滚动摘要表（分层记忆一期，每 app 一行）
 create table if not exists app_memory_summary
 (
     id               bigint                             not null comment '主键（snowflake）' primary key,

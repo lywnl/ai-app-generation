@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "vue-skeleton-basic-001",
+  "documentKind": "PROJECT_SKELETON",
+  "type": "vue-project",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "vue-router": "4.2.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  },
+  "category": "starter",
+  "style": ["minimal", "clean", "responsive"],
+  "tech": ["vue3", "vue-router", "composition-api", "vite"],
+  "title": "Vue3 基础起步工程",
+  "embedText": "Vue3 基础工程 起步模板 极简官网 响应式布局 首页 关于我们 Vue Router Vite 原生 CSS 无组件库",
+  "description": "适合企业官网、个人主页和小型展示站的轻量 Vue3 起步工程，包含响应式导航、首页、关于页和基础设计变量。",
+  "files": [
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"vue-basic-starter\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"vue\": \"3.3.4\",\n    \"vue-router\": \"4.2.4\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-vue\": \"4.2.3\",\n    \"vite\": \"4.4.5\"\n  }\n}"
+    },
+    {
+      "path": "index.html",
+      "content": "<!doctype html>\n<html lang=\"zh-CN\">\n  <head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>轻舟工作室</title>\n  </head>\n  <body>\n    <div id=\"app\"></div>\n    <script type=\"module\" src=\"/src/main.js\"></script>\n  </body>\n</html>"
+    },
+    {
+      "path": "vite.config.js",
+      "content": "import { defineConfig } from 'vite'\nimport vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({ base: './', plugins: [vue()] })\n"
+    },
+    {
+      "path": "src/main.js",
+      "content": "import { createApp } from 'vue'\nimport App from './App.vue'\nimport router from './router/index.js'\nimport './style.css'\n\ncreateApp(App).use(router).mount('#app')\n"
+    },
+    {
+      "path": "src/App.vue",
+      "content": "<template>\n  <div class=\"shell\">\n    <header>\n      <RouterLink class=\"brand\" to=\"/\">轻舟工作室</RouterLink>\n      <nav>\n        <RouterLink to=\"/\">首页</RouterLink>\n        <RouterLink to=\"/about\">关于我们</RouterLink>\n      </nav>\n    </header>\n    <main><RouterView /></main>\n    <footer>© 2026 轻舟工作室</footer>\n  </div>\n</template>\n"
+    },
+    {
+      "path": "src/router/index.js",
+      "content": "import { createRouter, createWebHashHistory } from 'vue-router'\nimport HomeView from '../views/HomeView.vue'\nimport AboutView from '../views/AboutView.vue'\n\nexport default createRouter({\n  history: createWebHashHistory(),\n  routes: [\n    { path: '/', component: HomeView },\n    { path: '/about', component: AboutView }\n  ]\n})\n"
+    },
+    {
+      "path": "src/views/HomeView.vue",
+      "content": "<template>\n  <section class=\"hero\">\n    <p class=\"eyebrow\">从想法到产品</p>\n    <h1>为小团队打造清晰、可靠的数字体验</h1>\n    <p>一个没有额外组件库的 Vue3 基础工程，适合从简单页面开始持续扩展。</p>\n    <RouterLink class=\"button\" to=\"/about\">了解团队</RouterLink>\n  </section>\n  <section class=\"features\">\n    <article v-for=\"item in features\" :key=\"item.title\">\n      <h2>{{ item.title }}</h2>\n      <p>{{ item.description }}</p>\n    </article>\n  </section>\n</template>\n\n<script setup>\nconst features = [\n  { title: '结构简单', description: '清晰的入口、路由与页面目录。' },\n  { title: '响应式布局', description: '手机和桌面端都能自然阅读。' },\n  { title: '便于扩展', description: '按业务逐步加入状态和组件。' }\n]\n</script>\n"
+    },
+    {
+      "path": "src/views/AboutView.vue",
+      "content": "<template>\n  <section class=\"page\">\n    <p class=\"eyebrow\">关于我们</p>\n    <h1>把复杂需求变成简单产品</h1>\n    <p>我们关注业务目标、可用性和长期维护成本，陪伴产品从第一版持续成长。</p>\n  </section>\n</template>\n"
+    },
+    {
+      "path": "src/style.css",
+      "content": ":root { font-family: Inter, system-ui, sans-serif; color: #172033; background: #f7f8fc; }\n* { box-sizing: border-box; }\nbody { margin: 0; }\na { color: inherit; }\n.shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }\nheader { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 max(24px, calc((100% - 1100px) / 2)); background: #fff; border-bottom: 1px solid #e7eaf0; }\n.brand { font-weight: 800; text-decoration: none; }\nnav { display: flex; gap: 24px; }\nnav a { text-decoration: none; color: #667085; }\nnav a.router-link-active { color: #3157d5; }\nmain { width: min(1100px, calc(100% - 40px)); margin: 0 auto; }\n.hero, .page { padding: 100px 0 72px; max-width: 720px; }\n.eyebrow { color: #3157d5; font-weight: 700; letter-spacing: .08em; }\nh1 { margin: 12px 0 20px; font-size: clamp(2.4rem, 7vw, 4.5rem); line-height: 1.05; }\np { line-height: 1.8; color: #5b6475; }\n.button { display: inline-block; margin-top: 20px; padding: 12px 20px; border-radius: 9px; background: #3157d5; color: #fff; text-decoration: none; }\n.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; padding-bottom: 72px; }\n.features article { padding: 24px; background: #fff; border-radius: 14px; border: 1px solid #e7eaf0; }\nfooter { padding: 28px; text-align: center; color: #8a93a3; }\n@media (max-width: 680px) { .features { grid-template-columns: 1fr; } header { padding: 0 20px; } }\n"
+    }
+  ],
+  "qualityScore": 0.95
+}

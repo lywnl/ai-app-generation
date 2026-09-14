@@ -1,5 +1,7 @@
 # 生产部署（仅上传 prod 目录）
 
+> 第二版升级必须先完成备份、Milvus 导入和验收。不要直接执行 `up -d` 覆盖线上环境。
+
 ## 1. 本地先生成产物（前后端打包进 prod）
 
 在项目根目录执行：
@@ -7,6 +9,15 @@
 ```powershell
 .\prod\build-artifacts.ps1
 ```
+
+macOS 可执行：
+
+```bash
+./prod/build-artifacts.sh /api
+```
+
+脚本会严格检查前后端构建退出码，同步 `sql/migrations`，并生成
+`prod/artifacts/RELEASE` 与 `prod/artifacts/SHA256SUMS`。构建失败时不会继续复制旧产物。
 
 该步骤会生成这些内容：
 
@@ -23,6 +34,21 @@
 `/opt/ai-app-generation/prod`
 
 ## 3. 服务器部署
+
+第二版迁移流程由 `migrate-rag.sh` 分阶段执行：
+
+```bash
+./migrate-rag.sh preflight
+./migrate-rag.sh backup
+./migrate-rag.sh start-milvus
+./migrate-rag.sh ingest
+./migrate-rag.sh verify
+```
+
+`ingest` 会使用当前 `embed_text` 的 35 份模板重新生成三类 Milvus 向量，旧 pgvector
+仅作为备份和迁移前核对来源。必须在维护窗口内执行；4GB 服务器若出现 OOM、Swap
+持续增长或健康检查失败，应立即停止，不进入清理阶段。只有备份可恢复、检索和业务
+验收全部通过后，才可由人工设置 `CONFIRM_DELETE_PGVECTOR=yes` 执行清理。
 
 进入服务器上的 `prod` 目录：
 

@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "vue-skeleton-shop-001",
+  "documentKind": "PROJECT_SKELETON",
+  "type": "vue-project",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "vue-router": "4.2.4",
+    "element-plus": "2.8.8",
+    "@element-plus/icons-vue": "2.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  },
+  "category": "ecommerce",
+  "style": ["warm", "editorial", "product-grid"],
+  "tech": ["vue3", "vue-router", "element-plus", "element-icons", "vite"],
+  "title": "Element Plus 生活方式商城",
+  "embedText": "Vue3 Element Plus 商城 电商 商品陈列 分类筛选 商品详情 购物车 生活方式 品牌零售",
+  "description": "面向品牌零售和生活方式商品的商城骨架，包含商品分类、商品网格、详情页、购物车数量和购买行动区。",
+  "files": [
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"vue-lifestyle-shop\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"vue\": \"3.3.4\",\n    \"vue-router\": \"4.2.4\",\n    \"element-plus\": \"2.8.8\",\n    \"@element-plus/icons-vue\": \"2.3.1\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-vue\": \"4.2.3\",\n    \"vite\": \"4.4.5\"\n  }\n}"
+    },
+    {
+      "path": "index.html",
+      "content": "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>拾光生活商店</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>"
+    },
+    {
+      "path": "vite.config.js",
+      "content": "import { defineConfig } from 'vite'\nimport vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({ base: './', plugins: [vue()] })\n"
+    },
+    {
+      "path": "src/main.js",
+      "content": "import { createApp } from 'vue'\nimport ElementPlus from 'element-plus'\nimport 'element-plus/dist/index.css'\nimport App from './App.vue'\nimport router from './router/index.js'\nimport './style.css'\n\ncreateApp(App).use(ElementPlus).use(router).mount('#app')\n"
+    },
+    {
+      "path": "src/App.vue",
+      "content": "<template>\n  <div class=\"shop\">\n    <header>\n      <RouterLink class=\"brand\" to=\"/\">拾光生活</RouterLink>\n      <nav><RouterLink to=\"/\">精选商品</RouterLink><RouterLink to=\"/product/1\">本周推荐</RouterLink></nav>\n      <el-badge :value=\"cartCount\"><el-icon :size=\"22\"><ShoppingBag /></el-icon></el-badge>\n    </header>\n    <RouterView @add-cart=\"cartCount += 1\" />\n  </div>\n</template>\n\n<script setup>\nimport { ref } from 'vue'\nimport { ShoppingBag } from '@element-plus/icons-vue'\nconst cartCount = ref(2)\n</script>\n"
+    },
+    {
+      "path": "src/router/index.js",
+      "content": "import { createRouter, createWebHashHistory } from 'vue-router'\nimport ProductListView from '../views/ProductListView.vue'\nimport ProductDetailView from '../views/ProductDetailView.vue'\n\nexport default createRouter({\n  history: createWebHashHistory(),\n  routes: [\n    { path: '/', component: ProductListView },\n    { path: '/product/:id', component: ProductDetailView }\n  ]\n})\n"
+    },
+    {
+      "path": "src/views/ProductListView.vue",
+      "content": "<template>\n  <main>\n    <section class=\"hero\"><span>秋日焕新</span><h1>让日常，多一点温度</h1><p>精选自然材质与耐用设计，构成值得长久陪伴的生活物件。</p></section>\n    <div class=\"toolbar\"><h2>本季精选</h2><el-segmented v-model=\"category\" :options=\"categories\" /></div>\n    <section class=\"grid\">\n      <RouterLink v-for=\"product in shownProducts\" :key=\"product.id\" :to=\"`/product/${product.id}`\" class=\"product\">\n        <div class=\"cover\" :style=\"{ background: product.color }\"><span>{{ product.emoji }}</span></div>\n        <small>{{ product.category }}</small><h3>{{ product.name }}</h3><strong>¥ {{ product.price }}</strong>\n      </RouterLink>\n    </section>\n  </main>\n</template>\n\n<script setup>\nimport { computed, ref } from 'vue'\nconst categories = ['全部', '家居', '饮食']\nconst category = ref('全部')\nconst products = [\n  { id: 1, name: '手作陶瓷分享壶', category: '饮食', price: 268, emoji: '🫖', color: '#d9c8ae' },\n  { id: 2, name: '亚麻休闲盖毯', category: '家居', price: 359, emoji: '🧶', color: '#c6d1c2' },\n  { id: 3, name: '胡桃木氛围灯', category: '家居', price: 429, emoji: '💡', color: '#d7b8a2' }\n]\nconst shownProducts = computed(() => category.value === '全部' ? products : products.filter(item => item.category === category.value))\n</script>\n"
+    },
+    {
+      "path": "src/views/ProductDetailView.vue",
+      "content": "<template>\n  <main class=\"detail\">\n    <div class=\"detail-cover\">🫖</div>\n    <section><small>拾光器物 · 手工系列</small><h1>手作陶瓷分享壶</h1><strong class=\"price\">¥ 268</strong><p>温润陶土经高温烧制，壶身保留手工拉坯的细微纹理。容量适合二至四人分享一壶好茶。</p><el-input-number v-model=\"quantity\" :min=\"1\" :max=\"8\"/><el-button type=\"primary\" size=\"large\" @click=\"emit('add-cart')\">加入购物车</el-button></section>\n  </main>\n</template>\n\n<script setup>\nimport { ref } from 'vue'\nconst emit = defineEmits(['add-cart'])\nconst quantity = ref(1)\n</script>\n"
+    },
+    {
+      "path": "src/style.css",
+      "content": ":root { font-family: 'Noto Serif SC', Georgia, serif; color: #352f29; background: #f8f5ef; }\n* { box-sizing: border-box; }\nbody { margin: 0; }\na { color: inherit; text-decoration: none; }\nheader { height: 76px; display: flex; align-items: center; gap: 42px; padding: 0 max(24px, calc((100% - 1120px) / 2)); background: #f8f5ef; border-bottom: 1px solid #ded6ca; }\n.brand { font-size: 22px; font-weight: 800; margin-right: auto; }\nnav { display: flex; gap: 24px; }\nmain { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }\n.hero { margin-top: 36px; min-height: 330px; padding: 70px; border-radius: 4px; background: linear-gradient(100deg, #314237, #71826f); color: #fff; }\n.hero h1 { font-size: clamp(2.4rem, 5vw, 4.2rem); margin: 14px 0; }\n.hero p { max-width: 520px; line-height: 1.8; color: #e7eee8; }\n.toolbar { display: flex; justify-content: space-between; align-items: center; margin: 52px 0 22px; }\n.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding-bottom: 70px; }\n.cover { aspect-ratio: 1; display: grid; place-items: center; font-size: 90px; margin-bottom: 16px; }\n.product small { color: #887b6b; }\n.product h3 { margin: 7px 0; }\n.detail { display: grid; grid-template-columns: 1.15fr 1fr; gap: 64px; padding-top: 70px; align-items: center; }\n.detail-cover { aspect-ratio: 1; display: grid; place-items: center; font-size: 150px; background: #d9c8ae; }\n.detail h1 { font-size: 48px; margin: 10px 0; }\n.detail p { line-height: 1.9; color: #6f655a; margin: 22px 0; }\n.price { display: block; font-size: 25px; }\n.detail .el-button { margin-left: 14px; }\n@media (max-width: 760px) { nav { display: none; } .hero { padding: 42px 28px; } .grid, .detail { grid-template-columns: 1fr; } }\n"
+    }
+  ],
+  "qualityScore": 0.97
+}

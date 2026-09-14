@@ -1,16 +1,40 @@
 {
+  "schemaVersion": 1,
   "id": "multi-weather-search-001",
+  "documentKind": "SINGLE_PAGE_APP",
   "type": "multi-file",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html-css-javascript",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "tool",
-  "style": ["minimal", "clean"],
-  "tech": ["html5", "css3", "vanilla-js"],
+  "style": [
+    "minimal",
+    "clean"
+  ],
+  "tech": [
+    "html5",
+    "css3",
+    "vanilla-js"
+  ],
   "title": "天气查询页(城市搜索 + 模拟数据 + 未来 5 天预报)",
   "embedText": "天气 天气查询 城市搜索 天气预报 未来几天 温度 湿度 风速 晴 多云 下雨 图标 weather app",
   "description": "纯前端天气查询页(使用模拟数据,不调外部 API),用户输入城市名后展示当天天气和未来 5 天预报,包含温度/湿度/风速/天气图标",
   "files": [
-    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>天气查询</title><link rel=\"stylesheet\" href=\"style.css\"></head><body><div class=\"wrap\"><form id=\"f\"><input id=\"q\" placeholder=\"输入城市名,如北京 / 上海 / 广州\" required><button>查询</button></form><div id=\"result\" class=\"result\" hidden><div class=\"now\"><div class=\"city\" id=\"city\"></div><div class=\"temp\"><span class=\"ico\" id=\"ico\"></span><span class=\"num\" id=\"temp\"></span>°</div><div class=\"meta\"><span id=\"desc\"></span> · 湿度 <span id=\"hum\"></span>% · 风 <span id=\"wind\"></span> km/h</div></div><div class=\"forecast\" id=\"forecast\"></div></div></div><script src=\"script.js\"></script></body></html>"},
-    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:linear-gradient(135deg,#60a5fa,#a78bfa);min-height:100vh;color:#fff;padding:40px 16px;display:flex;align-items:flex-start;justify-content:center}.wrap{width:100%;max-width:640px}#f{display:flex;gap:8px;margin-bottom:24px}#q{flex:1;padding:14px 18px;border:none;border-radius:10px;font-size:16px}button{padding:14px 24px;border:none;border-radius:10px;background:#0f172a;color:#fff;font-weight:600;cursor:pointer}.result{background:rgba(255,255,255,.15);border-radius:18px;padding:28px;backdrop-filter:blur(10px)}.city{font-size:1.5rem;opacity:.85;margin-bottom:8px}.temp{display:flex;align-items:center;gap:12px;margin-bottom:8px}.ico{font-size:64px}.num{font-size:5rem;font-weight:300}.meta{opacity:.85;margin-bottom:24px}.forecast{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding-top:20px;border-top:1px solid rgba(255,255,255,.2)}.day{text-align:center;padding:12px 4px;background:rgba(255,255,255,.1);border-radius:12px}.day .d{font-size:13px;opacity:.8}.day .i{font-size:24px;margin:6px 0}.day .t{font-weight:600}"},
-    {"path": "script.js", "content": "const WEATHERS=[{ico:'☀️',desc:'晴'},{ico:'⛅',desc:'多云'},{ico:'☁️',desc:'阴'},{ico:'🌧️',desc:'小雨'},{ico:'⛈️',desc:'雷阵雨'}];function mockWeather(seed){let h=0;for(let i=0;i<seed.length;i++)h=(h*31+seed.charCodeAt(i))&0xffffff;const r=n=>(h=(h*9301+49297)%233280,h/233280*n|0);const w=WEATHERS[r(WEATHERS.length)];return{w,temp:15+r(18),hum:40+r(50),wind:2+r(20)}}document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const q=document.getElementById('q').value.trim();if(!q)return;const d=mockWeather(q);document.getElementById('city').textContent=q;document.getElementById('ico').textContent=d.w.ico;document.getElementById('temp').textContent=d.temp;document.getElementById('desc').textContent=d.w.desc;document.getElementById('hum').textContent=d.hum;document.getElementById('wind').textContent=d.wind;const fc=document.getElementById('forecast');const days=['明天','后天','第3天','第4天','第5天'];fc.innerHTML=days.map((day,i)=>{const d2=mockWeather(q+i);return`<div class=\"day\"><div class=\"d\">${day}</div><div class=\"i\">${d2.w.ico}</div><div class=\"t\">${d2.temp}°</div></div>`}).join('');document.getElementById('result').hidden=false});"}
+    {
+      "path": "index.html",
+      "content": "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>天气查询</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <main class=\"weather\" aria-labelledby=\"weather-title\"><h1 id=\"weather-title\">天气查询</h1><form id=\"weather-form\"><label for=\"city-input\">城市名称</label><div><input id=\"city-input\" autocomplete=\"address-level2\" required placeholder=\"例如：北京\"><button type=\"submit\">查询</button></div></form><p id=\"weather-status\" role=\"status\" aria-live=\"polite\"></p><section id=\"weather-result\" hidden aria-labelledby=\"city-name\"><h2 id=\"city-name\"></h2><div class=\"current\"><span id=\"weather-icon\" aria-hidden=\"true\"></span><strong><span id=\"temperature\"></span>°</strong></div><p><span id=\"description\"></span> · 湿度 <span id=\"humidity\"></span>% · 风速 <span id=\"wind\"></span> km/h</p><h3>未来五天</h3><div id=\"forecast\" class=\"forecast\"></div></section></main>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n"
+    },
+    {
+      "path": "style.css",
+      "content": ":root { font-family: system-ui, sans-serif; }\n* { box-sizing: border-box; }\nbody { min-height: 100vh; margin: 0; padding: 40px 16px; color: #ffffff; background: linear-gradient(135deg, #2563eb, #7c3aed); }\n.weather { max-width: 680px; margin: 0 auto; }\n.weather h1 { margin: 0 0 24px; text-align: center; }\n#weather-form label { display: block; margin-bottom: 8px; font-weight: 700; }\n#weather-form > div { display: flex; gap: 8px; }\ninput, button { min-height: 46px; padding: 12px 14px; border: 0; border-radius: 10px; font: inherit; }\ninput { flex: 1; min-width: 0; }\nbutton { color: #ffffff; background: #0f172a; font-weight: 800; cursor: pointer; }\ninput:focus-visible, button:focus-visible { outline: 3px solid #fde68a; outline-offset: 3px; }\n#weather-status { min-height: 24px; color: #fef3c7; }\n#weather-result { padding: clamp(24px, 6vw, 36px); border: 1px solid rgba(255,255,255,.2); border-radius: 22px; background: rgba(255,255,255,.14); backdrop-filter: blur(12px); }\n#city-name { margin: 0; }\n.current { display: flex; align-items: center; gap: 14px; }\n#weather-icon { font-size: 4rem; }\n.current strong { font-size: clamp(3.5rem, 14vw, 5rem); font-weight: 300; }\n.forecast { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.28); }\n.forecast article { padding: 12px 5px; border-radius: 12px; background: rgba(255,255,255,.12); text-align: center; }\n.forecast span { display: block; margin: 6px 0; font-size: 1.5rem; }\n@media (max-width: 560px) { #weather-form > div { flex-direction: column; } .forecast { grid-template-columns: repeat(2, 1fr); } }\n"
+    },
+    {
+      "path": "script.js",
+      "content": "const weatherTypes = [{ icon: '☀️', text: '晴' }, { icon: '⛅', text: '多云' }, { icon: '☁️', text: '阴' }, { icon: '🌧️', text: '小雨' }, { icon: '⛈️', text: '雷阵雨' }];\nconst result = document.querySelector('#weather-result');\nconst status = document.querySelector('#weather-status');\n\nfunction mockWeather(seed) {\n  let hash = 0;\n  for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) & 0xffffff;\n  const next = maximum => { hash = (hash * 9301 + 49297) % 233280; return Math.floor(hash / 233280 * maximum); };\n  return { type: weatherTypes[next(weatherTypes.length)], temperature: 15 + next(18), humidity: 40 + next(50), wind: 2 + next(20) };\n}\n\nfunction createForecast(city) {\n  const container = document.querySelector('#forecast');\n  container.replaceChildren();\n  ['明天', '后天', '第 3 天', '第 4 天', '第 5 天'].forEach((day, index) => {\n    const data = mockWeather(city + index);\n    const card = document.createElement('article');\n    const title = document.createElement('strong');\n    const icon = document.createElement('span');\n    const temperature = document.createElement('small');\n    title.textContent = day;\n    icon.textContent = data.type.icon;\n    icon.setAttribute('aria-label', data.type.text);\n    temperature.textContent = data.temperature + '°';\n    card.append(title, icon, temperature);\n    container.append(card);\n  });\n}\n\ndocument.querySelector('#weather-form').addEventListener('submit', event => {\n  event.preventDefault();\n  const city = document.querySelector('#city-input').value.trim();\n  if (!city) return;\n  const data = mockWeather(city);\n  document.querySelector('#city-name').textContent = city;\n  document.querySelector('#weather-icon').textContent = data.type.icon;\n  document.querySelector('#temperature').textContent = data.temperature;\n  document.querySelector('#description').textContent = data.type.text;\n  document.querySelector('#humidity').textContent = data.humidity;\n  document.querySelector('#wind').textContent = data.wind;\n  createForecast(city);\n  result.hidden = false;\n  status.textContent = '已展示 ' + city + ' 的模拟天气数据';\n});\n"
+    }
   ],
   "qualityScore": 0.89
 }

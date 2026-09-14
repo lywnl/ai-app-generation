@@ -1,12 +1,31 @@
 {
+  "schemaVersion": 1,
   "id": "html-features-grid-001",
+  "documentKind": "PAGE_SECTION",
   "type": "html",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "landing",
-  "style": ["minimal", "playful"],
-  "tech": ["html5", "css3"],
+  "style": [
+    "minimal",
+    "playful"
+  ],
+  "tech": [
+    "html5",
+    "css3"
+  ],
   "title": "6 宫格产品特性展示(大号 emoji 图标 + 标题 + 说明)",
   "embedText": "产品特性 功能卡片 六宫格 三宫格 卖点展示 为什么选择我们 产品优势 核心功能 emoji 图标 landing page 特性区 feature cards",
   "description": "产品 landing 页的特性展示区,6 个卡片网格布局,每个卡片含大号 emoji 图标、简短标题和说明文字,响应式自适应",
-  "files": [{"path": "index.html", "content": "<section class=\"features\"><h2>为什么选择我们</h2><p class=\"sub\">用数据驱动增长,让团队专注创造</p><div class=\"grid\"><div class=\"card\"><div class=\"icon\">⚡</div><h3>极速性能</h3><p>毫秒级响应,99.99% 可用性,全球 CDN 加速分发</p></div><div class=\"card\"><div class=\"icon\">🔒</div><h3>安全可信</h3><p>银行级加密,数据本地化,符合 ISO27001 认证</p></div><div class=\"card\"><div class=\"icon\">🤖</div><h3>AI 驱动</h3><p>内置 AI 助手,智能建议,自动优化工作流程</p></div><div class=\"card\"><div class=\"icon\">📊</div><h3>实时分析</h3><p>多维度数据看板,支持自定义报表和告警</p></div><div class=\"card\"><div class=\"icon\">🌍</div><h3>全球部署</h3><p>多区域机房,一键切换,支持多语言本地化</p></div><div class=\"card\"><div class=\"icon\">💬</div><h3>7x24 支持</h3><p>专属客户经理 + 社区论坛,问题平均 30 分钟响应</p></div></div></section><style>*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#fff;padding:80px 20px;color:#0f172a}.features{max-width:1200px;margin:0 auto;text-align:center}.features h2{font-size:2.5rem;margin-bottom:12px}.sub{color:#64748b;margin-bottom:48px;font-size:18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px;text-align:left}.card{background:#f8fafc;border-radius:16px;padding:32px;transition:transform .2s,background .2s}.card:hover{transform:translateY(-4px);background:#eef2ff}.icon{font-size:48px;margin-bottom:16px}.card h3{font-size:1.25rem;margin-bottom:8px}.card p{color:#475569;line-height:1.6}</style>"}],
-  "qualityScore": 0.90
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<section class=\"features-template\" aria-labelledby=\"features-title\">\n  <header class=\"features-template__header\">\n    <p>核心能力</p>\n    <h2 id=\"features-title\">为什么选择我们</h2>\n    <span>用可靠的工具减少重复工作，把时间留给真正重要的创造。</span>\n  </header>\n  <div class=\"features-template__grid\">\n    <article><span aria-hidden=\"true\">⚡</span><h3>极速性能</h3><p>毫秒级响应与全球节点，让每次操作都保持流畅。</p></article>\n    <article><span aria-hidden=\"true\">🔒</span><h3>安全可信</h3><p>分层权限与加密存储，帮助团队守住重要数据。</p></article>\n    <article><span aria-hidden=\"true\">🤖</span><h3>AI 驱动</h3><p>从需求理解到执行建议，让智能真正进入工作流。</p></article>\n    <article><span aria-hidden=\"true\">📊</span><h3>实时分析</h3><p>清晰呈现关键指标，及时发现趋势与异常。</p></article>\n    <article><span aria-hidden=\"true\">🌍</span><h3>灵活部署</h3><p>支持多区域和多语言场景，陪伴业务持续扩展。</p></article>\n    <article><span aria-hidden=\"true\">💬</span><h3>专业支持</h3><p>文档、社区与服务团队共同保障稳定使用。</p></article>\n  </div>\n  <a class=\"features-template__link\" href=\"#details\">查看全部功能</a>\n</section>\n<style>\n.features-template { box-sizing: border-box; padding: 72px 24px; color: #0f172a; background: #ffffff; font-family: system-ui, sans-serif; }\n.features-template__header { max-width: 680px; margin: 0 auto 42px; text-align: center; }\n.features-template__header p { margin: 0 0 8px; color: #4f46e5; font-weight: 700; }\n.features-template__header h2 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); }\n.features-template__header span { display: block; margin-top: 14px; color: #64748b; line-height: 1.7; }\n.features-template__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 20px; max-width: 1160px; margin: 0 auto; }\n.features-template article { padding: 28px; border: 1px solid #e2e8f0; border-radius: 18px; background: #f8fafc; }\n.features-template article > span { display: inline-grid; width: 48px; height: 48px; place-items: center; border-radius: 14px; background: #eef2ff; font-size: 26px; }\n.features-template h3 { margin: 18px 0 8px; font-size: 1.2rem; }\n.features-template article p { margin: 0; color: #475569; line-height: 1.65; }\n.features-template__link { display: block; width: fit-content; min-height: 44px; margin: 34px auto 0; padding: 12px 18px; color: #4338ca; font-weight: 700; }\n.features-template a:focus-visible { outline: 3px solid #818cf8; outline-offset: 3px; }\n</style>\n"
+    }
+  ],
+  "qualityScore": 0.9
 }

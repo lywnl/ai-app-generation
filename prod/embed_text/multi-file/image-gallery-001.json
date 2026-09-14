@@ -1,16 +1,40 @@
 {
+  "schemaVersion": 1,
   "id": "multi-image-gallery-001",
+  "documentKind": "SINGLE_PAGE_APP",
   "type": "multi-file",
+  "version": "1.0.0",
+  "framework": "none",
+  "language": "html-css-javascript",
+  "buildTool": "none",
+  "dependencies": {},
+  "devDependencies": {},
   "category": "display",
-  "style": ["minimal", "clean"],
-  "tech": ["html5", "css3", "vanilla-js"],
+  "style": [
+    "minimal",
+    "clean"
+  ],
+  "tech": [
+    "html5",
+    "css3",
+    "vanilla-js"
+  ],
   "title": "图片画廊(网格 + 点击查看大图 lightbox)",
   "embedText": "图片画廊 图片墙 作品集 相册 网格布局 瀑布流 点击放大 大图预览 lightbox 灯箱 图片展示 摄影作品",
   "description": "响应式图片画廊,CSS Grid 布局,点击缩略图在 lightbox 层查看大图,支持键盘 Esc 关闭,移动端单列,桌面端多列",
   "files": [
-    {"path": "index.html", "content": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>画廊</title><link rel=\"stylesheet\" href=\"style.css\"></head><body><h1>作品画廊</h1><div class=\"grid\" id=\"grid\"></div><div class=\"lb\" id=\"lb\"><span class=\"close\">×</span><img id=\"lbImg\"></div><script src=\"script.js\"></script></body></html>"},
-    {"path": "style.css", "content": "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}body{background:#0f172a;color:#fff;padding:40px 20px}h1{text-align:center;margin-bottom:32px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;max-width:1200px;margin:0 auto}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:pointer;transition:transform .2s,opacity .2s}.grid img:hover{transform:scale(1.03);opacity:.85}.lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:100}.lb.on{display:flex}.lb img{max-width:92%;max-height:88%;border-radius:8px}.close{position:absolute;top:20px;right:28px;font-size:40px;color:#fff;cursor:pointer;user-select:none}"},
-    {"path": "script.js", "content": "const imgs=Array.from({length:12},(_,i)=>`https://picsum.photos/seed/${i+1}/600/600`);const grid=document.getElementById('grid');const lb=document.getElementById('lb');const lbImg=document.getElementById('lbImg');imgs.forEach(src=>{const el=document.createElement('img');el.src=src;el.loading='lazy';el.addEventListener('click',()=>{lbImg.src=src.replace('/600/600','/1200/1200');lb.classList.add('on')});grid.appendChild(el)});lb.addEventListener('click',()=>lb.classList.remove('on'));document.addEventListener('keydown',e=>{if(e.key==='Escape')lb.classList.remove('on')});"}
+    {
+      "path": "index.html",
+      "content": "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>作品画廊</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <main class=\"gallery\" aria-labelledby=\"gallery-title\"><h1 id=\"gallery-title\">作品画廊</h1><p>选择任意图片查看大图。</p><div id=\"gallery-grid\" class=\"grid\"></div></main>\n  <div id=\"lightbox\" class=\"lightbox\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"lightbox-title\" hidden><div class=\"lightbox__panel\"><h2 id=\"lightbox-title\">图片预览</h2><button id=\"lightbox-close\" type=\"button\" aria-label=\"关闭图片预览\">×</button><img id=\"lightbox-image\" alt=\"当前选中作品的大图预览\"></div></div>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n"
+    },
+    {
+      "path": "style.css",
+      "content": ":root { color-scheme: dark; font-family: system-ui, sans-serif; }\n* { box-sizing: border-box; }\nbody { min-height: 100vh; margin: 0; padding: 40px 20px; color: #f8fafc; background: #0f172a; }\n.gallery { max-width: 1180px; margin: 0 auto; }\n.gallery h1, .gallery > p { text-align: center; }\n.gallery > p { margin-bottom: 30px; color: #94a3b8; }\n.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }\n.grid button { display: block; min-height: 44px; padding: 0; overflow: hidden; border: 0; border-radius: 12px; background: #1e293b; cursor: zoom-in; }\n.grid img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; transition: transform .2s; }\n.grid button:hover img { transform: scale(1.035); }\nbutton:focus-visible { outline: 3px solid #fbbf24; outline-offset: 4px; }\n.lightbox { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(2, 6, 23, .94); }\n.lightbox[hidden] { display: none; }\n.lightbox__panel { position: relative; width: min(100%, 980px); }\n.lightbox h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }\n.lightbox img { display: block; width: 100%; max-height: 82vh; border-radius: 12px; object-fit: contain; }\n#lightbox-close { position: absolute; top: 10px; right: 10px; z-index: 1; width: 48px; height: 48px; border: 0; border-radius: 50%; color: #ffffff; background: rgba(15,23,42,.78); font-size: 2rem; cursor: pointer; }\n@media (prefers-reduced-motion: reduce) { .grid img { transition: none; } }\n"
+    },
+    {
+      "path": "script.js",
+      "content": "const images = Array.from({ length: 12 }, (_, index) => ({\n  thumb: 'https://picsum.photos/seed/gallery-' + (index + 1) + '/600/600',\n  full: 'https://picsum.photos/seed/gallery-' + (index + 1) + '/1200/900',\n  alt: '画廊作品 ' + (index + 1)\n}));\nconst gallery = document.querySelector('.gallery');\nconst grid = document.querySelector('#gallery-grid');\nconst lightbox = document.querySelector('#lightbox');\nconst lightboxImage = document.querySelector('#lightbox-image');\nconst closeButton = document.querySelector('#lightbox-close');\nlet previousFocus = null;\n\nimages.forEach(image => {\n  const button = document.createElement('button');\n  const element = document.createElement('img');\n  button.type = 'button';\n  button.setAttribute('aria-label', '查看大图：' + image.alt);\n  element.src = image.thumb;\n  element.alt = image.alt;\n  element.loading = 'lazy';\n  button.append(element);\n  button.addEventListener('click', () => {\n    previousFocus = button;\n    lightboxImage.src = image.full;\n    lightboxImage.alt = image.alt + '的大图';\n    gallery.inert = true;\n    lightbox.hidden = false;\n    closeButton.focus();\n  });\n  grid.append(button);\n});\n\nfunction closeLightbox() {\n  if (lightbox.hidden) return;\n  lightbox.hidden = true;\n  gallery.inert = false;\n  lightboxImage.removeAttribute('src');\n  if (previousFocus) previousFocus.focus();\n}\n\ncloseButton.addEventListener('click', closeLightbox);\nlightbox.addEventListener('click', event => { if (event.target === lightbox) closeLightbox(); });\ndocument.addEventListener('keydown', event => {\n  if (event.key === 'Escape') closeLightbox();\n  if (event.key === 'Tab' && !lightbox.hidden) {\n    event.preventDefault();\n    closeButton.focus();\n  }\n});\n"
+    }
   ],
   "qualityScore": 0.92
 }

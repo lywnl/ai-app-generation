@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "vue-skeleton-dashboard-001",
+  "documentKind": "PROJECT_SKELETON",
+  "type": "vue-project",
+  "version": "1.0.0",
+  "framework": "vue@3.3.4",
+  "language": "javascript",
+  "buildTool": "vite@4.4.5",
+  "dependencies": {
+    "vue": "3.3.4",
+    "vue-router": "4.2.4",
+    "element-plus": "2.8.8",
+    "@element-plus/icons-vue": "2.3.1",
+    "echarts": "5.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "4.2.3",
+    "vite": "4.4.5"
+  },
+  "category": "analytics-dashboard",
+  "style": ["dark", "analytics", "chart-focused"],
+  "tech": ["vue3", "vue-router", "element-plus", "element-icons", "echarts", "vite"],
+  "title": "Element Plus 与 ECharts 数据看板",
+  "embedText": "Vue3 Element Plus ECharts 数据大屏 数据看板 实时监控 趋势折线图 渠道环形图 告警中心 深色驾驶舱",
+  "description": "面向实时运营和监控中心的深色数据看板骨架，包含核心指标、ECharts 趋势图、渠道占比与告警列表。",
+  "files": [
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"vue-analytics-dashboard\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"vue\": \"3.3.4\",\n    \"vue-router\": \"4.2.4\",\n    \"element-plus\": \"2.8.8\",\n    \"@element-plus/icons-vue\": \"2.3.1\",\n    \"echarts\": \"5.5.1\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-vue\": \"4.2.3\",\n    \"vite\": \"4.4.5\"\n  }\n}"
+    },
+    {
+      "path": "index.html",
+      "content": "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>星轨实时数据中心</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>"
+    },
+    {
+      "path": "vite.config.js",
+      "content": "import { defineConfig } from 'vite'\nimport vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({ base: './', plugins: [vue()] })\n"
+    },
+    {
+      "path": "src/main.js",
+      "content": "import { createApp } from 'vue'\nimport ElementPlus from 'element-plus'\nimport 'element-plus/dist/index.css'\nimport App from './App.vue'\nimport router from './router/index.js'\nimport './style.css'\n\ncreateApp(App).use(ElementPlus).use(router).mount('#app')\n"
+    },
+    {
+      "path": "src/App.vue",
+      "content": "<template>\n  <div class=\"dashboard-shell\">\n    <header><div><strong>星轨实时数据中心</strong><span>全域业务监控</span></div><nav><RouterLink to=\"/\">实时总览</RouterLink><RouterLink to=\"/alerts\">告警中心</RouterLink></nav><el-tag type=\"success\" effect=\"dark\">实时连接</el-tag></header>\n    <RouterView />\n  </div>\n</template>\n"
+    },
+    {
+      "path": "src/router/index.js",
+      "content": "import { createRouter, createWebHashHistory } from 'vue-router'\nimport OverviewView from '../views/OverviewView.vue'\nimport AlertsView from '../views/AlertsView.vue'\n\nexport default createRouter({\n  history: createWebHashHistory(),\n  routes: [\n    { path: '/', component: OverviewView },\n    { path: '/alerts', component: AlertsView }\n  ]\n})\n"
+    },
+    {
+      "path": "src/components/TrendChart.vue",
+      "content": "<template><div ref=\"chartRef\" class=\"chart\"></div></template>\n\n<script setup>\nimport * as echarts from 'echarts'\nimport { onBeforeUnmount, onMounted, ref } from 'vue'\nconst chartRef = ref()\nlet chart\nfunction resize() { chart?.resize() }\nonMounted(() => {\n  chart = echarts.init(chartRef.value)\n  chart.setOption({\n    tooltip: { trigger: 'axis' },\n    grid: { left: 42, right: 18, top: 24, bottom: 30 },\n    xAxis: { type: 'category', data: ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00'], axisLine: { lineStyle: { color: '#40506b' } } },\n    yAxis: { type: 'value', splitLine: { lineStyle: { color: '#28354b' } } },\n    series: [{ type: 'line', smooth: true, data: [1280, 1680, 1520, 2180, 2670, 2910], areaStyle: { color: 'rgba(74, 222, 128, .12)' }, lineStyle: { color: '#4ade80' }, itemStyle: { color: '#4ade80' } }]\n  })\n  window.addEventListener('resize', resize)\n})\nonBeforeUnmount(() => { window.removeEventListener('resize', resize); chart?.dispose() })\n</script>\n"
+    },
+    {
+      "path": "src/views/OverviewView.vue",
+      "content": "<template>\n  <main>\n    <section class=\"topline\"><div><p>最后更新：刚刚</p><h1>实时总览</h1></div><el-button :icon=\"Refresh\" circle /></section>\n    <section class=\"metrics\"><article v-for=\"item in metrics\" :key=\"item.label\"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>{{ item.note }}</small></article></section>\n    <section class=\"panels\"><article class=\"wide\"><h2>实时访问趋势</h2><TrendChart /></article><article><h2>渠道占比</h2><div class=\"donut\"><strong>68%</strong><span>自然流量</span></div><ul><li>自然搜索 68%</li><li>活动渠道 21%</li><li>直接访问 11%</li></ul></article></section>\n  </main>\n</template>\n\n<script setup>\nimport { Refresh } from '@element-plus/icons-vue'\nimport TrendChart from '../components/TrendChart.vue'\nconst metrics = [\n  { label: '当前在线', value: '8,426', note: '较上小时 +12.4%' },\n  { label: '今日请求量', value: '1.28M', note: '峰值 3,102 次/秒' },\n  { label: '平均响应时间', value: '86 ms', note: '服务水平良好' },\n  { label: '异常率', value: '0.08%', note: '低于告警阈值' }\n]\n</script>\n"
+    },
+    {
+      "path": "src/views/AlertsView.vue",
+      "content": "<template>\n  <main><section class=\"topline\"><div><p>关注需要及时处理的服务异常</p><h1>告警中心</h1></div><el-button type=\"primary\">配置规则</el-button></section><article class=\"alert-list\"><div v-for=\"item in alerts\" :key=\"item.service\"><el-icon><WarningFilled /></el-icon><section><strong>{{ item.service }}</strong><p>{{ item.message }}</p></section><el-tag :type=\"item.level === '高' ? 'danger' : 'warning'\">{{ item.level }}优先级</el-tag></div></article></main>\n</template>\n\n<script setup>\nimport { WarningFilled } from '@element-plus/icons-vue'\nconst alerts = [\n  { service: '支付网关', message: 'P95 响应时间连续 5 分钟超过阈值', level: '高' },\n  { service: '消息中心', message: '待消费消息数量持续增长', level: '中' }\n]\n</script>\n"
+    },
+    {
+      "path": "src/style.css",
+      "content": ":root { font-family: Inter, system-ui, sans-serif; color: #dce6f6; background: #0b1220; }\n* { box-sizing: border-box; }\nbody { margin: 0; min-width: 320px; }\na { color: inherit; text-decoration: none; }\nheader { height: 70px; padding: 0 max(24px, calc((100% - 1200px) / 2)); display: flex; align-items: center; gap: 36px; background: #101a2c; border-bottom: 1px solid #243149; }\nheader div { margin-right: auto; display: grid; }\nheader strong { color: #6ee7b7; }\nheader span { color: #7887a1; font-size: 12px; }\nnav { display: flex; gap: 24px; }\nnav a { color: #8190aa; }\nnav a.router-link-active { color: #fff; }\nmain { width: min(1200px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0; }\n.topline { display: flex; align-items: end; justify-content: space-between; margin-bottom: 24px; }\nh1, h2, p { margin: 0; }\nh1 { margin-top: 5px; font-size: 29px; }\nh2 { font-size: 16px; }\np, small { color: #7887a1; }\n.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }\n.metrics article, .panels article, .alert-list { background: #111c30; border: 1px solid #243149; border-radius: 10px; }\n.metrics article { display: grid; padding: 19px; gap: 9px; }\n.metrics span { color: #8b99b0; }\n.metrics strong { font-size: 27px; }\n.metrics small { color: #4ade80; }\n.panels { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-top: 14px; }\n.panels article { padding: 22px; min-height: 350px; }\n.chart { height: 290px; }\n.donut { width: 170px; aspect-ratio: 1; margin: 30px auto; border: 28px solid #27354b; border-top-color: #4ade80; border-radius: 50%; display: grid; place-content: center; text-align: center; }\n.donut strong { font-size: 26px; }\nul { line-height: 2; color: #8998af; }\n.alert-list > div { display: flex; align-items: center; gap: 15px; padding: 20px; border-bottom: 1px solid #243149; }\n.alert-list > div:last-child { border: 0; }\n.alert-list section { flex: 1; }\n@media (max-width: 800px) { .metrics { grid-template-columns: repeat(2, 1fr); } .panels { grid-template-columns: 1fr; } nav { display: none; } }\n"
+    }
+  ],
+  "qualityScore": 0.98
+}
