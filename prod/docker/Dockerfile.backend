@@ -1,6 +1,8 @@
+ARG RUNTIME_IMAGE=runtime
+
 FROM node:22-bullseye-slim AS node22
 
-FROM eclipse-temurin:latest
+FROM eclipse-temurin:25-jdk-noble AS runtime
 WORKDIR /app
 
 ARG APT_MIRROR=http://mirrors.aliyun.com/ubuntu/
@@ -53,7 +55,11 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
 RUN npm config set registry ${NPM_REGISTRY}
 
+# BuildKit 复用已有运行时镜像时跳过上面的依赖安装阶段。
+FROM ${RUNTIME_IMAGE} AS application
+WORKDIR /app
 COPY artifacts/backend/app.jar /app/app.jar
+COPY tools /app/deployment-tools
 
 EXPOSE 9025
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

@@ -5,11 +5,15 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$pythonCommand = Get-Command python3, python -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $pythonCommand) { throw "发布打包需要 Python 3.9+，请先安装并加入 PATH。" }
+$Python = $pythonCommand.Source
 
 function Invoke-Checked([string]$File, [string[]]$Arguments) {
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { throw "命令失败（退出码 $LASTEXITCODE）: $File $($Arguments -join ' ')" }
 }
+Invoke-Checked $Python @("-c", 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "发布打包需要 Python 3.9+")')
 
 $prodDir = (Resolve-Path $PSScriptRoot).Path
 $frontendDir = Join-Path $ProjectRoot "ai-app-generation-frontend"
@@ -34,13 +38,10 @@ Remove-Item -Recurse -Force (Join-Path $artifactsFrontendDir "dist") -ErrorActio
 Copy-Item -Recurse -Force (Join-Path $frontendDir "dist") (Join-Path $artifactsFrontendDir "dist")
 Copy-Item -Force $jar.FullName (Join-Path $artifactsBackendDir "app.jar")
 Copy-Item -Force (Join-Path $ProjectRoot "sql\schema.sql") (Join-Path $prodSqlDir "schema.sql")
-Remove-Item -Recurse -Force (Join-Path $prodSqlDir "migrations") -ErrorAction SilentlyContinue
-Copy-Item -Recurse -Force (Join-Path $ProjectRoot "sql\migrations") (Join-Path $prodSqlDir "migrations")
 Remove-Item -Recurse -Force (Join-Path $prodEmbedDir "*") -ErrorAction SilentlyContinue
 Copy-Item -Recurse -Force (Join-Path $ProjectRoot "embed_text\*") $prodEmbedDir
 Copy-Item -Force (Join-Path $ProjectRoot "grafana\ai-model-observability-dashboard.json") (Join-Path $prodDashboardDir "ai-model-observability-dashboard.json")
 
 $release = Get-Date -Format "yyyyMMdd-HHmmss"
 Set-Content -Path $releaseFile -Value $release -Encoding utf8
-Get-ChildItem $artifactsFrontendDir, $artifactsBackendDir, $prodSqlDir, $prodEmbedDir -File -Recurse | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($_.Path.Substring($prodDir.Length + 1))" } | Set-Content -Path (Join-Path $prodDir "artifacts\SHA256SUMS") -Encoding utf8
-Write-Host "构建完成，版本: $release"
+Invoke-Checked $Python @((Join-Path $prodDir "package-release.py"))

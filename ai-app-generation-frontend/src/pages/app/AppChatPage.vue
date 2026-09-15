@@ -367,6 +367,7 @@ import {
 } from '@/api/appController'
 import { listAppChatHistory } from '@/api/chatHistoryController'
 import { CodeGenTypeEnum, formatCodeGenType } from '@/utils/codeGenTypes'
+import { createUuid } from '@/utils/uuid'
 import request from '@/request'
 import {
   type ToolCallView,
@@ -545,7 +546,7 @@ const loadChatHistory = async (isLoadMore = false) => {
         // 将对话历史转换为消息格式，并按时间正序排列（老消息在前）
         const historyMessages: Message[] = chatHistories
           .map((chat) => ({
-            id: chat.id ? `history-${chat.id}` : crypto.randomUUID(),
+            id: chat.id ? `history-${chat.id}` : createUuid(),
             type: (chat.messageType === 'user' ? 'user' : 'ai') as 'user' | 'ai',
             content: chat.message || '',
             createTime: chat.createTime,
@@ -683,7 +684,7 @@ const createSessionMessage = (snapshot: GenerationSessionSnapshot) => {
     sessionMessageKey.value = messages.value[lastMessageIndex]?.id ?? null
     return
   }
-  const id = crypto.randomUUID()
+  const id = createUuid()
   sessionMessageKey.value = id
   messages.value.push({
     id,
@@ -768,7 +769,7 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
   startGenerationSession({
     appId: targetAppId,
     userMessage: inputMessage,
-    generationId: crypto.randomUUID(),
+    generationId: createUuid(),
     baseURL: request.defaults.baseURL || API_BASE_URL,
     renderMode:
       expectVueTurnOutcome ? 'direct' : 'throttled',
@@ -820,7 +821,7 @@ const restoreActiveSessionIfNeeded = () => {
 const sendInitialMessage = async (prompt: string) => {
   // 添加用户消息
   messages.value.push({
-    id: crypto.randomUUID(),
+    id: createUuid(),
     type: 'user',
     content: prompt,
   })
@@ -828,7 +829,7 @@ const sendInitialMessage = async (prompt: string) => {
   // 添加AI消息占位符
   const aiMessageIndex = messages.value.length
   messages.value.push({
-    id: crypto.randomUUID(),
+    id: createUuid(),
     type: 'ai',
     content: '',
     loading: true,
@@ -864,7 +865,7 @@ const sendMessage = async () => {
   userInput.value = ''
   // 添加用户消息（包含元素信息）
   messages.value.push({
-    id: crypto.randomUUID(),
+    id: createUuid(),
     type: 'user',
     content: message,
   })
@@ -880,7 +881,7 @@ const sendMessage = async () => {
   // 添加AI消息占位符
   const aiMessageIndex = messages.value.length
   messages.value.push({
-    id: crypto.randomUUID(),
+    id: createUuid(),
     type: 'ai',
     content: '',
     loading: true,

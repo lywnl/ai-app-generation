@@ -26,12 +26,10 @@ class MemorySchemaMigrationContractTest {
     private static final List<String> SCHEMA_FILES = List.of(
             "sql/schema.sql",
             "prod/sql/schema.sql");
-    private static final List<String> MIGRATION_FILES = List.of(
-            "sql/migrations/2026-08-15-token-layered-memory-v3.sql",
-            "prod/sql/migrations/2026-08-15-token-layered-memory-v3.sql");
-    private static final List<String> CHAT_MEMORY_MIGRATION_FILES = List.of(
-            "sql/migrations/2026-08-18-chat-history-memory-projection.sql",
-            "prod/sql/migrations/2026-08-18-chat-history-memory-projection.sql");
+    private static final String MEMORY_MIGRATION_FILE =
+            "sql/migrations/2026-08-15-token-layered-memory-v3.sql";
+    private static final String CHAT_MEMORY_MIGRATION_FILE =
+            "sql/migrations/2026-08-18-chat-history-memory-projection.sql";
 
     @Test
     void retryTimeEntitiesUseExplicitLocalDateTimeColumns() throws Exception {
@@ -74,16 +72,9 @@ class MemorySchemaMigrationContractTest {
     }
 
     @Test
-    void migrationsAreIdenticalRerunnableAndStagedForMysql8040()
+    void memoryMigrationIsRerunnableAndStagedForMysql8040()
             throws Exception {
-        for (String relativePath : MIGRATION_FILES) {
-            assertTrue(Files.isRegularFile(projectRoot().resolve(relativePath)),
-                    "缺少 migration: " + relativePath);
-        }
-        String development = read(MIGRATION_FILES.getFirst());
-        String production = read(MIGRATION_FILES.getLast());
-        assertEquals(development, production,
-                "开发和生产 migration 必须保持完全一致");
+        String development = read(MEMORY_MIGRATION_FILE);
 
         String normalized = normalize(development);
         assertTrue(normalized.contains("mysql 8.0.40"));
@@ -142,15 +133,8 @@ class MemorySchemaMigrationContractTest {
     }
 
     @Test
-    void chatMemoryProjectionMigrationsAreIdenticalAndSafe() throws Exception {
-        for (String relativePath : CHAT_MEMORY_MIGRATION_FILES) {
-            assertTrue(Files.isRegularFile(projectRoot().resolve(relativePath)),
-                    "缺少 migration: " + relativePath);
-        }
-        String development = read(CHAT_MEMORY_MIGRATION_FILES.getFirst());
-        String production = read(CHAT_MEMORY_MIGRATION_FILES.getLast());
-        assertEquals(development, production,
-                "开发和生产聊天记忆投影 migration 必须字节级一致");
+    void chatMemoryProjectionMigrationIsSafe() throws Exception {
+        String development = read(CHAT_MEMORY_MIGRATION_FILE);
 
         String normalized = normalize(development);
         assertTrue(normalized.contains("mysql 8.0.40"));

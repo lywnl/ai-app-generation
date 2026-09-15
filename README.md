@@ -152,7 +152,7 @@ User Prompt
 | 类型 | TypeScript 5.8 |
 | HTTP | Axios 1.11 |
 | 类型生成 | `@umijs/openapi`（基于 OpenAPI 自动生成 TS 接口） |
-| Markdown | markdown-it + highlight.js |
+| Markdown / 代码展示 | markdown-it + highlight.js + acorn + diff |
 
 ### 基础设施
 
@@ -192,20 +192,14 @@ User Prompt
 ### 1. 克隆仓库
 
 ```bash
-git clone https://gitee.com/lywynl/ai-app-generation.git
+git clone https://github.com/lywnl/ai-app-generation.git
 cd ai-app-generation
 ```
 
 ### 2. 初始化数据库
 
 ```bash
-# 第一次从旧 Compose 迁移：先做无副作用检查（MinIO 密码至少 8 位）
-bash scripts/migrate-local-compose.sh --dry-run
-
-# 确认检查通过后再执行一次迁移；该命令会停止并重建中间件容器，但不会删除数据卷
-bash scripts/migrate-local-compose.sh --confirm
-
-# 迁移完成后的日常启动（前后端和中间件）
+# 日常启动（前后端和中间件，使用 dev/docker-compose.local.yml）
 bash scripts/start-local.sh
 
 # 停止前后端和全部本地中间件（不删除容器和数据卷）
@@ -272,6 +266,8 @@ npm run dev
 
 前端默认 <http://localhost:5173>，已通过 Vite 代理转发到后端 `/api`。
 
+实时会话中的用户消息和 AI 消息内容最大宽度为聊天区域的 80%，头像和间距占用的空间除外，移动端按响应式规则缩小。Vue 工具调用使用统一卡片，详情默认展开；写入和修改代码随参数流式更新，代码区高度随内容自然展开，页面整体负责纵向滚动，超长代码行通过代码区横向滚动查看。
+
 ### 用户展示身份迁移
 
 新用户（包括管理员创建的用户）统一保存 `用户_` 加 8 位随机数字作为昵称，
@@ -290,9 +286,6 @@ npm run dev
 回退展示数据前需停止用户写入并移除 `uk_userName` 约束，将昵称与头像列恢复为可空，
 再按备份表的用户 ID 恢复 `oldUserName`、`oldUserAvatar`，重新建立普通昵称索引。
 不要删除备份表，也不要覆盖账号、密码、角色和迁移后新增用户的数据。
-
-本地迁移演练可执行 `bash scripts/test-user-display-identity-migration.sh`，
-默认在现有 MySQL 容器内创建独立测试数据库，验证结束后自动删除，不使用真实用户作为样本。
 
 注册数据库回归测试：配置 `USER_IDENTITY_MYSQL_URL`、`USER_IDENTITY_MYSQL_USER`、
 `USER_IDENTITY_MYSQL_PASSWORD` 后，执行
@@ -429,7 +422,7 @@ ai-app-generation/
 ├── prod/                               # 生产部署目录（独立可发布）
 │   ├── docker-compose.yml              # 9 服务容器编排
 │   ├── docker/
-│   │   ├── Dockerfile.backend          # 后端镜像（含 Chromium / Node.js）
+│   │   ├── Dockerfile.backend          # 后端镜像（含 Chrome / Node.js，支持运行时复用）
 │   │   └── Dockerfile.nginx
 │   ├── nginx/nginx.conf
 │   ├── redis/start-redis.sh            # 根据环境变量生成 Redis ACL 并启动
@@ -439,11 +432,16 @@ ai-app-generation/
 │   ├── embed_text/                     # 同步 RAG 模板库
 │   ├── artifacts/                      # 构建产物（jar + 前端 dist）
 │   ├── build-artifacts.ps1             # 一键打包脚本
-│   ├── deploy.ps1
+│   ├── build-artifacts.sh              # macOS/Linux 构建入口
+│   ├── package-release.py             # 按清单生成版本发布包及完整校验和
+│   ├── tools/                         # Milvus 模板导入和核验工具
+│   ├── deploy.sh                       # Linux 部署、校验和健康验收
 │   ├── .env.example
 │   └── README.md                       # 部署文档
 │
 ├── sql/schema.sql                      # 业务表结构（user / app / chat_history）
+├── sql/migrations/                     # 唯一迁移脚本来源，发布时按需携带
+├── tests/deployment/                   # 部署配置与发布包测试，不上传服务器
 ├── docs/                               # 设计文档（图片采集并发设计等）
 ├── docker/                             # 开发环境 Docker
 └── pom.xml
@@ -810,15 +808,21 @@ Vue 业务层使用 30 分钟绝对截止，Spring 的 30 分 45 秒用于终态
 # 1. 本地打包前后端产物到 prod/artifacts/
 .\prod\build-artifacts.ps1
 
-# 2. 上传 prod 目录到服务器（例如 /opt/ai-app-generation/prod）
+# 2. 上传脚本输出的 .codex/releases/<版本>/prod.tar.gz
+# 先解压到临时版本目录，在其中执行 sha256sum -c artifacts/SHA256SUMS
+# 校验通过后更新服务器 prod 目录，保留原 .env
 
 # 3. 服务器进入 prod 目录
 cd /opt/ai-app-generation/prod
+# 仅全新环境复制示例；已有服务器继续使用原 .env
 cp .env.example .env
-# 编辑 .env，填写 INFRA_SHARED_PASSWORD、用户和 API Key
+# 编辑 .env，RELEASE_ID 与 artifacts/RELEASE 一致，并填写地址、基础设施密码、用户和 API Key
+# 已有环境保留 BACKEND_RUNTIME_IMAGE、NGINX_RUNTIME_IMAGE；新环境可留空完整构建
 
-# 4. 一键启动
-docker compose --env-file .env up -d
+# 4. Linux 部署前检查，再构建并更新前后端
+bash deploy.sh --check
+bash deploy.sh
+# 全新环境显式使用 --all-services；部署前先完成必要的迁移和维护准备
 ```
 
 ### 端口映射
@@ -1002,7 +1006,7 @@ clamp_min(sum(rate(generation_sse_publisher_terminations_total[15m])), 1e-9)
    - `chore:` 杂项
 4. 推送分支并提交 Pull Request
 
-> 提交代码前请确保通过 `mvn clean verify` 与前端 `npm run lint`。
+> 提交代码前请确保通过 `mvn clean verify` 与前端 `npx eslint .`。`npm run lint` 当前包含 `--fix`，会直接修改文件，不作为只读检查命令使用。
 
 ---
 
@@ -1033,6 +1037,6 @@ clamp_min(sum(rate(generation_sse_publisher_terminations_total[15m])), 1e-9)
 
 **如果这个项目对你有帮助，欢迎 Star 支持一下！**
 
-Made with ♥ by [@lywynl](https://gitee.com/lywynl)
+Made with ♥ by [@lywnl](https://github.com/lywnl)
 
 </div>

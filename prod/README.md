@@ -1,6 +1,10 @@
-# 生产部署（仅上传 prod 目录）
+# 生产部署（上传生成的发布包）
 
-> 第二版升级必须先完成备份、Milvus 导入和验收。不要直接执行 `up -d` 覆盖线上环境。
+> 第一版首次升级至第二版必须先完成备份、Milvus 导入和验收。已完成迁移的服务器后续发布无需重复导入，继续复用现有数据卷。
+
+**现有服务器第二版升级记录：见 [UPGRADE-V2.md](UPGRADE-V2.md)。** 实际目录为
+`/root/ai_gen_app/prod`。全新部署和后续升级统一使用 `docker-compose.yml`，
+后端和 Nginx 各保留一份 Dockerfile。镜像标签由必填的 `RELEASE_ID` 决定，不回退到 `latest`。
 
 ## 1. 本地先生成产物（前后端打包进 prod）
 
@@ -16,8 +20,10 @@ macOS 可执行：
 ./prod/build-artifacts.sh /api
 ```
 
-脚本会严格检查前后端构建退出码，同步 `sql/migrations`，并生成
-`prod/artifacts/RELEASE` 与 `prod/artifacts/SHA256SUMS`。构建失败时不会继续复制旧产物。
+本地需要 Node/npm、Java/Maven 和 Python 3.9+。macOS 脚本可使用项目 Maven Wrapper。
+脚本严格检查构建退出码，成功后调用 `package-release.py`，在项目根目录
+`.codex/releases/<版本>/` 生成可独立发布的 `prod/` 及 `prod.tar.gz`。
+同版本不覆盖；打包失败不会发布不完整的新版本。
 
 该步骤会生成这些内容：
 
@@ -29,26 +35,41 @@ macOS 可执行：
 
 ## 2. 上传到服务器
 
-只上传 `prod` 目录到服务器，例如：
+上传脚本输出的 `.codex/releases/<版本>/prod.tar.gz`，先在服务器临时版本目录解压，
+进入解压得到的 `prod/` 校验：
 
-`/opt/ai-app-generation/prod`
+```bash
+sha256sum -c artifacts/SHA256SUMS
+```
+
+确认无误后再按发布流程更新 `/root/ai_gen_app/prod`（新环境也可使用 `/opt/ai-app-generation/prod`）。
+保留现有 `.env`，将其中的 `RELEASE_ID` 设置为本次 `artifacts/RELEASE` 的版本；
+不要通过整个目录删除或带删除选项的同步来覆盖现有环境。
+
+发布包按明确清单收集 Compose、Dockerfile、前后端、模板、RAG 工具、初始化 SQL 和监控配置，
+SHA-256 覆盖所有打包文件（校验清单自身除外）。真实 `.env`、测试、日志和历史迁移默认不打包。
+`prod/artifacts/SHA256SUMS` 同步记录本地默认发布输入；实际上传以发布包内的清单为准。
+
+已有应用产物时可单独打包，不重新运行 npm/Maven：
+
+```bash
+python3 prod/package-release.py --release-id v2-your-release-id
+```
+
+迁移 SQL 唯一来源为项目根目录 `sql/migrations/`。有数据库变更的发布可以明确选择文件：
+
+```bash
+python3 prod/package-release.py --release-id v2-your-next-release \
+  --migration 2026-08-15-token-layered-memory-v3.sql
+```
+
+`--migration` 可重复指定，仅打包选中的文件到发布包 `prod/sql/migrations/`，不会执行 SQL。
+执行前仍需备份、判断当前数据库版本并按顺序迁移。普通发布不要重复执行已经完成的迁移，
+已有数据库不能用 `schema.sql` 替代增量迁移。
 
 ## 3. 服务器部署
 
-第二版迁移流程由 `migrate-rag.sh` 分阶段执行：
-
-```bash
-./migrate-rag.sh preflight
-./migrate-rag.sh backup
-./migrate-rag.sh start-milvus
-./migrate-rag.sh ingest
-./migrate-rag.sh verify
-```
-
-`ingest` 会使用当前 `embed_text` 的 35 份模板重新生成三类 Milvus 向量，旧 pgvector
-仅作为备份和迁移前核对来源。必须在维护窗口内执行；4GB 服务器若出现 OOM、Swap
-持续增长或健康检查失败，应立即停止，不进入清理阶段。只有备份可恢复、检索和业务
-验收全部通过后，才可由人工设置 `CONFIRM_DELETE_PGVECTOR=yes` 执行清理。
+第二版使用 `tools/run-rag-tool.sh` 独立导入并验证模板，操作见升级说明。
 
 进入服务器上的 `prod` 目录：
 
@@ -64,6 +85,7 @@ chmod 600 .env
 
 ```env
 APP_CODE_DEPLOY_BASE_URL=http://your-domain.example
+RELEASE_ID=v2-your-release-id
 INFRA_SHARED_PASSWORD=请填写新的随机强密码
 MYSQL_USER=admin
 REDIS_USERNAME=admin
@@ -71,12 +93,30 @@ MILVUS_MINIO_PASSWORD=请填写至少8位的MinIO随机强密码
 GRAFANA_ADMIN_USER=admin
 ```
 
-该值只能包含协议、主机和可选端口，不能包含业务路径；部署访问路径由后端统一追加。
+`APP_CODE_DEPLOY_BASE_URL` 只能包含协议、主机和可选端口，不能包含业务路径；部署访问路径由后端统一追加。
+
+### 构建方式
+
+两种方式均使用同一份 Compose 和 Dockerfile，需要 Docker BuildKit。
+后端完整构建使用 Google Chrome Linux AMD64，发布目标为 `linux/amd64`；
+在 Apple Silicon 本机构建镜像时，执行命令前设置 `DOCKER_DEFAULT_PLATFORM=linux/amd64`。
+本地 `build-artifacts.sh` 只打包应用产物，不构建 Docker 镜像。
+
+- 全新环境：`BACKEND_RUNTIME_IMAGE`、`NGINX_RUNTIME_IMAGE` 留空。后端完整安装
+  Java 25 JDK、Node 22、Chrome、ChromeDriver 和中文字体；Nginx 使用 `nginx:1.27-alpine`。
+- 现有服务器：保留 `.env` 中的运行时镜像标签。BuildKit 直接复用这些镜像，
+  更新 JAR、独立 RAG 工具、前端和 Nginx 配置，不重复下载安装运行依赖。
+  基础镜像必须已存在或可拉取，并包含所需工具和环境变量；不要填本次构建的输出标签。
+
+每次发布使用新的 `RELEASE_ID`，保留旧标签用于回滚。升级已有服务器时继续使用原 `.env`，
+不要执行上面的 `cp .env.example .env`。切换版本前先完成构建与验收，再执行启动命令。
 
 基础设施密码：
 
 - 在 `.env` 中填写 `INFRA_SHARED_PASSWORD`。
-- MySQL、Redis、Milvus root、Grafana 和后端连接统一使用该值。
+- 新环境可使用该默认值；已有环境分别保留 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、
+  `REDIS_PASSWORD`、`GRAFANA_ADMIN_PASSWORD`，新 Milvus 使用 `RAG_MILVUS_PASSWORD`。
+  未设置独立值时才回退到共享密码，不要用示例配置覆盖已有 `.env`。
 - MinIO 使用独立的 `MILVUS_MINIO_PASSWORD`，不能复用当前长度不足 8 的共享密码；该密码至少为 8 个字符。
 - MinIO 用户固定为 `minioadmin`，仅供 Milvus 内部对象存储使用，不对公网暴露。
 - 建议使用新的随机强密码；仓库历史中的旧口令不应继续复用。
@@ -88,7 +128,8 @@ GRAFANA_ADMIN_USER=admin
 修改现有账号密码，再更新 `.env` 并重启；不能通过删除数据卷来“同步密码”。
 
 Milvus root 初始密码仅在全新的 etcd 元数据中生效。已有 `milvus_etcd_data` 卷改密时，
-必须先在 Milvus 内完成 root 密码修改，再更新 `.env` 中的 `INFRA_SHARED_PASSWORD`。
+必须先在 Milvus 内完成 root 密码修改，再更新 `.env` 中的 `RAG_MILVUS_PASSWORD`
+（未单独配置时才使用 `INFRA_SHARED_PASSWORD`）。
 旧 PG 数据卷在迁移验收完成前只读保留，验收后先备份，再由人工删除；应用不会再连接旧卷。
 
 如果暂时不填 API Key，请保留这些键且值为空：
@@ -102,12 +143,52 @@ TEN_SECRET_KEY=
 PEXELS_API_KEY=
 ```
 
-启动：
+### Linux 部署入口
+
+服务器需要 Bash、Python 3.9+、curl、flock（util-linux）、Docker 和支持 `--wait-timeout` 的 Compose V2。
+当前完整运行环境要求 Linux AMD64。所有部署应从同一个固定生产目录执行，例如
+`/root/ai_gen_app/prod`，以便共享部署锁与已有相对挂载。
+生产目录需要位于可靠支持 `flock` 的本地文件系统，不应使用不支持该锁语义的共享挂载。
+首次使用新脚本必须重新生成发布包；旧包中的 SHA256SUMS 不包含新脚本及校验工具。
+
+普通应用更新：
 
 ```bash
-docker compose --env-file .env -f docker-compose.yml build
-docker compose --env-file .env -f docker-compose.yml up -d
+bash deploy.sh --check
+bash deploy.sh
+```
 
+默认只构建和更新 `backend`、`nginx`，使用 `--no-deps`，要求五个基础服务已运行且健康。
+全新环境或明确需要启动/更新全部服务时，使用 `bash deploy.sh --all-services`；可先加 `--check` 校验。
+该模式也不会自动执行增量迁移或模板导入，MySQL 全新数据卷仍按 Compose 原配置执行初始化 schema。
+
+部署前校验包括：完整文件清单及 SHA-256、实际 Compose 镜像标签与 `artifacts/RELEASE` 一致、
+禁止覆盖已有版本镜像、禁止 `RAG_INGEST_ENABLED=true`、Docker 平台、磁盘空间和基础服务健康。
+实际 Compose 配置包含 shell 环境变量覆盖，因此不能只核对 `.env` 中的文字。
+构建失败不会切换容器；构建完成后再次检查清单、版本和 `.env`，发现变化即停止。
+
+切换使用 `--wait` 等待容器就绪，再通过本机 Nginx 检查首页与发布包字节一致，
+以及 `/api/actuator/health` 返回 `UP`。支持以下参数：
+
+```bash
+bash deploy.sh --env-file .env --wait-timeout 300 --min-free-mb 5120
+```
+
+默认磁盘阈值是部署目录和 Docker 数据目录各至少 5120 MiB，属于基本检查，不代表完整容量评估。
+不支持通过此脚本向远程 Docker daemon 部署。`--check` 只做前置检查，不构建、不启动容器，
+但会在项目 `.codex/deployments/` 写入检查记录并获取部署锁。
+
+部署记录权限受限，保留切换前容器/镜像/挂载信息、本次输入清单、构建日志和失败诊断。
+记录不会打印或复制 `.env` 内容；容器失败日志仍应按敏感运维资料保存。
+保存的是切换前容器元数据与本次文件，不能代替上传新包之前对旧配置和数据库的备份。
+脚本不自动回滚或清理数据卷，不主动重做 SQL、Embedding；已有版本镜像保留。
+
+更新前先安排维护时间、暂停新增生成请求并等待进行中的任务结束。
+脚本不检测活跃生成任务，执行前需要部署者确认维护准备已完成。
+
+基础设施单独维护命令：
+
+```bash
 # 单独启动并检查 RAG 向量基础设施
 docker compose --env-file .env -f docker-compose.yml up -d milvus-etcd milvus-minio milvus
 docker compose --env-file .env -f docker-compose.yml ps milvus-etcd milvus-minio milvus
@@ -188,13 +269,24 @@ docker compose --env-file .env -f docker-compose.yml logs -f backend
 
 ## 5. 说明
 
-- 后端镜像内包含 `chromium + chromedriver`，满足截图服务。
-- 后端镜像保留 Node.js、npm 及 npm registry 配置，支持 Vue 工程构建；同时保留 Chromium + chromedriver，满足截图服务。
+- 后端镜像保留 Node.js、npm/npx 及 npm registry 配置，支持 Vue 工程构建；同时保留 Google Chrome、ChromeDriver 和中文字体，满足截图服务。
+- 两种构建方式均包含 `/app/deployment-tools`，保留独立模板导入和验证能力。
 - 服务器部署时不再依赖项目根目录源码，只依赖 `prod` 本目录文件。
+
+配置回归测试（只用虚拟凭据，不启动容器、不读取生产 `.env`）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/deployment -v
+```
+
+该命令在项目根目录执行，检查合并前后九个服务的运行配置、数据卷和网络完全一致，
+以及完整构建默认值、运行时复用参数、必填发布版本和独立密码回退规则。
+同时验证发布包的内容清单、完整校验和、可选迁移、失败保护和版本防覆盖。
+测试代码只在源码仓库中保留，不随发布包上传。
 
 ## 6. Token 分层记忆 V3 上线前人工门禁
 
-本节只定义上线检查、停止条件和非破坏性回滚流程。`prod/sql/migrations/2026-08-15-token-layered-memory-v3.sql` 不会由应用启动自动执行；真实生产备份、migration、部署、回滚和删列都必须由具备权限的人员另行审批后操作。
+本节只定义上线检查、停止条件和非破坏性回滚流程。根目录 `sql/migrations/2026-08-15-token-layered-memory-v3.sql` 不会由应用启动自动执行；需要发布时使用 `--migration` 单独携带。真实生产备份、migration、部署、回滚和删列都必须由具备权限的人员另行审批后操作。
 
 ### 6.1 发布前置条件
 
@@ -210,7 +302,7 @@ docker compose --env-file .env -f docker-compose.yml logs -f backend
 只在由旧生产结构复制出的非生产数据库执行：
 
 ```bash
-mysql --default-character-set=utf8mb4 < prod/sql/migrations/2026-08-15-token-layered-memory-v3.sql
+mysql --default-character-set=utf8mb4 < sql/migrations/2026-08-15-token-layered-memory-v3.sql
 ```
 
 必须分别留存三组证据：

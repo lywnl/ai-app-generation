@@ -5,7 +5,9 @@ services:
     build:
       context: .
       dockerfile: ./docker/Dockerfile.nginx
-    image: ai-app-generation-nginx:latest
+      args:
+        RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine}
+    image: ai-app-generation-nginx:${RELEASE_ID:?RELEASE_ID不能为空}
     container_name: ai-nginx
     restart: unless-stopped
     depends_on:
@@ -22,7 +24,9 @@ services:
     build:
       context: .
       dockerfile: ./docker/Dockerfile.backend
-    image: ai-app-generation-backend:latest
+      args:
+        RUNTIME_IMAGE: ${BACKEND_RUNTIME_IMAGE:-runtime}
+    image: ai-app-generation-backend:${RELEASE_ID:?RELEASE_ID不能为空}
     container_name: ai-backend
     restart: unless-stopped
     depends_on:
@@ -41,16 +45,16 @@ services:
       INFRA_SHARED_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ai_app_generation?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=30000
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
-      SPRING_DATASOURCE_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_USERNAME: ${REDIS_USERNAME}
-      SPRING_DATA_REDIS_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
       RAG_MILVUS_HOST: milvus
       RAG_MILVUS_PORT: 19530
       RAG_MILVUS_DATABASE: default
       RAG_MILVUS_USERNAME: root
-      RAG_MILVUS_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      RAG_MILVUS_PASSWORD: ${RAG_MILVUS_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
       RAG_HYBRID_ENABLED: ${RAG_HYBRID_ENABLED:-true}
       RAG_TEMPLATES_DIR: /app/embed_text
       RAG_INGEST_ENABLED: ${RAG_INGEST_ENABLED:-false}
@@ -88,10 +92,10 @@ services:
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
       TZ: Asia/Shanghai
-      MYSQL_ROOT_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
       MYSQL_DATABASE: ai_app_generation
       MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
     volumes:
       - mysql_data:/var/lib/mysql
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
@@ -110,12 +114,13 @@ services:
     environment:
       REDIS_USERNAME: ${REDIS_USERNAME:?REDIS_USERNAME不能为空}
       INFRA_SHARED_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
     command: ["/usr/local/bin/start-redis.sh"]
     volumes:
       - redis_data:/data
       - ./redis/start-redis.sh:/usr/local/bin/start-redis.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=$${INFRA_SHARED_PASSWORD} redis-cli --user $${REDIS_USERNAME} ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$${REDIS_PASSWORD} redis-cli --user $${REDIS_USERNAME} ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -146,7 +151,7 @@ services:
       - ai_net
 
   milvus-minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    image: quay.io/minio/minio:RELEASE.2023-03-20T20-16-18Z
     container_name: ai-milvus-minio
     restart: unless-stopped
     environment:
@@ -174,7 +179,7 @@ services:
       MINIO_ACCESS_KEY_ID: minioadmin
       MINIO_SECRET_ACCESS_KEY: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}
       COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
-      COMMON_SECURITY_DEFAULTROOTPASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      COMMON_SECURITY_DEFAULTROOTPASSWORD: ${RAG_MILVUS_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
       QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: "-1"
     volumes:
       - milvus_data:/var/lib/milvus
@@ -215,7 +220,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
-      GF_SECURITY_ADMIN_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana

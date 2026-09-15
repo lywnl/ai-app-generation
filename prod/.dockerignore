@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+**/.DS_Store
+**/__pycache__
+tests
+sql/migrations
+artifacts/SHA256SUMS
+build-artifacts.*
+package-release.py
