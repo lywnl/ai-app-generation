@@ -45,6 +45,7 @@ tmp
 /prod/.env
 /dev/.env
 
-/.codex/
+.codex/
 /.claude/
 /.m2repo/
+/.tmp-dir-structure-no-newline.txt
