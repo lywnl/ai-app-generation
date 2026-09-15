@@ -49,3 +49,5 @@ tmp
 /.claude/
 /.m2repo/
 /.tmp-dir-structure-no-newline.txt
+/docs/superpowers/
+/tests/deployment/
