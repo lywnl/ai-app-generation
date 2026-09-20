@@ -75,6 +75,21 @@ class VueToolExecutionFactTest {
         assertNull(fact.relativePath());
     }
 
+    @Test
+    void 计划事实保留版本和计划工具状态() {
+        String result = PlanToolProtocolSupport.json(
+                PlanToolResult.applied(
+                        "makePlan", "plan-1", 3, "创建页面", java.util.List.of()));
+
+        VueToolExecutionFact fact = VueToolExecutionFact.parse(
+                "makePlan", result).orElseThrow();
+
+        assertEquals(VueToolExecutionFact.ExecutionStatus.SUCCEEDED, fact.status());
+        assertEquals(3, fact.planVersion());
+        assertEquals("APPLIED", fact.planStatus());
+        assertNull(fact.relativePath());
+    }
+
     private String fileResult(
             String operation, String path, boolean changed, String content) {
         return "{\"protocol\":\"file-tool/v1\","

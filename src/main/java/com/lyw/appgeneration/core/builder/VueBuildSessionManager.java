@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * Vue 构建回合状态机。
@@ -121,6 +122,12 @@ public final class VueBuildSessionManager {
         public AutoCloseable enterCallback() {
             ensureOpen();
             return session.enterCallback();
+        }
+
+        /** 在应用取消门内原子提交计划等回合状态。 */
+        public <T> T commitWhileActive(Supplier<T> action) {
+            ensureOpen();
+            return session.commitWhileActive(action);
         }
 
         public DeleteTakeoverCallbackRegistration enterHandlerCallback(
@@ -425,6 +432,11 @@ public final class VueBuildSessionManager {
             }
             CallbackRegistration registration = operationLease.enterCallback();
             return registration::close;
+        }
+
+        private <T> T commitWhileActive(Supplier<T> action) {
+            ensureOpen();
+            return operationLease.commitWhileActive(action);
         }
 
         private synchronized DeleteTakeoverCallbackRegistration enterHandlerCallback(

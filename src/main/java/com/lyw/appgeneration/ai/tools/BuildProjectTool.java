@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai.tools;
 
 import cn.hutool.json.JSONObject;
 import com.lyw.appgeneration.constants.AppConstant;
+import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
 import com.lyw.appgeneration.core.builder.BuildCancellationSignal;
 import com.lyw.appgeneration.core.builder.BuildErrorSanitizer;
 import com.lyw.appgeneration.core.builder.BuildExecutionContext;
@@ -18,6 +19,7 @@ import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import dev.langchain4j.service.ReplanContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -34,15 +36,39 @@ public final class BuildProjectTool extends BaseTool {
     private final BiFunction<Path, BuildResult, String> errorSanitizer;
     private final FileToolExecutionScopeManager scopeManager;
     private final VueBuildRepairMetricsCollector metricsCollector;
+    private final AppPlanStateManager planStateManager;
 
     @Autowired
     public BuildProjectTool(
             VueProjectBuilder vueProjectBuilder,
             BuildErrorSanitizer errorSanitizer,
             FileToolExecutionScopeManager scopeManager,
-            VueBuildRepairMetricsCollector metricsCollector) {
+            VueBuildRepairMetricsCollector metricsCollector,
+            AppPlanStateManager planStateManager) {
         this(vueProjectBuilder, errorSanitizer::sanitize, scopeManager,
-                metricsCollector);
+                metricsCollector, planStateManager);
+    }
+
+    public BuildProjectTool(
+            VueProjectBuilder vueProjectBuilder,
+            BuildErrorSanitizer errorSanitizer,
+            FileToolExecutionScopeManager scopeManager,
+            VueBuildRepairMetricsCollector metricsCollector) {
+        this(vueProjectBuilder, errorSanitizer::sanitize,
+                scopeManager, metricsCollector, null);
+    }
+
+    BuildProjectTool(
+            VueProjectBuilder vueProjectBuilder,
+            BiFunction<Path, BuildResult, String> errorSanitizer,
+            FileToolExecutionScopeManager scopeManager,
+            VueBuildRepairMetricsCollector metricsCollector,
+            AppPlanStateManager planStateManager) {
+        this.vueProjectBuilder = vueProjectBuilder;
+        this.errorSanitizer = errorSanitizer;
+        this.scopeManager = scopeManager;
+        this.metricsCollector = metricsCollector;
+        this.planStateManager = planStateManager;
     }
 
     BuildProjectTool(
@@ -50,10 +76,8 @@ public final class BuildProjectTool extends BaseTool {
             BiFunction<Path, BuildResult, String> errorSanitizer,
             FileToolExecutionScopeManager scopeManager,
             VueBuildRepairMetricsCollector metricsCollector) {
-        this.vueProjectBuilder = vueProjectBuilder;
-        this.errorSanitizer = errorSanitizer;
-        this.scopeManager = scopeManager;
-        this.metricsCollector = metricsCollector;
+        this(vueProjectBuilder, errorSanitizer, scopeManager,
+                metricsCollector, null);
     }
 
     @Tool("构建当前Vue项目。完成文件修改后调用；失败时根据返回诊断修复，成功或达到上限时系统自动结束。")
@@ -70,6 +94,31 @@ public final class BuildProjectTool extends BaseTool {
         if (scope.type() != FileToolExecutionScopeManager.ScopeType.ONLINE) {
             return json(BuildProjectToolResult.rejected(
                     "PROTOCOL_ERROR: buildProject 只允许在线 Vue 作用域调用"));
+        }
+        if (!scope.mutationAllowed().getAsBoolean()) {
+            return json(BuildProjectToolResult.mutationRequired(
+                    "当前只读回合不允许构建"));
+        }
+        if (scope.replanContext() != null
+                && scope.replanContext().replanPending()
+                && !scope.replanContext().failOpen()) {
+            return json(BuildProjectToolResult.mutationRequired(
+                    "当前计划存在未处理偏差，请先调用 updatePlan"));
+        }
+        if (planStateManager != null) {
+            AppPlanStateManager.BuildGateDecision planDecision =
+                    planStateManager.beforeBuild(scope.appId(), scope.ownerToken());
+            if (!planDecision.allowed()) {
+                if (planDecision.message().startsWith("计划依赖尚未完成")
+                        && scope.replanContext() != null) {
+                    scope.replanContext().observe(new ReplanContext.PlanDeviation(
+                            "dependency-blocked:" + scope.ownerToken(),
+                            "当前计划存在未完成依赖，请先修订计划或完成依赖文件",
+                            planDecision.message()));
+                }
+                return json(BuildProjectToolResult.mutationRequired(
+                        planDecision.message()));
+            }
         }
         return executeBuild(scope);
     }
@@ -148,6 +197,12 @@ public final class BuildProjectTool extends BaseTool {
                     ticket.attempt(), result.stage(), "构建已取消"));
         }
         if (result.success()) {
+            if (planStateManager != null) {
+                scope.lease().commitWhileActive(() -> {
+                    planStateManager.markBuilt(scope.appId(), scope.ownerToken());
+                    return null;
+                });
+            }
             return json(BuildProjectToolResult.completedSuccess(ticket.attempt()));
         }
         Path projectRoot = Path.of(

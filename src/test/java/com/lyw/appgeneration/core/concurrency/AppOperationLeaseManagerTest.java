@@ -275,6 +275,46 @@ class AppOperationLeaseManagerTest {
     }
 
     @Test
+    void 当前回合提交先于取消完成且取消不会插入提交中间() throws Exception {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var lease = manager.acquire(17L, AppOperationType.GENERATE, "turn-commit");
+        CountDownLatch commitEntered = new CountDownLatch(1);
+        CountDownLatch releaseCommit = new CountDownLatch(1);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<String> commit = executor.submit(() ->
+                    lease.commitWhileActive(() -> {
+                        commitEntered.countDown();
+                        awaitUnchecked(releaseCommit);
+                        return "committed";
+                    }));
+            assertTrue(commitEntered.await(1, TimeUnit.SECONDS));
+            Future<Boolean> cancellation = executor.submit(lease::requestCancellation);
+            assertFalse(cancellation.isDone());
+
+            releaseCommit.countDown();
+            assertEquals("committed", commit.get(1, TimeUnit.SECONDS));
+            assertTrue(cancellation.get(1, TimeUnit.SECONDS));
+        } finally {
+            lease.close();
+        }
+    }
+
+    @Test
+    void 取消先取得提交门时拒绝提交动作() {
+        AppOperationLeaseManager manager = new AppOperationLeaseManager();
+        var lease = manager.acquire(18L, AppOperationType.GENERATE, "turn-cancelled");
+        try {
+            assertTrue(lease.requestCancellation());
+            AtomicInteger actions = new AtomicInteger();
+            assertThrows(AppOperationLeaseManager.CommitRejectedException.class,
+                    () -> lease.commitWhileActive(actions::incrementAndGet));
+            assertEquals(0, actions.get());
+        } finally {
+            lease.close();
+        }
+    }
+
+    @Test
     void deleteReplacementSealsRegistrationThatPassedOuterCheck() throws Exception {
         CountDownLatch outerCheckPassed = new CountDownLatch(1);
         CountDownLatch resumeRegistration = new CountDownLatch(1);

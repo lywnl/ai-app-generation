@@ -130,7 +130,7 @@ public record BuildProjectToolResult(
         return switch (action) {
             case REPAIR -> "第 1 次构建失败，请进行最小代码修复";
             case RETRY_BUILD -> "第 1 次构建失败，请直接重试构建";
-            case FINAL_DIAGNOSIS -> "第 2 次构建失败，请进行最终诊断";
+            case FINAL_DIAGNOSIS -> "第 2 次构建失败，请进行最终诊断；若根因是计划假设错误，请先调用 updatePlan，再进行修复";
             case STOP -> "第 " + attempt + " 次构建失败，已停止自动修复";
         };
     }

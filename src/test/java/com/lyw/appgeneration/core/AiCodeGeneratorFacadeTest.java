@@ -4,6 +4,15 @@ import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lyw.appgeneration.ai.plan.AppPlan;
+import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
+import com.lyw.appgeneration.ai.plan.PlanFile;
+import com.lyw.appgeneration.ai.plan.PlanFileAction;
+import com.lyw.appgeneration.ai.plan.PlanFileState;
+import com.lyw.appgeneration.ai.plan.PlanMode;
+import com.lyw.appgeneration.ai.plan.PlanStatus;
+import com.lyw.appgeneration.ai.plan.PlanStoragePathResolver;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
@@ -45,6 +54,8 @@ import reactor.test.StepVerifier;
 
 import java.util.List;
 import java.util.Set;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -197,7 +208,7 @@ class AiCodeGeneratorFacadeTest {
         verify(tokenStream).toolProtocolRecoveryPolicy(policyCaptor.capture());
         assertEquals(Set.of(
                         "writeFile", "readFile", "modifyFile", "deleteFile",
-                        "readDir", "buildProject", "readSkill"),
+                        "readDir", "buildProject", "readSkill", "makePlan", "updatePlan"),
                 policyCaptor.getValue().registeredToolNames());
         var internalPolicyCaptor = org.mockito.ArgumentCaptor.forClass(
                 InternalOutputRecoveryPolicy.class);
@@ -237,6 +248,49 @@ class AiCodeGeneratorFacadeTest {
                 RAW_QUERY, APP_ID, false, readOnly, generatorService);
         verify(readOnlyStream, never()).turnTransientMessages(anyList());
         readOnly.closeResources();
+    }
+
+    @Test
+    void 后续变更回合把已有计划摘要作为临时系统消息注入() throws Exception {
+        properties.setEnabled(false);
+        stubVueGenerator();
+        Path root = Files.createTempDirectory("facade-plan-context-");
+        AppPlanStateManager planManager = new AppPlanStateManager(
+                new ObjectMapper(), new PlanStoragePathResolver(root));
+        ReflectionTestUtils.setField(facade, "appPlanStateManager", planManager);
+        VueTurnContext context = newVueTurnContext(
+                "plan-context-turn", VueTurnMode.MUTATION_REQUIRED);
+        planManager.save(APP_ID, new AppPlan(
+                "plan-1", context.turnId(), context.turnId(), 3, 1,
+                PlanMode.FULL, "创建看板", List.of(new PlanFile(
+                "src/App.vue", "入口", PlanFileAction.MODIFY,
+                List.of(), PlanFileState.PENDING)), List.of(),
+                PlanStatus.PLANNED), 0, context.turnId());
+        try {
+            facade.generateVueProjectStream(
+                    RAW_QUERY, APP_ID, false, context, generatorService);
+
+            var captor = org.mockito.ArgumentCaptor.forClass(List.class);
+            verify(tokenStream).turnTransientMessages(captor.capture());
+            List<?> messages = captor.getValue();
+            assertEquals(2, messages.size());
+            String planContext = ((dev.langchain4j.data.message.SystemMessage)
+                    messages.get(1)).text();
+            assertTrue(planContext.contains("创建看板"));
+            assertTrue(planContext.contains("src/App.vue"));
+        } finally {
+            context.closeResources();
+            try (var paths = Files.walk(root)) {
+                paths.sorted(java.util.Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (java.io.IOException exception) {
+                                throw new RuntimeException(exception);
+                            }
+                        });
+            }
+        }
     }
 
     @Test

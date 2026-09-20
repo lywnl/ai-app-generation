@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import dev.langchain4j.service.ModelRequestGate;
+import dev.langchain4j.service.ReplanContext;
 
 import java.util.Objects;
 
@@ -30,6 +31,11 @@ public interface ContextContinuationGate
     default void publishContextCompression(
             ContextCompressionMessage message) {
         Objects.requireNonNull(message, "上下文压缩进度不能为空");
+    }
+
+    /** 真实 Vue 回合可提供共享的软 Replan 状态；普通调用方保持空。 */
+    default ReplanContext replanContext() {
+        return null;
     }
 
     static ContextContinuationGate from(

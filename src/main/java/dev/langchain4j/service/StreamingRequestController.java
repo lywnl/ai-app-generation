@@ -43,6 +43,42 @@ public final class StreamingRequestController {
     private boolean recoveryReadinessDispatching;
     private final RepeatedReadLoopGuard repeatedReadLoopGuard =
             new RepeatedReadLoopGuard();
+    private ReplanContext replanContext;
+
+    synchronized void bindReplanContext(ReplanContext context) {
+        if (replanContext != null && replanContext != context) {
+            throw new IllegalStateException("流式请求控制器不能绑定多个 Replan 上下文");
+        }
+        replanContext = context;
+    }
+
+    void observePlanDeviation(ReplanContext.PlanDeviation deviation) {
+        ReplanContext context;
+        synchronized (this) {
+            context = replanContext;
+        }
+        if (context != null) {
+            context.observe(deviation);
+        }
+    }
+
+    void observePlanToolExecution(String toolName, String rawResult) {
+        ReplanContext context;
+        synchronized (this) {
+            context = replanContext;
+        }
+        if (context != null) {
+            context.observeToolExecution(toolName, rawResult);
+        }
+    }
+
+    List<dev.langchain4j.data.message.ChatMessage> claimPlanFeedback() {
+        ReplanContext context;
+        synchronized (this) {
+            context = replanContext;
+        }
+        return context == null ? List.of() : context.claimFeedback();
+    }
 
     RepeatedReadLoopGuard.Action observeRepeatedRead(
             dev.langchain4j.agent.tool.ToolExecutionRequest request,

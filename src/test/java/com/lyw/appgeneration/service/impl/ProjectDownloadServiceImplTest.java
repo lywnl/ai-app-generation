@@ -43,6 +43,7 @@ class ProjectDownloadServiceImplTest {
         writeIgnored(project, "dist/index.html");
         writeIgnored(project, ".git/config");
         writeIgnored(project, ".ai-build-dependency-state.json");
+        writeIgnored(project, ".plan.json");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         new ProjectDownloadServiceImpl().downloadProjectAsZip(project, "7", response);
@@ -56,6 +57,8 @@ class ProjectDownloadServiceImplTest {
         assertTrue(entries.stream().noneMatch(name -> name.contains(".git/")));
         assertTrue(entries.stream().noneMatch(
                 name -> name.endsWith(".ai-build-dependency-state.json")));
+        assertTrue(entries.stream().noneMatch(
+                name -> name.endsWith(".plan.json")));
     }
 
     @Test

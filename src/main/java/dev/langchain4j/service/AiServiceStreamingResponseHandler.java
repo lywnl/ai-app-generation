@@ -1,6 +1,7 @@
 package dev.langchain4j.service;
 
 import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
+import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -435,6 +436,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         this.toolExecutors = copy(toolExecutors);
         this.hasOutputGuardrails = context.guardrailService().hasOutputGuardrails(methodKey);
         this.requestController = ensureNotNull(requestController, "requestController");
+        if (continuationGate != null) {
+            ReplanContext replanContext = ContextContinuationGate
+                    .from(continuationGate).replanContext();
+            if (replanContext != null) {
+                requestController.bindReplanContext(replanContext);
+            }
+        }
         this.toolExecutionGuard = ensureNotNull(toolExecutionGuard, "toolExecutionGuard");
         this.requestGeneration = requestGeneration;
         if ((modelRequestGate == null) != (continuationGate == null)) {
@@ -1593,6 +1601,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 dispatchTermination = true;
                 continue;
             }
+            requestController.observePlanToolExecution(
+                    normalizedRequest.name(), guardedExecution.toolResult());
             RepeatedReadLoopGuard.Action readLoopAction =
                     requestController.observeRepeatedRead(
                             normalizedRequest,
@@ -1902,6 +1912,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     private void prepareIncompleteRecoveryRequest(
             TokenUsage accumulatedUsage) {
+        List<ChatMessage> recoveryTransientMessages =
+                transientMessagesWithPlanFeedback(
+                        incompleteRecoveryCoordinator.transientMessages());
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -1910,7 +1923,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         toolSpecifications,
                         continuationGate,
                         withTurnTransientMessages(
-                                incompleteRecoveryCoordinator.transientMessages()),
+                                recoveryTransientMessages),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
@@ -1918,12 +1931,20 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         gateRequest,
                         () -> messagesToSendWithTransient(
                                 memoryId,
-                                incompleteRecoveryCoordinator.transientMessages()),
+                                recoveryTransientMessages),
                         incompleteRecoveryCoordinator::failIfRecovering,
                         this::notifyIncompleteRecoveryFailure,
                         (messages, generation) -> startModelRequest(
                                 messages, accumulatedUsage, generation,
                                 false, true)));
+    }
+
+    private List<ChatMessage> transientMessagesWithPlanFeedback(
+            List<ChatMessage> baseMessages) {
+        List<ChatMessage> combined = new ArrayList<>(
+                baseMessages == null ? List.of() : baseMessages);
+        combined.addAll(requestController.claimPlanFeedback());
+        return List.copyOf(combined);
     }
 
     private void notifyIncompleteRecoveryFailure(Throwable failure) {
@@ -1941,6 +1962,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 tokenUsage, completeResponse.metadata().tokenUsage());
         List<ChatMessage> transientMessages =
                 requestController.claimRepeatedReadCorrection();
+        List<ChatMessage> planFeedback = requestController.claimPlanFeedback();
+        if (!planFeedback.isEmpty()) {
+            List<ChatMessage> combined = new ArrayList<>(transientMessages);
+            combined.addAll(planFeedback);
+            transientMessages = List.copyOf(combined);
+        }
+        List<ChatMessage> requestTransientMessages = transientMessages;
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -1948,14 +1976,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        withTurnTransientMessages(transientMessages),
+                        withTurnTransientMessages(requestTransientMessages),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.continuation(
                         requestGeneration,
                         gateRequest,
                         () -> messagesToSendWithTransient(
-                                memoryId, transientMessages),
+                                memoryId, requestTransientMessages),
                         this::notifyError,
                         (messages, generation) -> startModelRequest(
                                 messages,

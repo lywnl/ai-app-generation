@@ -7,7 +7,7 @@ public final class VueToolNames {
 
     public static final List<String> ONLINE = List.of(
             "writeFile", "readFile", "modifyFile", "deleteFile", "readDir",
-            "buildProject", "readSkill");
+            "buildProject", "readSkill", "makePlan", "updatePlan");
     public static final List<String> EVALUATION = List.of(
             "writeFile", "readFile", "modifyFile", "deleteFile", "readDir", "exit");
 

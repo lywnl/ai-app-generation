@@ -375,6 +375,23 @@ class FileToolSecurityTest {
     }
 
     @Test
+    void 计划旁车文件对普通文件工具不可见且不会进入目录结果() throws IOException {
+        Path projectRoot = Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR,
+                "vue_project_" + APP_ID);
+        Files.createDirectories(projectRoot);
+        Files.writeString(projectRoot.resolve(".plan.json"), "{}");
+
+        JSONObject read = inEvaluation(() ->
+                fileReadTool.readFile(".plan.json", APP_ID));
+        JSONObject directory = inEvaluation(() ->
+                fileDirReadTool.readDir("", APP_ID));
+
+        assertEquals("REJECTED", read.getStr("status"));
+        assertEquals("APPLIED", directory.getStr("status"));
+        assertFalse(directory.getStr("content").contains(".plan.json"));
+    }
+
+    @Test
     void 修改超大旧文件必须拒绝且保持原文件不变() throws IOException {
         FileToolBudgetGuard guard = new FileToolBudgetGuard();
         guard.setMaxSingleFileCodePoints(4);

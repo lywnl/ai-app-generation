@@ -18,6 +18,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * 统一管理同一应用上的生成、部署、下载和删除互斥关系。
@@ -432,6 +433,20 @@ public final class AppOperationLeaseManager {
             return state.enterCallback();
         }
 
+        /**
+         * 在取消门监视器内原子提交回合状态。
+         *
+         * <p>调用方不得在提交动作中反向调用本租约 API；提交动作应只取得更低层
+         * 的状态锁并完成有限的本地持久化。</p>
+         */
+        public <T> T commitWhileActive(Supplier<T> action) {
+            Objects.requireNonNull(action, "提交动作不能为空");
+            if (closed.get()) {
+                throw new CommitRejectedException("应用操作租约已经失效");
+            }
+            return state.commitWhileActive(action);
+        }
+
         public boolean requestCancellation() {
             ensureActiveOrCancellationRequested();
             boolean changed = state.requestCancellation();
@@ -651,6 +666,15 @@ public final class AppOperationLeaseManager {
         }
     }
 
+    /** 取消门先于回合状态提交取得时返回的拒绝。 */
+    public static final class CommitRejectedException
+            extends IllegalStateException {
+
+        private CommitRejectedException(String message) {
+            super(message);
+        }
+    }
+
     public static final class OperationQuiescenceTimeoutException extends IllegalStateException {
 
         private OperationQuiescenceTimeoutException(
@@ -722,6 +746,13 @@ public final class AppOperationLeaseManager {
             }
             callbackCount++;
             return new CallbackRegistration(this);
+        }
+
+        private synchronized <T> T commitWhileActive(Supplier<T> action) {
+            if (ownerClosed || replaced || cancellationRequested) {
+                throw new CommitRejectedException("应用操作取消门已经关闭");
+            }
+            return action.get();
         }
 
         private synchronized DeleteTakeoverCallbackRegistration

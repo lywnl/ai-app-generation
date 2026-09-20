@@ -634,6 +634,60 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
+    void 软Replan反馈进入下一次模型请求但不写入聊天记忆() throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        CapturingStreamingChatModel model = new CapturingStreamingChatModel();
+        context.streamingChatModel = model;
+        MessageWindowChatMemory memory = MessageWindowChatMemory.withMaxMessages(100);
+        StreamingRequestController controller = new StreamingRequestController();
+        assertTrue(controller.beforeModelRequest());
+        ReplanContext replanContext = new ReplanContext();
+        controller.bindReplanContext(replanContext);
+        controller.observePlanDeviation(new ReplanContext.PlanDeviation(
+                "trigger-handler", "计划路径不一致", "src/Other.vue 不在当前计划"));
+
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
+                request -> CompletableFuture.completedFuture(
+                        allowed(withTransient(
+                                request.latestMemory().get().messages(),
+                                request.transientMessages()))))) {
+            AiServiceStreamingResponseHandler handler =
+                    new AiServiceStreamingResponseHandler(
+                            new NoopChatExecutor(), context, "mem-1",
+                            ignored -> { }, null, null, null,
+                            response -> { },
+                            error -> fail("软 Replan 不应触发错误", error),
+                            memory, new TokenUsage(), List.of(),
+                            Map.of("writeFile", (request, memoryId) -> """
+                                    {"protocol":"file-tool/v1","operation":"writeFile",
+                                    "status":"APPLIED","relativePath":"src/App.vue",
+                                    "changed":true,"message":"文件写入成功",
+                                    "failureReason":null,"content":null}
+                                    """),
+                            null, "method-1", controller,
+                            ToolExecutionGuard.direct(),
+                            controller.latestModelRequestGeneration(),
+                            gate,
+                            action -> {
+                                action.run();
+                                return true;
+                            });
+
+            handler.onCompleteResponse(responseWithTools(tool("write", "writeFile")));
+            gate.awaitIdle();
+
+            assertEquals(1, model.chatInvocations);
+            assertTrue(model.lastChatRequest.messages().stream()
+                    .anyMatch(message -> message
+                            instanceof dev.langchain4j.data.message.SystemMessage
+                            && ((dev.langchain4j.data.message.SystemMessage) message)
+                            .text().contains("updatePlan")));
+            assertTrue(memory.messages().stream().noneMatch(message ->
+                    message instanceof dev.langchain4j.data.message.SystemMessage));
+        }
+    }
+
+    @Test
     void 连续相同可信读取第二次注入纠正提示第三次安全终止()
             throws Exception {
         AiServiceContext context = new AiServiceContext(Object.class);
@@ -1114,6 +1168,36 @@ class AiServiceStreamingResponseHandlerTest {
         assertEquals(List.of(
                 "callback:on-complete-tool-request:build-provider",
                 "executor:build-provider"), events);
+    }
+
+    @Test
+    void incompleteRecovery临时消息会合并一次Replan反馈() throws Exception {
+        AiServiceContext context = new AiServiceContext(Object.class);
+        context.streamingChatModel = new CapturingStreamingChatModel();
+        StreamingRequestController controller = new StreamingRequestController();
+        ReplanContext replan = new ReplanContext();
+        controller.bindReplanContext(replan);
+        replan.observe(new ReplanContext.PlanDeviation(
+                "recovery-plan", "请修订计划", "src/App.vue"));
+        AiServiceStreamingResponseHandler handler = ordinaryHandler(
+                context,
+                MessageWindowChatMemory.withMaxMessages(10),
+                ignored -> { },
+                response -> { },
+                error -> fail("不应触发错误回调", error),
+                controller);
+
+        var method = AiServiceStreamingResponseHandler.class
+                .getDeclaredMethod("transientMessagesWithPlanFeedback", List.class);
+        method.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<ChatMessage> messages = (List<ChatMessage>) method.invoke(
+                handler, List.of());
+
+        assertEquals(1, messages.size());
+        assertTrue(((dev.langchain4j.data.message.SystemMessage)
+                messages.getFirst()).text().contains("请修订计划"));
+        assertTrue(controller.claimPlanFeedback().isEmpty());
     }
 
     @Test
@@ -2820,6 +2904,13 @@ class AiServiceStreamingResponseHandlerTest {
                 messages,
                 12_000,
                 "");
+    }
+
+    private static List<ChatMessage> withTransient(
+            List<ChatMessage> base, List<ChatMessage> transientMessages) {
+        List<ChatMessage> result = new ArrayList<>(base);
+        result.addAll(transientMessages);
+        return List.copyOf(result);
     }
 
     private static ChatResponse responseWithTools(ToolExecutionRequest... requests) {

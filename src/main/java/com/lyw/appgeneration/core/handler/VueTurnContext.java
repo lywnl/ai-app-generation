@@ -14,6 +14,7 @@ import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTak
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverCallbackRegistration;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTakeoverRegistration;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController.AdmissionPermit;
+import dev.langchain4j.service.ReplanContext;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTermination;
 import lombok.extern.slf4j.Slf4j;
 
@@ -87,6 +88,7 @@ public final class VueTurnContext implements ContextContinuationGate {
     private final TurnProgressChannel progressChannel =
             new TurnProgressChannel();
     private final FileToolBudgetGuard.Session budgetSession;
+    private final ReplanContext replanContext = new ReplanContext();
 
     VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
@@ -251,6 +253,11 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     public long appId() {
         return appId;
+    }
+
+    @Override
+    public ReplanContext replanContext() {
+        return replanContext;
     }
 
     public long userId() {
@@ -738,6 +745,12 @@ public final class VueTurnContext implements ContextContinuationGate {
         } catch (Exception exception) {
             throw new IllegalStateException("关闭 Vue 回合回调票据失败", exception);
         }
+    }
+
+    /** 在生产回合租约的取消提交边界内写入计划状态；测试上下文直接执行动作。 */
+    public <T> T commitPlanState(Supplier<T> action) {
+        Objects.requireNonNull(action, "计划状态提交动作不能为空");
+        return lease == null ? action.get() : lease.commitWhileActive(action);
     }
 
     /** 原子登记删除参与者，并仅用临时 callback 票据包围同步 Handler 装配。 */

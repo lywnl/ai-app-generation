@@ -102,7 +102,7 @@
       "repairable": true,
       "reflectionRequired": true,
       "nextAction": "FINAL_DIAGNOSIS",
-      "message": "第 2 次构建失败，请进行最终诊断",
+      "message": "第 2 次构建失败，请进行最终诊断；若根因是计划假设错误，请先调用 updatePlan，再进行修复",
       "errorSummary": "TypeScript 编译仍失败",
       "terminateToolLoop": false,
       "finalResponse": null
@@ -132,7 +132,7 @@
       "repairable": false,
       "reflectionRequired": true,
       "nextAction": "FINAL_DIAGNOSIS",
-      "message": "第 2 次构建失败，请进行最终诊断",
+      "message": "第 2 次构建失败，请进行最终诊断；若根因是计划假设错误，请先调用 updatePlan，再进行修复",
       "errorSummary": "构建环境超时",
       "terminateToolLoop": false,
       "finalResponse": null

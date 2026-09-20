@@ -23,7 +23,8 @@ class UnfinishedToolChainCheckpointProjectorTest {
 
     private static final Set<String> REGISTERED_TOOLS = Set.of(
             "readFile", "readDir", "writeFile", "modifyFile",
-            "deleteFile", "buildProject", "readSkill", "exit");
+            "deleteFile", "buildProject", "readSkill", "makePlan",
+            "updatePlan", "exit");
 
     private final ConversationTurnSnapshotParser parser =
             new ConversationTurnSnapshotParser();

@@ -22,6 +22,8 @@ public final class VueToolExecutionFact {
     private final Integer buildAttempt;
     private final String buildErrorSummary;
     private final String skillName;
+    private final Integer planVersion;
+    private final String planStatus;
 
     private VueToolExecutionFact(
             String toolName,
@@ -30,7 +32,9 @@ public final class VueToolExecutionFact {
             ExecutionStatus status,
             Integer buildAttempt,
             String buildErrorSummary,
-            String skillName) {
+            String skillName,
+            Integer planVersion,
+            String planStatus) {
         this.toolName = Objects.requireNonNull(toolName, "工具名不能为空");
         this.relativePath = relativePath;
         this.changedRelativePath = changedRelativePath;
@@ -38,6 +42,8 @@ public final class VueToolExecutionFact {
         this.buildAttempt = buildAttempt;
         this.buildErrorSummary = buildErrorSummary;
         this.skillName = skillName;
+        this.planVersion = planVersion;
+        this.planStatus = planStatus;
     }
 
     public static Optional<VueToolExecutionFact> parse(
@@ -50,6 +56,10 @@ public final class VueToolExecutionFact {
             if ("readSkill".equals(toolName)) {
                 return Optional.of(fromSkillResult(
                         SkillToolProtocolSupport.parse(rawResult)));
+            }
+            if ("makePlan".equals(toolName) || "updatePlan".equals(toolName)) {
+                return Optional.of(fromPlanResult(
+                        PlanToolProtocolSupport.parse(rawResult)));
             }
             if (!FILE_TOOLS.contains(toolName)) {
                 return Optional.empty();
@@ -66,7 +76,7 @@ public final class VueToolExecutionFact {
         String changedPath = result.changed() ? path : null;
         return new VueToolExecutionFact(
                 result.operation(), path, changedPath,
-                fileStatus(result.status()), null, null, null);
+                fileStatus(result.status()), null, null, null, null, null);
     }
 
     private static String trustedObservedPath(FileToolResult result) {
@@ -88,13 +98,19 @@ public final class VueToolExecutionFact {
             BuildProjectToolResult result) {
         return new VueToolExecutionFact(
                 "buildProject", null, null, buildStatus(result),
-                result.attempt(), structuredBuildErrorSummary(result), null);
+                result.attempt(), structuredBuildErrorSummary(result), null, null, null);
     }
 
     private static VueToolExecutionFact fromSkillResult(SkillToolResult result) {
         return new VueToolExecutionFact(
                 "readSkill", null, null, skillStatus(result.status()), null,
-                null, result.skillName());
+                null, result.skillName(), null, null);
+    }
+
+    private static VueToolExecutionFact fromPlanResult(PlanToolResult result) {
+        return new VueToolExecutionFact(
+                result.operation(), null, null, planStatus(result.status()),
+                null, null, null, result.version(), result.status().name());
     }
 
     private static ExecutionStatus skillStatus(SkillToolResult.Status status) {
@@ -114,6 +130,14 @@ public final class VueToolExecutionFact {
             case REJECTED -> ExecutionStatus.REJECTED;
             case NOT_FOUND -> ExecutionStatus.NOT_FOUND;
             case CANCELLED -> ExecutionStatus.CANCELLED;
+            case FAILED -> ExecutionStatus.FAILED;
+        };
+    }
+
+    private static ExecutionStatus planStatus(PlanToolResult.Status status) {
+        return switch (status) {
+            case APPLIED -> ExecutionStatus.SUCCEEDED;
+            case REJECTED, CONFLICT -> ExecutionStatus.REJECTED;
             case FAILED -> ExecutionStatus.FAILED;
         };
     }
@@ -208,6 +232,14 @@ public final class VueToolExecutionFact {
 
     public String skillName() {
         return skillName;
+    }
+
+    public Integer planVersion() {
+        return planVersion;
+    }
+
+    public String planStatus() {
+        return planStatus;
     }
 
     public boolean isRead() {

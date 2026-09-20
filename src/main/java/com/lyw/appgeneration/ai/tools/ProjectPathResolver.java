@@ -20,10 +20,24 @@ import java.util.function.Consumer;
  * <p>所有工具都只能操作 appId 对应工程根目录内的相对路径；已存在路径必须同时通过真实路径校验，
  * 防止项目内符号链接把文件操作导向工程外。</p>
  */
-final class ProjectPathResolver {
+public final class ProjectPathResolver {
 
     private static final Set<String> PROTECTED_SEGMENTS = Set.of(
-            "node_modules", "dist", ".git", ".ai-build-dependency-state.json");
+            "node_modules", "dist", ".git", ".ai-build-dependency-state.json",
+            ".plan.json");
+
+    /** 供计划等服务端状态输入复用普通文件工具的受保护路径策略。 */
+    public static boolean isProtectedPath(Path path) {
+        if (path == null) {
+            return false;
+        }
+        for (Path segment : path) {
+            if (PROTECTED_SEGMENTS.contains(segment.toString())) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     Path resolveExisting(Long appId, String relativePath, boolean allowEmpty) throws UnsafeProjectPathException {
         Path projectRoot = projectRoot(appId);
@@ -168,10 +182,8 @@ final class ProjectPathResolver {
     }
 
     private void rejectProtectedSegments(Path path) throws UnsafeProjectPathException {
-        for (Path segment : path) {
-            if (PROTECTED_SEGMENTS.contains(segment.toString())) {
-                throw new UnsafeProjectPathException("不允许访问受保护路径段: " + segment);
-            }
+        if (isProtectedPath(path)) {
+            throw new UnsafeProjectPathException("不允许访问受保护路径段");
         }
     }
 

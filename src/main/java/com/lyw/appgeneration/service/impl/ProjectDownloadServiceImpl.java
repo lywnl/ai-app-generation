@@ -37,7 +37,7 @@ public class ProjectDownloadServiceImpl implements ProjectDownloadService {
     private static final Set<String> IGNORED_NAMES = Set.of(
             "node_modules", ".git", "dist", "build", ".DS_Store", ".env",
             "target", ".mvn", ".idea", ".vscode",
-            ".ai-build-dependency-state.json"
+            ".ai-build-dependency-state.json", ".plan.json"
     );
 
     private static final Set<String> IGNORED_EXTENSIONS = Set.of(

@@ -18,7 +18,8 @@ public class FileDirReadTool extends BaseTool {
 
     private static final Set<String> IGNORED_NAMES = Set.of(
             "node_modules", ".git", "dist", "build", ".DS_Store",
-            ".env", "target", ".mvn", ".idea", ".vscode", "coverage");
+            ".env", "target", ".mvn", ".idea", ".vscode", "coverage",
+            ".plan.json");
     private static final Set<String> IGNORED_EXTENSIONS = Set.of(
             ".log", ".tmp", ".cache", ".lock");
 

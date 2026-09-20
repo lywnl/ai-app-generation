@@ -137,7 +137,7 @@ class AiGeneratorServiceFactoryTest {
 
         assertEquals(List.of(
                 "writeFile", "readFile", "modifyFile", "deleteFile", "readDir",
-                "buildProject", "readSkill"), online);
+                "buildProject", "readSkill", "makePlan", "updatePlan"), online);
         assertEquals(List.of(
                 "writeFile", "readFile", "modifyFile", "deleteFile", "readDir", "exit"),
                 evaluation);

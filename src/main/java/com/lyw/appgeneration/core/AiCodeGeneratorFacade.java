@@ -8,6 +8,10 @@ import com.lyw.appgeneration.ai.VueToolNames;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
 import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
+import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
+import com.lyw.appgeneration.ai.plan.AppPlan;
+import com.lyw.appgeneration.ai.plan.PlanStatus;
+import com.lyw.appgeneration.ai.plan.ReplanDetector;
 import com.lyw.appgeneration.ai.skill.SkillCatalog;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
@@ -40,6 +44,8 @@ import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.IncompleteToolChainRecoveryPolicy;
 import dev.langchain4j.service.InternalOutputProtocolException;
@@ -100,6 +106,9 @@ public class AiCodeGeneratorFacade {
 
     @Resource
     private FileToolExecutionScopeManager fileToolExecutionScopeManager;
+
+    @Resource
+    private AppPlanStateManager appPlanStateManager;
 
     @Resource
     private ModelRequestGate modelRequestGate;
@@ -319,6 +328,37 @@ public class AiCodeGeneratorFacade {
         java.util.Objects.requireNonNull(generatorService, "Vue 生成服务不能为空");
         boolean mutationTurn = turnContext.turnMode()
                 == VueTurnMode.MUTATION_REQUIRED;
+        List<ChatMessage> planTransientMessages = List.of();
+        if (mutationTurn && appPlanStateManager != null) {
+            AppPlan currentPlan = turnContext.commitPlanState(() ->
+                    appPlanStateManager.loadForTurn(appId, turnContext.turnId())
+                            .orElse(null));
+            turnContext.replanContext().setDetector(
+                    new ReplanDetector(appPlanStateManager, appId,
+                            turnContext.turnId())::detect);
+            turnContext.replanContext().setAcceptedDeviationHandler(
+                    deviation -> turnContext.commitPlanState(() -> {
+                        appPlanStateManager.markReplanPending(
+                                appId, turnContext.turnId());
+                        return null;
+                    }));
+            turnContext.replanContext().setFailOpenHandler(() ->
+                    turnContext.commitPlanState(() -> {
+                        appPlanStateManager.clearReplanPending(
+                                appId, turnContext.turnId());
+                        return null;
+                    }));
+            if (currentPlan != null) {
+                if (currentPlan.status() == PlanStatus.REPLAN_PENDING) {
+                    turnContext.replanContext().restorePending(
+                            "上一回合计划仍有未处理偏差，请先修订计划",
+                            "计划 version=" + currentPlan.version());
+                }
+                planTransientMessages = List.of(
+                        SystemMessage.from(
+                                appPlanStateManager.toPromptContext(currentPlan)));
+            }
+        }
         String generationRequest = isFirstMessage && mutationTurn
                 ? imageCollectionService.enhancePrompt(userMessage) : userMessage;
         if (shouldRetrieveVueOnlineRag(isFirstMessage, mutationTurn)) {
@@ -335,8 +375,10 @@ public class AiCodeGeneratorFacade {
         tokenStream.initialToolChoiceRequired(
                 turnContext.requiresInitialToolCall());
         if (mutationTurn) {
-            tokenStream.turnTransientMessages(
-                    List.of(skillCatalog.metadataMessage()));
+            List<ChatMessage> transientMessages = new java.util.ArrayList<>();
+            transientMessages.add(skillCatalog.metadataMessage());
+            transientMessages.addAll(planTransientMessages);
+            tokenStream.turnTransientMessages(transientMessages);
         }
         tokenStream.modelRequestGate(modelRequestGate, turnContext);
         tokenStream.toolProtocolRecoveryPolicy(new ToolProtocolRecoveryPolicy(
@@ -563,7 +605,9 @@ public class AiCodeGeneratorFacade {
         FileToolExecutionScopeManager.FileToolScope scope =
                 fileToolExecutionScopeManager.online(
                         context.lease(), context.turnId(), context.appId(),
-                        Set.copyOf(VueToolNames.ONLINE), context.budgetSession());
+                        Set.copyOf(VueToolNames.ONLINE), context.budgetSession(),
+                        () -> context.turnMode() == VueTurnMode.MUTATION_REQUIRED,
+                        context.replanContext());
         ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
         tokenStream.toolExecutionGuard((toolName, memoryId, action) ->
                 directGuard.execute(toolName, memoryId,
