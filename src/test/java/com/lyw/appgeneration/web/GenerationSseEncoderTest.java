@@ -1,18 +1,13 @@
 package com.lyw.appgeneration.web;
 
 import cn.hutool.json.JSONUtil;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRecoveryMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRollbackMessage;
 import com.lyw.appgeneration.ai.model.message.TrustedToolDisplayMessage;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
-import dev.langchain4j.service.GenerationStreamSignal;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.codec.ServerSentEvent;
 
-import java.util.List;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,7 +40,7 @@ class GenerationSseEncoderTest {
     }
 
     @Test
-    void 回滚恢复和可信工具展示必须编码受信字段与字符串代次() {
+    void 可信工具展示必须编码受信字段与字符串代次() {
         GenerationSseEncoder encoder = new GenerationSseEncoder();
         var display = encoder.business(
                 GenerationStreamEvent.trustedToolDisplay(
@@ -53,39 +48,12 @@ class GenerationSseEncoderTest {
                                 3L, "tool-1",
                                 TrustedToolDisplayMessage.Stage.REQUESTED,
                                 "正在选择工具")));
-        var rollback = encoder.business(GenerationStreamEvent.rollback(
-                new InternalOutputRollbackMessage(
-                        3L, 2, Set.of("tool-1"))));
-        var recovery = encoder.business(
-                GenerationStreamEvent.internalRecovery(
-                        new InternalOutputRecoveryMessage(
-                                GenerationStreamSignal.Recovery.Phase.STARTED,
-                                3L, 4L, null)));
-
         var displayData = JSONUtil.parseObj(display.data());
         assertEquals("trusted-tool-display", display.event());
         assertEquals("3", displayData.getStr("generation"));
         assertEquals("REQUESTED", displayData.getStr("stage"));
         assertEquals(1L, displayData.getLong("sequence"));
 
-        var rollbackData = JSONUtil.parseObj(rollback.data());
-        assertEquals("internal-output-rollback", rollback.event());
-        assertEquals("3", rollbackData.getStr("failedGeneration"));
-        assertEquals(2, rollbackData.getInt("codePoints"));
-        assertEquals(List.of("tool-1"),
-                rollbackData.getJSONArray("provisionalToolRequestIds")
-                        .toList(String.class));
-        assertEquals(2L, rollbackData.getLong("sequence"));
-
-        var recoveryData = JSONUtil.parseObj(recovery.data());
-        assertEquals("internal-output-recovery", recovery.event());
-        assertEquals("3", recoveryData.getStr("originalFailedGeneration"));
-        assertEquals("4", recoveryData.getStr("recoveryGeneration"));
-        assertTrue(recoveryData.containsKey("failedGeneration"));
-        assertTrue(JSONUtil.isNull(recoveryData.get("failedGeneration")));
-        assertEquals("检测到生成状态异常，正在重新生成…",
-                recoveryData.getStr("message"));
-        assertEquals(3L, recoveryData.getLong("sequence"));
     }
 
     @Test

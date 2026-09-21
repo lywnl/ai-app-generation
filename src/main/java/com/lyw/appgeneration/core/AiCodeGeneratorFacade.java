@@ -16,8 +16,6 @@ import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
 import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRecoveryMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRollbackMessage;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentDeltaMessage;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentMessage;
 import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
@@ -47,7 +45,6 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.IncompleteToolChainRecoveryPolicy;
-import dev.langchain4j.service.InternalOutputProtocolException;
 import dev.langchain4j.service.GenerationStreamSignal;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
@@ -280,13 +277,12 @@ public class AiCodeGeneratorFacade {
                 || sink.isCancelled()) {
             return;
         }
-        if (termination.reason()
-                == ToolLoopTerminationProtocol
+        if (termination.reason() == ToolLoopTerminationProtocol
                 .ControlledTerminationReason.PROTOCOL_ERROR) {
-            sink.error(new InternalOutputProtocolException());
-        } else {
-            sink.complete();
+            sink.error(new IllegalStateException("生成工具协议异常"));
+            return;
         }
+        sink.complete();
     }
 
     /**
@@ -704,17 +700,6 @@ public class AiCodeGeneratorFacade {
                     handleToolExecuted(
                             executed, output, tokenStream, budgetSession,
                             parsers, completedToolIds);
-            case GenerationStreamSignal.Rollback rollback -> {
-                rollback.provisionalToolRequestIds().forEach(toolId -> {
-                    parsers.remove(toolId);
-                    announcedToolIds.remove(toolId);
-                });
-                output.accept(JSONUtil.toJsonStr(
-                        new InternalOutputRollbackMessage(rollback)));
-            }
-            case GenerationStreamSignal.Recovery recovery -> output.accept(
-                    JSONUtil.toJsonStr(
-                            new InternalOutputRecoveryMessage(recovery)));
         }
     }
 
@@ -1013,7 +998,6 @@ public class AiCodeGeneratorFacade {
             super("Vue 评测生成被受控终止: " + reason);
         }
     }
-
 
     /**
      * 通用流式代码处理方法

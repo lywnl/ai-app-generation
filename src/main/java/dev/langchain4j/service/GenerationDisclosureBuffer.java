@@ -4,11 +4,11 @@ import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Queue;
 
-/** 按模型事件到达顺序串行发布已完成安全判定的 generation 内容。 */
+/** 按模型事件到达顺序串行发布 generation 内容。 */
 final class GenerationDisclosureBuffer {
 
     private final Object monitor = new Object();
-    private final Queue<Disclosure> disclosures = new ArrayDeque<>();
+    private final Queue<Runnable> disclosures = new ArrayDeque<>();
     private boolean publishing;
     private int publishingPauseCount;
 
@@ -28,61 +28,20 @@ final class GenerationDisclosureBuffer {
         publishReady();
     }
 
-    Disclosure enqueueResolved(Runnable action) {
-        Disclosure disclosure = new Disclosure(action, action);
+    void enqueueResolved(Runnable action) {
         synchronized (monitor) {
-            disclosures.add(disclosure);
+            disclosures.add(action);
         }
         publishReady();
-        return disclosure;
     }
 
     void enqueueResolvedBatch(Collection<Runnable> actions) {
         synchronized (monitor) {
             for (Runnable action : actions) {
-                disclosures.add(new Disclosure(action, action));
+                disclosures.add(action);
             }
         }
         publishReady();
-    }
-
-    Disclosure enqueuePending(Runnable delayedAction) {
-        Disclosure disclosure = new Disclosure(null, delayedAction);
-        synchronized (monitor) {
-            disclosures.add(disclosure);
-        }
-        return disclosure;
-    }
-
-    void resolve(Disclosure disclosure, Runnable action) {
-        synchronized (monitor) {
-            disclosure.action = action;
-        }
-        publishReady();
-    }
-
-    void resolveDelayed(Disclosure disclosure) {
-        resolve(disclosure, disclosure.delayedAction);
-    }
-
-    void remove(Disclosure disclosure) {
-        synchronized (monitor) {
-            disclosures.remove(disclosure);
-        }
-        publishReady();
-    }
-
-    void removeAll(Collection<Disclosure> removed) {
-        synchronized (monitor) {
-            disclosures.removeAll(removed);
-        }
-        publishReady();
-    }
-
-    void clear() {
-        synchronized (monitor) {
-            disclosures.clear();
-        }
     }
 
     private void publishReady() {
@@ -105,13 +64,12 @@ final class GenerationDisclosureBuffer {
                     rethrow(failure);
                     return;
                 }
-                Disclosure head = disclosures.peek();
-                if (head == null || head.action == null) {
+                if (disclosures.isEmpty()) {
                     publishing = false;
                     rethrow(failure);
                     return;
                 }
-                action = disclosures.remove().action;
+                action = disclosures.remove();
             }
             try {
                 action.run();
@@ -134,14 +92,4 @@ final class GenerationDisclosureBuffer {
         }
     }
 
-    static final class Disclosure {
-
-        private final Runnable delayedAction;
-        private Runnable action;
-
-        private Disclosure(Runnable action, Runnable delayedAction) {
-            this.action = action;
-            this.delayedAction = delayedAction;
-        }
-    }
 }

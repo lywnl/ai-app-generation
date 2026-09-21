@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.core.handler;
 
-import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
@@ -11,9 +10,7 @@ import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
-import dev.langchain4j.service.InternalOutputProtocolException;
 
-import java.util.List;
 
 /**
  * 简单文本流处理器
@@ -70,9 +67,6 @@ public class SimpleTextStreamHandler {
             UserMemoryService userMemoryService,
             AppDataLifecycleFence lifecycleFence,
             SimpleGenerationTurnContext context) {
-        if (SyntheticMemoryMessageProtocol.containsReservedMarker(message)) {
-            return Flux.error(new InternalOutputProtocolException());
-        }
         PersistenceResult result = persistStableMessage(
                 message, message, ChatMemoryOutcome.SUCCEEDED,
                 true, chatHistoryService, appId, loginUser,
@@ -91,20 +85,8 @@ public class SimpleTextStreamHandler {
             AppDataLifecycleFence lifecycleFence,
             SimpleGenerationTurnContext context) {
         try {
-            boolean protocolFailure = failure
-                    instanceof InternalOutputProtocolException;
-            String displayMessage = protocolFailure
-                    ? VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE
-                    : FAILURE_MESSAGE;
-            String memoryMessage = protocolFailure
-                    ? VueTurnMemoryProjection.project(
-                    List.of(), VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR)
-                    : FAILURE_MESSAGE;
-            ChatMemoryOutcome memoryOutcome = protocolFailure
-                    ? ChatMemoryOutcome.PROTOCOL_ERROR
-                    : ChatMemoryOutcome.SYSTEM_ERROR;
             PersistenceResult result = persistStableMessage(
-                    displayMessage, memoryMessage, memoryOutcome,
+                    FAILURE_MESSAGE, FAILURE_MESSAGE, ChatMemoryOutcome.SYSTEM_ERROR,
                     false, chatHistoryService, appId,
                     loginUser, memorySummaryService, userMemoryService,
                     lifecycleFence, context);

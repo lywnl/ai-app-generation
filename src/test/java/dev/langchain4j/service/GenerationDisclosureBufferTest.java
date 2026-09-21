@@ -70,36 +70,6 @@ class GenerationDisclosureBufferTest {
     }
 
     @Test
-    void 队首未决时后续披露不得越过且解决后按原序释放() {
-        GenerationDisclosureBuffer buffer = new GenerationDisclosureBuffer();
-        List<String> published = new ArrayList<>();
-
-        GenerationDisclosureBuffer.Disclosure pending =
-                buffer.enqueuePending(() -> published.add("第一项"));
-        buffer.enqueueResolved(() -> published.add("第二项"));
-
-        assertTrue(published.isEmpty());
-
-        buffer.resolveDelayed(pending);
-
-        assertEquals(List.of("第一项", "第二项"), published);
-    }
-
-    @Test
-    void 删除违规披露后必须释放后续安全披露() {
-        GenerationDisclosureBuffer buffer = new GenerationDisclosureBuffer();
-        List<String> published = new ArrayList<>();
-
-        GenerationDisclosureBuffer.Disclosure violation =
-                buffer.enqueuePending(() -> published.add("不得发布"));
-        buffer.enqueueResolved(() -> published.add("安全项"));
-
-        buffer.remove(violation);
-
-        assertEquals(List.of("安全项"), published);
-    }
-
-    @Test
     void 并发入队只能存在一个发布者() throws Exception {
         GenerationDisclosureBuffer buffer = new GenerationDisclosureBuffer();
         List<String> published = Collections.synchronizedList(
@@ -158,8 +128,8 @@ class GenerationDisclosureBufferTest {
         IllegalArgumentException secondFailure =
                 new IllegalArgumentException("第二项披露失败");
 
-        GenerationDisclosureBuffer.Disclosure head =
-                buffer.enqueuePending(() -> {
+        buffer.pausePublishing();
+        buffer.enqueueResolved(() -> {
                     published.add("第一项");
                     buffer.enqueueResolved(() -> published.add("重入项"));
                     throw firstFailure;
@@ -171,7 +141,7 @@ class GenerationDisclosureBufferTest {
         buffer.enqueueResolved(() -> published.add("第三项"));
 
         RuntimeException actual = assertThrows(
-                RuntimeException.class, () -> buffer.resolveDelayed(head));
+                RuntimeException.class, buffer::resumePublishing);
 
         assertSame(firstFailure, actual);
         assertEquals(1, actual.getSuppressed().length);

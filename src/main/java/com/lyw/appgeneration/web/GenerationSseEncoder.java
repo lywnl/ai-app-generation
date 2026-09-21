@@ -1,17 +1,11 @@
 package com.lyw.appgeneration.web;
 
-import cn.hutool.json.JSONConfig;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
 import org.springframework.http.codec.ServerSentEvent;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /** 单个 SSE 响应的业务帧与终止帧编码器。 */
@@ -21,11 +15,6 @@ public final class GenerationSseEncoder {
     public static final String ERROR_PROTOCOL = "generation-error/v1";
     private static final String VUE_TURN_PROTOCOL = "vue-turn/v1";
     private static final String SIMPLE_TURN_PROTOCOL = "simple-turn/v1";
-    private static final String ROLLBACK_PROTOCOL =
-            "internal-output-rollback/v1";
-    private static final String RECOVERY_PROTOCOL =
-            "internal-output-recovery/v1";
-
     private long sequence;
     private boolean done;
     private boolean businessError;
@@ -52,34 +41,6 @@ public final class GenerationSseEncoder {
                         "toolRequestId", message.toolRequestId(),
                         "stage", message.stage().name(),
                         "text", message.text()));
-            }
-            case GenerationStreamEvent.Rollback rollback -> {
-                var message = rollback.message();
-                List<String> requestIds = new ArrayList<>(
-                        message.getProvisionalToolRequestIds());
-                requestIds.sort(Comparator.naturalOrder());
-                yield event("internal-output-rollback", object(
-                        "protocol", ROLLBACK_PROTOCOL,
-                        "sequence", next,
-                        "failedGeneration", generation(
-                                message.getFailedGeneration()),
-                        "codePoints", message.getCodePoints(),
-                        "provisionalToolRequestIds", requestIds));
-            }
-            case GenerationStreamEvent.InternalRecovery recovery -> {
-                var message = recovery.message();
-                yield event("internal-output-recovery", objectWithNulls(
-                        "protocol", RECOVERY_PROTOCOL,
-                        "sequence", next,
-                        "phase", message.getPhase().name(),
-                        "originalFailedGeneration", generation(
-                                message.getOriginalFailedGeneration()),
-                        "recoveryGeneration", optionalGeneration(
-                                message.getRecoveryGeneration()),
-                        "failedGeneration", optionalGeneration(
-                                message.getFailedGeneration()),
-                        "message", internalRecoveryMessage(
-                                message.getPhase())));
             }
             case GenerationStreamEvent.ContextCompression compression -> {
                 var message = compression.message();
@@ -214,31 +175,8 @@ public final class GenerationSseEncoder {
         return object;
     }
 
-    private JSONObject objectWithNulls(Object... values) {
-        JSONObject object = new JSONObject(
-                JSONConfig.create().setIgnoreNullValue(false));
-        for (int index = 0; index < values.length; index += 2) {
-            object.set((String) values[index], values[index + 1]);
-        }
-        return object;
-    }
-
     private String generation(long generation) {
         return Long.toString(generation);
-    }
-
-    private String optionalGeneration(Long generation) {
-        return generation == null ? null : generation(generation);
-    }
-
-    private String internalRecoveryMessage(
-            dev.langchain4j.service.GenerationStreamSignal.Recovery.Phase
-                    phase) {
-        return switch (phase) {
-            case STARTED -> "检测到生成状态异常，正在重新生成…";
-            case RECOVERED -> "生成状态已恢复，继续处理…";
-            case FAILED -> "生成状态异常，系统已停止本次生成，请重新发起。";
-        };
     }
 
     private String wire(ServerSentEvent<String> event) {

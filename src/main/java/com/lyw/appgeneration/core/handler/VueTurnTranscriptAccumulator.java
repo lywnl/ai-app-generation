@@ -1,12 +1,9 @@
 package com.lyw.appgeneration.core.handler;
 
-import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /** 按来源维护 Vue 单回合有序转录，并支持只回滚指定代次的 AI 正文。 */
@@ -48,77 +45,12 @@ public final class VueTurnTranscriptAccumulator {
                 generation, toolRequestId, text);
     }
 
-    public synchronized RollbackDecision rollbackAiText(
-            long generation, int codePoints) {
-        validateGeneration(generation);
-        if (codePoints < 0) {
-            throw new IllegalArgumentException("回滚码点不能为负数");
-        }
-        int available = fragments.stream()
-                .filter(fragment -> fragment.source() == FragmentSource.AI_TEXT)
-                .filter(fragment -> fragment.generation() == generation)
-                .mapToInt(fragment -> FileToolBudgetGuard.codePointCount(
-                        fragment.text()))
-                .sum();
-        if (codePoints > available) {
-            throw new IllegalArgumentException(
-                    "回滚码点超过指定 generation 的已接收正文");
-        }
-        int remaining = codePoints;
-        for (int index = fragments.size() - 1;
-                index >= 0 && remaining > 0; index--) {
-            Fragment fragment = fragments.get(index);
-            if (fragment.source() != FragmentSource.AI_TEXT
-                    || fragment.generation() != generation) {
-                continue;
-            }
-            int fragmentCodePoints = FileToolBudgetGuard.codePointCount(
-                    fragment.text());
-            if (fragmentCodePoints <= remaining) {
-                fragments.remove(index);
-                remaining -= fragmentCodePoints;
-                continue;
-            }
-            int keptCodePoints = fragmentCodePoints - remaining;
-            String kept = FileToolBudgetGuard.prefixByCodePoints(
-                    fragment.text(), keptCodePoints);
-            fragments.set(index, new Fragment(
-                    fragment.source(), fragment.generation(),
-                    fragment.toolRequestId(), kept));
-            remaining = 0;
-        }
-        if (pendingHighSurrogate != null
-                && pendingHighSurrogate.source() == FragmentSource.AI_TEXT
-                && pendingHighSurrogate.generation() == generation) {
-            pendingHighSurrogate = null;
-        }
-        rebuildDisplayBudget();
-        return new RollbackDecision(codePoints, snapshot());
-    }
-
     public synchronized String displayText() {
         return joinFragments(false);
     }
 
     public synchronized String answerMemoryText() {
         return joinFragments(true);
-    }
-
-    /** 按 generation 拼接仍保留的 AI 正文，工具展示既不参与也不分隔扫描。 */
-    public synchronized boolean containsReservedMarkerInAiText() {
-        Map<Long, StringBuilder> aiTextByGeneration = new LinkedHashMap<>();
-        for (Fragment fragment : fragments) {
-            if (fragment.source() != FragmentSource.AI_TEXT) {
-                continue;
-            }
-            aiTextByGeneration.computeIfAbsent(
-                            fragment.generation(), ignored -> new StringBuilder())
-                    .append(fragment.text());
-        }
-        return aiTextByGeneration.values().stream()
-                .map(StringBuilder::toString)
-                .anyMatch(SyntheticMemoryMessageProtocol
-                        ::containsReservedMarker);
     }
 
     public synchronized Snapshot snapshot() {
@@ -227,21 +159,6 @@ public final class VueTurnTranscriptAccumulator {
         return joined.toString();
     }
 
-    private void rebuildDisplayBudget() {
-        FileToolBudgetGuard.CanonicalAccumulator rebuilt =
-                newDisplayBudget();
-        for (Fragment fragment : fragments) {
-            FileToolBudgetGuard.AppendDecision decision =
-                    rebuilt.append(fragment.text());
-            if (!decision.accepted()
-                    || !decision.acceptedPrefix().equals(fragment.text())) {
-                throw new IllegalStateException(
-                        "回滚后重建 Vue 转录预算失败");
-            }
-        }
-        displayBudget = rebuilt;
-    }
-
     private FileToolBudgetGuard.CanonicalAccumulator newDisplayBudget() {
         return terminalReserveCodePoints == 0
                 ? budgetSession.newCanonicalAccumulator()
@@ -308,18 +225,6 @@ public final class VueTurnTranscriptAccumulator {
 
         public AppendDecision {
             Objects.requireNonNull(acceptedPrefix, "已接收前缀不能为空");
-            Objects.requireNonNull(snapshot, "转录快照不能为空");
-        }
-    }
-
-    public record RollbackDecision(
-            int removedCodePoints,
-            Snapshot snapshot) {
-
-        public RollbackDecision {
-            if (removedCodePoints < 0) {
-                throw new IllegalArgumentException("已回滚码点不能为负数");
-            }
             Objects.requireNonNull(snapshot, "转录快照不能为空");
         }
     }

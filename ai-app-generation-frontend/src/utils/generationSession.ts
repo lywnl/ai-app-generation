@@ -4,7 +4,6 @@ export type SessionEventType = 'delta' | 'done' | 'error'
 export type ToolCallStatus = 'streaming' | 'done' | 'error'
 export type GenerationStatus = 'streaming' | 'done' | 'error'
 export type ContextCompressionState = 'idle' | 'compressing'
-export type InternalOutputRecoveryState = 'idle' | 'recovering'
 export type ToolProtocolRecoveryState = 'idle' | 'recovering'
 export type IncompleteToolChainRecoveryState = 'idle' | 'recovering'
 
@@ -84,7 +83,6 @@ export interface GenerationSessionSnapshot {
   status: GenerationStatus
   outcome: GenerationOutcome
   contextCompression: ContextCompressionState
-  internalOutputRecovery: InternalOutputRecoveryState
   toolProtocolRecovery: ToolProtocolRecoveryState
   incompleteToolChainRecovery: IncompleteToolChainRecoveryState
   errorMessage?: string
@@ -127,13 +125,11 @@ export function shouldHideToolCall(
 
 export function getGenerationStatusText(
   contextCompression: ContextCompressionState,
-  internalOutputRecovery: InternalOutputRecoveryState,
   incompleteToolChainRecovery: IncompleteToolChainRecoveryState,
   toolProtocolRecovery: ToolProtocolRecoveryState,
   fallback: string,
 ): string {
   if (contextCompression === 'compressing') return '正在压缩上下文，请稍候…'
-  if (internalOutputRecovery === 'recovering') return '正在恢复安全生成，请稍候…'
   if (incompleteToolChainRecovery === 'recovering') {
     return '正在继续未完成的构建流程，请稍候…'
   }
@@ -144,7 +140,6 @@ export function getGenerationStatusText(
 export function shouldShowGenerationStatus(
   loading: boolean,
   contextCompression: ContextCompressionState,
-  internalOutputRecovery: InternalOutputRecoveryState,
   incompleteToolChainRecovery: IncompleteToolChainRecoveryState,
   toolProtocolRecovery: ToolProtocolRecoveryState,
   hasVisibleOutput: boolean,
@@ -152,7 +147,6 @@ export function shouldShowGenerationStatus(
   return (
     loading &&
     (contextCompression === 'compressing' ||
-      internalOutputRecovery === 'recovering' ||
       incompleteToolChainRecovery === 'recovering' ||
       toolProtocolRecovery === 'recovering' ||
       !hasVisibleOutput)
@@ -185,17 +179,7 @@ type ContentFragment = IncomingContentFragment & { sequence: number }
 
 type Listener = (snapshot: GenerationSessionSnapshot, eventType: SessionEventType) => void
 type JsonRecord = Record<string, unknown>
-type RecoveryPhase = 'idle' | 'started' | 'recovered' | 'failed'
 type AuxiliaryRecoveryPhase = 'idle' | 'recovering' | 'recovered' | 'failed'
-
-interface InternalRecoveryProtocolState {
-  phase: RecoveryPhase
-  recoveryAttempt: 0 | 1
-  originalFailedGeneration?: string
-  recoveryGeneration?: string
-  recentRollbackGeneration?: string
-  rollbackAwaitingRecovery: boolean
-}
 
 interface SessionState {
   snapshot: GenerationSessionSnapshot
@@ -213,7 +197,6 @@ interface SessionState {
   awaitingDone: boolean
   awaitingDoneAfterTurnOutcome: boolean
   doneSeen: boolean
-  recovery: InternalRecoveryProtocolState
   toolProtocolRecoveryPhase: AuxiliaryRecoveryPhase
   incompleteToolChainRecoveryPhase: AuxiliaryRecoveryPhase
   generationId: string
@@ -221,7 +204,6 @@ interface SessionState {
 
 const DEFAULT_THROTTLE_MS = 100
 const MAX_SEQUENCE = 2_147_483_647
-const MAX_CODE_POINTS = 2_147_483_647
 const MAX_GENERATION = '9223372036854775807'
 const STREAM_PROTOCOL = 'generation-stream/v1'
 const SERVICE_UNAVAILABLE_MESSAGE = '生成服务暂时不可用，请稍后重试。'
@@ -242,12 +224,6 @@ const OUTCOME_MAP: Record<string, Exclude<GenerationOutcome, 'pending'>> = {
 const CONTEXT_COMPRESSION_MESSAGES = {
   STARTED: '正在压缩上下文，请稍候…',
   COMPLETED: '上下文压缩完成，继续生成…',
-} as const
-
-const INTERNAL_RECOVERY_MESSAGES = {
-  STARTED: '检测到生成状态异常，正在重新生成…',
-  RECOVERED: '生成状态已恢复，继续处理…',
-  FAILED: '生成状态异常，系统已停止本次生成，请重新发起。',
 } as const
 
 const TOOL_PROTOCOL_RECOVERY_MESSAGES = {
@@ -281,7 +257,6 @@ function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
     status: 'done',
     outcome: 'pending',
     contextCompression: 'idle',
-    internalOutputRecovery: 'idle',
     toolProtocolRecovery: 'idle',
     incompleteToolChainRecovery: 'idle',
     toolCalls: new Map(),
@@ -308,10 +283,6 @@ function cloneSnapshot(snapshot: GenerationSessionSnapshot): GenerationSessionSn
   }
 }
 
-function createProtocolState(): InternalRecoveryProtocolState {
-  return { phase: 'idle', recoveryAttempt: 0, rollbackAwaitingRecovery: false }
-}
-
 function getOrCreateSession(appId: string): SessionState {
   const existing = sessions.get(appId)
   if (existing) return existing
@@ -329,7 +300,6 @@ function getOrCreateSession(appId: string): SessionState {
     awaitingDone: false,
     awaitingDoneAfterTurnOutcome: false,
     doneSeen: false,
-    recovery: createProtocolState(),
     toolProtocolRecoveryPhase: 'idle',
     incompleteToolChainRecoveryPhase: 'idle',
     generationId: '',
@@ -468,7 +438,6 @@ function appendFragment(appId: string, requestId: number, fragment: IncomingCont
 
 function resetVisibleStatuses(session: SessionState): void {
   session.snapshot.contextCompression = 'idle'
-  session.snapshot.internalOutputRecovery = 'idle'
   session.snapshot.toolProtocolRecovery = 'idle'
   session.snapshot.incompleteToolChainRecovery = 'idle'
 }
@@ -557,10 +526,6 @@ function isGeneration(value: unknown): value is string {
   if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return false
   return value.length < MAX_GENERATION.length ||
     (value.length === MAX_GENERATION.length && value <= MAX_GENERATION)
-}
-
-function compareGeneration(left: string, right: string): number {
-  return left.length === right.length ? left.localeCompare(right) : left.length - right.length
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -750,10 +715,6 @@ function handleMessage(appId: string, requestId: number, payload: JsonRecord): v
     markProtocolError(appId, requestId, '生成正文 envelope 不合法')
     return
   }
-  if (vueKind && !canAcceptGeneration(session, payload.generation as string)) {
-    markProtocolError(appId, requestId, '恢复阶段收到不合法的生成代内容')
-    return
-  }
   if (kind === 'simple_text') {
     appendFragment(appId, requestId, { source: 'simple_text', text: payload.data, committed: false })
   } else if (kind === 'ai_text') {
@@ -763,14 +724,6 @@ function handleMessage(appId: string, requestId: number, payload: JsonRecord): v
   } else {
     handleStructuredTool(appId, requestId, payload.generation as string, payload.data)
   }
-}
-
-function canAcceptGeneration(session: SessionState, generation: string): boolean {
-  if (!session.recovery.recentRollbackGeneration) return true
-  return !session.recovery.rollbackAwaitingRecovery &&
-    session.recovery.phase === 'recovered' &&
-    session.recovery.recoveryGeneration !== undefined &&
-    compareGeneration(generation, session.recovery.recoveryGeneration) >= 0
 }
 
 function handleTrustedDisplay(appId: string, requestId: number, payload: JsonRecord): void {
@@ -786,10 +739,6 @@ function handleTrustedDisplay(appId: string, requestId: number, payload: JsonRec
   }
   const session = getActiveSession(appId, requestId)
   if (!session) return
-  if (!canAcceptGeneration(session, payload.generation)) {
-    markProtocolError(appId, requestId, '恢复阶段收到不合法的可信工具展示')
-    return
-  }
   const view = matchingToolCall(
     session, payload.toolRequestId, session.snapshot.toolCalls.get(payload.toolRequestId)?.name ?? '',
     payload.generation,
@@ -806,161 +755,6 @@ function handleTrustedDisplay(appId: string, requestId: number, payload: JsonRec
     text: payload.text,
     committed: false,
   })
-}
-
-function rollbackAiFragments(session: SessionState, generation: string, codePoints: number): boolean {
-  const available = session.fragments
-    .filter((fragment) => fragment.source === 'ai' && fragment.generation === generation)
-    .reduce((sum, fragment) => sum + Array.from(fragment.text).length, 0)
-  if (codePoints > available) return false
-  let remaining = codePoints
-  for (let index = session.fragments.length - 1; index >= 0 && remaining > 0; index -= 1) {
-    const fragment = session.fragments[index]
-    if (fragment.source !== 'ai' || fragment.generation !== generation) continue
-    const points = Array.from(fragment.text)
-    const removed = Math.min(remaining, points.length)
-    fragment.text = points.slice(0, points.length - removed).join('')
-    remaining -= removed
-  }
-  session.fragments = session.fragments.filter((fragment) => fragment.text.length > 0)
-  return true
-}
-
-function handleRollback(appId: string, requestId: number, payload: JsonRecord): void {
-  const ids = payload.provisionalToolRequestIds
-  if (
-    payload.protocol !== 'internal-output-rollback/v1' ||
-    !hasExactFields(payload, ['protocol', 'sequence', 'failedGeneration', 'codePoints', 'provisionalToolRequestIds']) ||
-    !isGeneration(payload.failedGeneration) || !Number.isInteger(payload.codePoints) ||
-    Number(payload.codePoints) < 0 || Number(payload.codePoints) > MAX_CODE_POINTS ||
-    !Array.isArray(ids) || ids.some((id) => !isNonEmptyString(id)) ||
-    new Set(ids).size !== ids.length
-  ) {
-    markProtocolError(appId, requestId, '内部输出回滚协议不合法')
-    return
-  }
-  const session = getActiveSession(appId, requestId)
-  if (!session) return
-  if (session.recovery.rollbackAwaitingRecovery) {
-    markProtocolError(appId, requestId, '前一内部输出回滚尚未完成状态转换')
-    return
-  }
-  if (
-    session.recovery.recoveryAttempt === 1 &&
-    session.recovery.phase !== 'started' &&
-    session.recovery.phase !== 'recovered'
-  ) {
-    markProtocolError(appId, requestId, '内部输出回滚次数超限')
-    return
-  }
-  if (
-    (session.recovery.phase === 'started' || session.recovery.phase === 'recovered') &&
-    session.recovery.recoveryGeneration !== undefined &&
-    compareGeneration(payload.failedGeneration, session.recovery.recoveryGeneration) < 0
-  ) {
-    markProtocolError(appId, requestId, '内部输出回滚代次早于恢复下界')
-    return
-  }
-  for (const id of ids as string[]) {
-    const view = session.snapshot.toolCalls.get(id)
-    if (view && view.generation !== payload.failedGeneration) {
-      markProtocolError(appId, requestId, '回滚工具来源代次冲突')
-      return
-    }
-  }
-  cancelFlushTimer(session)
-  if (!rollbackAiFragments(session, payload.failedGeneration, payload.codePoints as number)) {
-    markProtocolError(appId, requestId, '回滚正文码点数超过已接收范围')
-    return
-  }
-  const removableIds = new Set<string>()
-  for (const id of ids as string[]) {
-    const view = session.snapshot.toolCalls.get(id)
-    if (view?.provisional) {
-      removableIds.add(id)
-      session.snapshot.toolCalls.delete(id)
-      session.toolPositions.delete(id)
-    }
-  }
-  session.fragments = session.fragments.filter(
-    (fragment) =>
-      fragment.source !== 'trusted_tool_display' ||
-      fragment.stage !== 'REQUESTED' ||
-      fragment.generation !== payload.failedGeneration ||
-      !removableIds.has(fragment.toolRequestId),
-  )
-  session.recovery.recentRollbackGeneration = payload.failedGeneration
-  session.recovery.rollbackAwaitingRecovery = true
-  rebuildContent(session)
-  emit(appId, 'delta', requestId)
-}
-
-function handleInternalRecovery(appId: string, requestId: number, payload: JsonRecord): void {
-  if (
-    payload.protocol !== 'internal-output-recovery/v1' ||
-    !hasExactFields(payload, [
-      'protocol', 'sequence', 'phase', 'originalFailedGeneration',
-      'recoveryGeneration', 'failedGeneration', 'message',
-    ]) ||
-    (payload.phase !== 'STARTED' && payload.phase !== 'RECOVERED' && payload.phase !== 'FAILED') ||
-    payload.message !== INTERNAL_RECOVERY_MESSAGES[payload.phase] ||
-    !isGeneration(payload.originalFailedGeneration) ||
-    (payload.recoveryGeneration !== null && !isGeneration(payload.recoveryGeneration)) ||
-    (payload.failedGeneration !== null && !isGeneration(payload.failedGeneration))
-  ) {
-    markProtocolError(appId, requestId, '内部输出恢复协议不合法')
-    return
-  }
-  const session = getActiveSession(appId, requestId)
-  if (!session) return
-  const state = session.recovery
-  const original = payload.originalFailedGeneration
-  const recoveryGeneration = payload.recoveryGeneration
-  const failedGeneration = payload.failedGeneration
-  if (payload.phase === 'STARTED') {
-    const valid = state.recoveryAttempt === 0 && state.phase === 'idle' &&
-      state.recentRollbackGeneration === original && isGeneration(recoveryGeneration) &&
-      failedGeneration === null && compareGeneration(recoveryGeneration, original) > 0
-    if (!valid) {
-      markProtocolError(appId, requestId, '内部输出恢复 STARTED 转移不合法')
-      return
-    }
-    state.phase = 'started'
-    state.recoveryAttempt = 1
-    state.originalFailedGeneration = original
-    state.recoveryGeneration = recoveryGeneration
-    state.rollbackAwaitingRecovery = false
-    session.snapshot.internalOutputRecovery = 'recovering'
-  } else if (payload.phase === 'RECOVERED') {
-    const valid = state.phase === 'started' && state.originalFailedGeneration === original &&
-      state.recoveryGeneration === recoveryGeneration && failedGeneration === null &&
-      !state.rollbackAwaitingRecovery
-    if (!valid) {
-      markProtocolError(appId, requestId, '内部输出恢复 RECOVERED 转移不合法')
-      return
-    }
-    state.phase = 'recovered'
-    session.snapshot.internalOutputRecovery = 'idle'
-  } else {
-    const failedBeforeStart = state.recoveryAttempt === 0 && state.phase === 'idle' &&
-      state.recentRollbackGeneration === original && recoveryGeneration === null &&
-      failedGeneration === original && state.rollbackAwaitingRecovery
-    const failedAfterStart = state.recoveryAttempt === 1 &&
-      (state.phase === 'started' || state.phase === 'recovered') &&
-      state.originalFailedGeneration === original && state.recoveryGeneration === recoveryGeneration &&
-      (state.phase === 'started'
-        ? failedGeneration === recoveryGeneration
-        : failedGeneration === state.recentRollbackGeneration && state.rollbackAwaitingRecovery)
-    if (!failedBeforeStart && !failedAfterStart) {
-      markProtocolError(appId, requestId, '内部输出恢复 FAILED 转移不合法')
-      return
-    }
-    state.phase = 'failed'
-    state.rollbackAwaitingRecovery = false
-    discardPendingFragments(session)
-    session.snapshot.internalOutputRecovery = 'idle'
-  }
-  emit(appId, 'delta', requestId)
 }
 
 function handleContextCompression(appId: string, requestId: number, payload: JsonRecord): void {
@@ -1034,8 +828,6 @@ function handleTurnOutcome(appId: string, requestId: number, payload: JsonRecord
     !hasExactFields(payload, ['protocol', 'sequence', 'outcome', 'message', 'refreshPreview']) ||
     !outcome || !isNonEmptyString(payload.message) || typeof payload.refreshPreview !== 'boolean' ||
     session.snapshot.outcome !== 'pending' ||
-    ((outcome === 'answered' || outcome === 'succeeded') &&
-      !canAcceptSuccessfulOutcome(session)) ||
     (outcome === 'succeeded' ? payload.refreshPreview !== true : payload.refreshPreview !== false)
   ) {
     markProtocolError(appId, requestId, '生成业务终态协议不合法')
@@ -1051,12 +843,6 @@ function handleTurnOutcome(appId: string, requestId: number, payload: JsonRecord
     session.snapshot.errorMessage = payload.message
   }
   emit(appId, 'delta', requestId)
-}
-
-function canAcceptSuccessfulOutcome(session: SessionState): boolean {
-  if (!session.recovery.recentRollbackGeneration) return true
-  return session.recovery.phase === 'recovered' &&
-    !session.recovery.rollbackAwaitingRecovery
 }
 
 function handleBusinessError(appId: string, requestId: number, payload: JsonRecord): void {
@@ -1135,12 +921,6 @@ function handleSseEvent(appId: string, requestId: number, event: string, data: s
   switch (eventName) {
     case 'trusted-tool-display':
       handleTrustedDisplay(appId, requestId, payload)
-      break
-    case 'internal-output-rollback':
-      handleRollback(appId, requestId, payload)
-      break
-    case 'internal-output-recovery':
-      handleInternalRecovery(appId, requestId, payload)
       break
     case 'context-compression':
       handleContextCompression(appId, requestId, payload)
@@ -1292,7 +1072,6 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.awaitingDone = false
   session.awaitingDoneAfterTurnOutcome = false
   session.doneSeen = false
-  session.recovery = createProtocolState()
   session.toolProtocolRecoveryPhase = 'idle'
   session.incompleteToolChainRecoveryPhase = 'idle'
   session.snapshot = {
@@ -1302,7 +1081,6 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
     status: 'streaming',
     outcome: 'pending',
     contextCompression: 'idle',
-    internalOutputRecovery: 'idle',
     toolProtocolRecovery: 'idle',
     incompleteToolChainRecovery: 'idle',
     toolCalls: new Map(),

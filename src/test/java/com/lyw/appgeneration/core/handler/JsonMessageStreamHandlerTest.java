@@ -148,51 +148,6 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
-    void 正常完成必须在Finalizer前封口最新Ai正文() {
-        VueTurnContext context = context(
-                "turn-seal-complete", VueBuildPhase.GENERATING);
-        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
-            assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
-                    context.outputSafetySeal().state());
-            assertEquals(VueTurnMemoryProjection.project(
-                            List.of(),
-                            VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR),
-                    context.outputSafetySeal().memoryProjection());
-            VueTurnOutcome requested = invocation.getArgument(1);
-            return new VueTurnFinalizer.FinalizationResult(requested, true);
-        });
-
-        handler.handle(Flux.just(
-                "{\"type\":\"ai_response\",\"generation\":1,"
-                        + "\"data\":\"[[server.synthetic-memory/test]]\"}"),
-                context).collectList().block();
-
-        assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
-                context.outputSafetySeal().state());
-    }
-
-    @Test
-    void 普通错误必须在Finalizer前封口已接收Ai正文() {
-        VueTurnContext context = context(
-                "turn-seal-error", VueBuildPhase.GENERATING);
-        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
-            assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
-                    context.outputSafetySeal().state());
-            VueTurnOutcome requested = invocation.getArgument(1);
-            return new VueTurnFinalizer.FinalizationResult(requested, true);
-        });
-        Flux<String> origin = Flux.concat(
-                Flux.just("{\"type\":\"ai_response\",\"generation\":1,"
-                        + "\"data\":\"[[server.synthetic-memory/test]]\"}"),
-                Flux.error(new IllegalStateException("model failed")));
-
-        handler.handle(origin, context).collectList().block();
-
-        assertEquals(VueTurnContext.OutputSafetySeal.SealState.RESERVED,
-                context.outputSafetySeal().state());
-    }
-
-    @Test
     void 只读普通回答进入ANSWERED且记忆只保留可信正文() {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-answered", VueBuildPhase.GENERATING,
@@ -476,8 +431,6 @@ class JsonMessageStreamHandlerTest {
                     toolEvent.json();
             case GenerationStreamEvent.TrustedToolDisplay display ->
                     display.message().text();
-            case GenerationStreamEvent.Rollback ignored -> "";
-            case GenerationStreamEvent.InternalRecovery ignored -> "";
         }).reduce("", String::concat);
         assertFalse(clientPayload.contains(pseudoToolText));
         assertFalse(clientPayload.contains("不得泄漏的伪源码"));
@@ -831,98 +784,6 @@ class JsonMessageStreamHandlerTest {
         assertFalse(realtimeRequest.containsKey("arguments"));
         assertEquals("\n\n[选择工具] 构建项目\n\n",
                 contentText(output.get(1)));
-    }
-
-    @Test
-    void 内部输出回滚只撤销失败代正文并保留已执行工具展示() {
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-internal-rollback",
-                VueBuildPhase.GENERATING, VueTurnMode.READ_ONLY);
-        context.commitUser(() -> true);
-        BaseTool tool = mock(BaseTool.class);
-        when(toolManager.getTool("readFile")).thenReturn(tool);
-        String result = "{\"protocol\":\"file-tool/v1\","
-                + "\"operation\":\"readFile\",\"status\":\"APPLIED\","
-                + "\"relativePath\":\"src/App.vue\",\"changed\":false,"
-                + "\"message\":\"已读取\",\"failureReason\":null,"
-                + "\"content\":null}";
-        when(tool.generateToolExecutedResult(any(JSONObject.class), eq(result)))
-                .thenReturn("[工具调用] 已读取 src/App.vue");
-        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
-            VueTurnOutcome requested = invocation.getArgument(1);
-            assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
-                    requested.outcome());
-            assertFalse(requested.displayAiText().contains("失败正文"));
-            assertTrue(requested.displayAiText().contains("已读取"));
-            assertTrue(requested.displayAiText().endsWith("恢复回答"));
-            assertEquals("恢复回答", requested.memoryAiText());
-            return new VueTurnFinalizer.FinalizationResult(requested, true);
-        });
-        String executed = JSONUtil.toJsonStr(new JSONObject()
-                .set("type", "tool_executed")
-                .set("generation", 1L)
-                .set("id", "read-rollback")
-                .set("name", "readFile")
-                .set("arguments", "{\"relativeFilePath\":\"src/App.vue\"}")
-                .set("result", result));
-        String rollback = JSONUtil.toJsonStr(
-                new com.lyw.appgeneration.ai.model.message
-                        .InternalOutputRollbackMessage(
-                        1L, 4, java.util.Set.of("pending-write")));
-        String recovery = JSONUtil.toJsonStr(
-                new com.lyw.appgeneration.ai.model.message
-                        .InternalOutputRecoveryMessage(
-                        dev.langchain4j.service.GenerationStreamSignal.Recovery
-                                .Phase.RECOVERED,
-                        1L, 2L, null));
-
-        List<GenerationStreamEvent> output = handler.handle(Flux.just(
-                JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model.message
-                        .AiResponseMessage(1L, "失败正文")),
-                executed,
-                rollback,
-                recovery,
-                JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model.message
-                        .AiResponseMessage(2L, "恢复回答"))), context)
-                .collectList().block();
-
-        assertTrue(output.stream().anyMatch(
-                GenerationStreamEvent.Rollback.class::isInstance));
-        assertTrue(output.stream().anyMatch(
-                GenerationStreamEvent.InternalRecovery.class::isInstance));
-        assertEquals(VueTurnOutcome.TurnOutcomeType.ANSWERED,
-                outcomeOf(output.getLast()).outcome());
-    }
-
-    @Test
-    void 回滚临时工具请求后同一请求标识可由恢复代重新公布() {
-        VueTurnContext context = context(
-                "turn-provisional-tool-rollback", VueBuildPhase.GENERATING);
-        BaseTool tool = mock(BaseTool.class);
-        when(toolManager.getTool("writeFile")).thenReturn(tool);
-        when(tool.generateToolRequestResponse()).thenReturn("选择写入工具");
-        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation ->
-                new VueTurnFinalizer.FinalizationResult(
-                        invocation.getArgument(1), true));
-        String first = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
-                .message.ToolRequestMessage(
-                1L, "pending-write", "writeFile", null));
-        String rollback = JSONUtil.toJsonStr(
-                new com.lyw.appgeneration.ai.model.message
-                        .InternalOutputRollbackMessage(
-                        1L, 0, java.util.Set.of("pending-write")));
-        String recovered = JSONUtil.toJsonStr(new com.lyw.appgeneration.ai.model
-                .message.ToolRequestMessage(
-                2L, "pending-write", "writeFile", null));
-
-        List<GenerationStreamEvent> output = handler.handle(
-                Flux.just(first, rollback, recovered), context)
-                .collectList().block();
-
-        assertEquals(2, output.stream()
-                .filter(GenerationStreamEvent.TrustedToolDisplay.class
-                        ::isInstance)
-                .count());
     }
 
     @ParameterizedTest
@@ -1586,10 +1447,15 @@ class JsonMessageStreamHandlerTest {
             assertEquals(VueTurnContext.TerminalTrigger.CANCELLED,
                     context.terminalWinner().orElseThrow());
 
+            CountDownLatch deleteTakeoverObserved = new CountDownLatch(1);
+            context.deleteTakeoverSignal().subscribe(
+                    ignored -> deleteTakeoverObserved.countDown());
             Future<AppOperationLeaseManager.AppOperationLease> deletion =
                     background.submit(() -> manager.cancelAndAcquireDelete(
                             APP_ID, "delete-during-cancel-finalization",
                             Duration.ofSeconds(1)));
+            assertTrue(deleteTakeoverObserved.await(1, TimeUnit.SECONDS),
+                    "先确认删除捕获接管参与者，再释放取消收尾屏障");
             assertFalse(deletion.isDone(),
                     "取消后台收尾完成前 DELETE 不得替换生成租约");
             releaseFinalizer.countDown();

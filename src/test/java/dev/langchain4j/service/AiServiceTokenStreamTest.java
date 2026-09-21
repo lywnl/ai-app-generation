@@ -45,9 +45,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AiServiceTokenStreamTest {
 
-    private static final String INTERNAL_PREFIX = "[[internal.";
-    private static final String INTERNAL_MARKER = "<internal-ack>";
-
     private static final String CORRECTION_INSTRUCTION = """
             上一响应未遵守工具调用协议。你在普通正文 content 中输出了工具调用内容，
             这些文本不会被系统执行，也不会展示给用户。
@@ -75,25 +72,13 @@ class AiServiceTokenStreamTest {
     void 统一信号模式与旧流式回调互斥且策略监听器只能安装一次() {
         AiServiceTokenStream stream = tokenStreamWithTools(
                 List.of(), Map.of());
-        InternalOutputRecoveryPolicy policy = internalPolicy(
-                InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE);
-
-        stream.internalOutputRecoveryPolicy(policy)
-                .onGenerationStreamSignal(ignored -> { })
+        stream.onGenerationStreamSignal(ignored -> { })
                 .onPartialResponse(ignored -> { })
                 .onError(ignored -> { });
 
         assertThrows(IllegalConfigurationException.class, stream::start);
         assertThrows(IllegalConfigurationException.class, () ->
                 tokenStreamWithTools(List.of(), Map.of())
-                        .internalOutputRecoveryPolicy(policy)
-                        .internalOutputRecoveryPolicy(policy)
-                        .onGenerationStreamSignal(ignored -> { })
-                        .onError(ignored -> { })
-                        .start());
-        assertThrows(IllegalConfigurationException.class, () ->
-                tokenStreamWithTools(List.of(), Map.of())
-                        .internalOutputRecoveryPolicy(policy)
                         .onGenerationStreamSignal(ignored -> { })
                         .onGenerationStreamSignal(ignored -> { })
                         .onError(ignored -> { })
@@ -101,132 +86,7 @@ class AiServiceTokenStreamTest {
     }
 
     @Test
-    void 内部正文跨分片命中必须按码点回滚并只恢复一次() throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
-                terminal = new AtomicReference<>();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onControlledTermination(terminal::set)
-                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                            "内部输出首次恢复不应报普通错误", error))
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            model.handler(0).onPartialResponse("开头😀[[inte");
-            model.handler(0).onPartialResponse("rnal.");
-            assertTrue(model.awaitCalls(2));
-            model.handler(1).onCompleteResponse(response(
-                    "安全完成", new TokenUsage(2, 3, 5)));
-            gate.awaitIdle();
-
-            assertEquals(2, model.callCount());
-            assertEquals(new GenerationStreamSignal.AiText(
-                    1, "开头😀"), signals.get(0));
-            assertEquals(new GenerationStreamSignal.Rollback(
-                    1, 3, Set.of()), signals.get(1));
-            assertEquals(GenerationStreamSignal.Recovery.Phase.STARTED,
-                    ((GenerationStreamSignal.Recovery) signals.get(2)).phase());
-            assertEquals(GenerationStreamSignal.Recovery.Phase.RECOVERED,
-                    ((GenerationStreamSignal.Recovery) signals.get(3)).phase());
-            assertEquals(new GenerationStreamSignal.AiText(
-                    2, "安全完成"), signals.get(4));
-            assertNull(terminal.get());
-            assertFalse(containsAiTextFragment(memory.messages(),
-                    INTERNAL_PREFIX));
-        }
-    }
-
-    @Test
-    void 工具参数候选必须阻塞后续请求且命中前不得回调入记忆或执行()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        AtomicInteger toolCalls = new AtomicInteger();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            RecoveryAiService service = AiServices.builder(
-                            RecoveryAiService.class)
-                    .streamingChatModel(model)
-                    .chatMemoryProvider(ignored -> memory)
-                    .tools(new RecoveryTools(toolCalls))
-                    .build();
-            service.chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                            "工具参数泄漏首次恢复不应报普通错误", error))
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            StreamingChatResponseHandler handler = model.handler(0);
-            handler.onPartialToolExecutionRequest(0,
-                    toolRequest("leaking", "writeFile",
-                            "{\"text\":\"\\u005b\\u005binte"));
-            handler.onPartialToolExecutionRequest(1,
-                    toolRequest("safe", "writeFile", "{\"text\":\"安全\"}"));
-            assertTrue(signals.isEmpty(), "后续 request id 不得越过候选参数");
-            handler.onPartialToolExecutionRequest(0,
-                    toolRequest("leaking", "writeFile", "rnal.\"}"));
-            assertTrue(model.awaitCalls(2));
-            gate.awaitIdle();
-
-            assertEquals(0, toolCalls.get());
-            assertEquals(2, memory.messages().size(),
-                    "内部参数不得形成工具请求或结果记忆");
-            assertEquals(2, signals.size());
-            assertEquals(new GenerationStreamSignal.Rollback(
-                    1, 0, Set.of()), signals.getFirst());
-            assertEquals(GenerationStreamSignal.Recovery.Phase.STARTED,
-                    ((GenerationStreamSignal.Recovery) signals.get(1)).phase());
-        }
-    }
-
-    @Test
-    void 快速失败正文不得进入旧回调完整响应或记忆() throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<String> partials = new CopyOnWriteArrayList<>();
-        AtomicReference<ChatResponse> completed = new AtomicReference<>();
-        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
-                terminal = new AtomicReference<>();
-
-        recoveryService(model, memory).chat(7L, "本轮问题")
-                .internalOutputRecoveryPolicy(internalPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST))
-                .onPartialResponse(partials::add)
-                .onCompleteResponse(completed::set)
-                .onControlledTermination(terminal::set)
-                .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                        "快速失败应走受控终止", error))
-                .start();
-        assertTrue(model.awaitCalls(1));
-
-        model.handler(0).onPartialResponse("可信正文<internal-");
-        model.handler(0).onPartialResponse("ack>");
-
-        assertEquals(List.of("可信正文"), partials);
-        assertNull(completed.get());
-        assertEquals(ToolLoopTerminationProtocol.ControlledTerminationReason
-                        .PROTOCOL_ERROR,
-                terminal.get().reason());
-        assertFalse(containsAiTextFragment(memory.messages(),
-                INTERNAL_MARKER));
-        assertEquals(1, model.callCount());
-    }
-
-    @Test
-    void 工具参数分片必须按请求累计扫描但统一回调仍收到原始delta()
+    void 工具参数分片通过统一回调保留原始delta()
             throws Exception {
         MutableChatMemory memory = memoryWithQuestion();
         RecordingRecoveryModel model = new RecordingRecoveryModel();
@@ -242,8 +102,6 @@ class AiServiceTokenStreamTest {
                     .build();
             service.chat(7L, "本轮问题")
                     .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
                     .onGenerationStreamSignal(signals::add)
                     .onError(error -> org.junit.jupiter.api.Assertions.fail(
                             "安全 delta 不应报错", error))
@@ -285,348 +143,6 @@ class AiServiceTokenStreamTest {
     }
 
     @Test
-    void 完整工具参数单独泄漏必须在披露入记忆和执行前恢复()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicInteger toolCalls = new AtomicInteger();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            RecoveryAiService service = AiServices.builder(
-                            RecoveryAiService.class)
-                    .streamingChatModel(model)
-                    .chatMemoryProvider(ignored -> memory)
-                    .tools(new TextRecoveryTools(toolCalls))
-                    .build();
-            service.chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                            "complete-only 泄漏应走内部恢复", error))
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            ToolExecutionRequest leaked = toolRequest(
-                    "complete-only", "writeFile",
-                    "{\"text\":\"<internal-ack>\"}");
-            model.handler(0).onCompleteToolExecutionRequest(0, leaked);
-            assertTrue(model.awaitCalls(2));
-            gate.awaitIdle();
-
-            assertEquals(0, toolCalls.get());
-            assertFalse(memory.messages().stream()
-                    .filter(AiMessage.class::isInstance)
-                    .map(AiMessage.class::cast)
-                    .anyMatch(AiMessage::hasToolExecutionRequests));
-            assertEquals(GenerationStreamSignal.Rollback.class,
-                    signals.getFirst().getClass());
-            assertEquals(GenerationStreamSignal.Recovery.Phase.STARTED,
-                    ((GenerationStreamSignal.Recovery) signals.get(1)).phase());
-        }
-    }
-
-    @Test
-    void 工具参数partial与complete不一致必须失败关闭且不得执行()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        AtomicInteger toolCalls = new AtomicInteger();
-        RecoveryAiService service = AiServices.builder(RecoveryAiService.class)
-                .streamingChatModel(model)
-                .chatMemoryProvider(ignored -> memory)
-                .tools(new TextRecoveryTools(toolCalls))
-                .build();
-        service.chat(7L, "本轮问题")
-                .internalOutputRecoveryPolicy(internalPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST))
-                .onPartialResponse(ignored -> { })
-                .onError(failure::set)
-                .start();
-        assertTrue(model.awaitCalls(1));
-
-        StreamingChatResponseHandler handler = model.handler(0);
-        handler.onPartialToolExecutionRequest(0, toolRequest(
-                "mismatch", "writeFile", "{\"text\":\"安全\"}"));
-        handler.onCompleteToolExecutionRequest(0, toolRequest(
-                "mismatch", "writeFile", "{\"text\":\"不同\"}"));
-
-        assertInstanceOf(StreamingResponseConsistencyException.class,
-                failure.get());
-        assertEquals(0, toolCalls.get());
-        assertFalse(memory.messages().stream()
-                .filter(AiMessage.class::isInstance)
-                .map(AiMessage.class::cast)
-                .anyMatch(AiMessage::hasToolExecutionRequests));
-    }
-
-    @Test
-    void 恢复分支再次泄漏必须回滚失败并以协议错误收口且无第三次请求()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
-                terminal = new AtomicReference<>();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onControlledTermination(terminal::set)
-                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                            "二次泄漏应走受控协议错误", error))
-                    .start();
-            assertTrue(model.awaitCalls(1));
-            model.handler(0).onPartialResponse("首代<internal-ack>");
-            assertTrue(model.awaitCalls(2));
-
-            model.handler(1).onPartialResponse("恢复😀");
-            model.handler(1).onPartialResponse("<internal-ack>");
-            gate.awaitIdle();
-
-            assertEquals(2, model.callCount());
-            GenerationStreamSignal.Rollback lastRollback = signals.stream()
-                    .filter(GenerationStreamSignal.Rollback.class::isInstance)
-                    .map(GenerationStreamSignal.Rollback.class::cast)
-                    .reduce((first, second) -> second).orElseThrow();
-            assertEquals(2, lastRollback.failedGeneration());
-            assertEquals(3, lastRollback.codePoints());
-            GenerationStreamSignal.Recovery failed = signals.stream()
-                    .filter(GenerationStreamSignal.Recovery.class::isInstance)
-                    .map(GenerationStreamSignal.Recovery.class::cast)
-                    .filter(signal -> signal.phase()
-                            == GenerationStreamSignal.Recovery.Phase.FAILED)
-                    .findFirst().orElseThrow();
-            assertEquals(2L, failed.failedGeneration());
-            assertEquals(ToolLoopTerminationProtocol
-                            .ControlledTerminationReason.PROTOCOL_ERROR,
-                    terminal.get().reason());
-        }
-    }
-
-    @Test
-    void 内部恢复模型同步启动失败必须在STARTED后FAILED并受控协议关闭()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        model.failOnCall(2);
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
-                terminal = new AtomicReference<>();
-        AtomicInteger errors = new AtomicInteger();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onControlledTermination(terminal::set)
-                    .onError(ignored -> errors.incrementAndGet())
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            model.handler(0).onPartialResponse("<internal-ack>");
-            gate.awaitIdle();
-
-            assertEquals(2, model.callCount());
-            assertEquals(List.of(
-                            GenerationStreamSignal.Recovery.Phase.STARTED,
-                            GenerationStreamSignal.Recovery.Phase.FAILED),
-                    recoveryPhases(signals));
-            assertEquals(0, errors.get());
-            assertEquals(ToolLoopTerminationProtocol
-                            .ControlledTerminationReason.PROTOCOL_ERROR,
-                    terminal.get().reason());
-        }
-    }
-
-    @Test
-    void 内部恢复异步失败必须由控制器持有唯一协议终态()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicInteger terminations = new AtomicInteger();
-        AtomicInteger errors = new AtomicInteger();
-        AtomicInteger completions = new AtomicInteger();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            TokenStream stream = recoveryService(model, memory)
-                    .chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onCompleteResponse(ignored ->
-                            completions.incrementAndGet())
-                    .onControlledTermination(ignored ->
-                            terminations.incrementAndGet())
-                    .onError(ignored -> errors.incrementAndGet());
-            StreamingRequestController controller =
-                    requestController(stream);
-            stream.start();
-            assertTrue(model.awaitCalls(1));
-
-            model.handler(0).onPartialResponse("<internal-ack>");
-            assertTrue(model.awaitCalls(2));
-            model.handler(1).onError(
-                    new IllegalStateException("恢复模型异步失败"));
-            gate.awaitIdle();
-
-            assertEquals(List.of(
-                            GenerationStreamSignal.Recovery.Phase.STARTED,
-                            GenerationStreamSignal.Recovery.Phase.FAILED),
-                    recoveryPhases(signals));
-            assertEquals(1, terminations.get());
-            assertEquals(0, errors.get());
-            assertEquals(0, completions.get());
-            assertFalse(controller.isOpen());
-            assertEquals(ToolLoopTerminationProtocol
-                            .ControlledTerminationReason.PROTOCOL_ERROR,
-                    controller.controlledTermination().reason());
-        }
-    }
-
-    @Test
-    void 内部恢复门禁准备失败必须启动前FAILED并受控协议关闭且无g2()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
-                terminal = new AtomicReference<>();
-        AtomicInteger errors = new AtomicInteger();
-        AtomicInteger gateCalls = new AtomicInteger();
-        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
-                request -> {
-                    if (gateCalls.incrementAndGet() == 1) {
-                        return CompletableFuture.completedFuture(
-                                new ModelRequestGate.Decision(
-                                        ModelRequestGate.Status.ALLOWED,
-                                        request.latestMemory().get().messages(),
-                                        1, ""));
-                    }
-                    return CompletableFuture.completedFuture(
-                            new ModelRequestGate.Decision(
-                                    ModelRequestGate.Status.HARD_LIMIT_REJECTED,
-                                    request.latestMemory().get().messages(),
-                                    32_768, "恢复上下文过长"));
-                })) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onControlledTermination(terminal::set)
-                    .onError(ignored -> errors.incrementAndGet())
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            model.handler(0).onPartialResponse("<internal-ack>");
-            gate.awaitIdle();
-
-            assertEquals(1, model.callCount());
-            List<GenerationStreamSignal.Recovery> recoveries = signals.stream()
-                    .filter(GenerationStreamSignal.Recovery.class::isInstance)
-                    .map(GenerationStreamSignal.Recovery.class::cast)
-                    .toList();
-            assertEquals(1, recoveries.size());
-            assertEquals(GenerationStreamSignal.Recovery.Phase.FAILED,
-                    recoveries.getFirst().phase());
-            assertNull(recoveries.getFirst().recoveryGeneration());
-            assertEquals(1L, recoveries.getFirst().failedGeneration());
-            assertEquals(0, errors.get());
-            assertEquals(ToolLoopTerminationProtocol
-                            .ControlledTerminationReason.PROTOCOL_ERROR,
-                    terminal.get().reason());
-        }
-    }
-
-    @Test
-    void 并发正文披露期间命中标记必须按Unicode码点生成完整回滚快照()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        CountDownLatch textListenerEntered = new CountDownLatch(1);
-        CountDownLatch releaseTextListener = new CountDownLatch(1);
-        CountDownLatch violationCallbackReturned = new CountDownLatch(1);
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicReference<Throwable> threadFailure = new AtomicReference<>();
-        String disclosedText = "安全\ud83d\ude00";
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signal -> {
-                        signals.add(signal);
-                        if (signal instanceof GenerationStreamSignal.AiText) {
-                            textListenerEntered.countDown();
-                            awaitLatch(releaseTextListener,
-                                    "等待释放正文信号监听器超时");
-                        }
-                    })
-                    .onError(threadFailure::set)
-                    .start();
-            assertTrue(model.awaitCalls(1));
-            StreamingChatResponseHandler handler = model.handler(0);
-
-            Thread textThread = Thread.startVirtualThread(() -> {
-                try {
-                    handler.onPartialResponse(disclosedText);
-                } catch (Throwable failure) {
-                    threadFailure.compareAndSet(null, failure);
-                }
-            });
-            assertTrue(textListenerEntered.await(2, TimeUnit.SECONDS));
-            Thread violationThread = Thread.startVirtualThread(() -> {
-                try {
-                    handler.onPartialResponse(INTERNAL_MARKER);
-                } catch (Throwable failure) {
-                    threadFailure.compareAndSet(null, failure);
-                } finally {
-                    violationCallbackReturned.countDown();
-                }
-            });
-
-            boolean violationReturnedWhileTextBlocked;
-            try {
-                violationReturnedWhileTextBlocked =
-                        violationCallbackReturned.await(2, TimeUnit.SECONDS);
-            } finally {
-                releaseTextListener.countDown();
-            }
-            textThread.join(2_000);
-            violationThread.join(2_000);
-            gate.awaitIdle();
-
-            assertTrue(violationReturnedWhileTextBlocked,
-                    "标记回调应只提交状态和信号，不得等待外部监听器返回");
-            assertFalse(textThread.isAlive());
-            assertFalse(violationThread.isAlive());
-            assertNull(threadFailure.get());
-            assertEquals(new GenerationStreamSignal.AiText(
-                    1, disclosedText), signals.getFirst());
-            GenerationStreamSignal.Rollback rollback = signals.stream()
-                    .filter(GenerationStreamSignal.Rollback.class::isInstance)
-                    .map(GenerationStreamSignal.Rollback.class::cast)
-                    .findFirst().orElseThrow();
-            assertEquals(disclosedText.codePointCount(
-                            0, disclosedText.length()),
-                    rollback.codePoints(),
-                    "回滚快照必须包含已进入监听器的全部 Unicode 码点");
-        }
-    }
-
-    @Test
     void 正文与多个工具信号必须按回调认领顺序由单一发布者披露()
             throws Exception {
         MutableChatMemory memory = memoryWithQuestion();
@@ -643,8 +159,6 @@ class AiServiceTokenStreamTest {
                 new CopyOnWriteArrayList<>())) {
             recoveryService(model, memory).chat(7L, "本轮问题")
                     .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
                     .onGenerationStreamSignal(signal -> {
                         String label = switch (signal) {
                             case GenerationStreamSignal.AiText text ->
@@ -724,134 +238,11 @@ class AiServiceTokenStreamTest {
     }
 
     @Test
-    void 并发正文泄漏与工具披露必须由单一发布者线性化且回滚快照完整()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        AtomicInteger activeListeners = new AtomicInteger();
-        AtomicInteger maximumListeners = new AtomicInteger();
-        CountDownLatch toolListenerEntered = new CountDownLatch(1);
-        CountDownLatch releaseToolListener = new CountDownLatch(1);
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicReference<Throwable> threadFailure = new AtomicReference<>();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signal -> {
-                        int active = activeListeners.incrementAndGet();
-                        maximumListeners.accumulateAndGet(active, Math::max);
-                        signals.add(signal);
-                        if (signal instanceof GenerationStreamSignal
-                                .PartialToolRequest) {
-                            toolListenerEntered.countDown();
-                            awaitLatch(releaseToolListener,
-                                    "等待释放工具信号监听器超时");
-                        }
-                        activeListeners.decrementAndGet();
-                    })
-                    .onError(threadFailure::set)
-                    .start();
-            assertTrue(model.awaitCalls(1));
-            StreamingChatResponseHandler handler = model.handler(0);
-
-            Thread toolThread = Thread.startVirtualThread(() -> {
-                try {
-                    handler.onPartialToolExecutionRequest(0, toolRequest(
-                            "concurrent-tool", "writeFile", "{}"));
-                } catch (Throwable failure) {
-                    threadFailure.compareAndSet(null, failure);
-                }
-            });
-            assertTrue(toolListenerEntered.await(2, TimeUnit.SECONDS));
-            Thread violationThread = Thread.startVirtualThread(() -> {
-                try {
-                    handler.onPartialResponse("<internal-ack>");
-                } catch (Throwable failure) {
-                    threadFailure.compareAndSet(null, failure);
-                }
-            });
-            violationThread.join(250);
-            releaseToolListener.countDown();
-            toolThread.join(2_000);
-            violationThread.join(2_000);
-            gate.awaitIdle();
-
-            assertFalse(toolThread.isAlive());
-            assertFalse(violationThread.isAlive());
-            assertNull(threadFailure.get());
-            assertEquals(1, maximumListeners.get(),
-                    "同一 TokenStream 的 generation listener 必须只有一个发布者");
-            GenerationStreamSignal.Rollback rollback = signals.stream()
-                    .filter(GenerationStreamSignal.Rollback.class::isInstance)
-                    .map(GenerationStreamSignal.Rollback.class::cast)
-                    .findFirst().orElseThrow();
-            assertEquals(Set.of("concurrent-tool"),
-                    rollback.provisionalToolRequestIds());
-        }
-    }
-
-    @Test
-    void 恢复代完整安全工具批次必须提交后先RECOVERED再披露完整请求()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<GenerationStreamSignal> signals = new CopyOnWriteArrayList<>();
-        AtomicInteger toolCalls = new AtomicInteger();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            RecoveryAiService service = AiServices.builder(
-                            RecoveryAiService.class)
-                    .streamingChatModel(model)
-                    .chatMemoryProvider(ignored -> memory)
-                    .tools(new RecoveryTools(toolCalls))
-                    .build();
-            service.chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signals::add)
-                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                            "恢复代安全工具批次不应报错", error))
-                    .start();
-            assertTrue(model.awaitCalls(1));
-            model.handler(0).onPartialResponse("<internal-ack>");
-            assertTrue(model.awaitCalls(2));
-
-            ToolExecutionRequest request = toolRequest(
-                    "recovery-tool", "writeFile", "{}");
-            model.handler(1).onCompleteResponse(toolResponse(request));
-            assertTrue(model.awaitCalls(3));
-            gate.awaitIdle();
-
-            int recovered = signalIndex(signals,
-                    signal -> signal instanceof GenerationStreamSignal.Recovery recovery
-                            && recovery.phase()
-                            == GenerationStreamSignal.Recovery.Phase.RECOVERED);
-            int completed = signalIndex(signals,
-                    GenerationStreamSignal.CompleteToolRequest.class::isInstance);
-            assertTrue(recovered >= 0 && completed > recovered,
-                    "工具批次提交成功后必须先发布 RECOVERED 再发布完整工具请求");
-            assertEquals(1, toolCalls.get());
-        }
-    }
-
-    @Test
     void generation监听器对任一信号抛异常都必须唯一协议终止且不走普通收口()
             throws Exception {
         assertGenerationListenerFailure(
                 GenerationStreamSignal.AiText.class,
                 (handler, model) -> handler.onPartialResponse("安全正文"));
-        assertGenerationListenerFailure(
-                GenerationStreamSignal.Rollback.class,
-                (handler, model) -> handler.onPartialResponse(
-                        "<internal-ack>"));
-        assertGenerationListenerFailure(
-                GenerationStreamSignal.Recovery.class,
-                (handler, model) -> handler.onPartialResponse(
-                        "<internal-ack>"));
         assertGenerationListenerFailure(
                 GenerationStreamSignal.PartialToolRequest.class,
                 (handler, model) -> handler.onPartialToolExecutionRequest(
@@ -882,8 +273,6 @@ class AiServiceTokenStreamTest {
             TokenStream stream = recoveryService(model, memory)
                     .chat(7L, "本轮问题")
                     .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
                     .onGenerationStreamSignal(signal -> {
                         attemptedSignals.add(signal.getClass());
                         if (signal instanceof GenerationStreamSignal.AiText) {
@@ -942,171 +331,6 @@ class AiServiceTokenStreamTest {
                                     .PROTOCOL_ERROR,
                             controller.controlledTermination().reason()),
                     () -> assertEquals(1, model.callCount()));
-        }
-    }
-
-    @Test
-    void 旧代正文监听器跨代后失败必须终止当前恢复代且唯一通知协议错误()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        CountDownLatch oldTextEntered = new CountDownLatch(1);
-        CountDownLatch releaseOldText = new CountDownLatch(1);
-        AtomicInteger terminations = new AtomicInteger();
-        AtomicInteger errors = new AtomicInteger();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            TokenStream stream = recoveryService(model, memory)
-                    .chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signal -> {
-                        if (signal instanceof GenerationStreamSignal.AiText text
-                                && text.generation() == 1L) {
-                            oldTextEntered.countDown();
-                            awaitLatch(releaseOldText,
-                                    "等待释放旧代正文监听器超时");
-                            throw new IllegalStateException(
-                                    "旧代正文 listener 跨代失败");
-                        }
-                    })
-                    .onControlledTermination(termination -> {
-                        assertEquals(ToolLoopTerminationProtocol
-                                        .ControlledTerminationReason
-                                        .PROTOCOL_ERROR,
-                                termination.reason());
-                        terminations.incrementAndGet();
-                    })
-                    .onError(ignored -> errors.incrementAndGet());
-            StreamingRequestController controller =
-                    requestController(stream);
-            stream.start();
-            assertTrue(model.awaitCalls(1));
-            StreamingChatResponseHandler oldHandler = model.handler(0);
-
-            Thread textThread = Thread.startVirtualThread(() ->
-                    oldHandler.onPartialResponse("旧代正文"));
-            assertTrue(oldTextEntered.await(2, TimeUnit.SECONDS));
-            Thread violationThread = Thread.startVirtualThread(() ->
-                    oldHandler.onPartialResponse(INTERNAL_MARKER));
-            assertTrue(model.awaitCalls(2),
-                    "旧 listener 阻塞期间内部恢复代必须能够启动");
-            assertEquals(2L, controller.latestModelRequestGeneration());
-
-            releaseOldText.countDown();
-            textThread.join(2_000);
-            violationThread.join(2_000);
-            gate.awaitIdle();
-
-            assertAll(
-                    () -> assertFalse(textThread.isAlive()),
-                    () -> assertFalse(violationThread.isAlive()),
-                    () -> assertEquals(1, terminations.get()),
-                    () -> assertEquals(0, errors.get()),
-                    () -> assertFalse(controller.isOpen()),
-                    () -> assertEquals(ToolLoopTerminationProtocol
-                                    .ControlledTerminationReason
-                                    .PROTOCOL_ERROR,
-                            controller.controlledTermination().reason()),
-                    () -> assertEquals(2, model.callCount()));
-        }
-    }
-
-    @Test
-    void 恢复成功监听器阻塞时再次泄漏不得让旧正文越过回滚()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        CountDownLatch recoveredEntered = new CountDownLatch(1);
-        CountDownLatch releaseRecovered = new CountDownLatch(1);
-        CountDownLatch violationReturned = new CountDownLatch(1);
-        List<GenerationStreamSignal> signals =
-                new CopyOnWriteArrayList<>();
-        AtomicReference<Throwable> threadFailure = new AtomicReference<>();
-        AtomicInteger terminations = new AtomicInteger();
-        try (ManagedModelRequestGate gate = allowingGate(
-                new CopyOnWriteArrayList<>())) {
-            recoveryService(model, memory).chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
-                    .onGenerationStreamSignal(signal -> {
-                        signals.add(signal);
-                        if (signal instanceof GenerationStreamSignal
-                                .Recovery recovery
-                                && recovery.phase()
-                                == GenerationStreamSignal.Recovery.Phase
-                                .RECOVERED) {
-                            recoveredEntered.countDown();
-                            awaitLatch(releaseRecovered,
-                                    "等待释放恢复成功监听器超时");
-                        }
-                    })
-                    .onControlledTermination(termination -> {
-                        assertEquals(ToolLoopTerminationProtocol
-                                        .ControlledTerminationReason
-                                        .PROTOCOL_ERROR,
-                                termination.reason());
-                        terminations.incrementAndGet();
-                    })
-                    .onError(threadFailure::set)
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            model.handler(0).onPartialResponse(INTERNAL_MARKER);
-            assertTrue(model.awaitCalls(2));
-            StreamingChatResponseHandler recoveryHandler = model.handler(1);
-
-            Thread safeTextThread = Thread.startVirtualThread(() -> {
-                try {
-                    recoveryHandler.onPartialResponse("恢复正文");
-                } catch (Throwable failure) {
-                    threadFailure.compareAndSet(null, failure);
-                }
-            });
-            assertTrue(recoveredEntered.await(2, TimeUnit.SECONDS));
-
-            Thread violationThread = Thread.startVirtualThread(() -> {
-                try {
-                    recoveryHandler.onPartialResponse(INTERNAL_MARKER);
-                } catch (Throwable failure) {
-                    threadFailure.compareAndSet(null, failure);
-                } finally {
-                    violationReturned.countDown();
-                }
-            });
-            try {
-                assertTrue(violationReturned.await(2, TimeUnit.SECONDS),
-                        "再次泄漏回调只提交状态，不得等待外部监听器返回");
-            } finally {
-                releaseRecovered.countDown();
-            }
-            safeTextThread.join(2_000);
-            violationThread.join(2_000);
-            gate.awaitIdle();
-
-            int recoveredIndex = indexOfRecoveryPhase(
-                    signals,
-                    GenerationStreamSignal.Recovery.Phase.RECOVERED);
-            int textIndex = signals.indexOf(
-                    new GenerationStreamSignal.AiText(2L, "恢复正文"));
-            int rollbackIndex = signals.indexOf(
-                    new GenerationStreamSignal.Rollback(
-                            2L, 4, Set.of()));
-
-            assertAll(
-                    () -> assertNull(threadFailure.get()),
-                    () -> assertFalse(safeTextThread.isAlive()),
-                    () -> assertFalse(violationThread.isAlive()),
-                    () -> assertTrue(recoveredIndex >= 0),
-                    () -> assertTrue(textIndex > recoveredIndex,
-                            "恢复正文必须紧随 RECOVERED 进入共享总线"),
-                    () -> assertTrue(rollbackIndex > textIndex,
-                            "再次泄漏的 rollback 必须覆盖此前已提交正文"),
-                    () -> assertEquals(1, terminations.get()),
-                    () -> assertEquals(2, model.callCount(),
-                            "恢复分支再次泄漏不得启动第三次请求"));
         }
     }
 
@@ -3249,12 +2473,6 @@ class AiServiceTokenStreamTest {
         return (request, memoryId) -> "成功";
     }
 
-    private InternalOutputRecoveryPolicy internalPolicy(
-            InternalOutputRecoveryPolicy.Mode mode) {
-        return new InternalOutputRecoveryPolicy(
-                mode, INTERNAL_PREFIX, Set.of(INTERNAL_MARKER));
-    }
-
     private ToolExecutionRequest toolRequest(
             String id, String name, String arguments) {
         return ToolExecutionRequest.builder()
@@ -3306,15 +2524,6 @@ class AiServiceTokenStreamTest {
                 Set.of("writeFile"), phases::add);
     }
 
-    private List<GenerationStreamSignal.Recovery.Phase> recoveryPhases(
-            List<GenerationStreamSignal> signals) {
-        return signals.stream()
-                .filter(GenerationStreamSignal.Recovery.class::isInstance)
-                .map(GenerationStreamSignal.Recovery.class::cast)
-                .map(GenerationStreamSignal.Recovery::phase)
-                .toList();
-    }
-
     private int signalIndex(
             List<GenerationStreamSignal> signals,
             java.util.function.Predicate<GenerationStreamSignal> predicate) {
@@ -3345,8 +2554,6 @@ class AiServiceTokenStreamTest {
                     .build();
             TokenStream stream = service.chat(7L, "本轮问题")
                     .modelRequestGate(gate, directContinuation())
-                    .internalOutputRecoveryPolicy(internalPolicy(
-                            InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE))
                     .onGenerationStreamSignal(signal -> {
                         if (failingType.isInstance(signal)) {
                             throw new IllegalStateException(
@@ -3386,8 +2593,7 @@ class AiServiceTokenStreamTest {
             assertEquals(expectedToolCalls, toolCalls.get(),
                     failingType.getSimpleName()
                             + " 失败后的工具副作用边界不正确");
-            int expectedModelCalls = failingType
-                    == GenerationStreamSignal.Recovery.class ? 2 : 1;
+            int expectedModelCalls = 1;
             assertEquals(expectedModelCalls, model.callCount(),
                     failingType.getSimpleName()
                             + " 失败后不得再启动新的模型请求");
@@ -3498,19 +2704,6 @@ class AiServiceTokenStreamTest {
             }
         }
         return !pendingIds.isEmpty();
-    }
-
-    private int indexOfRecoveryPhase(
-            List<GenerationStreamSignal> signals,
-            GenerationStreamSignal.Recovery.Phase expectedPhase) {
-        for (int index = 0; index < signals.size(); index++) {
-            GenerationStreamSignal signal = signals.get(index);
-            if (signal instanceof GenerationStreamSignal.Recovery recovery
-                    && recovery.phase() == expectedPhase) {
-                return index;
-            }
-        }
-        return -1;
     }
 
     private Object compressionAttemptState(ModelRequestGate.Request request) {

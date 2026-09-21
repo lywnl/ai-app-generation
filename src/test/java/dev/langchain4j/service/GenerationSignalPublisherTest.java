@@ -25,16 +25,16 @@ class GenerationSignalPublisherTest {
         GenerationSignalPublisher publisher =
                 new GenerationSignalPublisher(buffer, signal -> {
                     published.add(signal);
-                    if (signal instanceof GenerationStreamSignal.Recovery) {
+                    if (signal instanceof GenerationStreamSignal.CompleteToolRequest) {
                         firstEntered.countDown();
                         await(releaseFirst);
                     }
                 });
-        GenerationStreamSignal first = recoverySignal();
+        GenerationStreamSignal first = toolSignal();
         GenerationStreamSignal second =
                 new GenerationStreamSignal.AiText(2L, "恢复正文");
         GenerationStreamSignal third =
-                new GenerationStreamSignal.Rollback(2L, 4, java.util.Set.of());
+                new GenerationStreamSignal.AiText(3L, "后续正文");
 
         Thread batchThread = Thread.startVirtualThread(() ->
                 publisher.publishAtomically(() -> {
@@ -62,11 +62,11 @@ class GenerationSignalPublisherTest {
         GenerationSignalPublisher publisher =
                 new GenerationSignalPublisher(buffer, signal ->
                         order.add(signal instanceof GenerationStreamSignal
-                                .Recovery ? "恢复信号" : "正文信号"));
+                                .CompleteToolRequest ? "工具信号" : "正文信号"));
 
         publisher.pausePublishing();
         publisher.publishAtomically(() -> {
-            publisher.accept(recoverySignal());
+            publisher.accept(toolSignal());
             publisher.accept(new GenerationStreamSignal.AiText(
                     2L, "恢复正文"));
         }, () -> order.add("批次尾部"));
@@ -74,14 +74,14 @@ class GenerationSignalPublisherTest {
         assertTrue(order.isEmpty());
         publisher.resumePublishing();
 
-        assertEquals(List.of("恢复信号", "正文信号", "批次尾部"),
+        assertEquals(List.of("工具信号", "正文信号", "批次尾部"),
                 order);
     }
 
-    private GenerationStreamSignal recoverySignal() {
-        return new GenerationStreamSignal.Recovery(
-                GenerationStreamSignal.Recovery.Phase.RECOVERED,
-                1L, 2L, null);
+    private GenerationStreamSignal toolSignal() {
+        return new GenerationStreamSignal.CompleteToolRequest(2L, 0,
+                dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                        .id("write-1").name("writeFile").arguments("{}").build());
     }
 
     private void await(CountDownLatch latch) {

@@ -1273,12 +1273,6 @@ class AiServiceStreamingResponseHandlerTest {
                     }
                 });
         controller.onControlledTermination(ignored -> events.add("terminated"));
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, publisher);
         AiServiceStreamingResponseHandler handler =
                 new AiServiceStreamingResponseHandler(
                         new NoopChatExecutor(), context, "mem-1",
@@ -1293,7 +1287,7 @@ class AiServiceStreamingResponseHandlerTest {
                         null, null, null, null,
                         new com.lyw.appgeneration.ai.memory
                                 .ContextCompressionAttemptState(),
-                        policy, coordinator, publisher);
+                        publisher);
 
         handler.onCompleteResponse(responseWithTools(
                 tool("build-terminal-order", "buildProject")));
@@ -1848,100 +1842,12 @@ class AiServiceStreamingResponseHandlerTest {
         assertNotNull(persistenceLog.getThrowableProxy());
     }
 
-    @Test
-    void 最终工具参数与complete回调不一致时必须记录安全诊断维度() {
-        AiServiceContext context = new AiServiceContext(Object.class);
-        context.streamingChatModel = new CapturingStreamingChatModel();
-        StreamingRequestController controller =
-                new StreamingRequestController();
-        StreamingRequestController.ModelRequestClaim initialClaim =
-                controller.claimModelRequest(0L);
-        assertNotNull(initialClaim);
-        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, ignored -> { });
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        AtomicInteger toolCalls = new AtomicInteger();
-        AiServiceStreamingResponseHandler handler =
-                new AiServiceStreamingResponseHandler(
-                        new NoopChatExecutor(), context, "mem-1",
-                        null, null, null, null,
-                        response -> fail("参数不一致后不得完成"),
-                        failure::set,
-                        MessageWindowChatMemory.withMaxMessages(10),
-                        new TokenUsage(), List.of(),
-                        Map.of("readDir", (request, memoryId) -> {
-                            toolCalls.incrementAndGet();
-                            return "不应执行";
-                        }),
-                        null, "method-1", controller,
-                        ToolExecutionGuard.direct(),
-                        initialClaim.generation(),
-                        null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
-                        policy, coordinator, ignored -> { });
-        ToolExecutionRequest callbackRequest =
-                ToolExecutionRequest.builder()
-                        .id("mismatch-log")
-                        .name("readDir")
-                        .arguments("{\"path\":\"src\"}")
-                        .build();
-        ToolExecutionRequest finalRequest =
-                ToolExecutionRequest.builder()
-                        .id("mismatch-log")
-                        .name("readDir")
-                        .arguments("{\"path\":\"src/main\"}")
-                        .build();
-        Logger logger = (Logger) LoggerFactory.getLogger(
-                AiServiceStreamingResponseHandler.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        logger.addAppender(appender);
-
-        try {
-            handler.onCompleteToolExecutionRequest(0, callbackRequest);
-            handler.onCompleteResponse(responseWithTools(finalRequest));
-        } finally {
-            logger.detachAppender(appender);
-            appender.stop();
-        }
-
-        assertInstanceOf(StreamingResponseConsistencyException.class,
-                failure.get());
-        assertEquals(0, toolCalls.get());
-        ILoggingEvent event = appender.list.stream()
-                .filter(log -> log.getFormattedMessage()
-                        .contains("工具参数流一致性校验失败"))
-                .findFirst().orElseThrow();
-        assertAll(
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("memoryId=mem-1")),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("generation=" + initialClaim.generation())),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("toolName=readDir")),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("toolId=mismatch-log")),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("status=MISMATCH")),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("completeCallbackObserved=true")),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("verifiedArgumentsLength=14")),
-                () -> assertTrue(event.getFormattedMessage()
-                        .contains("finalArgumentsLength=19")),
-                () -> assertFalse(event.getFormattedMessage()
-                        .contains("src/main")),
-                () -> assertNull(event.getThrowableProxy()));
-    }
-
-    @Test
-    void 最终工具参数仅JSON格式不同时必须视为同一请求并执行() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "{ }", "{\"content\":\"[[server.synthetic-memory/test]]\"}",
+            "{\"content\":\"不同的最终内容\",}"
+    })
+    void 参数分片与完整回调不同也按最终响应执行一次(String finalArguments) {
         AiServiceContext context = new AiServiceContext(Object.class);
         CapturingStreamingChatModel model = new CapturingStreamingChatModel();
         context.streamingChatModel = model;
@@ -1951,12 +1857,6 @@ class AiServiceStreamingResponseHandlerTest {
                 controller.claimModelRequest(0L);
         assertNotNull(initialClaim);
         assertTrue(controller.tryCommitModelRequestStart(initialClaim));
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, ignored -> { });
         AtomicReference<Throwable> failure = new AtomicReference<>();
         AtomicInteger toolCalls = new AtomicInteger();
         AiServiceStreamingResponseHandler handler =
@@ -1967,6 +1867,10 @@ class AiServiceStreamingResponseHandlerTest {
                         MessageWindowChatMemory.withMaxMessages(10),
                         new TokenUsage(), List.of(),
                         Map.of("readDir", (request, memoryId) -> {
+                            assertEquals(
+                                    dev.langchain4j.internal.ToolArgumentsJsonNormalizer
+                                            .normalize(finalArguments).normalizedArguments(),
+                                    request.arguments());
                             toolCalls.incrementAndGet();
                             return "目录读取成功";
                         }),
@@ -1976,7 +1880,7 @@ class AiServiceStreamingResponseHandlerTest {
                         null, null, null, null,
                         new com.lyw.appgeneration.ai.memory
                                 .ContextCompressionAttemptState(),
-                        policy, coordinator, ignored -> { });
+                        ignored -> { });
         ToolExecutionRequest callbackRequest =
                 ToolExecutionRequest.builder()
                         .id("equivalent-json")
@@ -1987,9 +1891,10 @@ class AiServiceStreamingResponseHandlerTest {
                 ToolExecutionRequest.builder()
                         .id("equivalent-json")
                         .name("readDir")
-                        .arguments("{ }")
+                        .arguments(finalArguments)
                         .build();
 
+        handler.onPartialToolExecutionRequest(0, callbackRequest);
         handler.onCompleteToolExecutionRequest(0, callbackRequest);
         handler.onCompleteResponse(responseWithTools(finalRequest));
 
@@ -1997,66 +1902,6 @@ class AiServiceStreamingResponseHandlerTest {
                 () -> assertNull(failure.get()),
                 () -> assertEquals(1, toolCalls.get()),
                 () -> assertEquals(1, model.chatInvocations));
-    }
-
-    @Test
-    void 最终工具参数需要修复时不得视为格式等价请求() {
-        AiServiceContext context = new AiServiceContext(Object.class);
-        context.streamingChatModel = new CapturingStreamingChatModel();
-        StreamingRequestController controller =
-                new StreamingRequestController();
-        StreamingRequestController.ModelRequestClaim initialClaim =
-                controller.claimModelRequest(0L);
-        assertNotNull(initialClaim);
-        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, ignored -> { });
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        AtomicInteger toolCalls = new AtomicInteger();
-        AiServiceStreamingResponseHandler handler =
-                new AiServiceStreamingResponseHandler(
-                        new NoopChatExecutor(), context, "mem-1",
-                        null, null, null, null,
-                        response -> fail("畸形参数不得完成"),
-                        failure::set,
-                        MessageWindowChatMemory.withMaxMessages(10),
-                        new TokenUsage(), List.of(),
-                        Map.of("readDir", (request, memoryId) -> {
-                            toolCalls.incrementAndGet();
-                            return "不应执行";
-                        }),
-                        null, "method-1", controller,
-                        ToolExecutionGuard.direct(),
-                        initialClaim.generation(),
-                        null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
-                        policy, coordinator, ignored -> { });
-        ToolExecutionRequest callbackRequest =
-                ToolExecutionRequest.builder()
-                        .id("repairable-json")
-                        .name("readDir")
-                        .arguments("{\"path\":\"src\"}")
-                        .build();
-        ToolExecutionRequest finalRequest =
-                ToolExecutionRequest.builder()
-                        .id("repairable-json")
-                        .name("readDir")
-                        .arguments("{\"path\":\"src\",}")
-                        .build();
-
-        handler.onCompleteToolExecutionRequest(0, callbackRequest);
-        handler.onCompleteResponse(responseWithTools(finalRequest));
-
-        assertAll(
-                () -> assertInstanceOf(
-                        StreamingResponseConsistencyException.class,
-                        failure.get()),
-                () -> assertEquals(0, toolCalls.get()));
     }
 
     @Test
@@ -2232,72 +2077,6 @@ class AiServiceStreamingResponseHandlerTest {
     }
 
     @Test
-    void outputGuardrail改写引入内部标记时不得发布完成或写入分叉正文() {
-        AiServiceContext context = new AiServiceContext(Object.class);
-        context.streamingChatModel = new CapturingStreamingChatModel();
-        String rewrittenLeak = "护栏改写<internal-ack>";
-        configureOutputGuardrailRewrite(context, rewrittenLeak);
-        MessageWindowChatMemory memory =
-                MessageWindowChatMemory.withMaxMessages(10);
-        StreamingRequestController controller =
-                new StreamingRequestController();
-        StreamingRequestController.ModelRequestClaim initialClaim =
-                controller.claimModelRequest(0L);
-        assertNotNull(initialClaim);
-        assertTrue(controller.tryCommitModelRequestStart(initialClaim));
-        AtomicReference<ToolLoopTerminationProtocol.ControlledTermination>
-                terminal = new AtomicReference<>();
-        controller.onControlledTermination(terminal::set);
-        List<GenerationStreamSignal> signals = new ArrayList<>();
-        AtomicReference<ChatResponse> completed = new AtomicReference<>();
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, signals::add);
-        AiServiceStreamingResponseHandler handler =
-                new AiServiceStreamingResponseHandler(
-                        new NoopChatExecutor(), context, "mem-1",
-                        null, null, null, null,
-                        completed::set,
-                        error -> fail("护栏改写泄漏应走协议终止", error),
-                        memory, new TokenUsage(), List.of(), Map.of(),
-                        dev.langchain4j.guardrail.GuardrailRequestParams
-                                .builder()
-                                .userMessageTemplate("测试")
-                                .variables(Map.of())
-                                .build(),
-                        "method-1", controller,
-                        ToolExecutionGuard.direct(),
-                        initialClaim.generation(),
-                        null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
-                        policy, coordinator, signals::add);
-
-        handler.onPartialResponse("模型安全正文");
-        handler.onCompleteResponse(ordinaryResponse("模型安全正文"));
-
-        assertAll(
-                () -> assertTrue(signals.stream()
-                                .noneMatch(GenerationStreamSignal.AiText.class
-                                        ::isInstance),
-                        "最终护栏投影违规时不得发布原始或改写正文"),
-                () -> assertNull(completed.get(),
-                        "包含内部标记的护栏最终响应不得进入 complete callback"),
-                () -> assertTrue(memory.messages().stream()
-                                .noneMatch(AiMessage.class::isInstance),
-                        "最终投影违规时不得保存原始与护栏改写两个分叉版本"),
-                () -> assertNotNull(terminal.get(),
-                        "护栏最终投影泄漏必须产生协议终态"),
-                () -> assertEquals(ToolLoopTerminationProtocol
-                                .ControlledTerminationReason.PROTOCOL_ERROR,
-                        terminal.get().reason()),
-                () -> assertFalse(controller.isOpen()));
-    }
-
-    @Test
     void outputGuardrail安全改写必须成为正文完成回调与记忆的唯一规范投影() {
         AiServiceContext context = new AiServiceContext(Object.class);
         context.streamingChatModel = new CapturingStreamingChatModel();
@@ -2314,12 +2093,6 @@ class AiServiceStreamingResponseHandlerTest {
         assertTrue(controller.tryCommitModelRequestStart(initialClaim));
         List<GenerationStreamSignal> signals = new ArrayList<>();
         AtomicReference<ChatResponse> completed = new AtomicReference<>();
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, signals::add);
         AiServiceStreamingResponseHandler handler =
                 new AiServiceStreamingResponseHandler(
                         new NoopChatExecutor(), context, "mem-1",
@@ -2338,7 +2111,7 @@ class AiServiceStreamingResponseHandlerTest {
                         null, null, null, null,
                         new com.lyw.appgeneration.ai.memory
                                 .ContextCompressionAttemptState(),
-                        policy, coordinator, signals::add);
+                        signals::add);
 
         handler.onPartialResponse(originalText);
         handler.onCompleteResponse(ordinaryResponse(originalText));
@@ -3052,12 +2825,6 @@ class AiServiceStreamingResponseHandlerTest {
         assertNotNull(initialClaim);
         assertTrue(controller.tryCommitModelRequestStart(initialClaim));
         AtomicReference<ChatResponse> completed = new AtomicReference<>();
-        InternalOutputRecoveryPolicy policy =
-                new InternalOutputRecoveryPolicy(
-                        InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                        "[[internal.", Set.of("<internal-ack>"));
-        InternalOutputRecoveryCoordinator coordinator =
-                new InternalOutputRecoveryCoordinator(policy, listener);
         AiServiceStreamingResponseHandler handler =
                 new AiServiceStreamingResponseHandler(
                         new NoopChatExecutor(), context, "mem-1",
@@ -3076,7 +2843,7 @@ class AiServiceStreamingResponseHandlerTest {
                         null, null, null, null,
                         new com.lyw.appgeneration.ai.memory
                                 .ContextCompressionAttemptState(),
-                        policy, coordinator, listener);
+                        listener);
         return new GuardrailUnifiedFixture(
                 handler, memory, controller, completed);
     }

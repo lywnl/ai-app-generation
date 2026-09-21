@@ -131,7 +131,7 @@ public class VueTurnFinalizer implements InitializingBean {
             return context.awaitFinalization();
         }
         try {
-            requestedOutcome = enforceOutputSafety(context, requestedOutcome);
+            requestedOutcome = normalizeSafeProtocolError(requestedOutcome);
             requestedOutcome = enforceCanonicalBudget(context, requestedOutcome);
             FinalizationResult result = persistWithinWriterPermit(
                     context, requestedOutcome);
@@ -144,22 +144,6 @@ public class VueTurnFinalizer implements InitializingBean {
             failSharedFinalization(context, failure);
             throw failure;
         }
-    }
-
-    private VueTurnOutcome enforceOutputSafety(
-            VueTurnContext context, VueTurnOutcome requestedOutcome) {
-        VueTurnContext.OutputSafetySeal seal = context.outputSafetySeal();
-        if (seal.state() == VueTurnContext.OutputSafetySeal.SealState.SAFE) {
-            return normalizeSafeProtocolError(requestedOutcome);
-        }
-        String safeProjection = seal.state()
-                == VueTurnContext.OutputSafetySeal.SealState.RESERVED
-                ? seal.memoryProjection()
-                : VueTurnMemoryProjection.project(List.of(), PROTOCOL_ERROR);
-        return new VueTurnOutcome(
-                context.phase(), PROTOCOL_ERROR,
-                SCOPE_PROTOCOL_MESSAGE, safeProjection,
-                false, SCOPE_PROTOCOL_MESSAGE);
     }
 
     private VueTurnOutcome normalizeSafeProtocolError(

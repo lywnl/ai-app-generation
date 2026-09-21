@@ -34,8 +34,6 @@ import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.GenerationStreamSignal;
-import dev.langchain4j.service.InternalOutputRecoveryPolicy;
-import dev.langchain4j.service.InternalOutputProtocolException;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
@@ -168,7 +166,6 @@ class AiCodeGeneratorFacadeTest {
                 context, generatorService);
 
         verify(tokenStream).modelRequestGate(modelRequestGate, context);
-        verify(tokenStream, never()).internalOutputRecoveryPolicy(any());
         context.close();
     }
 
@@ -201,7 +198,6 @@ class AiCodeGeneratorFacadeTest {
                         "writeFile", "readFile", "modifyFile", "deleteFile",
                         "readDir", "buildProject", "readSkill", "makePlan", "updatePlan"),
                 policyCaptor.getValue().registeredToolNames());
-        verify(tokenStream, never()).internalOutputRecoveryPolicy(any());
         context.closeResources();
     }
 
@@ -294,7 +290,7 @@ class AiCodeGeneratorFacadeTest {
                         generatorService)
                 .collectList().block();
 
-        assertEquals(5, output.size());
+        assertEquals(3, output.size());
         assertTrue(output.get(0).contains("\"type\":\"ai_response\""));
         assertTrue(output.get(0).contains("\"generation\":1"));
         assertTrue(output.get(1).contains("\"type\":\"tool_request\""));
@@ -302,37 +298,7 @@ class AiCodeGeneratorFacadeTest {
         assertTrue(output.get(2).contains(
                 "\"type\":\"tool_executed\""));
         assertTrue(output.get(2).contains("\"generation\":1"));
-        assertTrue(output.get(3).contains(
-                "\"type\":\"internal_output_rollback\""));
-        assertTrue(output.get(4).contains(
-                "\"type\":\"internal_output_recovery\""));
         assertEquals(0, stream.legacyBusinessRegistrations.get());
-        context.closeResources();
-    }
-
-    @Test
-    void 回滚临时工具请求不得finish并补发未完成参数() {
-        properties.setEnabled(false);
-        RollbackPartialToolTokenStream stream =
-                new RollbackPartialToolTokenStream();
-        when(generatorService.generateVueProjectCodeStream(
-                APP_ID, RAW_QUERY)).thenReturn(stream);
-        VueTurnContext context = newVueTurnContext(
-                "rollback-partial-tool");
-
-        List<String> output = facade.generateVueProjectStream(
-                        RAW_QUERY, APP_ID, false, context,
-                        generatorService)
-                .collectList().block();
-
-        assertEquals(2, output.size());
-        assertTrue(output.getFirst().contains(
-                "\"type\":\"tool_request\""));
-        assertTrue(output.getLast().contains(
-                "\"type\":\"internal_output_rollback\""));
-        assertTrue(output.stream().noneMatch(message ->
-                        message.contains("tool_argument")),
-                "回滚 provisional parser 时不得 finish 补发参数");
         context.closeResources();
     }
 
@@ -351,26 +317,26 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void 普通内部协议失败必须抛专用异常且不得进入文件保存() {
+    void 普通生成的通用协议错误不得进入解析保存() {
         OnlineControlledTokenStream stream = new OnlineControlledTokenStream(
-                ToolLoopTerminationProtocol.ControlledTerminationReason
-                        .PROTOCOL_ERROR);
-        when(generatorService.generateHtmlCodeStream(RAW_QUERY))
-                .thenReturn(stream);
+                ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR);
+        when(generatorService.generateHtmlCodeStream(RAW_QUERY)).thenReturn(stream);
         var context = newSimpleTurnContext("simple-protocol-error");
-        AppDataLifecycleFence fence = new AppDataLifecycleFence();
-        ReflectionTestUtils.setField(facade, "appDataLifecycleFence", fence);
-
-        StepVerifier.create(facade.generateAndSaveCodeStream(
-                        RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false,
-                        context, generatorService))
-                .expectError(dev.langchain4j.service
-                        .InternalOutputProtocolException.class)
-                .verify();
-
-        assertTrue(fence.isOpen(APP_ID),
-                "协议失败不得进入文件保存或改变删除栅栏状态");
-        context.close();
+        try (var parser = org.mockito.Mockito.mockStatic(
+                com.lyw.appgeneration.core.parser.CodeParserExecutor.class,
+                org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE));
+             var saver = org.mockito.Mockito.mockStatic(
+                     com.lyw.appgeneration.core.saver.CodeFileSaverExecutor.class,
+                     org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE))) {
+            StepVerifier.create(facade.generateAndSaveCodeStream(
+                            RAW_QUERY, CodeGenTypeEnum.HTML, APP_ID, false,
+                            context, generatorService))
+                    .expectError(IllegalStateException.class).verify();
+            parser.verifyNoInteractions();
+            saver.verifyNoInteractions();
+        } finally {
+            context.close();
+        }
     }
 
     @Test
@@ -1978,14 +1944,6 @@ class AiCodeGeneratorFacadeTest {
                 new AtomicInteger();
 
         @Override
-        public TokenStream internalOutputRecoveryPolicy(
-                InternalOutputRecoveryPolicy policy) {
-            assertEquals(InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
-                    policy.mode());
-            return this;
-        }
-
-        @Override
         public TokenStream onGenerationStreamSignal(
                 Consumer<GenerationStreamSignal> handler) {
             generationHandler = handler;
@@ -2062,98 +2020,6 @@ class AiCodeGeneratorFacadeTest {
                     new GenerationStreamSignal.ToolExecuted(
                             1L, dev.langchain4j.service.tool.ToolExecution
                             .builder().request(request).result("{}").build()));
-            generationHandler.accept(
-                    new GenerationStreamSignal.Rollback(
-                            1L, 2, Set.of()));
-            generationHandler.accept(
-                    new GenerationStreamSignal.Recovery(
-                            GenerationStreamSignal.Recovery.Phase.STARTED,
-                            1L, 2L, null));
-            completeHandler.accept(dev.langchain4j.model.chat.response
-                    .ChatResponse.builder()
-                    .aiMessage(dev.langchain4j.data.message.AiMessage.from(""))
-                    .build());
-        }
-    }
-
-    private static final class RollbackPartialToolTokenStream
-            implements TokenStream {
-
-        private Consumer<GenerationStreamSignal> generationHandler;
-        private Consumer<dev.langchain4j.model.chat.response.ChatResponse>
-                completeHandler;
-
-        @Override
-        public TokenStream onGenerationStreamSignal(
-                Consumer<GenerationStreamSignal> handler) {
-            generationHandler = handler;
-            return this;
-        }
-
-        @Override
-        public TokenStream onPartialResponse(Consumer<String> handler) {
-            return this;
-        }
-
-        @Override
-        public TokenStream onPartialToolExecutionRequest(
-                BiConsumer<Integer,
-                        dev.langchain4j.agent.tool.ToolExecutionRequest>
-                        handler) {
-            return this;
-        }
-
-        @Override
-        public TokenStream onCompleteToolExecutionRequest(
-                BiConsumer<Integer,
-                        dev.langchain4j.agent.tool.ToolExecutionRequest>
-                        handler) {
-            return this;
-        }
-
-        @Override
-        public TokenStream onRetrieved(
-                Consumer<List<dev.langchain4j.rag.content.Content>> handler) {
-            return this;
-        }
-
-        @Override
-        public TokenStream onToolExecuted(
-                Consumer<dev.langchain4j.service.tool.ToolExecution> handler) {
-            return this;
-        }
-
-        @Override
-        public TokenStream onCompleteResponse(
-                Consumer<dev.langchain4j.model.chat.response.ChatResponse>
-                        handler) {
-            completeHandler = handler;
-            return this;
-        }
-
-        @Override
-        public TokenStream onError(Consumer<Throwable> handler) {
-            return this;
-        }
-
-        @Override
-        public TokenStream ignoreErrors() {
-            return this;
-        }
-
-        @Override
-        public void start() {
-            var request = dev.langchain4j.agent.tool.ToolExecutionRequest
-                    .builder()
-                    .id("provisional-1")
-                    .name("writeFile")
-                    .arguments("{\"relativeFilePath\":\"src/App.vue")
-                    .build();
-            generationHandler.accept(
-                    new GenerationStreamSignal.PartialToolRequest(
-                            1L, 0, request));
-            generationHandler.accept(new GenerationStreamSignal.Rollback(
-                    1L, 0, Set.of("provisional-1")));
             completeHandler.accept(dev.langchain4j.model.chat.response
                     .ChatResponse.builder()
                     .aiMessage(dev.langchain4j.data.message.AiMessage.from(""))

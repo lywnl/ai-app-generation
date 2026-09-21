@@ -22,8 +22,4 @@ public final class SyntheticMemoryMessageProtocol {
                 || L2_PREFERENCE_ACK.equals(text);
     }
 
-    /** 识别任意使用服务端保留命名空间的文本。 */
-    public static boolean containsReservedMarker(String text) {
-        return text != null && text.contains(RESERVED_PREFIX);
-    }
 }

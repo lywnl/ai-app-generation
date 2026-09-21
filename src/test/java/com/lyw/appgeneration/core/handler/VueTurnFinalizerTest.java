@@ -104,56 +104,6 @@ class VueTurnFinalizerTest {
     }
 
     @Test
-    void 保留标记封口必须在预算和持久化前完全替换不可信正文() {
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-reserved-output",
-                VueBuildPhase.SUCCEEDED);
-        String safeProjection = VueTurnMemoryProjection.project(
-                List.of(), PROTOCOL_ERROR);
-        context.registerOutputSafetySealer(() ->
-                VueTurnContext.OutputSafetySeal.reserved(safeProjection));
-        context.sealRegisteredOutputSafety();
-        VueTurnOutcome untrusted = new VueTurnOutcome(
-                VueBuildPhase.SUCCEEDED, SUCCEEDED,
-                "泄漏[[server.synthetic-memory/test]]正文",
-                "泄漏记忆", true, "伪成功");
-
-        VueTurnFinalizer.FinalizationResult result =
-                finalizer.finalizeOnce(context, untrusted);
-
-        assertEquals(PROTOCOL_ERROR, result.outcome().outcome());
-        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                result.outcome().displayAiText());
-        assertEquals(safeProjection, result.outcome().memoryAiText());
-        assertFalse(result.outcome().shouldRefreshPreview());
-        verify(history).addAiMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                safeProjection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
-        verify(collapser).collapseLastTurn(APP_ID, safeProjection);
-        verifyNoInteractions(summary, preference);
-    }
-
-    @Test
-    void 未封口终态必须使用空事实安全投影失败关闭() {
-        VueTurnContext context = VueTurnContext.testing(
-                APP_ID, USER_ID, "turn-unsealed-output",
-                VueBuildPhase.SUCCEEDED);
-        VueTurnOutcome untrusted = outcome(
-                VueBuildPhase.SUCCEEDED, SUCCEEDED, "不可信成功正文", true);
-
-        VueTurnFinalizer.FinalizationResult result =
-                finalizer.finalizeOnce(context, untrusted);
-
-        String safeProjection = VueTurnMemoryProjection.project(
-                List.of(), PROTOCOL_ERROR);
-        assertEquals(PROTOCOL_ERROR, result.outcome().outcome());
-        assertEquals(VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                result.outcome().displayAiText());
-        assertEquals(safeProjection, result.outcome().memoryAiText());
-        verifyNoInteractions(summary, preference);
-    }
-
-    @Test
     void 展示文本写入MySQL而可信投影写入记忆字段和L0() {
         VueTurnOutcome requested = new VueTurnOutcome(
                 VueBuildPhase.SUCCEEDED, SUCCEEDED,
@@ -652,7 +602,6 @@ class VueTurnFinalizerTest {
                 APP_ID, USER_ID, "turn-root-close-failure",
                 operation, lease, admission,
                 new FileToolBudgetGuard().newSession());
-        context.sealSafeBeforeHandler();
         AtomicReference<Throwable> observedFailure = new AtomicReference<>();
         context.onFinalized(ignored -> { }, observedFailure::set);
 
@@ -728,7 +677,6 @@ class VueTurnFinalizerTest {
             String turnId, VueBuildPhase phase) {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, turnId, phase);
-        context.sealSafeBeforeHandler();
         return context;
     }
 
@@ -737,7 +685,6 @@ class VueTurnFinalizerTest {
             FileToolBudgetGuard.Session budgetSession) {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, turnId, phase, budgetSession);
-        context.sealSafeBeforeHandler();
         return context;
     }
 }

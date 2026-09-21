@@ -40,24 +40,4 @@ class SyntheticMemoryMessageProtocolTest {
                 "[[server.synthetic-memory/unknown/v1]]"));
     }
 
-    @Test
-    void 保留标记检测识别统一命名空间() {
-        assertTrue(SyntheticMemoryMessageProtocol.containsReservedMarker(
-                SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK));
-        assertTrue(SyntheticMemoryMessageProtocol.containsReservedMarker(
-                SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK));
-        assertTrue(SyntheticMemoryMessageProtocol.containsReservedMarker(
-                SyntheticMemoryMessageProtocol.L2_PREFERENCE_ACK));
-        assertTrue(SyntheticMemoryMessageProtocol.containsReservedMarker(
-                "正文" + SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK + "正文"));
-        assertTrue(SyntheticMemoryMessageProtocol.containsReservedMarker(
-                "[[server.synthetic-memory/unknown/v1]]"));
-
-        assertFalse(SyntheticMemoryMessageProtocol.containsReservedMarker(null));
-        assertFalse(SyntheticMemoryMessageProtocol.containsReservedMarker(""));
-        assertFalse(SyntheticMemoryMessageProtocol.containsReservedMarker("  "));
-        assertFalse(SyntheticMemoryMessageProtocol.containsReservedMarker("[server."));
-        assertFalse(SyntheticMemoryMessageProtocol.containsReservedMarker("[[server"));
-        assertFalse(SyntheticMemoryMessageProtocol.containsReservedMarker("普通用户正文"));
-    }
 }

@@ -1,11 +1,8 @@
 package com.lyw.appgeneration.core.handler;
 
-import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.model.message.AiResponseMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRecoveryMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRollbackMessage;
 import com.lyw.appgeneration.ai.model.message.StreamMessage;
 import com.lyw.appgeneration.ai.model.message.StreamMessageTypeEnum;
 import com.lyw.appgeneration.ai.model.message.ToolArgumentDeltaMessage;
@@ -14,12 +11,10 @@ import com.lyw.appgeneration.ai.model.message.ToolExecutedMessage;
 import com.lyw.appgeneration.ai.model.message.ToolRequestMessage;
 import com.lyw.appgeneration.ai.model.message.TrustedToolDisplayMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
-import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.tools.VueToolExecutionFact;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
-import dev.langchain4j.service.GenerationStreamSignal;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -94,14 +89,6 @@ public final class JsonMessageStreamHandler {
                             TERMINAL_RESERVE_CODE_POINTS);
             Set<String> seenToolIds = new HashSet<>();
             List<VueToolExecutionFact> facts = new CopyOnWriteArrayList<>();
-            context.registerOutputSafetySealer(() ->
-                    transcript.containsReservedMarkerInAiText()
-                            ? VueTurnContext.OutputSafetySeal.reserved(
-                            VueTurnMemoryProjection.project(
-                                    List.copyOf(facts),
-                                    VueTurnOutcome.TurnOutcomeType
-                                            .PROTOCOL_ERROR))
-                            : VueTurnContext.OutputSafetySeal.safe());
             AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
@@ -207,7 +194,6 @@ public final class JsonMessageStreamHandler {
         if (!context.tryStartFinalization(trigger)) {
             return Flux.empty();
         }
-        context.sealRegisteredOutputSafety();
         VueTurnOutcome requested = resolveOutcome(
                 context, displayPrefix, facts, answerMemory, error);
         VueTurnFinalizer.FinalizationResult result =
@@ -510,36 +496,6 @@ public final class JsonMessageStreamHandler {
                 yield Flux.just(GenerationStreamEvent.structuredToolEvent(
                         message.getGeneration(), stripTransportGeneration(
                                 JSONUtil.toJsonStr(message))));
-            }
-            case INTERNAL_OUTPUT_ROLLBACK -> {
-                InternalOutputRollbackMessage message = parseTrusted(() -> {
-                    InternalOutputRollbackMessage parsed = JSONUtil.toBean(
-                            chunk, InternalOutputRollbackMessage.class);
-                    return new InternalOutputRollbackMessage(
-                            parsed.getFailedGeneration(),
-                            parsed.getCodePoints(),
-                            parsed.getProvisionalToolRequestIds());
-                });
-                transcript.rollbackAiText(
-                        message.getFailedGeneration(),
-                        message.getCodePoints());
-                seenToolIds.removeAll(
-                        message.getProvisionalToolRequestIds());
-                yield Flux.just(GenerationStreamEvent.rollback(message));
-            }
-            case INTERNAL_OUTPUT_RECOVERY -> {
-                InternalOutputRecoveryMessage message = parseTrusted(() -> {
-                    InternalOutputRecoveryMessage parsed = JSONUtil.toBean(
-                            chunk, InternalOutputRecoveryMessage.class);
-                    return new InternalOutputRecoveryMessage(
-                                new GenerationStreamSignal.Recovery(
-                                        parsed.getPhase(),
-                                        parsed.getOriginalFailedGeneration(),
-                                        parsed.getRecoveryGeneration(),
-                                        parsed.getFailedGeneration()));
-                });
-                yield Flux.just(
-                        GenerationStreamEvent.internalRecovery(message));
             }
             case TURN_OUTCOME -> Flux.error(new VueStreamProtocolException(
                     "模型业务流不能伪造 Vue 回合终态"));

@@ -51,8 +51,8 @@ final class GenerationCallbackSequencer {
     /**
      * 将动作安排在当前回调批次的结束钩子全部完成后执行。
      *
-     * <p>内部恢复请求必须在 generation 披露队列真正恢复后再提交，
-     * 否则监听器异常可能晚于恢复模型请求启动。</p>
+     * <p>后续模型请求必须在 generation 披露队列真正恢复后再提交，
+     * 否则监听器异常可能晚于下一次模型请求启动。</p>
      */
     void submitAfterBatch(Runnable action) {
         Objects.requireNonNull(action, "批次结束动作不能为空");

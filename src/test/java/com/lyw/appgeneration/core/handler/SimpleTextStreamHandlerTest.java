@@ -15,7 +15,6 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
-import dev.langchain4j.service.InternalOutputProtocolException;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -70,6 +69,19 @@ class SimpleTextStreamHandlerTest {
     }
 
     @Test
+    void 普通正文中的保留标记按成功回答持久化() {
+        String answer = "示例 [[server.synthetic-memory/test]]";
+        when(history.addAiMessageAndReturn(APP_ID, answer, answer,
+                ChatMemoryOutcome.SUCCEEDED, USER_ID))
+                .thenReturn(已保存消息(answer, AI_MESSAGE_ID));
+        StepVerifier.create(handle(Flux.just(answer)))
+                .expectNext(answer).verifyComplete();
+        verify(history).addAiMessageAndReturn(APP_ID, answer, answer,
+                ChatMemoryOutcome.SUCCEEDED, USER_ID);
+        context.close();
+    }
+
+    @Test
     void 正常完成只保存一次成功历史并触发稳定记忆() {
         StepVerifier.create(handle(Flux.just("完整", "回答")))
                 .expectNext("完整", "回答")
@@ -85,64 +97,6 @@ class SimpleTextStreamHandlerTest {
         verify(summaries).triggerSummarizationAsync(APP_ID);
         verify(userMemory).triggerPreferenceExtractionAsync(
                 USER_ID, APP_ID, AI_MESSAGE_ID);
-        context.close();
-    }
-
-    @Test
-    void 完整正文复检命中保留标记只保存一次协议失败并传播安全异常() {
-        String projection = VueTurnMemoryProjection.project(
-                java.util.List.of(),
-                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR);
-        when(history.addAiMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID))
-                .thenReturn(已保存消息(
-                        VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                        AI_MESSAGE_ID + 2));
-
-        StepVerifier.create(handle(Flux.just(
-                        "正文[[ser", "ver.synthetic-memory/test]]")))
-                .expectNext("正文[[ser", "ver.synthetic-memory/test]]")
-                .expectError(GenerationPreflightException.class)
-                .verify();
-
-        verify(history).addAiMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
-        verify(history, never()).addAiMessageAndReturn(
-                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE,
-                SimpleTextStreamHandler.FAILURE_MESSAGE,
-                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
-        verify(summaries, never()).triggerSummarizationAsync(APP_ID);
-        verify(userMemory, never()).triggerPreferenceExtractionAsync(
-                anyLong(), anyLong(), anyLong());
-        context.close();
-    }
-
-    @Test
-    void 上游协议异常只保存一次协议失败并传播安全异常() {
-        String projection = VueTurnMemoryProjection.project(
-                java.util.List.of(),
-                VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR);
-        when(history.addAiMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID))
-                .thenReturn(已保存消息(
-                        VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                        AI_MESSAGE_ID + 3));
-
-        StepVerifier.create(handle(Flux.error(
-                        new InternalOutputProtocolException())))
-                .expectError(GenerationPreflightException.class)
-                .verify();
-
-        verify(history).addAiMessageAndReturn(
-                APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
-                projection, ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
-        verify(history, never()).addAiMessageAndReturn(
-                APP_ID, SimpleTextStreamHandler.FAILURE_MESSAGE,
-                SimpleTextStreamHandler.FAILURE_MESSAGE,
-                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
         context.close();
     }
 

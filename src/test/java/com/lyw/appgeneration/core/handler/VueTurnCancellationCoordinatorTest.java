@@ -53,16 +53,16 @@ import static org.mockito.Mockito.doThrow;
 class VueTurnCancellationCoordinatorTest {
 
     @Test
-    void 取消必须等待回调静默后执行已注册安全封口器() throws Exception {
-        assertCancellationSealAfterQuiescence(false);
+    void 取消必须等待回调静默后执行收尾() throws Exception {
+        assertCancellationFinalizationAfterQuiescence(false);
     }
 
     @Test
-    void 超时必须等待回调静默后执行已注册安全封口器() throws Exception {
-        assertCancellationSealAfterQuiescence(true);
+    void 超时必须等待回调静默后执行收尾() throws Exception {
+        assertCancellationFinalizationAfterQuiescence(true);
     }
 
-    private void assertCancellationSealAfterQuiescence(boolean timeout)
+    private void assertCancellationFinalizationAfterQuiescence(boolean timeout)
             throws Exception {
         String turnId = timeout
                 ? "turn-timeout-output-seal" : "turn-cancel-output-seal";
@@ -71,14 +71,10 @@ class VueTurnCancellationCoordinatorTest {
         context.commitUser(() -> true);
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
-        AtomicBoolean lateMarkerObserved = new AtomicBoolean();
-        VueTurnContext.OutputSafetySeal reserved =
-                VueTurnContext.OutputSafetySeal.reserved("静默后可信投影");
-        context.registerOutputSafetySealer(() -> lateMarkerObserved.get()
-                ? reserved : VueTurnContext.OutputSafetySeal.safe());
+        AtomicBoolean callbackCompleted = new AtomicBoolean();
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
-            assertSame(reserved, context.outputSafetySeal());
+            assertTrue(callbackCompleted.get());
             VueTurnOutcome requested = invocation.getArgument(1);
             var result = new VueTurnFinalizer.FinalizationResult(
                     requested, true);
@@ -94,7 +90,7 @@ class VueTurnCancellationCoordinatorTest {
                     context.tryRunCallback(() -> {
                         callbackEntered.countDown();
                         await(releaseCallback);
-                        lateMarkerObserved.set(true);
+                        callbackCompleted.set(true);
                     }));
             assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
 
@@ -115,7 +111,7 @@ class VueTurnCancellationCoordinatorTest {
                     ? timeoutResult.block(Duration.ofSeconds(1))
                     : context.awaitFinalization();
             assertNotNull(result);
-            assertSame(reserved, context.outputSafetySeal());
+            assertTrue(callbackCompleted.get());
             verify(finalizer).finalizeOnce(eq(context), any());
         } finally {
             releaseCallback.countDown();
@@ -124,7 +120,7 @@ class VueTurnCancellationCoordinatorTest {
     }
 
     @Test
-    void 删除接管必须等待回调静默后执行已注册安全封口器()
+    void 删除接管必须等待回调静默后执行收尾()
             throws Exception {
         AppOperationLeaseManager manager = new AppOperationLeaseManager();
         String turnId = "turn-delete-output-seal";
@@ -138,11 +134,7 @@ class VueTurnCancellationCoordinatorTest {
         context.registerDeleteTakeoverParticipant();
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
-        AtomicBoolean lateMarkerObserved = new AtomicBoolean();
-        VueTurnContext.OutputSafetySeal reserved =
-                VueTurnContext.OutputSafetySeal.reserved("删除静默后可信投影");
-        context.registerOutputSafetySealer(() -> lateMarkerObserved.get()
-                ? reserved : VueTurnContext.OutputSafetySeal.safe());
+        AtomicBoolean callbackCompleted = new AtomicBoolean();
         AtomicReference<VueTurnContext.DeleteTakeoverRequest> request =
                 new AtomicReference<>();
         CountDownLatch requestObserved = new CountDownLatch(1);
@@ -152,7 +144,7 @@ class VueTurnCancellationCoordinatorTest {
         });
         VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
-            assertSame(reserved, context.outputSafetySeal());
+            assertTrue(callbackCompleted.get());
             VueTurnOutcome requested = invocation.getArgument(1);
             var result = new VueTurnFinalizer.FinalizationResult(
                     requested, true);
@@ -168,7 +160,7 @@ class VueTurnCancellationCoordinatorTest {
                     context.tryRunCallback(() -> {
                         callbackEntered.countDown();
                         await(releaseCallback);
-                        lateMarkerObserved.set(true);
+                        callbackCompleted.set(true);
                     }));
             assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
             Future<AppOperationLeaseManager.AppOperationLease> deletion =
@@ -189,7 +181,7 @@ class VueTurnCancellationCoordinatorTest {
                 assertEquals(AppOperationLeaseManager.AppOperationType.DELETE,
                         deleteLease.operationType());
             }
-            assertSame(reserved, context.outputSafetySeal());
+            assertTrue(callbackCompleted.get());
             verify(finalizer).finalizeOnce(eq(context), any());
         } finally {
             releaseCallback.countDown();

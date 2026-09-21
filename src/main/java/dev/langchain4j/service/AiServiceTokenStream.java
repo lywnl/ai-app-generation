@@ -66,14 +66,11 @@ public class AiServiceTokenStream implements TokenStream {
     private ToolProtocolRecoveryCoordinator recoveryCoordinator;
     private IncompleteToolChainRecoveryCoordinator
             incompleteRecoveryCoordinator;
-    private InternalOutputRecoveryPolicy internalOutputRecoveryPolicy;
     private Consumer<GenerationStreamSignal> generationStreamSignalHandler;
     private final GenerationDisclosureBuffer generationSignalBus =
             new GenerationDisclosureBuffer();
     private final AtomicBoolean generationSignalFailureHandled =
             new AtomicBoolean();
-    private InternalOutputRecoveryCoordinator
-            internalOutputRecoveryCoordinator;
     private GenerationAwareModelRequestOrchestrator requestOrchestrator;
     private boolean initialToolChoiceRequired;
 
@@ -83,7 +80,6 @@ public class AiServiceTokenStream implements TokenStream {
     private int onToolExecutedInvoked;
     private int onPartialToolExecutionRequestInvoked;
     private int onCompleteToolExecutionRequestInvoked;
-    private int internalOutputRecoveryPolicyInvoked;
     private int onGenerationStreamSignalInvoked;
     private int onErrorInvoked;
     private int ignoreErrorsInvoked;
@@ -164,9 +160,6 @@ public class AiServiceTokenStream implements TokenStream {
 
     @Override
     public void cancel() {
-        if (internalOutputRecoveryCoordinator != null) {
-            internalOutputRecoveryCoordinator.closeSilently();
-        }
         requestController.cancel();
     }
 
@@ -231,15 +224,6 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
-    public TokenStream internalOutputRecoveryPolicy(
-            InternalOutputRecoveryPolicy policy) {
-        this.internalOutputRecoveryPolicy = ensureNotNull(
-                policy, "internalOutputRecoveryPolicy");
-        this.internalOutputRecoveryPolicyInvoked++;
-        return this;
-    }
-
-    @Override
     public TokenStream onGenerationStreamSignal(
             Consumer<GenerationStreamSignal> handler) {
         this.generationStreamSignalHandler = ensureNotNull(
@@ -266,9 +250,6 @@ public class AiServiceTokenStream implements TokenStream {
     @Override
     public TokenStream requestControlledTermination(
             ToolLoopTerminationProtocol.ControlledTermination termination) {
-        if (internalOutputRecoveryCoordinator != null) {
-            internalOutputRecoveryCoordinator.closeSilently();
-        }
         requestController.terminate(termination);
         return this;
     }
@@ -286,22 +267,11 @@ public class AiServiceTokenStream implements TokenStream {
                 new ContextCompressionAttemptState();
         requestOrchestrator = new GenerationAwareModelRequestOrchestrator(
                 requestController, modelRequestGate, continuationGate);
-        if (internalOutputRecoveryPolicy != null) {
-            Consumer<GenerationStreamSignal> listener =
-                    generationStreamSignalHandler;
-            Consumer<GenerationStreamSignal> signalPublisher;
-            if (listener == null) {
-                signalPublisher = ignored -> { };
-            } else {
-                signalPublisher = new GenerationSignalPublisher(
-                        generationSignalBus,
-                        signal -> publishGenerationSignal(listener, signal));
-                generationStreamSignalHandler = signalPublisher;
-            }
-            internalOutputRecoveryCoordinator =
-                    new InternalOutputRecoveryCoordinator(
-                            internalOutputRecoveryPolicy,
-                            signalPublisher);
+        if (generationStreamSignalHandler != null) {
+            Consumer<GenerationStreamSignal> listener = generationStreamSignalHandler;
+            generationStreamSignalHandler = new GenerationSignalPublisher(
+                    generationSignalBus,
+                    signal -> publishGenerationSignal(listener, signal));
         }
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
@@ -370,8 +340,6 @@ public class AiServiceTokenStream implements TokenStream {
                 recoveryCoordinator,
                 incompleteRecoveryCoordinator,
                 compressionAttemptState,
-                internalOutputRecoveryPolicy,
-                internalOutputRecoveryCoordinator,
                 generationStreamSignalHandler);
         handler.turnTransientMessages(transientSnapshot);
 
@@ -421,18 +389,6 @@ public class AiServiceTokenStream implements TokenStream {
         if (!generationSignalFailureHandled.compareAndSet(false, true)) {
             return;
         }
-        boolean recoveryFailed = false;
-        if (internalOutputRecoveryCoordinator != null) {
-            recoveryFailed = internalOutputRecoveryCoordinator
-                    .failBeforeRecoveryStart();
-            if (!recoveryFailed) {
-                recoveryFailed = internalOutputRecoveryCoordinator
-                        .failAfterRecoveryStart();
-            }
-            if (!recoveryFailed) {
-                internalOutputRecoveryCoordinator.closeSilently();
-            }
-        }
         ToolLoopTerminationProtocol.ControlledTermination termination =
                 new ToolLoopTerminationProtocol.ControlledTermination(
                         ToolLoopTerminationProtocol
@@ -455,10 +411,6 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     private void validateConfiguration() {
-        if (internalOutputRecoveryPolicyInvoked > 1) {
-            throw new IllegalConfigurationException(
-                    "TokenStream 最多只能安装一次内部输出恢复策略");
-        }
         if (onGenerationStreamSignalInvoked > 1) {
             throw new IllegalConfigurationException(
                     "TokenStream 最多只能安装一次统一 generation 信号监听器");
@@ -474,13 +426,6 @@ public class AiServiceTokenStream implements TokenStream {
         }
         if (!unifiedSignalMode && onPartialResponseInvoked != 1) {
             throw new IllegalConfigurationException("onPartialResponse must be invoked on TokenStream exactly 1 time");
-        }
-        if (internalOutputRecoveryPolicy != null
-                && internalOutputRecoveryPolicy.mode()
-                == InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE
-                && !unifiedSignalMode) {
-            throw new IllegalConfigurationException(
-                    "一次恢复模式必须安装统一 generation 信号监听器");
         }
         if (onCompleteResponseInvoked > 1) {
             throw new IllegalConfigurationException("onCompleteResponse can be invoked on TokenStream at most 1 time");

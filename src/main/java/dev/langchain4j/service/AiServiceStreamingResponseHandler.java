@@ -26,8 +26,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -79,9 +77,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private final ToolProtocolRecoveryCoordinator recoveryCoordinator;
     private final IncompleteToolChainRecoveryCoordinator
             incompleteRecoveryCoordinator;
-    private final InternalOutputRecoveryPolicy internalOutputRecoveryPolicy;
-    private final InternalOutputRecoveryCoordinator
-            internalOutputRecoveryCoordinator;
     private final Consumer<GenerationStreamSignal>
             generationStreamSignalHandler;
     private final ContextCompressionAttemptState compressionAttemptState;
@@ -98,22 +93,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private int streamedResponseChars;
     private final Set<String> completedToolRequestIds =
             ConcurrentHashMap.newKeySet();
-    private final InternalOutputLeakDetector internalOutputLeakDetector;
-    private final ToolArgumentLeakScanner toolArgumentLeakScanner;
-    private final StringBuilder internalObservedResponseText =
-            new StringBuilder();
-    private final Set<String> bufferingToolRequestIds =
-            new LinkedHashSet<>();
-    private final Set<String> provisionalToolRequestIds =
-            new LinkedHashSet<>();
-    private final GenerationDisclosureBuffer disclosureBuffer =
-            new GenerationDisclosureBuffer();
-    private final Map<String, List<GenerationDisclosureBuffer.Disclosure>>
-            bufferedToolDisclosures = new HashMap<>();
-    private final Map<String, String> verifiedToolArguments =
-            new HashMap<>();
-    private GenerationDisclosureBuffer.Disclosure bufferedTextDisclosure;
-    private int publishedTextCodePoints;
     private final AtomicBoolean generationSignalPublishingClosed =
             new AtomicBoolean();
     private GenerationCallbackSequencer callbackSequencer;
@@ -141,7 +120,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, new StreamingRequestController(),
                 ToolExecutionGuard.direct(), 0L, null, null, null, false,
                 null, null, false, new ContextCompressionAttemptState(),
-                null, null, null);
+                null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -169,7 +148,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController, toolExecutionGuard,
                 requestController.latestModelRequestGeneration(), null, null,
                 null, false, null, null, false,
-                new ContextCompressionAttemptState(), null, null, null);
+                new ContextCompressionAttemptState(), null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -199,7 +178,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, null, null, null, false,
                 null, null, false, new ContextCompressionAttemptState(),
-                null, null, null);
+                null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -232,7 +211,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, null, false, null,
                 null, false, new ContextCompressionAttemptState(),
-                null, null, null);
+                null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -266,7 +245,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator,
                 null, new ContextCompressionAttemptState(),
-                null, null, null);
+                null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -300,7 +279,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator, null,
-                compressionAttemptState, null, null, null);
+                compressionAttemptState, null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -336,7 +315,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator, false, null,
                 incompleteRecoveryCoordinator, false,
-                compressionAttemptState, null, null, null);
+                compressionAttemptState, null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -363,8 +342,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             ToolProtocolRecoveryCoordinator recoveryCoordinator,
             IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
             ContextCompressionAttemptState compressionAttemptState,
-            InternalOutputRecoveryPolicy internalOutputRecoveryPolicy,
-            InternalOutputRecoveryCoordinator internalOutputRecoveryCoordinator,
             Consumer<GenerationStreamSignal> generationStreamSignalHandler) {
         this(chatExecutor, context, memoryId, partialResponseHandler,
                 partialToolExecutionRequestHandler,
@@ -376,8 +353,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 continuationGate, recoveryCoordinator, false,
                 null, incompleteRecoveryCoordinator,
                 false, compressionAttemptState,
-                internalOutputRecoveryPolicy,
-                internalOutputRecoveryCoordinator,
                 generationStreamSignalHandler);
     }
 
@@ -408,8 +383,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
             boolean incompleteRecoveryGeneration,
             ContextCompressionAttemptState compressionAttemptState,
-            InternalOutputRecoveryPolicy internalOutputRecoveryPolicy,
-            InternalOutputRecoveryCoordinator internalOutputRecoveryCoordinator,
             Consumer<GenerationStreamSignal> generationStreamSignalHandler) {
         this.chatExecutor = ensureNotNull(chatExecutor, "chatExecutor");
         this.context = ensureNotNull(context, "context");
@@ -453,9 +426,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         this.continuationGate = continuationGate;
         this.recoveryCoordinator = recoveryCoordinator;
         this.incompleteRecoveryCoordinator = incompleteRecoveryCoordinator;
-        this.internalOutputRecoveryPolicy = internalOutputRecoveryPolicy;
-        this.internalOutputRecoveryCoordinator =
-                internalOutputRecoveryCoordinator;
         this.generationStreamSignalHandler = generationStreamSignalHandler;
         this.compressionAttemptState = ensureNotNull(
                 compressionAttemptState, "上下文压缩尝试状态不能为空");
@@ -467,32 +437,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 ? new GenerationAwareModelRequestOrchestrator(
                         requestController, modelRequestGate, continuationGate)
                 : requestOrchestrator;
-        this.internalOutputLeakDetector = internalOutputRecoveryPolicy == null
-                ? null : internalOutputRecoveryPolicy.newLeakDetector();
-        this.toolArgumentLeakScanner = internalOutputRecoveryPolicy == null
-                ? null : internalOutputRecoveryPolicy
-                        .newToolArgumentLeakScanner();
         if (generationStreamSignalHandler
                 instanceof GenerationSignalPublisher publisher) {
             this.callbackSequencer = new GenerationCallbackSequencer(
-                    () -> pauseGenerationBatch(publisher),
-                    disclosureBuffer::resumePublishing,
+                    publisher::pausePublishing,
                     publisher::resumePublishing);
         } else {
-            this.callbackSequencer = new GenerationCallbackSequencer(
-                    disclosureBuffer::pausePublishing,
-                    disclosureBuffer::resumePublishing);
-        }
-    }
-
-    private void pauseGenerationBatch(
-            GenerationSignalPublisher publisher) {
-        disclosureBuffer.pausePublishing();
-        try {
-            publisher.pausePublishing();
-        } catch (RuntimeException | Error failure) {
-            disclosureBuffer.resumePublishing();
-            throw failure;
+            this.callbackSequencer = new GenerationCallbackSequencer();
         }
     }
 
@@ -508,7 +459,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void submitProviderCallback(Runnable action) {
-        if (internalOutputRecoveryPolicy == null) {
+        if (generationStreamSignalHandler == null) {
             action.run();
             return;
         }
@@ -517,7 +468,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     private void handlePartialResponse(String partialResponse) {
         AtomicBoolean protocolRecoveryPrepared = new AtomicBoolean();
-        AtomicBoolean internalRecoveryPrepared = new AtomicBoolean();
         try (var callback = requestController.enterCallback(
                 requestGeneration)) {
             if (callback == null) {
@@ -525,85 +475,21 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             }
             processPartialResponse(
                     partialResponse,
-                    protocolRecoveryPrepared,
-                    internalRecoveryPrepared);
+                    protocolRecoveryPrepared);
         }
-        if (internalRecoveryPrepared.get()) {
-            scheduleInternalRecoveryRequest(new TokenUsage());
-        } else if (protocolRecoveryPrepared.get()) {
+        if (protocolRecoveryPrepared.get()) {
             prepareRecoveryRequest(new TokenUsage());
         }
     }
 
     private void processPartialResponse(
             String partialResponse,
-            AtomicBoolean protocolRecoveryPrepared,
-            AtomicBoolean internalRecoveryPrepared) {
+            AtomicBoolean protocolRecoveryPrepared) {
         if (!reservePartialResponse(partialResponse)) {
             terminateForResponseLimit();
             return;
         }
-        if (internalOutputLeakDetector != null) {
-            processInternalPartial(
-                    partialResponse,
-                    protocolRecoveryPrepared,
-                    internalRecoveryPrepared);
-            return;
-        }
         processTrustedPartial(partialResponse, protocolRecoveryPrepared);
-    }
-
-    private void processInternalPartial(
-            String partialResponse,
-            AtomicBoolean protocolRecoveryPrepared,
-            AtomicBoolean internalRecoveryPrepared) {
-        InternalOutputLeakDetector.DetectionResult result;
-        synchronized (recoveryDetectionMonitor) {
-            internalObservedResponseText.append(partialResponse);
-            result = internalOutputLeakDetector.accept(partialResponse);
-        }
-        discloseInternalText(
-                result,
-                protocolRecoveryPrepared,
-                internalRecoveryPrepared);
-    }
-
-    private void discloseInternalText(
-            InternalOutputLeakDetector.DetectionResult result,
-            AtomicBoolean protocolRecoveryPrepared,
-            AtomicBoolean internalRecoveryPrepared) {
-        resolveBufferedText(
-                result.safeText(), protocolRecoveryPrepared);
-        if (result.status()
-                == InternalOutputLeakDetector.Status.VIOLATION) {
-            handleInternalViolation(internalRecoveryPrepared);
-            return;
-        }
-        if (result.status()
-                == InternalOutputLeakDetector.Status.BUFFERING) {
-            bufferedTextDisclosure = disclosureBuffer.enqueuePending(null);
-        }
-    }
-
-    private void resolveBufferedText(
-            String safeText,
-            AtomicBoolean protocolRecoveryPrepared) {
-        GenerationDisclosureBuffer.Disclosure buffered =
-                bufferedTextDisclosure;
-        bufferedTextDisclosure = null;
-        if (safeText.isEmpty()) {
-            if (buffered != null) {
-                disclosureBuffer.remove(buffered);
-            }
-            return;
-        }
-        Runnable action = () -> processTrustedPartial(
-                safeText, protocolRecoveryPrepared);
-        if (buffered == null) {
-            disclosureBuffer.enqueueResolved(action);
-        } else {
-            disclosureBuffer.resolve(buffered, action);
-        }
     }
 
     private void processTrustedPartial(
@@ -681,15 +567,11 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private void publishAiText(String text) {
         if (generationStreamSignalHandler != null) {
             publishGenerationSignalsAtomically(() -> {
-                markInternalRecoveredBeforeTrustedOutput();
-                publishedTextCodePoints += text.codePointCount(
-                        0, text.length());
                 publishGenerationSignal(
                         new GenerationStreamSignal.AiText(
                                 requestGeneration, text));
             });
         } else {
-            markInternalRecoveredBeforeTrustedOutput();
             partialResponseHandler.accept(text);
         }
     }
@@ -726,26 +608,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void terminateForGenerationListenerFailure() {
-        try {
-            if (internalOutputRecoveryCoordinator != null) {
-                if (!internalOutputRecoveryCoordinator
-                        .failBeforeRecoveryStart()
-                        && !internalOutputRecoveryCoordinator
-                        .failAfterRecoveryStart()) {
-                    internalOutputRecoveryCoordinator.closeSilently();
-                }
-            }
-        } catch (RuntimeException | Error ignored) {
-            internalOutputRecoveryCoordinator.closeSilently();
-        } finally {
-            failInternalOutputProtocol();
-        }
-    }
-
-    private void markInternalRecoveredBeforeTrustedOutput() {
-        if (internalOutputRecoveryCoordinator != null) {
-            internalOutputRecoveryCoordinator.recovered(requestGeneration);
-        }
+        terminateForProtocolError();
     }
 
     private boolean shouldQuarantineTrustedOutput() {
@@ -804,51 +667,18 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void handlePartialToolExecutionRequest(
-            int index,
-            ToolExecutionRequest partialToolExecutionRequest) {
-        AtomicBoolean recoveryPrepared = new AtomicBoolean();
-        try (var callback = requestController.enterCallback(
-                requestGeneration)) {
+            int index, ToolExecutionRequest request) {
+        try (var callback = requestController.enterCallback(requestGeneration)) {
             if (callback != null) {
-                processPartialToolRequest(
-                        index, partialToolExecutionRequest,
-                        recoveryPrepared);
+                observeStructuredToolCall();
+                publishPartialToolRequest(index, request);
             }
         }
-        if (recoveryPrepared.get()) {
-            scheduleInternalRecoveryRequest(new TokenUsage());
-        }
-    }
-
-    private void processPartialToolRequest(
-            int index,
-            ToolExecutionRequest request,
-            AtomicBoolean recoveryPrepared) {
-        observeStructuredToolCall();
-        if (toolArgumentLeakScanner == null) {
-            publishPartialToolRequest(index, request);
-            return;
-        }
-        ToolArgumentLeakScanner.Status status = toolArgumentLeakScanner
-                .accept(request.id(), request.arguments()).status();
-        if (status == ToolArgumentLeakScanner.Status.INVALID
-                || status == ToolArgumentLeakScanner.Status.MISMATCH) {
-            failStreamConsistency();
-            return;
-        }
-        if (status == ToolArgumentLeakScanner.Status.VIOLATION) {
-            handleInternalViolation(recoveryPrepared);
-            return;
-        }
-        enqueueToolDisclosure(
-                request.id(), status,
-                () -> publishPartialToolRequest(index, request));
     }
 
     private void publishPartialToolRequest(
             int index, ToolExecutionRequest request) {
         if (generationStreamSignalHandler != null) {
-            provisionalToolRequestIds.add(request.id());
             publishGenerationSignal(
                     new GenerationStreamSignal.PartialToolRequest(
                             requestGeneration, index, request));
@@ -857,161 +687,22 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         }
     }
 
-    private void enqueueToolDisclosure(
-            String requestId,
-            ToolArgumentLeakScanner.Status status,
-        Runnable action) {
-        if (status == ToolArgumentLeakScanner.Status.BUFFERING) {
-            bufferingToolRequestIds.add(requestId);
-            GenerationDisclosureBuffer.Disclosure disclosure =
-                    disclosureBuffer.enqueuePending(action);
-            bufferedToolDisclosures.computeIfAbsent(
-                    requestId, ignored -> new ArrayList<>()).add(disclosure);
-            return;
-        }
-        resolveBufferedToolDisclosures(requestId);
-        disclosureBuffer.enqueueResolved(action);
-    }
-
-    private void resolveBufferedToolDisclosures(String requestId) {
-        bufferingToolRequestIds.remove(requestId);
-        List<GenerationDisclosureBuffer.Disclosure> disclosures =
-                bufferedToolDisclosures.remove(
-                requestId);
-        if (disclosures == null) {
-            return;
-        }
-        for (GenerationDisclosureBuffer.Disclosure disclosure :
-                disclosures) {
-            disclosureBuffer.resolveDelayed(disclosure);
-        }
-    }
-
     @Override
     public void onCompleteToolExecutionRequest(
-            int index, ToolExecutionRequest completeToolExecutionRequest) {
-        submitProviderCallback(() ->
-                handleCompleteToolExecutionRequest(
-                        index, completeToolExecutionRequest));
-    }
-
-    private void handleCompleteToolExecutionRequest(
-            int index,
-            ToolExecutionRequest completeToolExecutionRequest) {
-        AtomicBoolean recoveryPrepared = new AtomicBoolean();
-        try (var callback = requestController.enterCallback(
-                requestGeneration)) {
-            if (callback != null) {
-                processCompleteToolRequest(
-                        index, completeToolExecutionRequest,
-                        recoveryPrepared);
-            }
-        }
-        if (recoveryPrepared.get()) {
-            scheduleInternalRecoveryRequest(new TokenUsage());
-        }
-    }
-
-    private void processCompleteToolRequest(
-            int index,
-            ToolExecutionRequest request,
-            AtomicBoolean recoveryPrepared) {
-        observeStructuredToolCall();
-        if (toolArgumentLeakScanner == null) {
-            return;
-        }
-        ToolArgumentLeakScanner.Status status = toolArgumentLeakScanner
-                .complete(request.id(), request.arguments()).status();
-        if (status == ToolArgumentLeakScanner.Status.VIOLATION) {
-            dropBufferedToolDisclosures(request.id());
-            handleInternalViolation(recoveryPrepared);
-            return;
-        }
-        if (status != ToolArgumentLeakScanner.Status.SAFE) {
-            dropBufferedToolDisclosures(request.id());
-            failStreamConsistency();
-            return;
-        }
-        verifiedToolArguments.put(request.id(), request.arguments());
-        resolveBufferedToolDisclosures(request.id());
-    }
-
-    private void dropBufferedToolDisclosures(String requestId) {
-        bufferingToolRequestIds.remove(requestId);
-        List<GenerationDisclosureBuffer.Disclosure> disclosures =
-                bufferedToolDisclosures.remove(
-                requestId);
-        if (disclosures == null) {
-            return;
-        }
-        disclosureBuffer.removeAll(disclosures);
-    }
-
-    private void handleInternalViolation(
-            AtomicBoolean recoveryPrepared) {
-        clearPendingInternalDisclosures();
-        InternalOutputRecoveryCoordinator.ViolationAction action =
-                internalOutputRecoveryCoordinator.claimViolation(
-                        requestGeneration);
-        if (action == InternalOutputRecoveryCoordinator
-                .ViolationAction.IGNORE) {
-            return;
-        }
-        publishGenerationSignalsAtomically(() -> {
-            publishInternalRollback();
-            if (action == InternalOutputRecoveryCoordinator
-                    .ViolationAction.FAIL) {
-                internalOutputRecoveryCoordinator.failForRecoveryViolation(
-                        requestGeneration);
+            int index, ToolExecutionRequest request) {
+        submitProviderCallback(() -> {
+            try (var callback = requestController.enterCallback(requestGeneration)) {
+                if (callback != null) {
+                    observeStructuredToolCall();
+                }
             }
         });
-        if (action == InternalOutputRecoveryCoordinator
-                .ViolationAction.FAIL) {
-            failInternalOutputProtocol();
-            return;
-        }
-        StreamingRequestController.GenerationCancellation cancellation =
-                requestController.cancelGenerationForRecovery(
-                        requestGeneration);
-        if (cancellation != StreamingRequestController
-                .GenerationCancellation.CANCELLED) {
-            internalOutputRecoveryCoordinator.releaseRecoveryReservation();
-            return;
-        }
-        recoveryPrepared.set(true);
     }
 
-    private void clearPendingInternalDisclosures() {
-        disclosureBuffer.clear();
-        bufferedTextDisclosure = null;
-        bufferedToolDisclosures.clear();
-        if (toolArgumentLeakScanner != null) {
-            bufferingToolRequestIds.forEach(
-                    toolArgumentLeakScanner::discard);
-        }
-        bufferingToolRequestIds.clear();
-        verifiedToolArguments.clear();
-    }
-
-    private void publishInternalRollback() {
-        if (generationStreamSignalHandler == null) {
-            return;
-        }
-        publishGenerationSignal(
-                new GenerationStreamSignal.Rollback(
-                        requestGeneration,
-                        publishedTextCodePoints,
-                        Set.copyOf(provisionalToolRequestIds)));
-    }
-
-    private void failInternalOutputProtocol() {
-        ToolLoopTerminationProtocol.ControlledTermination termination =
-                new ToolLoopTerminationProtocol.ControlledTermination(
-                        ToolLoopTerminationProtocol
-                                .ControlledTerminationReason.PROTOCOL_ERROR,
-                        null);
-        if (requestController.claimControlledTermination(
-                requestGeneration, termination)) {
+    private void terminateForProtocolError() {
+        var termination = new ToolLoopTerminationProtocol.ControlledTermination(
+                ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR, null);
+        if (requestController.claimControlledTermination(requestGeneration, termination)) {
             requestController.dispatchClaimedTermination();
         }
     }
@@ -1048,7 +739,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     private void handleCompleteResponse(ChatResponse completeResponse) {
         AtomicBoolean protocolRecoveryPrepared = new AtomicBoolean();
-        AtomicBoolean internalRecoveryPrepared = new AtomicBoolean();
         AtomicBoolean incompleteRecoveryPrepared = new AtomicBoolean();
         AtomicReference<ChatResponse> continuationResponse =
                 new AtomicReference<>();
@@ -1060,14 +750,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             processCompleteResponse(
                     completeResponse,
                     protocolRecoveryPrepared,
-                    internalRecoveryPrepared,
                     incompleteRecoveryPrepared,
                     continuationResponse);
         }
-        if (internalRecoveryPrepared.get()) {
-            scheduleInternalRecoveryRequest(TokenUsage.sum(
-                    tokenUsage, completeResponse.metadata().tokenUsage()));
-        } else if (protocolRecoveryPrepared.get()) {
+        if (protocolRecoveryPrepared.get()) {
             prepareRecoveryRequest(TokenUsage.sum(
                     tokenUsage, completeResponse.metadata().tokenUsage()));
         } else if (incompleteRecoveryPrepared.get()) {
@@ -1081,7 +767,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     private void processCompleteResponse(
             ChatResponse completeResponse,
             AtomicBoolean protocolRecoveryPrepared,
-            AtomicBoolean internalRecoveryPrepared,
             AtomicBoolean incompleteRecoveryPrepared,
             AtomicReference<ChatResponse> continuationResponse) {
         if (!requestController.isCurrentGeneration(requestGeneration)) {
@@ -1097,9 +782,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             return;
         }
         if (!aiMessage.hasToolExecutionRequests()) {
-            if (!completeInternalTextDetection(
-                    aiMessage.text(), internalRecoveryPrepared)
-                    || !completeRecoveryDetection(
+            if (!completeRecoveryDetection(
                     aiMessage.text(), protocolRecoveryPrepared)) {
                 return;
             }
@@ -1108,24 +791,15 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     incompleteRecoveryPrepared)) {
                 return;
             }
-            aiMessage = sanitizedOrdinaryMessage(aiMessage);
             markRecoveredBeforeTrustedOutput();
             markIncompleteRecoveredBeforeTrustedOutput();
             deliverAvailableTrustedOutput();
             completeOrdinaryResponse(
-                    completeResponse, aiMessage,
-                    internalRecoveryPrepared);
+                    completeResponse, aiMessage);
             return;
         }
         observeStructuredToolCall();
-        if (!completeInternalTextDetection(
-                aiMessage.text(), internalRecoveryPrepared)
-                || !completeToolRecoveryDetection(aiMessage.text())) {
-            return;
-        }
-        if (!verifyCompleteToolRequests(
-                aiMessage.toolExecutionRequests(),
-                internalRecoveryPrepared)) {
+        if (!completeToolRecoveryDetection(aiMessage.text())) {
             return;
         }
         aiMessage = sanitizedToolMessage(aiMessage);
@@ -1162,124 +836,17 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         if (generationStreamSignalHandler
                 instanceof GenerationSignalPublisher publisher) {
             publisher.publishAtomically(() -> {
-                markInternalRecoveredBeforeTrustedOutput();
                 publishCommittedToolRequests(requests);
             }, () -> executeCommittedToolBatchAndContinue(
                     requests, batchTicket, completeResponse));
             return;
         }
         publishGenerationSignalsAtomically(() -> {
-            markInternalRecoveredBeforeTrustedOutput();
             publishCommittedToolRequests(requests);
         });
         executeCommittedToolBatch(
                 requests, batchTicket, completeResponse,
                 continuationResponse);
-    }
-
-    private boolean completeInternalTextDetection(
-            String completeText,
-            AtomicBoolean recoveryPrepared) {
-        if (internalOutputLeakDetector == null) {
-            return true;
-        }
-        String normalizedText = completeText == null ? "" : completeText;
-        String suffix;
-        synchronized (recoveryDetectionMonitor) {
-            String observed = internalObservedResponseText.toString();
-            if (!normalizedText.startsWith(observed)) {
-                failStreamConsistency();
-                return false;
-            }
-            suffix = normalizedText.substring(observed.length());
-            internalObservedResponseText.append(suffix);
-        }
-        InternalOutputLeakDetector.DetectionResult suffixResult =
-                internalOutputLeakDetector.accept(suffix);
-        AtomicBoolean protocolRecoveryPrepared = new AtomicBoolean();
-        discloseInternalText(
-                suffixResult,
-                protocolRecoveryPrepared,
-                recoveryPrepared);
-        if (suffixResult.status()
-                == InternalOutputLeakDetector.Status.VIOLATION) {
-            return false;
-        }
-        InternalOutputLeakDetector.DetectionResult finishResult =
-                internalOutputLeakDetector.finish();
-        discloseInternalText(
-                finishResult,
-                protocolRecoveryPrepared,
-                recoveryPrepared);
-        return finishResult.status()
-                != InternalOutputLeakDetector.Status.VIOLATION
-                && requestController.isCurrentGeneration(requestGeneration);
-    }
-
-    private boolean verifyCompleteToolRequests(
-            List<ToolExecutionRequest> requests,
-            AtomicBoolean recoveryPrepared) {
-        if (toolArgumentLeakScanner == null) {
-            return true;
-        }
-        for (ToolExecutionRequest request : requests) {
-            String verifiedArguments = verifiedToolArguments.remove(
-                    request.id());
-            ToolArgumentLeakScanner.Status status = verifiedArguments == null
-                    ? toolArgumentLeakScanner.complete(
-                            request.id(), request.arguments()).status()
-                    : hasEquivalentToolArguments(
-                            verifiedArguments, request.arguments())
-                            ? ToolArgumentLeakScanner.Status.SAFE
-                            : ToolArgumentLeakScanner.Status.MISMATCH;
-            if (status == ToolArgumentLeakScanner.Status.VIOLATION) {
-                handleInternalViolation(recoveryPrepared);
-                return false;
-            }
-            if (status != ToolArgumentLeakScanner.Status.SAFE) {
-                logToolArgumentConsistencyFailure(
-                        request, status, verifiedArguments);
-                failStreamConsistency();
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean hasEquivalentToolArguments(
-            String verifiedArguments, String finalArguments) {
-        if (Objects.equals(verifiedArguments, finalArguments)) {
-            return true;
-        }
-        ToolArgumentsJsonNormalizer.Result verified =
-                ToolArgumentsJsonNormalizer.normalize(verifiedArguments);
-        ToolArgumentsJsonNormalizer.Result finalResult =
-                ToolArgumentsJsonNormalizer.normalize(finalArguments);
-        return verified.status()
-                == ToolArgumentsJsonNormalizer.Status.VALID
-                && finalResult.status()
-                == ToolArgumentsJsonNormalizer.Status.VALID
-                && Objects.equals(
-                        verified.normalizedArguments(),
-                        finalResult.normalizedArguments());
-    }
-
-    private void logToolArgumentConsistencyFailure(
-            ToolExecutionRequest request,
-            ToolArgumentLeakScanner.Status status,
-            String verifiedArguments) {
-        LOG.error("[Vue 工具链] 工具参数流一致性校验失败,memoryId={},"
-                        + "generation={},toolName={},toolId={},status={},"
-                        + "completeCallbackObserved={},"
-                        + "verifiedArgumentsLength={},finalArgumentsLength={}",
-                memoryId, requestGeneration, request.name(), request.id(),
-                status, verifiedArguments != null,
-                argumentLength(verifiedArguments),
-                argumentLength(request.arguments()));
-    }
-
-    private int argumentLength(String arguments) {
-        return arguments == null ? -1 : arguments.length();
     }
 
     private void publishCommittedToolRequests(
@@ -1289,7 +856,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         }
         for (int index = 0; index < requests.size(); index++) {
             ToolExecutionRequest request = requests.get(index);
-            provisionalToolRequestIds.add(request.id());
             publishGenerationSignal(
                     new GenerationStreamSignal.CompleteToolRequest(
                             requestGeneration, index, request));
@@ -1372,8 +938,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private AiMessage sanitizedToolMessage(AiMessage original) {
-        if (recoveryDetector == null
-                && internalOutputLeakDetector == null) {
+        if (recoveryDetector == null) {
             return original;
         }
         String trustedText;
@@ -1385,17 +950,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         return trustedText.isEmpty()
                 ? AiMessage.from(requests)
                 : AiMessage.from(trustedText, requests);
-    }
-
-    private AiMessage sanitizedOrdinaryMessage(AiMessage original) {
-        if (internalOutputLeakDetector == null) {
-            return original;
-        }
-        String trustedText;
-        synchronized (recoveryDetectionMonitor) {
-            trustedText = trustedResponseText.toString();
-        }
-        return AiMessage.from(trustedText);
     }
 
     private boolean completeToolRecoveryDetection(String completeText) {
@@ -1855,61 +1409,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 incompleteRecoveryGeneration)));
     }
 
-    private void prepareInternalRecoveryRequest(
-            TokenUsage accumulatedUsage) {
-        ModelRequestGate.Request gateRequest = modelRequestGate == null
-                ? null
-                : new ModelRequestGate.Request(
-                        memoryId,
-                        this::getMemory,
-                        toolSpecifications,
-                        continuationGate,
-                        withTurnTransientMessages(
-                                internalOutputRecoveryCoordinator
-                                        .transientMessages()),
-                        compressionAttemptState);
-        requestOrchestrator.submit(
-                GenerationAwareModelRequestOrchestrator
-                        .internalProtocolRecovery(
-                        requestGeneration,
-                        gateRequest,
-                        () -> messagesToSendWithTransient(
-                                memoryId,
-                                internalOutputRecoveryCoordinator
-                                        .transientMessages()),
-                        this::failInternalRecoveryBeforeStart,
-                        internalOutputRecoveryCoordinator::closeSilently,
-                        internalOutputRecoveryCoordinator
-                                ::recoveryStartCommitted,
-                        this::notifyInternalRecoveryFailure,
-                        (messages, generation) -> startModelRequest(
-                                messages,
-                                accumulatedUsage,
-                                generation,
-                                recoveryGeneration,
-                                incompleteRecoveryGeneration)));
-    }
-
-    private void scheduleInternalRecoveryRequest(
-            TokenUsage accumulatedUsage) {
-        callbackSequencer.submitAfterBatch(() -> {
-            if (requestController.isRecoverySourceGeneration(
-                    requestGeneration)) {
-                prepareInternalRecoveryRequest(accumulatedUsage);
-            }
-        });
-    }
-
-    private void failInternalRecoveryBeforeStart() {
-        internalOutputRecoveryCoordinator.failBeforeRecoveryStart();
-    }
-
-    private void notifyInternalRecoveryFailure(Throwable failure) {
-        if (!internalOutputRecoveryCoordinator.failBeforeRecoveryStart()) {
-            internalOutputRecoveryCoordinator.failAfterRecoveryStart();
-        }
-    }
-
     private void prepareIncompleteRecoveryRequest(
             TokenUsage accumulatedUsage) {
         List<ChatMessage> recoveryTransientMessages =
@@ -2067,8 +1566,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 incompleteRecoveryCoordinator,
                 incompleteRecoveryGeneration,
                 compressionAttemptState,
-                internalOutputRecoveryPolicy,
-                internalOutputRecoveryCoordinator,
                 generationStreamSignalHandler);
         child.turnTransientMessages(turnTransientMessages);
         return child;
@@ -2081,8 +1578,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     private void completeOrdinaryResponse(
             ChatResponse completeResponse,
-            AiMessage aiMessage,
-            AtomicBoolean internalRecoveryPrepared) {
+            AiMessage aiMessage) {
         try {
             ChatResponse finalChatResponse = ChatResponse.builder()
                     .aiMessage(aiMessage)
@@ -2116,22 +1612,12 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             if (hasOutputGuardrails
                     && finalAiMessage.hasToolExecutionRequests()) {
                 responseBuffer.clear();
-                if (internalOutputRecoveryCoordinator != null) {
-                    internalOutputRecoveryCoordinator.closeSilently();
-                }
-                failInternalOutputProtocol();
+                terminateForProtocolError();
                 return;
             }
             if (!isCompleteTextWithinLimit(finalAiMessage.text())) {
                 responseBuffer.clear();
                 terminateForResponseLimit();
-                return;
-            }
-            if (hasOutputGuardrails
-                    && finalProjectionViolatesInternalProtocol(
-                    finalAiMessage.text())) {
-                responseBuffer.clear();
-                handleInternalViolation(internalRecoveryPrepared);
                 return;
             }
             if (hasOutputGuardrails) {
@@ -2164,23 +1650,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         }
     }
 
-    private boolean finalProjectionViolatesInternalProtocol(
-            String finalText) {
-        if (internalOutputRecoveryPolicy == null) {
-            return false;
-        }
-        InternalOutputLeakDetector detector =
-                internalOutputRecoveryPolicy.newLeakDetector();
-        InternalOutputLeakDetector.DetectionResult accepted =
-                detector.accept(finalText == null ? "" : finalText);
-        if (accepted.status()
-                == InternalOutputLeakDetector.Status.VIOLATION) {
-            return true;
-        }
-        return detector.finish().status()
-                == InternalOutputLeakDetector.Status.VIOLATION;
-    }
-
     private void completeClaimedTermination(
             ToolLoopTerminationProtocol.ControlledTermination termination) {
         String finalResponse = termination.finalResponse();
@@ -2199,7 +1668,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 .request(request)
                 .result(result)
                 .build();
-        provisionalToolRequestIds.remove(request.id());
         if (generationStreamSignalHandler != null) {
             publishGenerationSignal(
                     new GenerationStreamSignal.ToolExecuted(
@@ -2231,30 +1699,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void handleError(Throwable error) {
-        boolean dispatchInternalProtocolTermination = false;
         try (var callback = requestController.enterCallback(
                 requestGeneration)) {
             if (callback == null) {
-                return;
-            }
-            if (internalOutputRecoveryCoordinator != null
-                    && internalOutputRecoveryCoordinator
-                    .isRecoveryInProgress()) {
-                ToolLoopTerminationProtocol.ControlledTermination
-                        termination =
-                        new ToolLoopTerminationProtocol
-                                .ControlledTermination(
-                                ToolLoopTerminationProtocol
-                                        .ControlledTerminationReason
-                                        .PROTOCOL_ERROR,
-                                null);
-                if (!requestController.claimControlledTermination(
-                        requestGeneration, termination)) {
-                    return;
-                }
-                internalOutputRecoveryCoordinator
-                        .failAfterRecoveryStart();
-                dispatchInternalProtocolTermination = true;
                 return;
             }
             if (!requestController.claimErrorCompletion(requestGeneration)) {
@@ -2268,10 +1715,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 incompleteRecoveryCoordinator.failIfRecovering();
             }
             notifyError(error);
-        } finally {
-            if (dispatchInternalProtocolTermination) {
-                requestController.dispatchClaimedTermination();
-            }
         }
     }
 

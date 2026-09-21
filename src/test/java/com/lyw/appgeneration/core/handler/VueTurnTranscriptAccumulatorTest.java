@@ -6,52 +6,23 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VueTurnTranscriptAccumulatorTest {
 
     @Test
-    void 同代Ai正文跨分片形成保留标记时必须命中() {
-        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
-        transcript.appendAiText(1L, "前缀[[ser");
-        transcript.appendAiText(1L, "ver.synthetic-memory/test]]后缀");
-
-        assertTrue(transcript.containsReservedMarkerInAiText());
-    }
-
-    @Test
-    void 不同代Ai正文不得跨代拼成保留标记() {
-        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
+    void 保留标记与工具展示仍按来源分离且遵守预算() {
+        VueTurnTranscriptAccumulator transcript = transcript(64, 8);
         transcript.appendAiText(1L, "[[ser");
-        transcript.appendAiText(2L, "ver.synthetic-memory/test]]");
-
-        assertFalse(transcript.containsReservedMarkerInAiText());
-    }
-
-    @Test
-    void 工具展示不参与扫描但也不切断同代Ai正文() {
-        VueTurnTranscriptAccumulator toolOnly = transcript(128, 8);
-        toolOnly.appendAiText(1L, "[[ser");
-        toolOnly.appendTrustedToolDisplay(1L, "read-1", "ver.");
-        assertFalse(toolOnly.containsReservedMarkerInAiText());
-
-        VueTurnTranscriptAccumulator acrossTool = transcript(128, 8);
-        acrossTool.appendAiText(1L, "[[ser");
-        acrossTool.appendTrustedToolDisplay(1L, "read-2", "任意展示");
-        acrossTool.appendAiText(1L, "ver.synthetic-memory/test]]");
-        assertTrue(acrossTool.containsReservedMarkerInAiText());
-    }
-
-    @Test
-    void 已回滚失败代不得参与最终安全判定() {
-        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
-        transcript.appendAiText(1L, "[[server.synthetic-memory/test]]");
-        transcript.rollbackAiText(1L, 32);
-        transcript.appendAiText(2L, "恢复后的安全回答");
-
-        assertFalse(transcript.containsReservedMarkerInAiText());
+        transcript.appendTrustedToolDisplay(1L, "write-1", "工具展示");
+        transcript.appendAiText(1L, "ver.test]]");
+        assertEquals("[[server.test]]", transcript.answerMemoryText());
+        assertEquals("[[ser工具展示ver.test]]", transcript.displayText());
+        VueTurnTranscriptAccumulator limited = transcript(6, 1);
+        assertTrue(limited.appendAiText(1L, "12345").accepted());
+        assertTrue(limited.appendAiText(1L, "6").resourceLimitExceeded());
+        assertEquals("12345", limited.displayText());
     }
 
     @Test
@@ -82,90 +53,10 @@ class VueTurnTranscriptAccumulatorTest {
     }
 
     @Test
-    void 回滚必须按Unicode码点逆序删除指定代次正文() {
-        VueTurnTranscriptAccumulator transcript = transcript(64, 8);
-        transcript.appendAiText(1L, "甲😀乙");
-        transcript.appendAiText(1L, "丙");
-
-        VueTurnTranscriptAccumulator.RollbackDecision decision =
-                transcript.rollbackAiText(1L, 3);
-
-        assertEquals(3, decision.removedCodePoints());
-        assertEquals("甲", decision.snapshot().displayText());
-        assertEquals("甲", decision.snapshot().answerMemoryText());
-        assertEquals(1, decision.snapshot().fragments().size());
-        assertEquals("甲", decision.snapshot().fragments().getFirst().text());
-    }
-
-    @Test
-    void 回滚正文必须保留同代已执行工具展示和其他代正文() {
-        VueTurnTranscriptAccumulator transcript = transcript(128, 8);
-        transcript.appendAiText(1L, "失败正文");
-        transcript.appendTrustedToolDisplay(
-                1L, "write-1", "\n\n文件已经落盘\n\n");
-        transcript.appendAiText(2L, "恢复正文");
-
-        transcript.rollbackAiText(1L, 4);
-
-        assertEquals("\n\n文件已经落盘\n\n恢复正文",
-                transcript.displayText());
-        assertEquals("恢复正文", transcript.answerMemoryText());
-        assertEquals(List.of(
-                VueTurnTranscriptAccumulator.FragmentSource
-                        .TRUSTED_TOOL_DISPLAY,
-                VueTurnTranscriptAccumulator.FragmentSource.AI_TEXT),
-                transcript.snapshot().fragments().stream()
-                        .map(VueTurnTranscriptAccumulator.Fragment::source)
-                        .toList());
-    }
-
-    @Test
-    void 回滚后必须归还展示预算供恢复代正文使用() {
-        VueTurnTranscriptAccumulator transcript = transcript(6, 1);
-        VueTurnTranscriptAccumulator.AppendDecision first =
-                transcript.appendAiText(1L, "ABCDE");
-        VueTurnTranscriptAccumulator.AppendDecision overflow =
-                transcript.appendAiText(1L, "F");
-
-        assertTrue(first.accepted());
-        assertTrue(overflow.resourceLimitExceeded());
-        assertEquals("", overflow.acceptedPrefix());
-
-        transcript.rollbackAiText(1L, 5);
-        VueTurnTranscriptAccumulator.AppendDecision recovered =
-                transcript.appendAiText(2L, "12345");
-
-        assertTrue(recovered.accepted());
-        assertFalse(recovered.resourceLimitExceeded());
-        assertEquals("12345", transcript.displayText());
-        assertEquals("12345", transcript.answerMemoryText());
-    }
-
-    @Test
-    void 回滚码点超过该代已接收正文时必须拒绝且不改变快照() {
-        VueTurnTranscriptAccumulator transcript = transcript(64, 8);
-        transcript.appendAiText(1L, "正文");
-        VueTurnTranscriptAccumulator.Snapshot before = transcript.snapshot();
-
-        IllegalArgumentException exception = assertThrows(
-                IllegalArgumentException.class,
-                () -> transcript.rollbackAiText(1L, 3));
-
-        assertEquals("回滚码点超过指定 generation 的已接收正文",
-                exception.getMessage());
-        assertEquals(before, transcript.snapshot());
-    }
-
-    @Test
-    void 零码点回滚不得改变正文且非法代次必须拒绝() {
+    void 非法代次与空工具标识必须拒绝() {
         VueTurnTranscriptAccumulator transcript = transcript(64, 8);
         transcript.appendAiText(1L, "正文");
 
-        VueTurnTranscriptAccumulator.RollbackDecision decision =
-                transcript.rollbackAiText(1L, 0);
-
-        assertEquals(0, decision.removedCodePoints());
-        assertEquals("正文", decision.snapshot().displayText());
         assertThrows(IllegalArgumentException.class,
                 () -> transcript.appendAiText(-1L, "非法"));
         assertThrows(IllegalArgumentException.class,
@@ -174,36 +65,12 @@ class VueTurnTranscriptAccumulatorTest {
                 () -> transcript.appendTrustedToolDisplay(
                         0L, "tool-0", "展示"));
         assertThrows(IllegalArgumentException.class,
-                () -> transcript.rollbackAiText(0L, 0));
-        assertThrows(IllegalArgumentException.class,
                 () -> new VueTurnTranscriptAccumulator.Fragment(
                         VueTurnTranscriptAccumulator.FragmentSource.AI_TEXT,
                         0L, null, "未初始化代次"));
         assertThrows(IllegalArgumentException.class,
                 () -> transcript.appendTrustedToolDisplay(
                         1L, " ", "展示"));
-        assertThrows(IllegalArgumentException.class,
-                () -> transcript.rollbackAiText(1L, -1));
-    }
-
-    @Test
-    void 跨分片代理对必须保持来源且零码点回滚要清除旧代待决项() {
-        VueTurnTranscriptAccumulator transcript = transcript(64, 8);
-        String emoji = "😀";
-
-        VueTurnTranscriptAccumulator.AppendDecision high =
-                transcript.appendAiText(1L, emoji.substring(0, 1));
-        assertEquals("", high.acceptedPrefix());
-        assertEquals("", transcript.displayText());
-
-        transcript.rollbackAiText(1L, 0);
-        VueTurnTranscriptAccumulator.AppendDecision low =
-                transcript.appendAiText(2L, emoji.substring(1));
-
-        assertEquals("�", low.acceptedPrefix());
-        assertEquals("�", transcript.displayText());
-        assertEquals(2L,
-                transcript.snapshot().fragments().getFirst().generation());
     }
 
     @Test

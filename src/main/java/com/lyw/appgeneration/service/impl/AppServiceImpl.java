@@ -1,6 +1,5 @@
 package com.lyw.appgeneration.service.impl;
 
-
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.RandomUtil;
@@ -9,7 +8,6 @@ import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingServiceFactory;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.guardrail.annotation.PromptSafetyCheck;
-import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.core.builder.BuildCancellationSignal;
@@ -19,7 +17,6 @@ import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
-import com.lyw.appgeneration.core.handler.VueTurnMode;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
 import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
 import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
@@ -739,8 +736,6 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             return Flux.empty();
         }
         try {
-            context.sealSafeBeforeHandler();
-            context.sealRegisteredOutputSafety();
             VueTurnFinalizer.FinalizationResult result = vueTurnFinalizer
                     .finalizeOnce(context, new VueTurnOutcome(
                             context.phase(),
@@ -948,7 +943,6 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                     sourceDirectory, String.valueOf(appId), response);
         }
     }
-
 
     @Override
     public boolean deleteApp(Long appId, User operator) {

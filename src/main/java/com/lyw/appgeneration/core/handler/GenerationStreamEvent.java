@@ -2,8 +2,6 @@ package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRecoveryMessage;
-import com.lyw.appgeneration.ai.model.message.InternalOutputRollbackMessage;
 import com.lyw.appgeneration.ai.model.message.TurnOutcomeMessage;
 import com.lyw.appgeneration.ai.model.message.TrustedToolDisplayMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
@@ -42,20 +40,6 @@ public sealed interface GenerationStreamEvent {
             implements GenerationStreamEvent {
         public TrustedToolDisplay {
             Objects.requireNonNull(message, "可信工具展示不能为空");
-        }
-    }
-
-    record Rollback(InternalOutputRollbackMessage message)
-            implements GenerationStreamEvent {
-        public Rollback {
-            Objects.requireNonNull(message, "内部输出回滚不能为空");
-        }
-    }
-
-    record InternalRecovery(InternalOutputRecoveryMessage message)
-            implements GenerationStreamEvent {
-        public InternalRecovery {
-            Objects.requireNonNull(message, "内部输出恢复不能为空");
         }
     }
 
@@ -115,15 +99,6 @@ public sealed interface GenerationStreamEvent {
     static TrustedToolDisplay trustedToolDisplay(
             TrustedToolDisplayMessage message) {
         return new TrustedToolDisplay(message);
-    }
-
-    static Rollback rollback(InternalOutputRollbackMessage message) {
-        return new Rollback(message);
-    }
-
-    static InternalRecovery internalRecovery(
-            InternalOutputRecoveryMessage message) {
-        return new InternalRecovery(message);
     }
 
     static TurnOutcome turnOutcome(VueTurnOutcome outcome) {

@@ -184,7 +184,6 @@
                   <span>{{
                     getGenerationStatusText(
                       message.contextCompression || 'idle',
-                      message.internalOutputRecovery || 'idle',
                       message.incompleteToolChainRecovery || 'idle',
                       message.toolProtocolRecovery || 'idle',
                       'AI 正在思考...',
@@ -318,7 +317,6 @@
             <p>{{
               getGenerationStatusText(
                 contextCompression,
-                internalOutputRecovery,
                 incompleteToolChainRecovery,
                 toolProtocolRecovery,
                 '正在生成网站...',
@@ -377,7 +375,6 @@ import {
   type GenerationSessionSnapshot,
   type GenerationOutcome,
   type ContextCompressionState,
-  type InternalOutputRecoveryState,
   type ToolProtocolRecoveryState,
   type IncompleteToolChainRecoveryState,
   startGenerationSession,
@@ -430,7 +427,6 @@ interface Message {
   content: string
   loading?: boolean
   contextCompression?: ContextCompressionState
-  internalOutputRecovery?: InternalOutputRecoveryState
   toolProtocolRecovery?: ToolProtocolRecoveryState
   incompleteToolChainRecovery?: IncompleteToolChainRecoveryState
   createTime?: string
@@ -468,7 +464,6 @@ const activeSessionAppId = ref<string | null>(null)
 const sessionMessageKey = ref<string | null>(null)
 const detachSession = ref<null | (() => void)>(null)
 const contextCompression = ref<ContextCompressionState>('idle')
-const internalOutputRecovery = ref<InternalOutputRecoveryState>('idle')
 const toolProtocolRecovery = ref<ToolProtocolRecoveryState>('idle')
 const incompleteToolChainRecovery =
   ref<IncompleteToolChainRecoveryState>('idle')
@@ -576,7 +571,6 @@ const loadChatHistory = async (isLoadMore = false) => {
   }
 }
 
-
 // 加载更多历史消息
 const loadMoreHistory = async () => {
   await loadChatHistory(true)
@@ -645,7 +639,6 @@ const fetchAppInfo = async () => {
 
 const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   contextCompression.value = snapshot.contextCompression
-  internalOutputRecovery.value = snapshot.internalOutputRecovery
   toolProtocolRecovery.value = snapshot.toolProtocolRecovery
   incompleteToolChainRecovery.value = snapshot.incompleteToolChainRecovery
   const aiMessage = messages.value.find((item) => item.id === sessionMessageKey.value)
@@ -661,14 +654,12 @@ const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
   aiMessage.toolCardStates = snapshot.toolCardStates
   aiMessage.generationStatus = snapshot.status
   aiMessage.contextCompression = snapshot.contextCompression
-  aiMessage.internalOutputRecovery = snapshot.internalOutputRecovery
   aiMessage.toolProtocolRecovery = snapshot.toolProtocolRecovery
   aiMessage.incompleteToolChainRecovery = snapshot.incompleteToolChainRecovery
   const hasVisibleOutput = snapshot.content.length > 0 || snapshot.toolCalls.size > 0
   aiMessage.loading = shouldShowGenerationStatus(
     snapshot.loading,
     snapshot.contextCompression,
-    snapshot.internalOutputRecovery,
     snapshot.incompleteToolChainRecovery,
     snapshot.toolProtocolRecovery,
     hasVisibleOutput,
