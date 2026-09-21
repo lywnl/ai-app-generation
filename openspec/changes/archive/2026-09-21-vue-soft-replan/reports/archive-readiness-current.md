@@ -34,3 +34,16 @@
 以上代码缺口已在本次实施中处理：专用组件及收尾检测已物理删除，共享信号发布与串行回调独立运行。删除并发用例已增加接管信号屏障，生产租约潜在窗口未在本次扩改。相关测试及独立评审已完成，前后端已重启且健康检查通过，详见 `internal-output-removal-evidence.md` 和 `../reviews/internal-output-removal-review.md`。
 
 当前归档状态仍为 Needs Work：追加规划和代码已经变化，旧规划评审/验收指纹不能复用，尚未重建当前归档基线。10:14 至 10:22 用户前端三轮真实生成已完成，首次生成、计划修订和标记文本构建均通过，详见实施记录的“用户前端实测补充”。未执行归档或推送。
+
+## 2026-09-21 当前基线收口完成
+
+当前结论更新为 Ready for Archive。前述 Needs Work 保留为历史检查结果。
+
+- 代码基线为 8b0e889，无业务代码修改。
+- 当前规划复审、当前提交独立代码复核均 PASS，见 reviews/change-review.md、reviews/independent-planning-review-current.md、reviews/independent-code-review-current.md（相对变更根）。
+- 9.5 真实重开后完成提交与证据对应、新增测试补核、动态日志冻结及映射补齐，37/37 项任务完成；未补造历史实施开始时间。
+- verification-manifest.json 覆盖 10 条规格需求、39 个场景及全部任务，结构校验通过。
+- record-verify 已绑定当前代码、测试、构建配置、原始日志、JUnit、实测快照及独立评审；check-plan、check-verify 均返回 valid=true。
+- 四项已知基础设施配置失败、22 项跳过、真实模型自动偏差触发未单独实测，以及历史流程偏差均保留在 verification.md 中。
+
+本轮仅更新评审和验收文档，未归档、提交、推送或发布。后续归档必须使用当前验收记录，并在写入和移动前执行归档检查点校验。

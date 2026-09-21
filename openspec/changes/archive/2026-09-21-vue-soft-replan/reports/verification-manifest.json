@@ -1,0 +1,402 @@
+{
+  "requirements": [
+    {
+      "id": "R1-plan-lifecycle",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlan.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "在线变更回合必须维护结构化计划",
+      "scenarios": [
+        "首轮创建计划",
+        "空计划被拒绝",
+        "后续回合加载计划",
+        "修订计划",
+        "后续回合把计划摘要注入模型上下文"
+      ],
+      "tasks": [
+        "1.1",
+        "1.2",
+        "7.1"
+      ]
+    },
+    {
+      "id": "R2-plan-path-protection",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/ProjectPathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileDirReadTool.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ProjectDownloadServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/FileToolSecurityTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ProjectDownloadServiceImplTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "计划状态文件必须受保护且与回合隔离",
+      "scenarios": [
+        "计划状态原子保存",
+        "普通文件工具访问计划文件",
+        "新回合接管上一版本计划",
+        "过期回合写入",
+        "旧回合在新回合接管后提交",
+        "取消与计划提交交错"
+      ],
+      "tasks": [
+        "1.3",
+        "1.4",
+        "7.3"
+      ]
+    },
+    {
+      "id": "R3-plan-tool-protocol",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupport.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/VueToolExecutionFact.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/VueToolExecutionFactTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "计划工具必须使用独立受信结果协议",
+      "scenarios": [
+        "计划工具结果进入可信执行记录",
+        "文件工具协议兼容",
+        "只读和评测作用域"
+      ],
+      "tasks": [
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4",
+        "2.5"
+      ]
+    },
+    {
+      "id": "R4-soft-replan-feedback",
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/ReplanContext.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/ReplanDetector.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/ReplanContextTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerReplanTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/ReplanDetectorTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "系统必须提供软 Replan 反馈",
+      "scenarios": [
+        "发现计划偏差",
+        "依赖声明无效",
+        "依赖在当前版本未完成",
+        "计划修订传播依赖状态",
+        "领取计划反馈",
+        "模型修订后恢复执行",
+        "偏差状态跨回合恢复",
+        "fail-open 恢复持久计划状态"
+      ],
+      "tasks": [
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "6.1",
+        "7.5"
+      ]
+    },
+    {
+      "id": "R5-mutation-blocking",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "待处理 Replan 时必须阻止继续扩大文件变更",
+      "scenarios": [
+        "Replan 未确认时修改文件",
+        "Replan 未确认时读取文件",
+        "Replan 反馈超过上限"
+      ],
+      "tasks": [
+        "3.5",
+        "4.1",
+        "4.2"
+      ]
+    },
+    {
+      "id": "R6-build-gate",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectToolTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "在线构建必须检查计划状态",
+      "scenarios": [
+        "计划不存在时构建",
+        "计划存在未处理变更时构建",
+        "计划闸门通过后构建",
+        "构建成功写回计划状态"
+      ],
+      "tasks": [
+        "4.3",
+        "4.4",
+        "6.3",
+        "7.4",
+        "7.6"
+      ]
+    },
+    {
+      "id": "R7-scope-cancellation-isolation",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "计划操作必须遵守作用域和取消边界",
+      "scenarios": [
+        "只读回合尝试创建计划",
+        "回合取消期间写计划"
+      ],
+      "tasks": [
+        "6.2",
+        "7.2"
+      ]
+    },
+    {
+      "id": "R8-existing-display-channel",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json",
+        ".codex/vue-soft-replan/archive-readiness/removal-frontend-test.log",
+        ".codex/vue-soft-replan/revalidation-20260921/live-generation-frozen.log"
+      ],
+      "status": "verified",
+      "requirement": "计划摘要必须沿用现有工具展示通道",
+      "scenarios": [
+        "创建计划后的展示",
+        "修订计划后的展示"
+      ],
+      "tasks": [
+        "5.3"
+      ]
+    },
+    {
+      "id": "R9-non-target-compatibility",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/VueToolNames.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/resources/prompt/codegen-vue-project-system-prompt.txt"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnfinishedToolChainCheckpointProjectorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "软 Replan 不得改变非目标模式和现有终态协议",
+      "scenarios": [
+        "非 Vue 模式生成",
+        "软 Replan 执行期间",
+        "计划外事实先于状态归档被观察"
+      ],
+      "tasks": [
+        "5.1",
+        "5.2"
+      ]
+    },
+    {
+      "id": "R10-strict-concurrency-and-path-boundaries",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/concurrency/AppOperationLeaseManager.java",
+        "src/main/java/com/lyw/appgeneration/core/builder/VueBuildSessionManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/ProjectPathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanFile.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/concurrency/AppOperationLeaseManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json"
+      ],
+      "status": "verified",
+      "requirement": "Strict 高风险跨需求核验",
+      "scenarios": [],
+      "tasks": [
+        "6.4",
+        "7.7"
+      ]
+    },
+    {
+      "id": "R11-remove-internal-output-detection",
+      "requirement": "统一工具流不依赖内部输出检测",
+      "scenarios": [
+        "参数与展示中包含内部标记文本",
+        "统一工具流完成构建",
+        "移除封口后的取消与协议失败"
+      ],
+      "tasks": [
+        "9.1",
+        "9.2",
+        "9.3",
+        "9.4",
+        "9.5"
+      ],
+      "implementation": [
+        "src/main/java/dev/langchain4j/service",
+        "src/main/java/com/lyw/appgeneration/core/handler",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/web/GenerationSseEncoder.java",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnCancellationCoordinatorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/model/message/GenerationMessageTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageGeneratingStatus.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+        ".codex/vue-soft-replan/archive-readiness/clean-surefire",
+        ".codex/vue-soft-replan/archive-readiness/removal-frontend-test.log",
+        ".codex/vue-soft-replan/archive-readiness/removal-frontend-build.log",
+        ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json",
+        ".codex/vue-soft-replan/revalidation-20260921/live-generation-frozen.log",
+        ".codex/vue-soft-replan/revalidation-20260921/live-plan-frozen.json",
+        ".codex/vue-soft-replan/revalidation-20260921/deletion-boundary-audit.json"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "bash mvnw -q clean test",
+      "cwd": ".",
+      "exit_code": 1,
+      "evidence": ".codex/vue-soft-replan/archive-readiness/removal-clean-full.log",
+      "note": "2022 项，4项已知基础设施配置断言失败，0错误，22跳过；不宣称全绿。"
+    },
+    {
+      "command": "npm test",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/vue-soft-replan/archive-readiness/removal-frontend-test.log"
+    },
+    {
+      "command": "npm run type-check",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/vue-soft-replan/archive-readiness/removal-typecheck.log"
+    },
+    {
+      "command": "npm run build",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/vue-soft-replan/archive-readiness/removal-frontend-build.log"
+    },
+    {
+      "command": "node -e 'const fs=require(\"fs\"),cp=require(\"child_process\");const deleted=[\"InternalOutputLeakDetector\",\"InternalOutputRecoveryPolicy\",\"InternalOutputRecoveryCoordinator\",\"InternalOutputProtocolException\",\"ToolArgumentLeakScanner\"];for(const n of deleted)if(fs.existsSync(\"src/main/java/dev/langchain4j/service/\"+n+\".java\"))throw Error(\"专用类仍存在：\"+n);for(const n of [\"InternalOutputRecoveryMessage\",\"InternalOutputRollbackMessage\"])if(fs.existsSync(\"src/main/java/com/lyw/appgeneration/ai/model/message/\"+n+\".java\"))throw Error(n);const source=fs.readFileSync(\"src/main/java/dev/langchain4j/service/GenerationStreamSignal.java\",\"utf8\");const actual=[...source.matchAll(/record (\\w+)\\(/g)].map(x=>x[1]);const expected=[\"AiText\",\"PartialToolRequest\",\"CompleteToolRequest\",\"ToolExecuted\"];if(JSON.stringify(actual)!==JSON.stringify(expected))throw Error(\"业务信号集合变化\");const keep=[\"src/main/java/com/lyw/appgeneration/ai/plan\",\"src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java\",\"src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java\",\"src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java\",\"src/main/java/dev/langchain4j/service/ReplanContext.java\",\"src/main/java/dev/langchain4j/service/RepeatedReadLoopGuard.java\",\"src/main/java/dev/langchain4j/service/ToolProtocolRecoveryPolicy.java\",\"src/main/java/dev/langchain4j/service/IncompleteToolChainRecoveryPolicy.java\"];if(cp.execFileSync(\"git\",[\"diff\",\"5b5f31d\",\"8b0e889\",\"--\",...keep]).length)throw Error(\"保留边界存在差异\");console.log(JSON.stringify({time:new Date().toISOString(),head:\"8b0e889\",deletedComponents:deleted,signalTypes:actual,unchangedScopes:keep},null,2));' > .codex/vue-soft-replan/revalidation-20260921/deletion-boundary-audit.json",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/vue-soft-replan/revalidation-20260921/deletion-boundary-audit.json"
+    }
+  ],
+  "code_baseline": "8b0e8891718467552682835d5b8fd7bc2bc1e996",
+  "evidence_reuse": {
+    "comparison": ".codex/vue-soft-replan/revalidation-20260921/code-evidence-comparison.json",
+    "independent_review": "openspec/changes/vue-soft-replan/reviews/independent-code-review-current.md",
+    "limitations": [
+      "三轮实测验证首次生成、updatePlan修订与标记放行，不宣称自动偏差由真实模型触发；该行为由确定性测试验证。",
+      "字符串包裹数组输入兼容没有专用单测，为非阻塞覆盖建议。",
+      "重开9.5只登记本次继续核验，不追认历史实施前门禁。"
+    ]
+  }
+}
