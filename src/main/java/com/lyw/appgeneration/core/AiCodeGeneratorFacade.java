@@ -7,7 +7,6 @@ import com.lyw.appgeneration.ai.VueEvaluationCodeGeneratorService;
 import com.lyw.appgeneration.ai.VueToolNames;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
-import com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocol;
 import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
 import com.lyw.appgeneration.ai.plan.AppPlan;
 import com.lyw.appgeneration.ai.plan.PlanStatus;
@@ -49,7 +48,6 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.IncompleteToolChainRecoveryPolicy;
 import dev.langchain4j.service.InternalOutputProtocolException;
-import dev.langchain4j.service.InternalOutputRecoveryPolicy;
 import dev.langchain4j.service.GenerationStreamSignal;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ToolExecutionGuard;
@@ -184,8 +182,6 @@ public class AiCodeGeneratorFacade {
         }
         TokenStream tokenStream = createSimpleCodeStream(
                 userMessage, codeGenTypeEnum, isFirstMessage, generatorService);
-        tokenStream.internalOutputRecoveryPolicy(
-                simpleInternalOutputRecoveryPolicy());
         tokenStream.modelRequestGate(modelRequestGate, context);
         Flux<String> source = processSimpleTokenStream(tokenStream, context);
         return progressCodeStream(source, codeGenTypeEnum, appId, context);
@@ -214,17 +210,6 @@ public class AiCodeGeneratorFacade {
             default -> throw new IllegalArgumentException(
                     "普通生成入口只支持 HTML 和 MULTI_FILE");
         });
-    }
-
-    private InternalOutputRecoveryPolicy
-            simpleInternalOutputRecoveryPolicy() {
-        return new InternalOutputRecoveryPolicy(
-                InternalOutputRecoveryPolicy.Mode.FAIL_FAST,
-                SyntheticMemoryMessageProtocol.RESERVED_PREFIX,
-                Set.of(
-                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK,
-                        SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK,
-                        SyntheticMemoryMessageProtocol.L2_PREFERENCE_ACK));
     }
 
     /**
@@ -393,20 +378,7 @@ public class AiCodeGeneratorFacade {
                         phase -> turnContext.tryRunCallback(() ->
                                 turnContext.publishIncompleteToolChainRecovery(
                                         incompleteRecoveryMessage(phase)))));
-        tokenStream.internalOutputRecoveryPolicy(
-                vueInternalOutputRecoveryPolicy());
         return processOnlineTokenStream(tokenStream, turnContext);
-    }
-
-    private InternalOutputRecoveryPolicy
-            vueInternalOutputRecoveryPolicy() {
-        return new InternalOutputRecoveryPolicy(
-                InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
-                SyntheticMemoryMessageProtocol.RESERVED_PREFIX,
-                Set.of(
-                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK,
-                        SyntheticMemoryMessageProtocol.L1_SUMMARY_ACK,
-                        SyntheticMemoryMessageProtocol.L2_PREFERENCE_ACK));
     }
 
     private IncompleteToolChainRecoveryPolicy.BuildState incompleteBuildState(
@@ -1089,9 +1061,6 @@ public class AiCodeGeneratorFacade {
             SimpleGenerationTurnContext context) {
         if (context.isCancelled()) {
             return;
-        }
-        if (SyntheticMemoryMessageProtocol.containsReservedMarker(code)) {
-            throw new InternalOutputProtocolException();
         }
         AppDataLifecycleFence.WriterPermit writerPermit =
                 appDataLifecycleFence.tryAcquireWriter(appId);

@@ -10,6 +10,7 @@ import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CommitRej
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -17,6 +18,7 @@ import java.util.UUID;
 
 /** 创建 Vue 在线首轮执行计划。 */
 @Component
+@Slf4j
 public final class MakePlanTool extends BaseTool {
 
     static final int MAX_PLAN_FILES = 30;
@@ -64,12 +66,21 @@ public final class MakePlanTool extends BaseTool {
                     operation, plan.planId(), plan.version(),
                     plan.summary(), plan.files()));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
+            log.warn("makePlan 被作用域拒绝,appId={},reasonType={},message={}",
+                    appId, exception.getClass().getSimpleName(),
+                    safeMessage(exception));
             return json(PlanToolResult.rejected(operation, exception.getMessage()));
         } catch (CommitRejectedException exception) {
+            log.warn("makePlan 在提交边界被拒绝,appId={},reasonType={}",
+                    appId, exception.getClass().getSimpleName());
             return json(PlanToolResult.rejected(operation, exception.getMessage()));
         } catch (IllegalArgumentException exception) {
+            log.warn("makePlan 参数被拒绝,appId={},reasonType={},message={}",
+                    appId, exception.getClass().getSimpleName(), safeMessage(exception));
             return json(PlanToolResult.rejected(operation, safeMessage(exception)));
         } catch (RuntimeException exception) {
+            log.error("makePlan 执行失败,appId={},reasonType={},message={}",
+                    appId, exception.getClass().getSimpleName(), safeMessage(exception));
             return json(PlanToolResult.failed(operation, safeMessage(exception)));
         }
     }

@@ -48,4 +48,15 @@ class PlanToolProtocolSupportTest {
         assertEquals(PlanFileState.PENDING, files.getFirst().state());
         assertTrue(files.getFirst().dependsOn().isEmpty());
     }
+
+    @Test
+    void 输入文件数组兼容动作大小写和JSON代码围栏() {
+        List<PlanFile> files = PlanToolProtocolSupport.parseInputFiles("""
+                ```json
+                [{"path":"src/App.vue","purpose":"入口","action":"modify","dependsOn":[]}]
+                ```
+                """);
+
+        assertEquals(PlanFileAction.MODIFY, files.getFirst().action());
+    }
 }

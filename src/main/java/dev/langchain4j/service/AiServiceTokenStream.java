@@ -475,10 +475,6 @@ public class AiServiceTokenStream implements TokenStream {
         if (!unifiedSignalMode && onPartialResponseInvoked != 1) {
             throw new IllegalConfigurationException("onPartialResponse must be invoked on TokenStream exactly 1 time");
         }
-        if (unifiedSignalMode && internalOutputRecoveryPolicy == null) {
-            throw new IllegalConfigurationException(
-                    "统一 generation 信号监听器必须同时安装内部输出恢复策略");
-        }
         if (internalOutputRecoveryPolicy != null
                 && internalOutputRecoveryPolicy.mode()
                 == InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE

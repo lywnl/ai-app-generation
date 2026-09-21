@@ -168,16 +168,7 @@ class AiCodeGeneratorFacadeTest {
                 context, generatorService);
 
         verify(tokenStream).modelRequestGate(modelRequestGate, context);
-        var policyCaptor = org.mockito.ArgumentCaptor.forClass(
-                dev.langchain4j.service.InternalOutputRecoveryPolicy.class);
-        verify(tokenStream).internalOutputRecoveryPolicy(
-                policyCaptor.capture());
-        assertEquals(dev.langchain4j.service.InternalOutputRecoveryPolicy
-                        .Mode.FAIL_FAST,
-                policyCaptor.getValue().mode());
-        assertEquals(com.lyw.appgeneration.ai.memory
-                        .SyntheticMemoryMessageProtocol.RESERVED_PREFIX,
-                policyCaptor.getValue().reservedPrefix());
+        verify(tokenStream, never()).internalOutputRecoveryPolicy(any());
         context.close();
     }
 
@@ -210,12 +201,7 @@ class AiCodeGeneratorFacadeTest {
                         "writeFile", "readFile", "modifyFile", "deleteFile",
                         "readDir", "buildProject", "readSkill", "makePlan", "updatePlan"),
                 policyCaptor.getValue().registeredToolNames());
-        var internalPolicyCaptor = org.mockito.ArgumentCaptor.forClass(
-                InternalOutputRecoveryPolicy.class);
-        verify(tokenStream).internalOutputRecoveryPolicy(
-                internalPolicyCaptor.capture());
-        assertEquals(InternalOutputRecoveryPolicy.Mode.RECOVER_ONCE,
-                internalPolicyCaptor.getValue().mode());
+        verify(tokenStream, never()).internalOutputRecoveryPolicy(any());
         context.closeResources();
     }
 
@@ -388,16 +374,15 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void 完整文本文件保存边界必须再次拒绝保留标记() {
+    void 完整文本文件保存不再执行内部标记拦截() {
         var context = newSimpleTurnContext("simple-final-file-guard");
         ReflectionTestUtils.setField(facade, "appDataLifecycleFence",
                 new AppDataLifecycleFence());
 
-        assertThrows(InternalOutputProtocolException.class,
-                () -> ReflectionTestUtils.invokeMethod(
-                        facade, "saveSimpleCode",
-                        "<html>[[server.synthetic-memory/test]]</html>",
-                        CodeGenTypeEnum.HTML, APP_ID, context));
+        assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(
+                facade, "saveSimpleCode",
+                "<html>[[server.synthetic-memory/test]]</html>",
+                CodeGenTypeEnum.HTML, APP_ID, context));
 
         context.close();
     }

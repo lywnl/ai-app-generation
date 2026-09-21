@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai.tools;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lyw.appgeneration.ai.plan.PlanFile;
@@ -18,7 +19,8 @@ public final class PlanToolProtocolSupport {
     private static final Set<String> FIELDS = Set.of(
             "protocol", "operation", "status", "planId",
             "version", "message", "summary", "files");
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS, true);
 
     private PlanToolProtocolSupport() {
     }
@@ -58,15 +60,41 @@ public final class PlanToolProtocolSupport {
             return List.of();
         }
         try {
-            PlanFileInput[] inputs = MAPPER.readValue(rawFiles, PlanFileInput[].class);
+            String normalized = unwrapJsonFence(rawFiles);
+            JsonNode root = MAPPER.readTree(normalized);
+            if (root != null && root.isTextual()) {
+                root = MAPPER.readTree(root.textValue());
+            }
+            if (root == null || !root.isArray()) {
+                throw new IllegalArgumentException("计划文件列表必须是 JSON 数组");
+            }
+            PlanFileInput[] inputs = MAPPER.treeToValue(root, PlanFileInput[].class);
             return Arrays.stream(inputs)
                     .map(input -> new PlanFile(
                             input.path(), input.purpose(), input.action(),
                             input.dependsOn(), PlanFileState.PENDING))
                     .toList();
         } catch (Exception exception) {
-            throw new IllegalArgumentException("计划文件列表不是合法 JSON 数组", exception);
+            String detail = exception.getMessage();
+            if (detail == null || detail.isBlank()) {
+                detail = "格式未知";
+            }
+            throw new IllegalArgumentException(
+                    "计划文件列表不是合法 JSON 数组: "
+                            + detail.replaceAll("[\\r\\n\\t]", " "), exception);
         }
+    }
+
+    private static String unwrapJsonFence(String raw) {
+        String value = raw.strip();
+        if (value.startsWith("```") && value.endsWith("```")) {
+            int firstLineEnd = value.indexOf('\n');
+            if (firstLineEnd >= 0) {
+                return value.substring(firstLineEnd + 1,
+                        value.length() - 3).strip();
+            }
+        }
+        return value;
     }
 
     public static List<String> parseInputPaths(String rawPaths) {
