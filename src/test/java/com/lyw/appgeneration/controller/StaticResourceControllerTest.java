@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -68,6 +69,19 @@ class StaticResourceControllerTest {
         }
         mvc.perform(get("/api/static/vue_project_7/../vue_project_8/.plan.json").contextPath("/api"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void encodedUrisAreRejectedThroughMvcWhileEncodedApplicationKeyStillWorks() throws Exception {
+        Files.writeString(root.resolve("vue_project_7/.plan.json"), "secret");
+        Files.writeString(root.resolve("vue_project_7/index.html"), "home");
+        for (String suffix : new String[]{"%2eplan.json", "%252eplan.json", ".PLAN.JSON", ".plan-save.tmp", "dist/%2e%2e/.plan.json"}) {
+            URI uri = URI.create("/api/static/vue_project_7/" + suffix);
+            mvc.perform(get(uri).contextPath("/api")).andExpect(status().isNotFound()).andExpect(content().string(""));
+            mvc.perform(head(uri).contextPath("/api")).andExpect(status().isNotFound()).andExpect(content().string(""));
+        }
+        mvc.perform(get(URI.create("/api/static/vue%5fproject_7/")).contextPath("/api"))
+                .andExpect(status().isOk()).andExpect(content().string("home"));
     }
 
     @Test

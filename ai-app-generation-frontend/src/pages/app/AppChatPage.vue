@@ -37,9 +37,23 @@
     </div>
 
     <!-- 主要内容区域 -->
-    <div class="main-content">
+    <div class="main-content" :class="{ 'generation-workspace': isVue && layout === 'workspace' }">
       <!-- 左侧对话区域 -->
       <div class="chat-section">
+        <div v-if="isVue && isOwner" class="workspace-toolbar">
+          <span>{{ isGenerating ? '正在生成' : layout === 'workspace' ? '生成工作区' : '对话与代码' }}</span>
+          <div>
+            <template v-if="layout === 'workspace' && !isGenerating">
+              <a-button v-if="previousAvailable" size="small" type="text" @click="layout = 'previous-preview'">查看上一版</a-button>
+              <span v-else class="previous-unavailable">上一版预览暂不可用</span>
+            </template>
+            <a-button v-if="layout !== 'workspace'" size="small" type="text" @click="planExpanded = !planExpanded">当前计划</a-button>
+          </div>
+        </div>
+        <details v-if="isVue && isOwner && layout !== 'workspace'" :open="planExpanded" class="compact-plan" @toggle="planExpanded = ($event.target as HTMLDetailsElement).open">
+          <summary>当前计划</summary>
+          <GenerationPlanPanel :snapshot="planSnapshot" :status="planStatus" :error="planError" :tools="currentTools" :active="isGenerating" @retry="planQuery.retry" />
+        </details>
         <!-- 消息区域 -->
         <div class="messages-container" ref="messagesContainer">
           <!-- 加载更多按钮 -->
@@ -274,13 +288,20 @@
           </div>
         </div>
       </div>
+      <aside v-if="isVue && isOwner && layout === 'workspace'" class="generation-plan-sidebar">
+        <details open class="workspace-plan-details"><summary>计划与执行进度</summary>
+          <GenerationPlanPanel :snapshot="planSnapshot" :status="planStatus" :error="planError" :tools="currentTools" :active="isGenerating" @retry="planQuery.retry" />
+          <GenerationExecutionTimeline :tools="currentTools" :status="lastSession?.status ?? 'done'" @locate="locateTool" />
+        </details>
+      </aside>
       <!-- 右侧网页展示区域 -->
-      <div class="preview-section">
+      <div v-show="!isVue || layout !== 'workspace'" class="preview-section">
         <div class="preview-header">
-          <h3>生成后的网页展示</h3>
+          <h3>{{ layout === 'previous-preview' ? '上一版预览' : '生成后的网页展示' }}</h3>
           <div class="preview-actions">
+            <a-button v-if="isVue && layout === 'previous-preview'" type="link" @click="layout = 'workspace'">返回执行区</a-button>
             <a-button
-              v-if="isOwner && previewUrl"
+              v-if="isOwner && previewUrl && layout === 'preview' && previewReady"
               type="link"
               :danger="isEditMode"
               @click="toggleEditMode"
@@ -292,7 +313,7 @@
               </template>
               {{ isEditMode ? '退出编辑' : '编辑模式' }}
             </a-button>
-            <a-button v-if="previewUrl" type="link" @click="openInNewTab">
+            <a-button v-if="previewUrl && layout !== 'previous-preview'" type="link" @click="openInNewTab">
               <template #icon>
                 <ExportOutlined />
               </template>
@@ -301,7 +322,8 @@
           </div>
         </div>
         <div class="preview-content">
-          <div v-if="!previewUrl && !isGenerating" class="preview-placeholder">
+          <div v-if="isVue && layout === 'previous-preview' && !previousAvailable" class="preview-placeholder">上一版预览暂不可用</div>
+          <div v-else-if="!previewUrl && !isGenerating" class="preview-placeholder">
             <div class="placeholder-icon" aria-hidden="true">
               <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="32" cy="32" r="24" />
@@ -312,7 +334,7 @@
             </div>
             <p>网站文件生成完成后将在这里展示</p>
           </div>
-          <div v-else-if="isGenerating" class="preview-loading" role="status" aria-live="polite">
+          <div v-else-if="isGenerating && !isVue" class="preview-loading" role="status" aria-live="polite">
             <a-spin size="large" />
             <p>{{
               getGenerationStatusText(
@@ -324,12 +346,18 @@
             }}</p>
           </div>
           <iframe
-            v-else
+            v-if="previewUrl && (isVue || !isGenerating)"
+            v-show="layout !== 'previous-preview' || previousAvailable"
+            :key="previewLoadId"
+            ref="previewFrame"
             :src="previewUrl"
+            :data-load-id="previewLoadId"
             class="preview-iframe"
             frameborder="0"
             @load="onIframeLoad"
+            @error="invalidatePreview"
           ></iframe>
+          <p v-if="isVue && layout === 'previous-preview' && previousAvailable && crossOrigin" class="preview-note">已保留本页内容，部分资源状态无法确认</p>
         </div>
       </div>
     </div>
@@ -353,7 +381,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, onUnmounted, computed } from 'vue'
+import { ref, shallowRef, watch, onMounted, nextTick, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser'
@@ -395,6 +423,10 @@ import { cancelChatGeneration } from '@/api/appController'
 
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import ToolOperationCard from '@/components/ToolOperationCard.vue'
+import GenerationPlanPanel from '@/components/GenerationPlanPanel.vue'
+import GenerationExecutionTimeline from '@/components/GenerationExecutionTimeline.vue'
+import { useGenerationPlan } from '@/composables/useGenerationPlan'
+import { useGenerationPreview } from '@/composables/useGenerationPreview'
 import { vAutoScroll } from '@/directives/autoScroll'
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
@@ -487,6 +519,22 @@ const historyLoaded = ref(false)
 // 预览相关
 const previewUrl = ref('')
 const previewReady = ref(false)
+const previewFrame = ref<HTMLIFrameElement>()
+const previewLoadId = ref(0)
+const previewState = useGenerationPreview()
+const { layout, crossOrigin } = previewState
+const previousAvailable = computed(() => previewState.retained.value && previewState.available.value)
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+let releaseResourceObserver: (() => void) | undefined
+let previewProbe: AbortController | undefined
+let pageEpoch = 0
+const lastSession = shallowRef<GenerationSessionSnapshot | null>(null)
+const currentTools = computed(() => [...lastSession.value?.toolCalls.values() ?? []])
+const planExpanded = ref(false)
+const planQuery = useGenerationPlan()
+const { snapshot: planSnapshot, status: planStatus, error: planError } = planQuery
+const isVue = computed(() => appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT)
+let initialPreviewPending = true
 // 部署相关
 const deploying = ref(false)
 const deployModalVisible = ref(false)
@@ -513,6 +561,29 @@ const isAdmin = computed(() => {
   return loginUserStore.loginUser.userRole === 'admin'
 })
 
+function syncPlanContext() {
+  const userId = loginUserStore.loginUser.id
+  planQuery.setContext(isVue.value && isOwner.value && userId && appId.value ? {
+    userId: String(userId), appId: appId.value, turnId: lastSession.value?.localTurnId ?? '',
+  } : null, lastSession.value?.planObservation ?? 0)
+}
+
+watch([isOwner, isVue], syncPlanContext)
+watch([planStatus, planSnapshot, historyLoaded], () => {
+  if (!historyLoaded.value || !initialPreviewPending || lastSession.value?.localTurnId || isGenerating.value) return
+  if (planStatus.value !== 'ready' && planStatus.value !== 'empty' && planStatus.value !== 'error') return
+  initialPreviewPending = false
+  if (planSnapshot.value && planSnapshot.value.status !== 'BUILT') layout.value = 'workspace'
+  else if (messages.value.length >= 2 && !previewUrl.value) updatePreview()
+})
+
+function locateTool(id: string) {
+  const block = lastSession.value?.displayBlocks?.find((entry) => entry.kind === 'tool' && entry.toolRequestId === id)
+  if (!block) return
+  const card = [...document.querySelectorAll<HTMLElement>('[data-tool-key]')].find((element) => element.dataset.toolKey === block.key)
+  card?.scrollIntoView({ block: 'center', behavior: 'auto' })
+}
+
 // 应用详情相关
 const appDetailVisible = ref(false)
 
@@ -525,6 +596,7 @@ const showAppDetail = () => {
 const loadChatHistory = async (isLoadMore = false) => {
   if (!appId.value || loadingHistory.value) return
   loadingHistory.value = true
+  const epoch = pageEpoch
   try {
     const params: API.listAppChatHistoryParams = {
       appId: appId.value as unknown as number,
@@ -535,6 +607,7 @@ const loadChatHistory = async (isLoadMore = false) => {
       params.lastCreateTime = lastCreateTime.value
     }
     const res = await listAppChatHistory(params)
+    if (epoch !== pageEpoch) return
     if (res.data.code === 0 && res.data.data) {
       const chatHistories = res.data.data.records || []
       if (chatHistories.length > 0) {
@@ -567,7 +640,7 @@ const loadChatHistory = async (isLoadMore = false) => {
     console.error('加载对话历史失败：', error)
     message.error('加载对话历史失败')
   } finally {
-    loadingHistory.value = false
+    if (epoch === pageEpoch) loadingHistory.value = false
   }
 }
 
@@ -578,6 +651,7 @@ const loadMoreHistory = async () => {
 
 // 获取应用信息
 const fetchAppInfo = async () => {
+  const epoch = pageEpoch
   const id = route.params.id as string
   if (!id) {
     message.error('应用ID不存在')
@@ -589,30 +663,28 @@ const fetchAppInfo = async () => {
 
   try {
     const res = await getAppVoById({ id: id as unknown as number })
+    if (epoch !== pageEpoch) return
     if (res.data.code === 0 && res.data.data) {
       appInfo.value = res.data.data
 
       // 先加载对话历史
       await loadChatHistory()
+      if (epoch !== pageEpoch) return
       const sessionSnapshot = getGenerationSessionSnapshot(id)
-      if (sessionSnapshot?.status === 'streaming') {
-        if (messages.value.length >= 2) {
+      if (isOwner.value && sessionSnapshot?.status === 'streaming') {
+        if (!isVue.value && messages.value.length >= 2) {
           updatePreview()
         }
         restoreActiveSessionIfNeeded()
-      } else if (sessionSnapshot) {
+      } else if (isOwner.value && sessionSnapshot?.localTurnId) {
         createSessionMessage(sessionSnapshot)
         applySessionSnapshot(sessionSnapshot)
-        if (shouldRefreshGenerationPreview(sessionSnapshot)) {
-          updatePreview(true)
-        } else if (messages.value.length >= 2 && !previewUrl.value) {
-          updatePreview()
-        }
-        isGenerating.value = false
-        clearGenerationSession(id)
-      } else if (messages.value.length >= 2) {
+        activeSessionAppId.value = id
+        finalizeGeneration(sessionSnapshot)
+      } else if ((!isVue.value || !isOwner.value) && messages.value.length >= 2) {
         updatePreview()
       }
+      syncPlanContext()
       // 只有自己的空应用才自动发送初始提示词；已有对话则在会话恢复完成后定位到最新消息。
       const initialPrompt = appInfo.value.initPrompt || ''
       const shouldSendInitialMessage =
@@ -631,6 +703,7 @@ const fetchAppInfo = async () => {
       router.push('/')
     }
   } catch (error) {
+    if (epoch !== pageEpoch) return
     console.error('获取应用信息失败：', error)
     message.error('获取应用信息失败')
     router.push('/')
@@ -638,6 +711,16 @@ const fetchAppInfo = async () => {
 }
 
 const applySessionSnapshot = (snapshot: GenerationSessionSnapshot) => {
+  if (snapshot.localTurnId) {
+    const newTurn = lastSession.value?.localTurnId !== snapshot.localTurnId
+    lastSession.value = snapshot
+    if (isVue.value && newTurn) {
+      previewState.begin(snapshot.localTurnId)
+      visualEditor.disableEditMode(); isEditMode.value = false; clearSelectedElement()
+      if (!previewState.retained.value) previewReady.value = false
+    }
+    syncPlanContext()
+  }
   contextCompression.value = snapshot.contextCompression
   toolProtocolRecovery.value = snapshot.toolProtocolRecovery
   incompleteToolChainRecovery.value = snapshot.incompleteToolChainRecovery
@@ -894,6 +977,12 @@ const updatePreview = (forceReload = false) => {
       ? `${basePreviewUrl}${basePreviewUrl.includes('?') ? '&' : '?'}_t=${Date.now()}`
       : basePreviewUrl
     previewReady.value = false
+    releaseResourceObserver?.()
+    previewProbe?.abort()
+    clearTimeout(previewTimer)
+    previewLoadId.value = previewState.startLoad()
+    const identity = previewLoadId.value
+    if (isVue.value) previewTimer = setTimeout(() => { if (identity === previewLoadId.value) invalidatePreview() }, 15000)
     previewUrl.value = newPreviewUrl
   }
 }
@@ -902,7 +991,8 @@ const updatePreview = (forceReload = false) => {
 const finalizeGeneration = (snapshot: GenerationSessionSnapshot) => {
   isGenerating.value = false
   isStopping.value = false
-  if (shouldRefreshGenerationPreview(snapshot)) {
+  const refresh = isVue.value ? previewState.finish(snapshot) : shouldRefreshGenerationPreview(snapshot)
+  if (refresh) {
     updatePreview(true)
   }
   const currentAppId = activeSessionAppId.value
@@ -1017,12 +1107,60 @@ const openDeployedSite = () => {
 }
 
 // iframe加载完成
-const onIframeLoad = () => {
-  previewReady.value = true
-  const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
-  if (iframe) {
+const invalidatePreview = () => {
+  previewState.invalidate(); previewReady.value = false
+  previewProbe?.abort()
+  clearTimeout(previewTimer)
+}
+const onIframeLoad = async (event: Event) => {
+  const iframe = event.target as HTMLIFrameElement
+  const identity = Number(iframe.dataset.loadId)
+  if (iframe !== previewFrame.value || identity !== previewLoadId.value) return
+  if (!isVue.value) {
+    previewReady.value = true
+    visualEditor.init(iframe); visualEditor.onIframeLoad()
+    return
+  }
+  let cross = false
+  try {
+    const doc = iframe.contentWindow?.document
+    if (doc && (/^(404|500|502|503)\b/.test(doc.title) || doc.querySelector('h1')?.textContent === 'Whitelabel Error Page'
+      || (doc.title === 'Error' && /^Cannot GET\b/.test(doc.body?.textContent?.trim() ?? '')))) {
+      invalidatePreview(); return
+    }
+    if (doc) {
+      const failed = () => { if (identity === previewLoadId.value) invalidatePreview() }
+      doc.addEventListener('error', failed, true)
+      releaseResourceObserver?.()
+      releaseResourceObserver = () => doc.removeEventListener('error', failed, true)
+      const failedImage = [...doc.images].some(image => image.complete && !!image.currentSrc && image.naturalWidth === 0)
+      const failedResource = iframe.contentWindow?.performance.getEntriesByType('resource')
+        .some(entry => 'responseStatus' in entry && Number(entry.responseStatus) >= 400)
+      if (failedImage || failedResource) { invalidatePreview(); return }
+    }
+  } catch { cross = true }
+  // load 也会在空体 404 时触发；同源下以 HEAD 核实主文档，跨源保持有限可观测提示。
+  if (!cross) {
+    previewProbe?.abort()
+    const probe = new AbortController(); previewProbe = probe
+    try {
+      const response = await fetch(iframe.contentWindow?.location.href || iframe.src, {
+        method: 'HEAD', credentials: 'same-origin', cache: 'no-store', signal: probe.signal,
+      })
+      if (probe.signal.aborted || iframe !== previewFrame.value || identity !== previewLoadId.value) return
+      if (!response.ok) { invalidatePreview(); return }
+    } catch {
+      if (!probe.signal.aborted && iframe === previewFrame.value && identity === previewLoadId.value) invalidatePreview()
+      return
+    }
+  }
+  if (previewState.loaded(identity, cross)) {
+    clearTimeout(previewTimer)
+    previewReady.value = true
     visualEditor.init(iframe)
     visualEditor.onIframeLoad()
+  } else if (isVue.value) {
+    invalidatePreview()
   }
 }
 
@@ -1093,8 +1231,21 @@ const handleInputKeydown = (event: KeyboardEvent) => {
 }
 
 const handleIframeMessage = (event: MessageEvent) => {
+  if (isVue.value && (layout.value !== 'preview' || isGenerating.value)) return
+  if (event.source !== previewFrame.value?.contentWindow || !event.data || typeof event.data !== 'object') return
   visualEditor.handleIframeMessage(event)
 }
+
+watch(() => [route.params.id, loginUserStore.loginUser.id], () => {
+  pageEpoch++; detachSession.value?.(); detachSession.value = null
+  planQuery.dispose(); lastSession.value = null; activeSessionAppId.value = null; sessionMessageKey.value = null
+  messages.value = []; appInfo.value = undefined; historyLoaded.value = false; loadingHistory.value = false
+  hasMoreHistory.value = false; lastCreateTime.value = undefined; isGenerating.value = false
+  visualEditor.disableEditMode(); isEditMode.value = false; selectedElementInfo.value = null
+  releaseResourceObserver?.(); previewProbe?.abort(); clearTimeout(previewTimer); previewState.reset()
+  previewUrl.value = ''; previewReady.value = false; initialPreviewPending = true
+  void fetchAppInfo()
+})
 
 // 页面加载时获取应用信息
 onMounted(() => {
@@ -1108,6 +1259,7 @@ onMounted(() => {
 
 // 清理资源
 onUnmounted(() => {
+  pageEpoch++; planQuery.dispose(); clearTimeout(previewTimer); releaseResourceObserver?.(); previewProbe?.abort()
   window.removeEventListener('message', handleIframeMessage)
   detachSession.value?.()
   detachSession.value = null
@@ -1749,5 +1901,41 @@ onUnmounted(() => {
   .preview-section {
     border-radius: var(--radius-md);
   }
+}
+.workspace-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--border-light); font-size: 13px; flex-shrink: 0; }
+.previous-unavailable { color: var(--text-secondary); font-size: 12px; }
+#appChatPage { height: calc(100dvh - 64px); box-sizing: border-box; }
+.generation-plan-sidebar { width: 320px; max-width: 34%; flex-shrink: 0; overflow-y: auto; padding: 16px; background: var(--bg-base); border-left: 1px solid var(--border-light); }
+.workspace-plan-details > summary { display: none; }
+.compact-plan { padding: 8px 16px; max-height: 38%; overflow: auto; border-bottom: 1px solid var(--border-light); flex-shrink: 0; }
+.compact-plan > summary { cursor: pointer; font-size: 13px; padding: 4px 0; }
+.preview-note { position: absolute; bottom: 0; left: 0; right: 0; background: var(--bg-base); padding: 8px; margin: 0; font-size: 12px; }
+.chat-section, .preview-section { min-width: 0; min-height: 0; }
+.main-content { min-height: 0; }
+.generation-workspace .chat-section { flex: 1; box-shadow: none; border-radius: 0; }
+.generation-workspace .messages-container { flex: 1; min-height: 0; }
+.generation-workspace .ai-message .message-content { width: 100%; max-width: calc(100% - 40px); }
+.header-left { min-width: 0; }
+.app-name { overflow-wrap: anywhere; }
+.preview-header { flex-wrap: wrap; gap: 8px; }
+@media (min-width: 769px) and (max-width: 1024px) {
+  .generation-workspace { flex-direction: row; }
+  .generation-workspace .chat-section { height: auto; }
+}
+@media (max-width: 768px) {
+  #appChatPage { padding: 4px; height: calc(100dvh - 64px); min-height: 500px; }
+  .header-bar { flex-wrap: wrap; gap: 8px; padding: 8px; }
+  .header-right { gap: 6px; flex-wrap: wrap; }
+  .main-content { padding: 4px; gap: 8px; }
+  .chat-section, .preview-section { flex: 1; height: auto; }
+  .generation-workspace { flex-direction: column; }
+  .generation-plan-sidebar { order: -1; width: 100%; max-width: 100%; max-height: 30%; padding: 8px 12px; border-left: 0; border-bottom: 1px solid var(--border-light); box-sizing: border-box; }
+  .workspace-plan-details > summary { display: list-item; cursor: pointer; font-size: 13px; }
+  .workspace-plan-details .plan-panel { padding-top: 10px; }
+  .generation-workspace .chat-section { min-height: 260px; }
+  .generation-workspace .messages-container { padding: 8px; }
+  .message-content { min-width: 0; }
+  .workspace-toolbar { padding: 6px 10px; }
+  .preview-section { min-height: 240px; }
 }
 </style>

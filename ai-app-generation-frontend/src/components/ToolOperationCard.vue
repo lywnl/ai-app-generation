@@ -18,6 +18,10 @@
     <div v-if="state.expanded" :id="detailsId" class="operation-details">
       <div v-if="view.name !== 'buildProject'" class="operation-full-path">{{ target }}</div>
       <p class="operation-result">{{ result.message }}</p>
+      <div v-if="result.plan" class="operation-plan-summary">
+        <p>第 {{ result.plan.version }} 版：{{ result.plan.summary }}</p>
+        <ul v-if="result.plan.files.length"><li v-for="file in result.plan.files" :key="file.path"><code>{{ file.path }}</code></li></ul>
+      </div>
       <template v-if="view.name === 'buildProject' && view.build">
         <div v-if="view.build.stage" class="operation-build-stage" :title="view.build.stage">
           阶段：{{ buildStageLabel }}
@@ -152,6 +156,8 @@ function updateState(patch: Partial<ToolCardState>) {
 .operation-status.FAILED, .operation-status.REJECTED { color: var(--warning); }
 .operation-details { padding: 4px 12px 12px; border-top: 1px solid var(--border-light); }
 .operation-full-path, .operation-result { overflow-wrap: anywhere; font-size: 12px; }
+.operation-plan-summary { font-size: 12px; overflow-wrap: anywhere; }
+.operation-plan-summary ul { padding-left: 16px; }
 .operation-full-path { color: var(--text-secondary); margin-top: 8px; }
 .operation-result { margin: 8px 0; }
 .operation-build-stage { font-size: 12px; color: var(--text-secondary); }

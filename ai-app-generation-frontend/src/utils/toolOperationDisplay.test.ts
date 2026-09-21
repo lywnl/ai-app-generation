@@ -67,6 +67,9 @@ describe('工具结果展示', () => {
     expect(getToolOperationResult(tool('readSkill', 'APPLIED', { content: '隐藏正文' }), 'done').label).toBe('结果未确认')
     expect(getToolOperationResult(tool('readSkill', 'NO_CHANGE'), 'done').label).toBe('结果未确认')
   })
+  it('计划版本冲突不得被文件工具协议接受', () => {
+    expect(getToolOperationResult(tool('modifyFile', 'CONFLICT'), 'done').status).toBe('unknown')
+  })
   it('目录目标使用 relativeDirPath', () => {
     expect(getToolOperationTarget({ ...tool('readDir'), args: { relativeDirPath: 'src/components' } })).toBe('src/components')
   })

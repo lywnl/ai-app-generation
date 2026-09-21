@@ -78,6 +78,8 @@ export interface ToolCardState {
 
 export interface GenerationSessionSnapshot {
   appId: string
+  localTurnId: string
+  planObservation: number
   content: string
   loading: boolean
   status: GenerationStatus
@@ -109,7 +111,11 @@ export function shouldHideCompletedReadOnlyTool(
 }
 
 const OPERATION_TOOL_NAMES = new Set([
-  'writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile', 'readSkill', 'buildProject',
+  'writeFile', 'modifyFile', 'readFile', 'readDir', 'deleteFile', 'readSkill', 'buildProject', 'makePlan', 'updatePlan',
+])
+
+export const PLAN_OBSERVATION_TOOLS = new Set([
+  'makePlan', 'updatePlan', 'writeFile', 'modifyFile', 'deleteFile', 'readFile', 'readDir', 'buildProject',
 ])
 
 export function isOperationTool(name: string): boolean {
@@ -252,6 +258,8 @@ class GenerationStreamError extends Error {
 function createEmptySnapshot(appId: string): GenerationSessionSnapshot {
   return {
     appId,
+    localTurnId: '',
+    planObservation: 0,
     content: '',
     loading: false,
     status: 'done',
@@ -453,6 +461,7 @@ function failSession(
   discardPendingFragments(session)
   session.snapshot.loading = false
   session.snapshot.status = 'error'
+  session.snapshot.planObservation += 1
   session.snapshot.outcome = outcome
   session.snapshot.errorMessage = message
   resetVisibleStatuses(session)
@@ -486,6 +495,7 @@ function markDone(appId: string, requestId: number): void {
   }
   session.snapshot.loading = false
   session.snapshot.status = 'done'
+  session.snapshot.planObservation += 1
   if (session.snapshot.outcome === 'succeeded') session.snapshot.errorMessage = undefined
   resetVisibleStatuses(session)
   stopSessionStream(session)
@@ -664,6 +674,8 @@ function handleStructuredTool(
       markProtocolError(appId, requestId, '工具执行来源不一致')
       return
     }
+    if (existing?.status === 'done') return
+    if (PLAN_OBSERVATION_TOOLS.has(name)) session.snapshot.planObservation += 1
     const view = existing ?? {
       id, name, generation, provisional: true, status: 'streaming' as const, args: {},
       executedDisplayCommitted: false,
@@ -834,6 +846,7 @@ function handleTurnOutcome(appId: string, requestId: number, payload: JsonRecord
     return
   }
   session.snapshot.outcome = outcome
+  session.snapshot.planObservation += 1
   session.awaitingDone = true
   session.awaitingDoneAfterTurnOutcome = true
   if (outcome !== 'succeeded' && outcome !== 'answered') {
@@ -1076,6 +1089,8 @@ export function startGenerationSession(options: StartGenerationSessionOptions): 
   session.incompleteToolChainRecoveryPhase = 'idle'
   session.snapshot = {
     appId,
+    localTurnId: options.generationId,
+    planObservation: 0,
     content: '',
     loading: true,
     status: 'streaming',

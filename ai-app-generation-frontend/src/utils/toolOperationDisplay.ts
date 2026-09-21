@@ -1,22 +1,27 @@
 import MarkdownIt from 'markdown-it'
 import type { GenerationStatus, ToolCallView } from './generationSession'
+import { parsePlanSnapshot, type PlanSnapshot } from './planSnapshot'
 
 const markdown = new MarkdownIt({ html: false })
 const STATUS_LABELS = {
   APPLIED: '已完成', NO_CHANGE: '无变化', REJECTED: '已拒绝',
   NOT_FOUND: '未找到', CANCELLED: '已取消', FAILED: '失败',
+  CONFLICT: '版本冲突',
 } as const
 type OperationStatus = keyof typeof STATUS_LABELS
+const FILE_TOOL_STATUSES = new Set(['APPLIED', 'NO_CHANGE', 'REJECTED', 'NOT_FOUND', 'CANCELLED', 'FAILED'])
 
 export const TOOL_OPERATION_LABELS: Record<string, string> = {
   writeFile: '写入文件', modifyFile: '修改文件', readFile: '读取文件',
   readDir: '读取目录', deleteFile: '删除文件', readSkill: '读取 Skill', buildProject: '构建项目',
+  makePlan: '创建计划', updatePlan: '调整计划',
 }
 
 export interface ToolOperationResult {
   status: OperationStatus | 'BUILD_IN_PROGRESS' | 'streaming' | 'unknown'
   label: string
   message: string
+  plan?: Pick<PlanSnapshot, 'version' | 'summary' | 'files'>
 }
 
 function parseResult(view: ToolCallView): Record<string, unknown> | undefined {
@@ -42,7 +47,7 @@ function hasValidStatus(view: ToolCallView, result: Record<string, unknown>): bo
       typeof result.skillName === 'string' && result.skillName.trim().length > 0 &&
       (view.args.skillName === undefined || view.args.skillName === result.skillName)
   }
-  if (result.protocol !== 'file-tool/v1' || !Object.prototype.hasOwnProperty.call(TOOL_OPERATION_LABELS, view.name)) return false
+  if (result.protocol !== 'file-tool/v1' || !FILE_TOOL_STATUSES.has(status) || !Object.prototype.hasOwnProperty.call(TOOL_OPERATION_LABELS, view.name)) return false
   if (result.relativePath !== null && typeof result.relativePath !== 'string') return false
   const expectedPath = view.args.relativeFilePath ?? view.args.relativeDirPath
   if (result.relativePath !== null && expectedPath !== undefined && result.relativePath !== expectedPath) return false
@@ -57,12 +62,35 @@ export function getToolOperationResult(view: ToolCallView, sessionStatus: Genera
     return { status: 'streaming', label: '执行中', message: '等待工具返回结果' }
   }
   if (view.name === 'buildProject') return getBuildResult(view)
+  if (view.name === 'makePlan' || view.name === 'updatePlan') return getPlanResult(view)
   const result = view.status === 'done' ? parseResult(view) : undefined
   if (!result || !hasValidStatus(view, result)) {
     return { status: 'unknown', label: '结果未确认', message: '未收到可确认的工具执行结果' }
   }
   const status = result.status as OperationStatus
   return { status, label: STATUS_LABELS[status], message: result.message as string }
+}
+
+function getPlanResult(view: ToolCallView): ToolOperationResult {
+  const unknown: ToolOperationResult = { status: 'unknown', label: '结果未确认', message: '未收到可确认的计划结果' }
+  if (view.status !== 'done' || !view.result) return unknown
+  try {
+    const value = JSON.parse(view.result)
+    if (!value || value.protocol !== 'plan-tool/v1' || value.operation !== view.name ||
+      !['APPLIED', 'REJECTED', 'CONFLICT', 'FAILED'].includes(value.status) ||
+      typeof value.message !== 'string' || !value.message.trim() || !Array.isArray(value.files) ||
+      Object.keys(value).sort().join(',') !== 'files,message,operation,planId,protocol,status,summary,version') return unknown
+    if (value.status === 'APPLIED' && (typeof value.planId !== 'string' || !value.planId.trim() ||
+      !Number.isSafeInteger(value.version) || value.version < 1 || typeof value.summary !== 'string' || !value.summary.trim())) return unknown
+    const status = value.status as OperationStatus
+    const labels = { APPLIED: '计划已保存', REJECTED: '计划未接受', CONFLICT: '计划版本已变化', FAILED: '计划保存失败' }
+    const plan = status === 'APPLIED' ? parsePlanSnapshot({
+      planId: value.planId, version: value.version, summary: value.summary,
+      status: 'PLANNED', files: value.files, history: [],
+    }) : null
+    return { status, label: STATUS_LABELS[status], message: labels[status as keyof typeof labels],
+      ...(plan ? { plan: { version: plan.version, summary: plan.summary, files: plan.files } } : {}) }
+  } catch { return unknown }
 }
 
 function getBuildResult(view: ToolCallView): ToolOperationResult {
@@ -80,6 +108,7 @@ function getBuildResult(view: ToolCallView): ToolOperationResult {
 
 export function getToolOperationTarget(view: ToolCallView): string {
   if (view.name === 'buildProject') return '当前项目'
+  if (view.name === 'makePlan' || view.name === 'updatePlan') return '当前计划'
   const path = view.args.relativeFilePath ?? view.args.relativeDirPath ?? view.args.skillName
   return typeof path === 'string' && path.length > 0 ? path : '等待目标信息'
 }
