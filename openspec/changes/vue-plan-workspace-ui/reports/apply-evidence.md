@@ -42,6 +42,6 @@
 - 2026-09-21T05:17Z，工作目录为项目根：`bash mvnw -q -DargLine="-Djava.io.tmpdir=$PWD/.codex/vue-plan-workspace-ui/tmp" -Dtest=PlanStoragePathResolverReadOnlyTest test`，退出码 0，6 tests / 0 failures / 0 errors / 0 skipped。
 - 初次测试声明新 API 尚未实现，编译退出码 1：`logs/01-readonly-red.log`。实现后的首次运行未将临时目录传入 fork JVM，macOS `/var` 链接被安全目录策略拒绝，退出码 1：`logs/01-readonly.log`；更正测试 JVM 参数后通过，未放宽链接防护。
 
-## 待完成
+## 验收交接
 
-25 项实施任务已有相应证据，等待最终独立代码报告与 verify 指纹核验。未启动真实后端或依赖服务；浏览器为真实页面加受控 HTTP/SSE，不等同真实模型、数据库或部署端到端验证。日志 16 首次浏览器失败为带图标按钮的精确名称定位错误，修正定位后通过；其余历史失败处置见上文。
+25 项实施任务已有相应证据，最终独立代码结论为 PASS，验收结论及基线见 `verification.md` 与证据助手记录。未启动真实后端或依赖服务；浏览器为真实页面加受控 HTTP/SSE，不等同真实模型、数据库或部署端到端验证。日志 16 首次浏览器失败为带图标按钮的精确名称定位错误，修正定位后通过；其余历史失败处置见上文。

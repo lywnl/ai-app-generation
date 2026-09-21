@@ -1,0 +1,950 @@
+{
+  "version": 1,
+  "profile": "strict",
+  "environment": "本地文件系统/MVC/生命周期真实执行；数据库依赖替身；实际Vue页面加受控HTTP与SSE，无真实模型/数据库/上传/部署调用。",
+  "requirements": [
+    {
+      "id": "vue-plan-read-api/当前计划只能由登录所有者查询",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-read-api/spec.md",
+      "scenarios": [
+        "所有者读取当前计划",
+        "未登录及越权访问",
+        "非法或不适用的应用"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-read-api/计划查询返回有限的一致快照",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-read-api/spec.md",
+      "scenarios": [
+        "计划更新与查询并发",
+        "计划或生成目录尚不存在",
+        "偏差原因没有持久化"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolverReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-read-api/查询不得改变计划或突破文件生命周期",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-read-api/spec.md",
+      "scenarios": [
+        "多次刷新页面",
+        "应用删除与查询交错",
+        "不安全路径或损坏计划"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolverReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-read-api/静态资源不得提供计划旁车文件",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-read-api/spec.md",
+      "scenarios": [
+        "直接请求计划和临时文件",
+        "路径编码和越界绕过",
+        "符号链接及路径替换绕过",
+        "正常公开预览资源"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/StaticPreviewResourceResolver.java",
+        "src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/StaticPreviewResourceResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/StaticResourceControllerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-workspace-ui/Vue 生成期间使用全宽工作区",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-workspace-ui/spec.md",
+      "scenarios": [
+        "启动回合且已有预览",
+        "首轮尚未创建计划",
+        "窄屏查看生成过程"
+      ],
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts",
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs",
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-workspace-ui/预览切换依据真实回合终态",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-workspace-ui/spec.md",
+      "scenarios": [
+        "构建成功完成回合",
+        "失败或取消后的上一版预览",
+        "无上一版且本轮失败",
+        "上一版预览无法恢复",
+        "只读问答结束"
+      ],
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-workspace-ui/计划展示区分持久状态与执行提示",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-workspace-ui/spec.md",
+      "scenarios": [
+        "文件工具成功变更",
+        "文件工具未产生成功变更",
+        "进度和依赖等待",
+        "计划修订重置进度"
+      ],
+      "implementation": [
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-workspace-ui/Replan 提示只表达可核验信息",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-workspace-ui/spec.md",
+      "scenarios": [
+        "待修订但没有具体原因",
+        "计划修订成功或失败"
+      ],
+      "implementation": [
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-workspace-ui/现有工具事件驱动计划查询与执行记录",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-workspace-ui/spec.md",
+      "scenarios": [
+        "事件和查询响应交错",
+        "计划查询失败",
+        "页面刷新或重新进入"
+      ],
+      "implementation": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-plan-workspace-ui/计划工作区保持既有功能和权限边界",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-plan-workspace-ui/spec.md",
+      "scenarios": [
+        "非所有者或切换账号",
+        "非目标模式及既有操作"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java",
+        "ai-app-generation-frontend/src/utils/planSnapshot.ts",
+        "ai-app-generation-frontend/src/api/appPlan.ts",
+        "ai-app-generation-frontend/src/request.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java",
+        "ai-app-generation-frontend/src/utils/planSnapshot.test.ts",
+        "ai-app-generation-frontend/src/api/appPlan.test.ts",
+        "ai-app-generation-frontend/src/api/planLoginBehavior.test.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log",
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划摘要必须沿用现有工具展示通道",
+      "source": "openspec/changes/vue-plan-workspace-ui/specs/vue-soft-replan/spec.md",
+      "scenarios": [
+        "创建计划后的展示",
+        "修订计划后的展示",
+        "用户页面恢复当前计划"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue",
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolverReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log",
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-1.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "在 `PlanStoragePathResolver` 增加只读安全目录访问入口，区分目录/文件不存在与符号链接、非普通文件、访问失败，禁止创建目录和不安全路径回退",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolverReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-1.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "在 `AppPlanStateManager` 增加 `loadReadOnly(appId)`，复用应用锁和计划语义校验，保持已有读写/回合接管入口不变",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolverReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "新增受限 `AppPlanVO` 及文件/修订视图映射，只返回设计约定字段，历史保留已有顺序并限制为最近 20 条",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "新增 `AppPlanQueryService` 和实现，校验登录身份、应用存在、所有者及 Vue 类型；取得既有生命周期许可后复核应用，再读取并返回 DTO，所有分支释放许可",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.3",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "在 `AppController` 提供 `GET /api/app/{appId}/plan`，沿用响应封装和错误码，合法无计划返回 `data: null`，设置 `Cache-Control: no-store`，将读取异常转换为不泄漏内部信息的错误",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.4",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "补充查询与删除并发测试，验证查询先取得许可时删除等待、删除先关门时查询拒绝、异常后许可释放，不复用互斥生成/下载租约",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.5",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "按设计 Decisions 8 新增静态资源安全解析与实际打开边界，并接入 `StaticResourceController`，拒绝计划旁车/临时文件、解码歧义、越界及链接别名，保留正常公开网站访问",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/StaticPreviewResourceResolver.java",
+        "src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/StaticPreviewResourceResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/StaticResourceControllerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.6",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "为静态 Controller 和延迟资源写出补充旁路及兼容回归，覆盖所有者、其他用户、管理员和未登录身份，对计划及 `.plan-*.tmp` 一律拒绝",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/StaticPreviewResourceResolver.java",
+        "src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/StaticPreviewResourceResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/StaticResourceControllerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "新增 `utils/planSnapshot.ts` 和 `api/appPlan.ts`，定义受限 DTO 类型、结果解析及现有 Axios 查询封装，支持取消和 10 秒超时",
+      "implementation": [
+        "ai-app-generation-frontend/src/utils/planSnapshot.ts",
+        "ai-app-generation-frontend/src/api/appPlan.ts",
+        "ai-app-generation-frontend/src/request.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planSnapshot.test.ts",
+        "ai-app-generation-frontend/src/api/appPlan.test.ts",
+        "ai-app-generation-frontend/src/api/planLoginBehavior.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "扩展 `generationSession.ts` 的本地快照，向订阅者提供本地回合标识及计划相关观察计数；相关工具完成和终态变化推进计数，文字及参数增量不推进",
+      "implementation": [
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.3",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "增加计划工具结果的展示解析，区分 `APPLIED/REJECTED/CONFLICT/FAILED` 与计划整体状态；为执行记录提供操作名称、可核验结果及文件关联，修订原因不依赖被裁剪的参数",
+      "implementation": [
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-4.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "新增 `useGenerationPlan` 组合函数，维护确认快照与同步状态，以用户/应用/本地回合为上下文实现单请求串行合并和观察序号校验",
+      "implementation": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-4.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "完成超时、网络失败、解析失败、手动重试及权限丢失的处理，无轮询和定时自动重试",
+      "implementation": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-4.3",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "接入页面初次加载、浏览器内会话恢复、回合开始、工具结果、终态及账号/路由变化；终态清理会话前保留最终展示记录和查询身份，卸载取消计划查询但不额外取消生成",
+      "implementation": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-5.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "实现计划展示模型，统计计划内非 `KEEP` 文件触达进度，将 `OUT_OF_PLAN` 单列，派生依赖等待与合法工具路径的执行中提示",
+      "implementation": [
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-5.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "新增 `GenerationPlanPanel.vue`，按项目样式展示目标、版本、状态、文件用途/动作/依赖、修订记录和查询状态；计划调整由模型处理，不提供模拟或手动更新计划按钮",
+      "implementation": [
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-5.3",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "新增 `GenerationExecutionTimeline.vue`，基于当前会话工具记录显示紧凑摘要并定位现有工具卡片，保持结果去重和原始顺序",
+      "implementation": [
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-6.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "在 `AppChatPage.vue` 接入计划面板与执行记录，生成中占满工作区并隐藏预览，预览布局保留可折叠计划入口",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-6.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "独立管理 `workspace/preview/previous-preview` 布局，不以计划 BUILT 或 `isGenerating=false` 单独触发成功切换",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-6.3",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "改造 Vue iframe 可见性，生成开始隐藏但保留已加载实例和 URL，退出编辑并清理选择",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-6.4",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "实现上一版主动查看及失效降级，只展示本页保留实例，支持返回执行区；刷新、导航或明确资源失效后提示“上一版预览暂不可用”，不将固定静态 URL 当历史版本",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-7.1",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "运行新增后端查询、只读存储和静态旁路测试，并回归计划、P/E、文件协议、下载、生命周期及 SSE 测试",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/model/vo/app/AppPlanVO.java",
+        "src/main/java/com/lyw/appgeneration/service/StaticPreviewResourceResolver.java",
+        "src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolverReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppPlanQueryLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanViewTest.java",
+        "src/test/java/com/lyw/appgeneration/service/StaticPreviewResourceResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/StaticResourceControllerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-7.2",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "运行前端新增同步/展示测试及既有工具流回归，完成类型检查与生产构建",
+      "implementation": [
+        "ai-app-generation-frontend/src/utils/planSnapshot.ts",
+        "ai-app-generation-frontend/src/api/appPlan.ts",
+        "ai-app-generation-frontend/src/request.ts",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.ts",
+        "ai-app-generation-frontend/src/components/ToolOperationCard.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/components/GenerationPlanPanel.vue",
+        "ai-app-generation-frontend/src/components/GenerationExecutionTimeline.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/planSnapshot.test.ts",
+        "ai-app-generation-frontend/src/api/appPlan.test.ts",
+        "ai-app-generation-frontend/src/api/planLoginBehavior.test.ts",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/utils/planObservation.test.ts",
+        "ai-app-generation-frontend/src/utils/toolOperationDisplay.test.ts",
+        "ai-app-generation-frontend/src/utils/planPresentation.test.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/browser/desktop-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-replan.png",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-7.3",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "用受控 API/SSE 样例在实际页面执行联合浏览器验证，覆盖正常生成、计划外状态、缺失原因、修订后进度回退、构建成功、失败、取消、只读、刷新恢复及权限变化",
+      "implementation": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts",
+        "src/main/java/com/lyw/appgeneration/service/StaticPreviewResourceResolver.java",
+        "src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        "src/test/java/com/lyw/appgeneration/service/StaticPreviewResourceResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/StaticResourceControllerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png",
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-7.4",
+      "source": "openspec/changes/vue-plan-workspace-ui/tasks.md",
+      "description": "核对接口与现有流的兼容性及降级，整理实际改动与验证记录",
+      "implementation": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts",
+        "src/main/java/com/lyw/appgeneration/service/StaticPreviewResourceResolver.java",
+        "src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java",
+        "src/main/java/com/lyw/appgeneration/utils/SecureFileAccess.java"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useGenerationPlan.test.ts",
+        ".codex/vue-plan-workspace-ui/browser.cjs",
+        ".codex/vue-plan-workspace-ui/browser-edge.cjs",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageScrollBehavior.test.ts",
+        "src/test/java/com/lyw/appgeneration/service/StaticPreviewResourceResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/StaticResourceControllerTest.java"
+      ],
+      "evidence": [
+        ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log",
+        ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log",
+        ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log",
+        ".codex/vue-plan-workspace-ui/browser/mobile-success.png",
+        ".codex/vue-plan-workspace-ui/browser/desktop-success.png",
+        ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "bash mvnw -DargLine=\"-Djava.io.tmpdir=$PWD/.codex/vue-plan-workspace-ui/tmp\" -Dtest=PlanStoragePathResolverReadOnlyTest,AppPlanReadOnlyTest,AppPlanViewTest,AppPlanQueryServiceTest,AppControllerPlanTest,AppPlanQueryLifecycleTest,StaticPreviewResourceResolverTest,StaticResourceControllerTest,AppPlanStateManagerTest,PlanToolTest,PlanToolProtocolSupportTest,ReplanDetectorTest,ReplanContextTest,StreamingRequestControllerReplanTest,BuildProjectPlanGateTest,FileToolSecurityTest,ProjectDownloadServiceImplTest,AppServiceDeletionLifecycleTest,GenerationSseEncoderTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/vue-plan-workspace-ui/logs/17-backend-final.log"
+    },
+    {
+      "command": "npm run test",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/vue-plan-workspace-ui/logs/32-frontend-protocol-final.log"
+    },
+    {
+      "command": "npm run build",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/vue-plan-workspace-ui/logs/33-build-protocol-final.log"
+    },
+    {
+      "command": "node .codex/vue-plan-workspace-ui/browser.cjs",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/vue-plan-workspace-ui/logs/34-browser-build-final.log"
+    },
+    {
+      "command": "node .codex/vue-plan-workspace-ui/browser-edge.cjs",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/vue-plan-workspace-ui/logs/26-browser-review-regression.log"
+    }
+  ]
+}
