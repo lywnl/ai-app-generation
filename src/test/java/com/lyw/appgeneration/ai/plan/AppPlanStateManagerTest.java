@@ -70,6 +70,9 @@ class AppPlanStateManagerTest {
 
         assertTrue(context.contains("version=1"));
         assertTrue(context.contains("src/App.vue"));
+        assertTrue(context.contains("当前项目已有计划，不要再次调用 makePlan"));
+        assertTrue(context.contains("当前状态为 REPLAN_PENDING 时，先调用 updatePlan"));
+        assertTrue(context.contains("仅继续执行现有计划时直接沿用"));
     }
 
     @Test
@@ -102,7 +105,7 @@ class AppPlanStateManagerTest {
     }
 
     @Test
-    void 依赖传播会把传递依赖重置为待处理并拒绝环() throws Exception {
+    void 只重置显式文件并提示间接依赖且仍拒绝环() throws Exception {
         Path root = Files.createTempDirectory("plan-dependency-");
         AppPlanStateManager manager = manager(root);
         PlanFile a = new PlanFile(
@@ -115,16 +118,53 @@ class AppPlanStateManagerTest {
                 "C.vue", "路由入口", PlanFileAction.MODIFY,
                 List.of("B.vue"), PlanFileState.TOUCHED);
 
-        List<PlanFile> rebased = manager.resetAffectedStates(
+        List<PlanFile> rebased = manager.resetExplicitlyChangedStates(
                 List.of(a, b, c), Set.of("A.vue"));
-        assertTrue(rebased.stream().allMatch(file ->
-                file.state() == PlanFileState.PENDING));
+        assertEquals(PlanFileState.PENDING, rebased.getFirst().state());
+        assertEquals(b, rebased.get(1));
+        assertEquals(c, rebased.get(2));
+        assertEquals(List.of("B.vue", "C.vue"), manager.indirectlyAffectedPaths(
+                rebased, Set.of("A.vue")));
         assertThrows(IllegalArgumentException.class, () ->
                 manager.validatePlanFiles(List.of(
                         new PlanFile("A.vue", "A", PlanFileAction.MODIFY,
                                 List.of("B.vue"), PlanFileState.PENDING),
                         new PlanFile("B.vue", "B", PlanFileAction.MODIFY,
                                 List.of("A.vue"), PlanFileState.PENDING))));
+    }
+
+    @Test
+    void 间接文件保留各种状态和元数据而显式KEEP不重置() throws Exception {
+        AppPlanStateManager manager = manager(Files.createTempDirectory("plan-states-"));
+        PlanFile upstream = new PlanFile("A.vue", "上游", PlanFileAction.MODIFY,
+                List.of(), PlanFileState.TOUCHED);
+        List<PlanFile> files = new java.util.ArrayList<>(List.of(upstream));
+        for (PlanFileState state : PlanFileState.values()) {
+            files.add(new PlanFile(state + ".vue", "保留完整元数据", PlanFileAction.CREATE,
+                    List.of("A.vue"), state));
+        }
+        PlanFile keep = new PlanFile("Keep.vue", "无需变更", PlanFileAction.KEEP,
+                List.of("A.vue"), PlanFileState.TOUCHED);
+        files.add(keep);
+        List<PlanFile> reset = manager.resetExplicitlyChangedStates(files, Set.of("A.vue", "Keep.vue"));
+        assertEquals(files.subList(1, files.size()), reset.subList(1, reset.size()));
+        assertEquals(files, manager.resetExplicitlyChangedStates(files, Set.of()));
+        assertTrue(manager.indirectlyAffectedPaths(files, Set.of()).isEmpty());
+    }
+
+    @Test
+    void 影响分析按计划顺序去重并跨过显式修订节点() throws Exception {
+        AppPlanStateManager manager = manager(Files.createTempDirectory("plan-order-"));
+        PlanFile a = new PlanFile("A.vue", "A", PlanFileAction.MODIFY, List.of(), PlanFileState.TOUCHED);
+        PlanFile b = new PlanFile("B.vue", "B", PlanFileAction.MODIFY, List.of("A.vue"), PlanFileState.TOUCHED);
+        PlanFile c = new PlanFile("C.vue", "C", PlanFileAction.MODIFY, List.of("A.vue", "B.vue"), PlanFileState.TOUCHED);
+        List<PlanFile> files = List.of(c, a, b);
+        assertEquals(List.of("C.vue", "B.vue"), manager.indirectlyAffectedPaths(files, Set.of("A.vue")));
+        assertEquals(List.of("C.vue"), manager.indirectlyAffectedPaths(files, Set.of("A.vue", "B.vue")));
+        List<PlanFile> reset = manager.resetExplicitlyChangedStates(files, Set.of("A.vue", "B.vue"));
+        assertEquals(c, reset.getFirst());
+        assertEquals(PlanFileState.PENDING, reset.get(1).state());
+        assertEquals(PlanFileState.PENDING, reset.get(2).state());
     }
 
     @Test

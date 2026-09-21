@@ -42,8 +42,14 @@ public record PlanToolResult(
     public static PlanToolResult applied(
             String operation, String planId, int version,
             String summary, List<PlanFile> files) {
+        return applied(operation, planId, version, summary, files, "计划已保存");
+    }
+
+    public static PlanToolResult applied(
+            String operation, String planId, int version,
+            String summary, List<PlanFile> files, String message) {
         return new PlanToolResult(PROTOCOL, operation, Status.APPLIED,
-                planId, version, "计划已保存", summary, files);
+                planId, version, message, summary, files);
     }
 
     public static PlanToolResult rejected(String operation, String message) {

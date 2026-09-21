@@ -25,6 +25,8 @@ import java.util.Set;
 @Component
 public final class UpdatePlanTool extends BaseTool {
 
+    private static final int MAX_IMPACT_HINT_PATHS = 20;
+
     private final AppPlanStateManager planStateManager;
     private final FileToolExecutionScopeManager scopeManager;
 
@@ -74,9 +76,12 @@ public final class UpdatePlanTool extends BaseTool {
             added.forEach(file -> changedPaths.add(file.path()));
             changedPaths.addAll(removedPaths);
             modified.forEach(file -> changedPaths.add(file.path()));
-            List<PlanFile> rebasedFiles = planStateManager.resetAffectedStates(
-                    List.copyOf(files.values()), changedPaths);
-            planStateManager.validatePlanFiles(rebasedFiles);
+            List<PlanFile> mergedFiles = List.copyOf(files.values());
+            planStateManager.validatePlanFiles(mergedFiles);
+            List<PlanFile> rebasedFiles = planStateManager.resetExplicitlyChangedStates(
+                    mergedFiles, changedPaths);
+            String successMessage = impactHint(planStateManager.indirectlyAffectedPaths(
+                    rebasedFiles, changedPaths));
             int nextVersion = current.version() + 1;
             PlanChange change = new PlanChange(
                     nextVersion, turnId, reason.strip(), added, removed, changed);
@@ -95,7 +100,7 @@ public final class UpdatePlanTool extends BaseTool {
             scopeManager.acknowledgePlanUpdate(scope);
             return json(PlanToolResult.applied(
                     operation, next.planId(), next.version(),
-                    next.summary(), next.files()));
+                    next.summary(), next.files(), successMessage));
         } catch (AppPlanStateManager.PlanVersionConflictException exception) {
             return json(PlanToolResult.conflict(operation, exception.getMessage()));
         } catch (FileToolExecutionScopeManager.ScopeViolationException exception) {
@@ -107,6 +112,20 @@ public final class UpdatePlanTool extends BaseTool {
         } catch (RuntimeException exception) {
             return json(PlanToolResult.failed(operation, safeMessage(exception)));
         }
+    }
+
+    private String impactHint(List<String> paths) {
+        if (paths.isEmpty()) {
+            return "计划已保存";
+        }
+        String listed = String.join("、", paths.subList(0,
+                Math.min(paths.size(), MAX_IMPACT_HINT_PATHS)));
+        String remaining = paths.size() > MAX_IMPACT_HINT_PATHS
+                ? "；另有 " + (paths.size() - MAX_IMPACT_HINT_PATHS) + " 个受影响文件"
+                : "";
+        return "计划已保存。\n以下文件可能受依赖变化影响，请检查："
+                + listed + remaining + "。\n"
+                + "只有确认需要修改时才通过 updatePlan 纳入变更；无需修改的文件保持原计划。";
     }
 
     private void validateAndApplyAdded(

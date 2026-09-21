@@ -6,6 +6,7 @@ import com.lyw.appgeneration.ai.plan.PlanFileState;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -58,5 +59,17 @@ class PlanToolProtocolSupportTest {
                 """);
 
         assertEquals(PlanFileAction.MODIFY, files.getFirst().action());
+    }
+
+    @Test
+    void 自定义检查提示往返但不改变协议字段和默认文案() throws Exception {
+        String message = "计划已保存。\n以下文件可能受依赖变化影响，请检查：src/main.js。";
+        PlanToolResult result = PlanToolResult.applied("updatePlan", "p", 2, "页面", List.of(), message);
+        String json = PlanToolProtocolSupport.json(result);
+        assertEquals(result, PlanToolProtocolSupport.parse(json));
+        var fields = new java.util.HashSet<String>();
+        new com.fasterxml.jackson.databind.ObjectMapper().readTree(json).fieldNames().forEachRemaining(fields::add);
+        assertEquals(Set.of("protocol", "operation", "status", "planId", "version", "message", "summary", "files"), fields);
+        assertEquals("计划已保存", PlanToolResult.applied("makePlan", "p", 1, "页面", List.of()).message());
     }
 }

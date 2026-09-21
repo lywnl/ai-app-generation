@@ -142,8 +142,22 @@ public final class AppPlanStateManager {
         }
     }
 
-    /** 将被修订文件及其传递依赖重置为当前版本待处理状态。 */
-    public List<PlanFile> resetAffectedStates(
+    /** 仅显式修订要求重新变更，间接依赖者保留既有可信状态。 */
+    public List<PlanFile> resetExplicitlyChangedStates(
+            List<PlanFile> files, Set<String> changedPaths) {
+        List<PlanFile> checked = files == null ? List.of() : List.copyOf(files);
+        Set<String> changed = changedPaths == null ? Set.of() : Set.copyOf(changedPaths);
+        return checked.stream()
+                .map(file -> changed.contains(file.path())
+                        && file.action() != PlanFileAction.KEEP
+                        ? new PlanFile(file.path(), file.purpose(), file.action(),
+                        file.dependsOn(), PlanFileState.PENDING)
+                        : file)
+                .toList();
+    }
+
+    /** 在已校验的新图上计算检查建议，不修改文件状态，按计划顺序返回。 */
+    public List<String> indirectlyAffectedPaths(
             List<PlanFile> files, Set<String> seedPaths) {
         List<PlanFile> checked = files == null ? List.of() : List.copyOf(files);
         Set<String> seeds = seedPaths == null ? Set.of() : Set.copyOf(seedPaths);
@@ -164,11 +178,8 @@ public final class AppPlanStateManager {
             }
         }
         return checked.stream()
-                .map(file -> affected.contains(file.path())
-                        && file.action() != PlanFileAction.KEEP
-                        ? new PlanFile(file.path(), file.purpose(), file.action(),
-                        file.dependsOn(), PlanFileState.PENDING)
-                        : file)
+                .map(PlanFile::path)
+                .filter(path -> affected.contains(path) && !seeds.contains(path))
                 .toList();
     }
 
@@ -216,7 +227,10 @@ public final class AppPlanStateManager {
                 + "，目标：" + plan.summary()
                 + "；已触达文件：" + (touched.isEmpty() ? "无" : String.join(", ", touched))
                 + "；待处理文件：" + (pending.isEmpty() ? "无" : String.join(", ", pending))
-                + "；最近修订：" + revisions;
+                + "；最近修订：" + revisions
+                + "。当前项目已有计划，不要再次调用 makePlan。"
+                + "需要调整文件范围、动作或依赖，或当前状态为 REPLAN_PENDING 时，先调用 updatePlan；"
+                + "仅继续执行现有计划时直接沿用，不要为开始新回合提交无变更的修订。";
     }
 
     /** 在当前活动回合中记录可信成功变更。调用方应把本方法放入租约提交边界。 */

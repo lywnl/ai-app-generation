@@ -33,7 +33,7 @@ public final class MakePlanTool extends BaseTool {
         this.scopeManager = scopeManager;
     }
 
-    @Tool("创建 Vue 项目的首轮完整执行计划。必须在任何文件变更前调用。")
+    @Tool("仅在工程变更回合且项目没有现有计划时创建完整执行计划，必须在文件变更前调用。已有计划时不要调用本工具；需要调整计划时使用 updatePlan，仅继续执行时沿用已有计划。")
     public String makePlan(
             @P("项目目标摘要") String summary,
             @P("计划文件 JSON 数组，每项包含 path、purpose、action、dependsOn") String files,

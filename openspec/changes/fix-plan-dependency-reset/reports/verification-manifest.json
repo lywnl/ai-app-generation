@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "profile": "strict",
+  "environment": "本地隔离文件系统和真实计划/文件工具/门禁；无真实模型、数据库或服务启动。查询测试依赖为替身，不冒充真实服务验收。",
+  "requirements": [
+    {
+      "id": "系统必须提供软 Replan 反馈",
+      "scenarios": [
+        "发现计划偏差",
+        "依赖声明无效",
+        "依赖在当前版本未完成",
+        "计划修订传播依赖状态",
+        "间接受影响条目保留原事实",
+        "同时显式修订依赖者",
+        "计划修订返回非阻断检查提示",
+        "无影响或修订失败不返回检查提示",
+        "旧计划不自动修复",
+        "领取计划反馈",
+        "模型修订后恢复执行",
+        "偏差状态跨回合恢复",
+        "fail-open 恢复持久计划状态"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/ReplanContextTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerReplanTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log",
+        ".codex/fix-plan-dependency-reset/logs/07-plans-unchanged.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-1.1",
+      "description": "分离直接状态重置与间接依赖分析，更新 AppPlanStateManager 及单测",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.1",
+      "description": "为 PlanToolResult.applied 增加自定义 message 的兼容重载",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.2",
+      "description": "UpdatePlanTool 接入新顺序和最多20路径的非阻断提示",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.1",
+      "description": "新增隔离的依赖修订到文件成功写回再到构建门禁的重现测试",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.2",
+      "description": "执行后端计划/Replan/查询及前端计划解析/工具流回归",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log",
+        ".codex/fix-plan-dependency-reset/logs/06-frontend-regression.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.3",
+      "description": "核对正式规格与增量规格一致、作用域及证据完整性",
+      "implementation": [
+        "openspec/specs/vue-soft-replan/spec.md",
+        "openspec/changes/fix-plan-dependency-reset/specs/vue-soft-replan/spec.md"
+      ],
+      "tests": [
+        ".codex/fix-plan-dependency-reset/verify-scope.cjs"
+      ],
+      "evidence": [
+        ".codex/fix-plan-dependency-reset/logs/08-openspec.log",
+        ".codex/fix-plan-dependency-reset/logs/09-consistency.json",
+        ".codex/fix-plan-dependency-reset/logs/07-plans-unchanged.json",
+        ".codex/fix-plan-dependency-reset/logs/10-scope-final.json"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "bash mvnw -DargLine=\"-Djava.io.tmpdir=$PWD/.codex/fix-plan-dependency-reset/tmp -Duser.dir=$PWD/.codex/fix-plan-dependency-reset/run-root\" -Dtest=AppPlanStateManagerTest,PlanToolTest,PlanToolProtocolSupportTest,AppPlanReadOnlyTest,AppPlanQueryServiceTest,AppControllerPlanTest,ReplanDetectorTest,ReplanContextTest,StreamingRequestControllerReplanTest,BuildProjectPlanGateTest,GenerationSseEncoderTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-plan-dependency-reset/logs/05-backend-regression.log"
+    },
+    {
+      "command": "npm run test -- src/utils/planSnapshot.test.ts src/utils/planPresentation.test.ts src/utils/toolOperationDisplay.test.ts src/utils/generationSession.test.ts src/utils/planObservation.test.ts src/composables/useGenerationPlan.test.ts",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/fix-plan-dependency-reset/logs/06-frontend-regression.log"
+    },
+    {
+      "command": "openspec validate fix-plan-dependency-reset --strict --no-interactive",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-plan-dependency-reset/logs/08-openspec.log"
+    },
+    {
+      "command": "node .codex/fix-plan-dependency-reset/verify-scope.cjs",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-plan-dependency-reset/logs/10-scope-final.json"
+    }
+  ]
+}
