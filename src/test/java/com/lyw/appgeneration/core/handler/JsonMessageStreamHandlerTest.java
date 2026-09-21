@@ -961,6 +961,38 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
+    void 构建停滞按FAILED保留实际次数并不刷新预览() {
+        for (var reason : List.of(com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.Reason.NO_PLAN,
+                com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.Reason.CODE_MUTATION_REQUIRED)) {
+            VueTurnContext context = context("turn-stalled-" + reason, VueBuildPhase.GENERATING);
+            var guard = context.buildProgressGuard();
+            var diagnostic = com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.single(reason);
+            var observation = dev.langchain4j.service.BuildProgressGuard.Observation.rejected(context.turnId(), diagnostic, 0);
+            guard.observe(1, "a", observation); guard.observe(1, "b", observation);
+            guard.requestStarted(2, guard.pendingFeedback()); guard.responseAccepted(2);
+            guard.observe(2, "c", observation);
+            context.recordControlledTermination(new ToolLoopTerminationProtocol.ControlledTermination(
+                    ToolLoopTerminationProtocol.ControlledTerminationReason.BUILD_STALLED, null));
+            when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+                VueTurnOutcome requested = invocation.getArgument(1);
+                assertEquals(VueTurnOutcome.TurnOutcomeType.FAILED, requested.outcome());
+                assertEquals(guard.terminalMessage(), requested.clientMessage());
+                assertTrue(requested.memoryAiText().contains("构建尝试次数：0"));
+                assertFalse(requested.shouldRefreshPreview());
+                assertTrue(com.lyw.appgeneration.ai.tools.FileToolBudgetGuard.codePointCount(requested.clientMessage())
+                        < VueTurnFinalizer.terminalReserveCodePoints());
+                return new VueTurnFinalizer.FinalizationResult(requested, true);
+            });
+            List<GenerationStreamEvent> output = handler.handle(Flux.error(new AiCodeGeneratorFacade.OnlineControlledTerminationException(
+                    ToolLoopTerminationProtocol.ControlledTerminationReason.BUILD_STALLED)), context).collectList().block();
+            assertEquals(VueTurnOutcome.TurnOutcomeType.FAILED, outcomeOf(output.getLast()).outcome());
+            assertEquals(1, output.stream().filter(event -> event instanceof GenerationStreamEvent.TurnOutcome).count());
+            context.closeResources();
+            assertEquals(0, guard.blockedCount());
+        }
+    }
+
+    @Test
     void terminalBuildTimeoutUsesTimedOutOutcomeAndFixedMessage() {
         VueTurnContext context = VueTurnContext.testing(
                 APP_ID, USER_ID, "turn-timeout", VueBuildPhase.FAILED, true);

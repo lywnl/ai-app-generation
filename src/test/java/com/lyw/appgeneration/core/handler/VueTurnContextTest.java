@@ -40,6 +40,46 @@ import static org.junit.jupiter.api.Assertions.fail;
 class VueTurnContextTest {
 
     @Test
+    void 构建停滞与其他终态竞争后关闭保护器且新回合重新计数() throws Exception {
+        for (var competing : List.of(VueTurnContext.TerminalTrigger.CANCELLED,
+                VueTurnContext.TerminalTrigger.TIMED_OUT, VueTurnContext.TerminalTrigger.DELETE_TAKEOVER)) {
+            VueTurnContext context = context("stalled-" + competing);
+            context.commitUser(() -> true);
+            var guard = context.buildProgressGuard();
+            var diagnostic = com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.single(
+                    com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.Reason.NO_PLAN);
+            var observation = dev.langchain4j.service.BuildProgressGuard.Observation.rejected(context.turnId(), diagnostic, 0);
+            guard.observe(1, "a", observation); guard.observe(1, "b", observation);
+            guard.requestStarted(2, guard.pendingFeedback()); guard.responseAccepted(2);
+            var ready = new java.util.concurrent.CountDownLatch(1);
+            var winners = new java.util.concurrent.atomic.AtomicInteger();
+            try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                var stalled = executor.submit(() -> {
+                    ready.await();
+                    guard.observe(2, "c", observation);
+                    if (context.tryStartFinalization(VueTurnContext.TerminalTrigger.FAILED)) winners.incrementAndGet();
+                    return null;
+                });
+                var other = executor.submit(() -> {
+                    ready.await();
+                    if (context.tryStartFinalization(competing)) winners.incrementAndGet();
+                    return null;
+                });
+                ready.countDown();
+                stalled.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                other.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            }
+            assertEquals(1, winners.get());
+            context.closeResources();
+            guard.observe(3, "late", observation);
+            assertEquals(0, guard.blockedCount());
+            var next = context("new-" + competing);
+            assertEquals(0, next.buildProgressGuard().blockedCount());
+            next.closeResources();
+        }
+    }
+
+    @Test
     void 取消终态观察者不得取消共享终态结果() {
         VueTurnContext context = context("turn-finalization-observer-cancel");
         assertEquals(VueTurnContext.UserCommitResult.COMMITTED,

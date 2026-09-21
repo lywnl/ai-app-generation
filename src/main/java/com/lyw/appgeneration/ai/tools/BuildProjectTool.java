@@ -3,6 +3,7 @@ package com.lyw.appgeneration.ai.tools;
 import cn.hutool.json.JSONObject;
 import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
+import com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic;
 import com.lyw.appgeneration.core.builder.BuildCancellationSignal;
 import com.lyw.appgeneration.core.builder.BuildErrorSanitizer;
 import com.lyw.appgeneration.core.builder.BuildExecutionContext;
@@ -19,7 +20,6 @@ import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
-import dev.langchain4j.service.ReplanContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -99,28 +99,24 @@ public final class BuildProjectTool extends BaseTool {
             return json(BuildProjectToolResult.mutationRequired(
                     "当前只读回合不允许构建"));
         }
-        if (scope.replanContext() != null
+        boolean replanPending = scope.replanContext() != null
                 && scope.replanContext().replanPending()
-                && !scope.replanContext().failOpen()) {
-            return json(BuildProjectToolResult.mutationRequired(
-                    "当前计划存在未处理偏差，请先调用 updatePlan"));
-        }
+                && !scope.replanContext().failOpen();
         if (planStateManager != null) {
             AppPlanStateManager.BuildGateDecision planDecision =
-                    planStateManager.beforeBuild(scope.appId(), scope.ownerToken());
+                    planStateManager.beforeBuild(scope.appId(), scope.ownerToken(), replanPending);
             if (!planDecision.allowed()) {
-                if (planDecision.message().startsWith("计划依赖尚未完成")
-                        && scope.replanContext() != null) {
-                    scope.replanContext().observe(new ReplanContext.PlanDeviation(
-                            "dependency-blocked:" + scope.ownerToken(),
-                            "当前计划存在未完成依赖，请先修订计划或完成依赖文件",
-                            planDecision.message()));
-                }
-                return json(BuildProjectToolResult.mutationRequired(
-                        planDecision.message()));
+                return rejectBuild(scope, planDecision.diagnostic());
             }
+        } else if (replanPending) {
+            return rejectBuild(scope, BuildBlockDiagnostic.single(BuildBlockDiagnostic.Reason.REPLAN_PENDING));
         }
         return executeBuild(scope);
+    }
+
+    private String rejectBuild(FileToolExecutionScopeManager.FileToolScope scope, BuildBlockDiagnostic diagnostic) {
+        scopeManager.recordBuildRejection(scope, diagnostic);
+        return json(BuildProjectToolResult.mutationRequired(diagnostic.message()));
     }
 
     private String executeBuild(FileToolExecutionScopeManager.FileToolScope scope) {
@@ -131,7 +127,7 @@ public final class BuildProjectTool extends BaseTool {
         } catch (BuildInProgressException exception) {
             return json(BuildProjectToolResult.buildInProgress());
         } catch (BuildMutationRequiredException exception) {
-            return json(BuildProjectToolResult.mutationRequired(exception.getMessage()));
+            return rejectBuild(scope, BuildBlockDiagnostic.single(BuildBlockDiagnostic.Reason.CODE_MUTATION_REQUIRED));
         } catch (RuntimeException exception) {
             return json(terminalOrProtocolRejection(lease, exception));
         }

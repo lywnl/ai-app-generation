@@ -3,6 +3,7 @@ package com.lyw.appgeneration.ai.memory;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import dev.langchain4j.service.ModelRequestGate;
 import dev.langchain4j.service.ReplanContext;
+import dev.langchain4j.service.BuildProgressGuard;
 
 import java.util.Objects;
 
@@ -35,6 +36,10 @@ public interface ContextContinuationGate
 
     /** 真实 Vue 回合可提供共享的软 Replan 状态；普通调用方保持空。 */
     default ReplanContext replanContext() {
+        return null;
+    }
+
+    default BuildProgressGuard buildProgressGuard() {
         return null;
     }
 

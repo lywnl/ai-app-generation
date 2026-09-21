@@ -1,0 +1,9 @@
+schema: spec-driven
+workflow_profile: strict
+risk_reason: 涉及工具提交、请求恢复、取消与唯一终态，必须验证跨模块生命周期与协议兼容。
+requirement_sources:
+  - 用户批准的回合内构建阻塞保护改造计划。
+  - 用户确认覆盖计划阻塞和代码失败后无修改重试；第一次说明、第二次纠偏、送达后仍无进展则FAILED。
+non_goals:
+  - 不改变真实构建三次上限，不增加SSE或外部协议字段，不修改旧项目计划，不自动重启推送归档。
+created: 2026-09-21

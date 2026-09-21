@@ -21,6 +21,11 @@ public final class VueTurnMemoryProjection {
     private VueTurnMemoryProjection() {
     }
 
+    public static String buildStalled(List<VueToolExecutionFact> facts, String diagnostic) {
+        return "本轮因构建条件持续未满足而停止，不代表新增了一次真实构建。\n"
+                + diagnostic + "\n" + project(facts, VueTurnOutcome.TurnOutcomeType.FAILED);
+    }
+
     public static String project(
             List<VueToolExecutionFact> facts,
             VueTurnOutcome.TurnOutcomeType outcome) {

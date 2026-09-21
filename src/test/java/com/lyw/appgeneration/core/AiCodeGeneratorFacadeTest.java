@@ -1301,7 +1301,7 @@ class AiCodeGeneratorFacadeTest {
                 case BUILD_FAILED ->
                         "抱歉，系统遇到了一些问题，请您稍后重试修复";
                 case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                        REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN,
+                        REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN, BUILD_STALLED,
                         RESOURCE_LIMIT_EXCEEDED,
                         EVALUATION_COMPLETED -> null;
             };

@@ -3,11 +3,14 @@ package com.lyw.appgeneration.ai.tools;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildFailureKind;
 import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
+import com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildLease;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager.VueBuildSnapshot;
 import com.lyw.appgeneration.ai.skill.SkillReadSession;
 import org.springframework.stereotype.Component;
 import dev.langchain4j.service.ReplanContext;
+import dev.langchain4j.service.BuildProgressGuard;
+import dev.langchain4j.service.ToolExecutionGuard;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Objects;
@@ -21,6 +24,7 @@ import java.util.function.BooleanSupplier;
 public final class FileToolExecutionScopeManager {
 
     private static final ScopedValue<FileToolScope> CURRENT_SCOPE = ScopedValue.newInstance();
+    private static final ScopedValue<BuildObservationCapture> BUILD_OBSERVATION = ScopedValue.newInstance();
     private static final Set<String> MUTATION_TOOLS = Set.of(
             "writeFile", "modifyFile", "deleteFile");
     private static final String NON_CODE_FAILURE_MESSAGE =
@@ -127,6 +131,66 @@ public final class FileToolExecutionScopeManager {
         } catch (Exception exception) {
             throw new IllegalStateException("关闭在线工具回调失败", exception);
         }
+    }
+
+    /** 内部观察与单次词法调用绑定，不经过模型可见的工具协议。 */
+    public ToolExecutionGuard.GuardedToolExecution callInScopeWithBuildObservation(
+            FileToolScope scope, String toolName, Supplier<String> action) {
+        BuildObservationCapture capture = new BuildObservationCapture();
+        boolean observe = scope.type() == ScopeType.ONLINE && scope.mutationAllowed().getAsBoolean()
+                && scope.planStateManager() != null;
+        boolean progressTool = MUTATION_TOOLS.contains(toolName) || "makePlan".equals(toolName) || "updatePlan".equals(toolName);
+        String result = ScopedValue.where(BUILD_OBSERVATION, capture).call(() -> callInScope(scope, toolName, () -> {
+            if (observe && progressTool) {
+                capture.before = buildDiagnostic(scope);
+                capture.failOpenBefore = scope.replanContext() != null && scope.replanContext().failOpen();
+            }
+            return action.get();
+        }));
+        BuildProgressGuard.Observation observation = null;
+        if (observe) {
+            var fact = VueToolExecutionFact.parse(toolName, result).orElse(null);
+            boolean successfulMutation = fact != null && fact.changedRelativePath() != null;
+            boolean successfulPlan = fact != null && ("makePlan".equals(toolName) || "updatePlan".equals(toolName))
+                    && fact.status() == VueToolExecutionFact.ExecutionStatus.SUCCEEDED;
+            boolean realBuild = fact != null && "buildProject".equals(toolName) && fact.buildAttempt() != null
+                    && (fact.status() == VueToolExecutionFact.ExecutionStatus.SUCCEEDED
+                    || fact.status() == VueToolExecutionFact.ExecutionStatus.FAILED
+                    || fact.status() == VueToolExecutionFact.ExecutionStatus.TIMED_OUT);
+            boolean progress = successfulMutation || successfulPlan;
+            try {
+                if (capture.rejection != null || progress || realBuild) {
+                    observation = scope.lease().commitWhileActive(() -> new BuildProgressGuard.Observation(
+                            scope.ownerToken(), capture.before, progress ? buildDiagnostic(scope) : null,
+                            fact != null && fact.status() == VueToolExecutionFact.ExecutionStatus.REJECTED ? capture.rejection : null,
+                            progress, realBuild, scope.lease().snapshot().mutationRevision(),
+                            !capture.failOpenBefore && scope.replanContext() != null && scope.replanContext().failOpen()));
+                }
+            } catch (com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.CommitRejectedException ignored) {
+                // 取消先赢时仍保留真实工具结果，由结果提交栅栏决定发布，观察不得推进。
+            }
+        }
+        return new ToolExecutionGuard.GuardedToolExecution(result, null, observation);
+    }
+
+    public void recordBuildRejection(FileToolScope scope, BuildBlockDiagnostic diagnostic) {
+        requireIssuedScope(scope);
+        if (CURRENT_SCOPE.isBound() && CURRENT_SCOPE.get() == scope && BUILD_OBSERVATION.isBound()) {
+            BUILD_OBSERVATION.get().rejection = diagnostic;
+        }
+    }
+
+    private BuildBlockDiagnostic buildDiagnostic(FileToolScope scope) {
+        boolean pending = scope.replanContext() != null && scope.replanContext().replanPending() && !scope.replanContext().failOpen();
+        var plan = scope.planStateManager().beforeBuild(scope.appId(), scope.ownerToken(), pending);
+        return plan.allowed() && scope.lease().requiresCodeMutation()
+                ? BuildBlockDiagnostic.single(BuildBlockDiagnostic.Reason.CODE_MUTATION_REQUIRED) : plan.diagnostic();
+    }
+
+    private static final class BuildObservationCapture {
+        private BuildBlockDiagnostic before;
+        private BuildBlockDiagnostic rejection;
+        private boolean failOpenBefore;
     }
 
     private void requireToolName(FileToolScope scope, String toolName) {

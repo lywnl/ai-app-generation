@@ -75,6 +75,13 @@ public final class VueBuildSessionManager {
             return session.canBuild();
         }
 
+        public boolean requiresCodeMutation() {
+            ensureOpen();
+            synchronized (session) {
+                return session.requiresMutation();
+            }
+        }
+
         public BuildAttemptTicket beginBuild() {
             ensureOpen();
             return session.beginBuild();

@@ -341,8 +341,9 @@ class VueTurnFinalizerTest {
                 .mapToInt(FileToolBudgetGuard::codePointCount)
                 .max()
                 .orElseThrow();
-        assertEquals(longest, VueTurnFinalizer.maxTerminalMessageCodePoints());
-        assertEquals(longest + 2, VueTurnFinalizer.terminalReserveCodePoints());
+        int maximum = Math.max(longest, dev.langchain4j.service.BuildProgressGuard.MAX_TERMINAL_CODE_POINTS);
+        assertEquals(maximum, VueTurnFinalizer.maxTerminalMessageCodePoints());
+        assertEquals(maximum + 2, VueTurnFinalizer.terminalReserveCodePoints());
     }
 
     @Test

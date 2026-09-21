@@ -302,43 +302,18 @@ public final class AppPlanStateManager {
     }
 
     public BuildGateDecision beforeBuild(long appId, String turnId) {
+        return beforeBuild(appId, turnId, false);
+    }
+
+    public BuildGateDecision beforeBuild(long appId, String turnId, boolean replanPending) {
         requireTurnId(turnId);
         return withLock(appId, () -> {
             AppPlan plan = read(appId).orElse(null);
-            if (plan == null) {
-                return BuildGateDecision.rejected("请先调用 makePlan 创建计划");
+            if (plan != null && !turnId.equals(plan.activeTurnId())) {
+                return BuildGateDecision.from(BuildBlockDiagnostic.single(BuildBlockDiagnostic.Reason.TURN_MISMATCH));
             }
-            if (!turnId.equals(plan.activeTurnId())) {
-                return BuildGateDecision.rejected("当前计划不属于活动生成回合");
-            }
-            if (plan.status() == PlanStatus.REPLAN_PENDING) {
-                return BuildGateDecision.rejected("当前计划存在未处理偏差，请先调用 updatePlan");
-            }
-            if (!isReadyToBuild(plan.files(), plan.status())) {
-                List<String> blockers = dependencyBlockers(plan.files());
-                return BuildGateDecision.rejected(blockers.isEmpty()
-                        ? "计划仍有未完成的必要文件变更"
-                        : "计划依赖尚未完成：" + String.join(", ", blockers));
-            }
-            return BuildGateDecision.pass();
+            return BuildGateDecision.from(BuildBlockDiagnostic.forPlan(plan, replanPending));
         });
-    }
-
-    private List<String> dependencyBlockers(List<PlanFile> files) {
-        Map<String, PlanFile> byPath = new HashMap<>();
-        files.forEach(file -> byPath.put(file.path(), file));
-        List<String> blockers = new ArrayList<>();
-        for (PlanFile file : files) {
-            for (String dependency : file.dependsOn()) {
-                PlanFile prerequisite = byPath.get(dependency);
-                if (prerequisite == null
-                        || (prerequisite.action() != PlanFileAction.KEEP
-                        && prerequisite.state() != PlanFileState.TOUCHED)) {
-                    blockers.add(file.path() + " -> " + dependency);
-                }
-            }
-        }
-        return blockers;
     }
 
     private boolean isReadyToBuild(List<PlanFile> files, PlanStatus status) {
@@ -506,7 +481,16 @@ public final class AppPlanStateManager {
         }
     }
 
-    public record BuildGateDecision(boolean allowed, String message) {
+    public record BuildGateDecision(boolean allowed, String message, BuildBlockDiagnostic diagnostic) {
+
+        public BuildGateDecision(boolean allowed, String message) {
+            this(allowed, message, null);
+        }
+
+        public static BuildGateDecision from(BuildBlockDiagnostic diagnostic) {
+            return new BuildGateDecision(diagnostic.reason() == BuildBlockDiagnostic.Reason.NONE,
+                    diagnostic.message(), diagnostic);
+        }
 
         public static BuildGateDecision pass() {
             return new BuildGateDecision(true, "");

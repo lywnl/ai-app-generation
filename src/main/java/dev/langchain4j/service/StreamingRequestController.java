@@ -44,6 +44,51 @@ public final class StreamingRequestController {
     private final RepeatedReadLoopGuard repeatedReadLoopGuard =
             new RepeatedReadLoopGuard();
     private ReplanContext replanContext;
+    private BuildProgressGuard buildProgressGuard;
+
+    synchronized void bindBuildProgressGuard(BuildProgressGuard guard) {
+        if (buildProgressGuard != null && buildProgressGuard != guard) {
+            throw new IllegalStateException("控制器不能绑定多个构建阻塞保护器");
+        }
+        buildProgressGuard = guard;
+    }
+
+    BuildProgressGuard.Action observeBuildProgress(long generation, String toolId,
+                                                   BuildProgressGuard.Observation observation) {
+        BuildProgressGuard guard;
+        BuildProgressGuard.Action result;
+        synchronized (this) {
+            guard = buildProgressGuard;
+            if (guard == null || !isCurrentGenerationActive(generation)) return BuildProgressGuard.Action.CONTINUE;
+            result = guard.observe(generation, toolId, observation);
+        }
+        guard.flushLogs();
+        return result;
+    }
+
+    synchronized BuildProgressGuard.Feedback pendingBuildFeedback() {
+        return buildProgressGuard == null ? null : buildProgressGuard.pendingFeedback();
+    }
+
+    void buildFeedbackRequestStarted(long generation, BuildProgressGuard.Feedback feedback) {
+        BuildProgressGuard guard;
+        synchronized (this) {
+            guard = buildProgressGuard;
+            if (guard == null || !isCurrentGenerationActive(generation)) return;
+            guard.requestStarted(generation, feedback);
+        }
+        guard.flushLogs();
+    }
+
+    void buildFeedbackResponseAccepted(long generation) {
+        BuildProgressGuard guard;
+        synchronized (this) {
+            guard = buildProgressGuard;
+            if (guard == null || !isCurrentGenerationActive(generation)) return;
+            guard.responseAccepted(generation);
+        }
+        guard.flushLogs();
+    }
 
     synchronized void bindReplanContext(ReplanContext context) {
         if (replanContext != null && replanContext != context) {

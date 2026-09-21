@@ -243,6 +243,12 @@ public final class JsonMessageStreamHandler {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.FAILED,
                     prefix, facts, BUILD_FAILED_MESSAGE, false);
         }
+        if (reason == ControlledTerminationReason.BUILD_STALLED) {
+            String diagnostic = context.buildProgressGuard().terminalMessage();
+            return new VueTurnOutcome(phase, VueTurnOutcome.TurnOutcomeType.FAILED,
+                    appendTerminalText(stripUntrustedControlledTerminal(prefix), diagnostic),
+                    VueTurnMemoryProjection.buildStalled(facts, diagnostic), false, diagnostic);
+        }
         if (reason == ControlledTerminationReason.LOOP_LIMIT_EXCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix),

@@ -27,7 +27,13 @@ public interface ToolExecutionGuard {
 
     record GuardedToolExecution(
             String toolResult,
-            ToolLoopTerminationProtocol.ControlledTermination controlledTermination) {
+            ToolLoopTerminationProtocol.ControlledTermination controlledTermination,
+            BuildProgressGuard.Observation buildObservation) {
+
+        public GuardedToolExecution(String toolResult,
+                ToolLoopTerminationProtocol.ControlledTermination controlledTermination) {
+            this(toolResult, controlledTermination, null);
+        }
 
         public GuardedToolExecution {
             Objects.requireNonNull(toolResult, "toolResult 不能为空");

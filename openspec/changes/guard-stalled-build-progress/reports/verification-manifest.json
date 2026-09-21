@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "profile": "strict",
+  "environment": "隔离文件系统和真实门禁/作用域/控制器/发布队列；模型与数据库依赖为测试替身，无真实模型、数据库或服务运行验收。",
+  "requirements": [
+    {
+      "id": "vue-build-progress-guard/构建拒绝必须具有可信具体诊断",
+      "source": "openspec/changes/guard-stalled-build-progress/specs/vue-build-progress-guard/spec.md",
+      "scenarios": [
+        "计划与代码阻塞",
+        "不适用的拒绝和正常重试"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnostic.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnosticTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-build-progress-guard/回合内只根据真实进展重置保护",
+      "source": "openspec/changes/guard-stalled-build-progress/specs/vue-build-progress-guard/spec.md",
+      "scenarios": [
+        "有效进展",
+        "无效进展与状态切换"
+      ],
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/ToolExecutionGuard.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-build-progress-guard/纠偏必须在可靠提交和有效送达后升级",
+      "source": "openspec/changes/guard-stalled-build-progress/specs/vue-build-progress-guard/spec.md",
+      "scenarios": [
+        "提交与去重",
+        "请求准备与恢复",
+        "有效响应后再次拒绝"
+      ],
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextContinuationGate.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/ToolExecutionGuard.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-build-progress-guard/停滞必须以准确唯一终态收口",
+      "source": "openspec/changes/guard-stalled-build-progress/specs/vue-build-progress-guard/spec.md",
+      "scenarios": [
+        "页面和记忆",
+        "取消超时删除和下一回合",
+        "受限日志"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/dev/langchain4j/service/ToolLoopTerminationProtocol.java",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts",
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts",
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log",
+        ".codex/guard-stalled-build-progress/logs/20-frontend-all.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/系统必须提供软 Replan 反馈",
+      "source": "openspec/changes/guard-stalled-build-progress/specs/vue-soft-replan/spec.md",
+      "scenarios": [
+        "发现计划偏差",
+        "依赖声明无效",
+        "依赖在当前版本未完成",
+        "计划修订传播依赖状态",
+        "间接受影响条目保留原事实",
+        "同时显式修订依赖者",
+        "计划修订返回非阻断检查提示",
+        "无影响或修订失败不返回检查提示",
+        "旧计划不自动修复",
+        "领取计划反馈",
+        "模型修订后恢复执行",
+        "偏差状态跨回合恢复",
+        "fail-open 恢复持久计划状态"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnostic.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java",
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/ToolExecutionGuard.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextContinuationGate.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/dev/langchain4j/service/ToolLoopTerminationProtocol.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnosticTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-1.1",
+      "description": "实现类型化 BuildBlockDiagnostic 和 BuildGateDecision，替换构建工具文案前缀分支并覆盖所有有效在线计划/代码无修改拒绝",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnostic.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnosticTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-1.2",
+      "description": "实现 BuildProgressGuard 与回合归属/清理",
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.1",
+      "description": "在词法工具作用域采集调用级诊断及成功工具后的可信快照，接入 GuardedToolExecution 可选内部元数据和在线Facade",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/ToolExecutionGuard.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.2",
+      "description": "流控制器在可靠工具结果提交后观察并按当前代次认领停滞终止，停止批次剩余真实工具",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/ToolExecutionGuard.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-2.3",
+      "description": "接入反馈票据、临时消息合并与有效回调确认",
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextContinuationGate.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.1",
+      "description": "新增内部BUILD_STALLED并接入FAILED、稳定正文、记忆投影及终态预算",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/dev/langchain4j/service/ToolLoopTerminationProtocol.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-3.2",
+      "description": "覆盖生命周期竞争和前端终态兼容",
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/dev/langchain4j/service/ToolLoopTerminationProtocol.java",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log",
+        ".codex/guard-stalled-build-progress/logs/20-frontend-all.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-4.1",
+      "description": "运行诊断、保护器、构建工具、构建会话、控制器、响应处理器、请求编排、终态、取消、SSE及前端会话回归",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnostic.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java",
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/ToolExecutionGuard.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextContinuationGate.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/dev/langchain4j/service/ToolLoopTerminationProtocol.java",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/BuildBlockDiagnosticTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.test.ts"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/19-full-green.log",
+        ".codex/guard-stalled-build-progress/logs/20-frontend-all.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task-4.2",
+      "description": "同步规格检查、改动范围及真实旧计划哈希核对，保存结构化证据",
+      "implementation": [
+        "openspec/specs/vue-build-progress-guard/spec.md",
+        "openspec/specs/vue-soft-replan/spec.md"
+      ],
+      "tests": [
+        ".codex/guard-stalled-build-progress/verify-scope.cjs"
+      ],
+      "evidence": [
+        ".codex/guard-stalled-build-progress/logs/22-scope-final.json",
+        ".codex/guard-stalled-build-progress/logs/23-openspec-change.log",
+        ".codex/guard-stalled-build-progress/logs/24-openspec-specs.log"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "bash mvnw -DargLine=\"-Djava.io.tmpdir=$PWD/.codex/guard-stalled-build-progress/tmp -Duser.dir=$PWD/.codex/guard-stalled-build-progress/run-root\" -Dtest=BuildBlockDiagnosticTest,BuildProgressGuardTest,BuildProgressStreamingTest,BuildProjectPlanGateTest,BuildProjectToolTest,VueBuildSessionManagerTest,AiCodeGeneratorFacadeTest,AiServiceStreamingResponseHandlerTest,AiServiceTokenStreamTest,StreamingRequestControllerRecoveryTest,StreamingRequestControllerReplanTest,ReplanContextTest,ReplanDetectorTest,PlanToolTest,PlanToolProtocolSupportTest,AppPlanStateManagerTest,ModelRequestGateTest,ContextCompressionModelRequestGateTest,GenerationSignalPublisherTest,GenerationDisclosureBufferTest,ToolLoopTerminationProtocolTest,JsonMessageStreamHandlerTest,VueTurnContextTest,VueTurnFinalizerTest,VueTurnMemoryProjectionTest,VueTurnCancellationCoordinatorTest,GenerationSseEncoderTest,AppServiceDeletionLifecycleTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/guard-stalled-build-progress/logs/19-full-green.log"
+    },
+    {
+      "command": "npm run test",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/guard-stalled-build-progress/logs/20-frontend-all.log"
+    },
+    {
+      "command": "npm run type-check",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/guard-stalled-build-progress/logs/21-frontend-types.log"
+    },
+    {
+      "command": "node .codex/guard-stalled-build-progress/verify-scope.cjs",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/guard-stalled-build-progress/logs/22-scope-final.json"
+    },
+    {
+      "command": "openspec validate guard-stalled-build-progress --strict --no-interactive",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/guard-stalled-build-progress/logs/23-openspec-change.log"
+    },
+    {
+      "command": "openspec validate --specs --strict --no-interactive",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/guard-stalled-build-progress/logs/24-openspec-specs.log"
+    }
+  ]
+}

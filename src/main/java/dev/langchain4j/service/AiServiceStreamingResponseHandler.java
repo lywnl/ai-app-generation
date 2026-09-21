@@ -415,6 +415,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             if (replanContext != null) {
                 requestController.bindReplanContext(replanContext);
             }
+            BuildProgressGuard buildGuard = ContextContinuationGate.from(continuationGate).buildProgressGuard();
+            if (buildGuard != null) requestController.bindBuildProgressGuard(buildGuard);
         }
         this.toolExecutionGuard = ensureNotNull(toolExecutionGuard, "toolExecutionGuard");
         this.requestGeneration = requestGeneration;
@@ -557,6 +559,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         if (pending.isEmpty()) {
             return;
         }
+        requestController.buildFeedbackResponseAccepted(requestGeneration);
         if (hasOutputGuardrails) {
             responseBuffer.add(pending);
         } else {
@@ -791,6 +794,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                     incompleteRecoveryPrepared)) {
                 return;
             }
+            requestController.buildFeedbackResponseAccepted(requestGeneration);
             markRecoveredBeforeTrustedOutput();
             markIncompleteRecoveredBeforeTrustedOutput();
             deliverAvailableTrustedOutput();
@@ -1109,6 +1113,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
             ToolExecutionGuard.GuardedToolExecution guardedExecution;
             try {
+                requestController.buildFeedbackResponseAccepted(requestGeneration);
                 LOG.info("[Vue 工具链] 工具执行开始,memoryId={},generation={},"
                                 + "toolName={},toolId={}",
                         memoryId, requestGeneration, toolName,
@@ -1153,6 +1158,22 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 skipRemainderReason =
                         "受控跳过：本批次已有工具触发终止";
                 dispatchTermination = true;
+                continue;
+            }
+            if (commit.failure() != null || commit.decision() != StreamingRequestController.ToolResultDecision.PROVIDED) continue;
+            BuildProgressGuard.Action buildAction = requestController.observeBuildProgress(
+                    requestGeneration, normalizedRequest.id(), guardedExecution.buildObservation());
+            if (buildAction == BuildProgressGuard.Action.TERMINATE) {
+                var termination = new ToolLoopTerminationProtocol.ControlledTermination(
+                        ToolLoopTerminationProtocol.ControlledTerminationReason.BUILD_STALLED, null);
+                boolean claimed = requestController.claimControlledTermination(requestGeneration, termination);
+                LOG.info("构建阻塞终止认领,memoryId={},generation={},toolId={},accepted={}",
+                        memoryId, requestGeneration, normalizedRequest.id(), claimed);
+                if (claimed) {
+                    claimedTermination = termination;
+                    skipRemainderReason = "受控跳过：构建阻塞在纠偏后仍未解除";
+                    dispatchTermination = true;
+                }
                 continue;
             }
             requestController.observePlanToolExecution(
@@ -1383,6 +1404,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void prepareRecoveryRequest(TokenUsage accumulatedUsage) {
+        BuildProgressGuard.Feedback buildFeedback = requestController.pendingBuildFeedback();
+        List<ChatMessage> recoveryMessages = withBuildFeedback(
+                transientMessagesWithPlanFeedback(recoveryCoordinator.transientMessages()), buildFeedback);
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -1390,15 +1414,14 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::getMemory,
                         toolSpecifications,
                         continuationGate,
-                        withTurnTransientMessages(
-                                recoveryCoordinator.transientMessages()),
+                        withTurnTransientMessages(recoveryMessages),
                         compressionAttemptState);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
                         requestGeneration,
                         gateRequest,
                         () -> messagesToSendWithTransient(
-                                memoryId, recoveryCoordinator.transientMessages()),
+                                memoryId, recoveryMessages),
                         recoveryCoordinator::failIfRecovering,
                         this::notifyRecoveryFailure,
                         (messages, generation) -> startModelRequest(
@@ -1406,14 +1429,15 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 accumulatedUsage,
                                 generation,
                                 true,
-                                incompleteRecoveryGeneration)));
+                                incompleteRecoveryGeneration, buildFeedback)));
     }
 
     private void prepareIncompleteRecoveryRequest(
             TokenUsage accumulatedUsage) {
+        BuildProgressGuard.Feedback buildFeedback = requestController.pendingBuildFeedback();
         List<ChatMessage> recoveryTransientMessages =
-                transientMessagesWithPlanFeedback(
-                        incompleteRecoveryCoordinator.transientMessages());
+                withBuildFeedback(transientMessagesWithPlanFeedback(
+                        incompleteRecoveryCoordinator.transientMessages()), buildFeedback);
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -1435,7 +1459,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         this::notifyIncompleteRecoveryFailure,
                         (messages, generation) -> startModelRequest(
                                 messages, accumulatedUsage, generation,
-                                false, true)));
+                                false, true, buildFeedback)));
     }
 
     private List<ChatMessage> transientMessagesWithPlanFeedback(
@@ -1443,6 +1467,13 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         List<ChatMessage> combined = new ArrayList<>(
                 baseMessages == null ? List.of() : baseMessages);
         combined.addAll(requestController.claimPlanFeedback());
+        return List.copyOf(combined);
+    }
+
+    private List<ChatMessage> withBuildFeedback(List<ChatMessage> messages, BuildProgressGuard.Feedback feedback) {
+        if (feedback == null) return messages;
+        List<ChatMessage> combined = new ArrayList<>(messages);
+        combined.add(feedback.message());
         return List.copyOf(combined);
     }
 
@@ -1467,7 +1498,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             combined.addAll(planFeedback);
             transientMessages = List.copyOf(combined);
         }
-        List<ChatMessage> requestTransientMessages = transientMessages;
+        BuildProgressGuard.Feedback buildFeedback = requestController.pendingBuildFeedback();
+        List<ChatMessage> requestTransientMessages = withBuildFeedback(transientMessages, buildFeedback);
         ModelRequestGate.Request gateRequest = modelRequestGate == null
                 ? null
                 : new ModelRequestGate.Request(
@@ -1489,7 +1521,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                                 accumulatedUsage,
                                 generation,
                                 false,
-                                false)));
+                                false, buildFeedback)));
     }
 
     private List<ChatMessage> messagesToSendWithTransient(
@@ -1512,7 +1544,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             TokenUsage accumulatedUsage,
             long nextGeneration,
             boolean recoveryGeneration,
-            boolean incompleteRecoveryGeneration) {
+            boolean incompleteRecoveryGeneration,
+            BuildProgressGuard.Feedback buildFeedback) {
         ChatRequest.Builder requestBuilder = ChatRequest.builder()
                 .messages(requestMessages)
                 .toolSpecifications(toolSpecifications);
@@ -1523,7 +1556,12 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         AiServiceStreamingResponseHandler child = childHandler(
                 accumulatedUsage, nextGeneration, recoveryGeneration,
                 incompleteRecoveryGeneration);
-        return () -> context.streamingChatModel.chat(chatRequest, child);
+        return () -> {
+            if (buildFeedback != null && requestMessages.contains(buildFeedback.message())) {
+                requestController.buildFeedbackRequestStarted(nextGeneration, buildFeedback);
+            }
+            context.streamingChatModel.chat(chatRequest, child);
+        };
     }
 
     private boolean shouldRequireToolCall(
@@ -1745,7 +1783,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 .BUILD_SUCCEEDED
                 || termination.reason()
                 == ToolLoopTerminationProtocol.ControlledTerminationReason
-                .BUILD_FAILED;
+                .BUILD_FAILED
+                || termination.reason()
+                == ToolLoopTerminationProtocol.ControlledTerminationReason.BUILD_STALLED;
     }
 
     private void notifyError(Throwable error) {

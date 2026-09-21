@@ -815,6 +815,17 @@ describe('generationSession generation-stream/v1 状态机', () => {
     )
   })
 
+  it('构建停滞沿用 FAILED 保留诊断且不刷新预览', async () => {
+    const terminal = outcome(2, 'FAILED', false)
+    terminal.data.message = '计划仍未完成，本轮已停止。阻塞文件：src/main.js'
+    const snapshot = await runSession([
+      vueMessage(1, 'ai_text', '正在处理计划文件'), terminal, done(3),
+    ])
+    expect(snapshot).toMatchObject({ status: 'done', outcome: 'failed', loading: false,
+      errorMessage: '计划仍未完成，本轮已停止。阻塞文件：src/main.js' })
+    expect(shouldRefreshGenerationPreview(snapshot!)).toBe(false)
+  })
+
   it('未提供会话类型时拒绝发起请求', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

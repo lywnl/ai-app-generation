@@ -577,10 +577,12 @@ public class AiCodeGeneratorFacade {
                         () -> context.turnMode() == VueTurnMode.MUTATION_REQUIRED,
                         context.replanContext());
         ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
-        tokenStream.toolExecutionGuard((toolName, memoryId, action) ->
-                directGuard.execute(toolName, memoryId,
-                        () -> fileToolExecutionScopeManager.callInScope(
-                                scope, toolName, action)));
+        tokenStream.toolExecutionGuard((toolName, memoryId, action) -> {
+            var observed = fileToolExecutionScopeManager.callInScopeWithBuildObservation(scope, toolName, action);
+            var trusted = directGuard.execute(toolName, memoryId, observed::toolResult);
+            return new ToolExecutionGuard.GuardedToolExecution(trusted.toolResult(),
+                    trusted.controlledTermination(), observed.buildObservation());
+        });
         return Flux.create(sink -> {
             AtomicBoolean terminated = new AtomicBoolean();
             SerializedGenerationStreamEmitter emitter =
@@ -967,7 +969,7 @@ public class AiCodeGeneratorFacade {
         return switch (termination.reason()) {
             case BUILD_SUCCEEDED, BUILD_FAILED -> null;
             case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                    REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN,
+                    REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN, BUILD_STALLED,
                     RESOURCE_LIMIT_EXCEEDED,
                     EVALUATION_COMPLETED -> new OnlineControlledTerminationException(
                     termination.reason());

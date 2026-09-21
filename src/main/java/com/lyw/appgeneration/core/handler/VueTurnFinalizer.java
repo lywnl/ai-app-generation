@@ -22,6 +22,7 @@ import static com.lyw.appgeneration.ai.memory.ToolMessageCollapser.CollapseStatu
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.INCOMPLETE_TOOL_CHAIN;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR;
 import static com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR;
+import dev.langchain4j.service.BuildProgressGuard;
 
 /** 同一回合唯一允许执行稳定终态持久化与记忆副作用的组件。 */
 @Slf4j
@@ -67,10 +68,10 @@ public class VueTurnFinalizer implements InitializingBean {
             RESOURCE_LIMIT_MESSAGE,
             CANCELLED_MESSAGE);
     private static final int MAX_TERMINAL_MESSAGE_CODE_POINTS =
-            FIXED_TERMINAL_MESSAGES.stream()
+            Math.max(BuildProgressGuard.MAX_TERMINAL_CODE_POINTS, FIXED_TERMINAL_MESSAGES.stream()
                     .mapToInt(FileToolBudgetGuard::codePointCount)
                     .max()
-                    .orElseThrow();
+                    .orElseThrow());
     private static final int TERMINAL_RESERVE_CODE_POINTS =
             MAX_TERMINAL_MESSAGE_CODE_POINTS + 2;
 

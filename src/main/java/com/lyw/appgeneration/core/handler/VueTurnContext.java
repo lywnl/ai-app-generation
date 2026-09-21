@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import dev.langchain4j.service.BuildProgressGuard;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import com.lyw.appgeneration.ai.model.message.IncompleteToolChainRecoveryMessage;
@@ -83,6 +84,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             new TurnProgressChannel();
     private final FileToolBudgetGuard.Session budgetSession;
     private final ReplanContext replanContext = new ReplanContext();
+    private final BuildProgressGuard buildProgressGuard;
 
     VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
@@ -143,6 +145,7 @@ public final class VueTurnContext implements ContextContinuationGate {
         this.appId = appId;
         this.userId = userId;
         this.turnId = Objects.requireNonNull(turnId, "turnId 不能为空");
+        this.buildProgressGuard = new BuildProgressGuard(appId, turnId);
         if (turnId.isBlank()) {
             throw new IllegalArgumentException("turnId 不能为空白");
         }
@@ -252,6 +255,11 @@ public final class VueTurnContext implements ContextContinuationGate {
     @Override
     public ReplanContext replanContext() {
         return replanContext;
+    }
+
+    @Override
+    public BuildProgressGuard buildProgressGuard() {
+        return buildProgressGuard;
     }
 
     public long userId() {
@@ -798,7 +806,7 @@ public final class VueTurnContext implements ContextContinuationGate {
         progressChannel.close();
         DeleteTakeoverRegistration takeoverRegistration =
                 deleteTakeoverRegistration.getAndSet(null);
-        closeAll(takeoverRegistration, lease, operationLease, admissionPermit);
+        closeAll(buildProgressGuard, takeoverRegistration, lease, operationLease, admissionPermit);
     }
 
     public static void closeAll(AutoCloseable... resources) {
