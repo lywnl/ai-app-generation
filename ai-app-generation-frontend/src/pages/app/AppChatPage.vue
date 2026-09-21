@@ -41,21 +41,23 @@
       <!-- 左侧对话区域 -->
       <div class="chat-section">
         <div v-if="isVue && isOwner" class="workspace-toolbar">
-          <span>{{ isGenerating ? '正在生成' : layout === 'workspace' ? '生成工作区' : '对话与代码' }}</span>
-          <div>
+          <div v-if="showLeftTabs" class="left-tabs" role="tablist" aria-label="对话与计划" @keydown="handleLeftTabKeydown">
+            <button id="chat-tab" type="button" role="tab" :aria-selected="activeLeftTab === 'chat'" aria-controls="chat-panel" :tabindex="activeLeftTab === 'chat' ? 0 : -1" @click="activeLeftTab = 'chat'">对话与代码</button>
+            <button id="plan-tab" type="button" role="tab" :aria-selected="activeLeftTab === 'plan'" aria-controls="plan-panel" :tabindex="activeLeftTab === 'plan' ? 0 : -1" @click="activeLeftTab = 'plan'">计划</button>
+          </div>
+          <span v-else>{{ isGenerating ? '正在生成' : '生成工作区' }}</span>
+          <div v-if="!showLeftTabs">
             <template v-if="layout === 'workspace' && !isGenerating">
               <a-button v-if="previousAvailable" size="small" type="text" @click="layout = 'previous-preview'">查看上一版</a-button>
               <span v-else class="previous-unavailable">上一版预览暂不可用</span>
             </template>
-            <a-button v-if="layout !== 'workspace'" size="small" type="text" @click="planExpanded = !planExpanded">当前计划</a-button>
           </div>
         </div>
-        <details v-if="isVue && isOwner && layout !== 'workspace'" :open="planExpanded" class="compact-plan" @toggle="planExpanded = ($event.target as HTMLDetailsElement).open">
-          <summary>当前计划</summary>
+        <div v-if="isVue && isOwner" v-show="showPlanTab" id="plan-panel" ref="planTabContainer" class="plan-tab-panel" role="tabpanel" aria-labelledby="plan-tab" tabindex="0" @scroll="handlePlanScroll">
           <GenerationPlanPanel :snapshot="planSnapshot" :status="planStatus" :error="planError" :tools="currentTools" :active="isGenerating" @retry="planQuery.retry" />
-        </details>
+        </div>
         <!-- 消息区域 -->
-        <div class="messages-container" ref="messagesContainer">
+        <div v-show="showConversation" id="chat-panel" class="messages-container" ref="messagesContainer" :role="showLeftTabs ? 'tabpanel' : undefined" :aria-labelledby="showLeftTabs ? 'chat-tab' : undefined">
           <!-- 加载更多按钮 -->
           <div v-if="hasMoreHistory" class="load-more-container">
             <a-button type="link" @click="loadMoreHistory" :loading="loadingHistory" size="small">
@@ -211,7 +213,7 @@
 
         <!-- 选中元素信息展示 -->
         <a-alert
-          v-if="selectedElementInfo"
+          v-if="selectedElementInfo && showConversation"
           class="selected-element-alert"
           type="info"
           closable
@@ -248,7 +250,7 @@
         </a-alert>
 
         <!-- 用户消息输入框 -->
-        <div class="input-container">
+        <div v-show="showConversation" class="input-container">
           <div class="input-wrapper">
             <a-tooltip v-if="!isOwner" title="无法在别人的作品下对话哦~" placement="top">
               <a-textarea
@@ -505,7 +507,8 @@ const incompleteToolChainRecovery =
 const stickBottom = ref(true)
 const handleMessagesScroll = () => {
   const el = messagesContainer.value
-  if (!el) return
+  if (!showConversation.value || !el || el.clientHeight === 0) return
+  chatScrollTop = el.scrollTop
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
   stickBottom.value = distance <= 32
 }
@@ -530,7 +533,10 @@ let previewProbe: AbortController | undefined
 let pageEpoch = 0
 const lastSession = shallowRef<GenerationSessionSnapshot | null>(null)
 const currentTools = computed(() => [...lastSession.value?.toolCalls.values() ?? []])
-const planExpanded = ref(false)
+const activeLeftTab = ref<'chat' | 'plan'>('chat')
+const planTabContainer = ref<HTMLElement>()
+let chatScrollTop = 0
+let planScrollTop = 0
 const planQuery = useGenerationPlan()
 const { snapshot: planSnapshot, status: planStatus, error: planError } = planQuery
 const isVue = computed(() => appInfo.value?.codeGenType === CodeGenTypeEnum.VUE_PROJECT)
@@ -559,6 +565,38 @@ const isOwner = computed(() => {
 
 const isAdmin = computed(() => {
   return loginUserStore.loginUser.userRole === 'admin'
+})
+
+const showLeftTabs = computed(() => isVue.value && isOwner.value && layout.value !== 'workspace')
+const showPlanTab = computed(() => showLeftTabs.value && activeLeftTab.value === 'plan')
+const showConversation = computed(() => !showPlanTab.value)
+
+function handlePlanScroll() {
+  const el = planTabContainer.value
+  if (showPlanTab.value && el && el.clientHeight > 0) planScrollTop = el.scrollTop
+}
+
+function handleLeftTabKeydown(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  activeLeftTab.value = event.key === 'Home' ? 'chat' : event.key === 'End' ? 'plan'
+    : activeLeftTab.value === 'chat' ? 'plan' : 'chat'
+  const tabList = event.currentTarget as HTMLElement
+  void nextTick(() => tabList.querySelector<HTMLElement>('[aria-selected="true"]')?.focus({ preventScroll: true }))
+}
+
+watch(showPlanTab, (visible, wasVisible) => {
+  const previous = wasVisible ? planTabContainer.value : messagesContainer.value
+  if (isVue.value && isOwner.value && previous && previous.clientHeight > 0) {
+    if (wasVisible) planScrollTop = previous.scrollTop
+    else chatScrollTop = previous.scrollTop
+  }
+  const epoch = pageEpoch
+  void nextTick(() => {
+    if (epoch !== pageEpoch || visible !== showPlanTab.value || !showLeftTabs.value) return
+    const target = visible ? planTabContainer.value : messagesContainer.value
+    if (target) target.scrollTop = visible ? planScrollTop : chatScrollTop
+  })
 })
 
 function syncPlanContext() {
@@ -1010,8 +1048,10 @@ const finalizeGeneration = (snapshot: GenerationSessionSnapshot) => {
 // 直接 scrollTop = scrollHeight 会把滚动条卡在"旧底部"即新视图的中间。
 // nextTick 内二次检查 stickBottom:等待期间用户可能上滑,避免覆盖用户意图。
 const scrollToBottom = () => {
+  if (!showConversation.value) return
   if (!stickBottom.value) return
   nextTick(() => {
+    if (!showConversation.value) return
     if (!stickBottom.value) return
     const el = messagesContainer.value
     if (!el) return
@@ -1238,6 +1278,7 @@ const handleIframeMessage = (event: MessageEvent) => {
 
 watch(() => [route.params.id, loginUserStore.loginUser.id], () => {
   pageEpoch++; detachSession.value?.(); detachSession.value = null
+  activeLeftTab.value = 'chat'; chatScrollTop = 0; planScrollTop = 0
   planQuery.dispose(); lastSession.value = null; activeSessionAppId.value = null; sessionMessageKey.value = null
   messages.value = []; appInfo.value = undefined; historyLoaded.value = false; loadingHistory.value = false
   hasMoreHistory.value = false; lastCreateTime.value = undefined; isGenerating.value = false
@@ -1907,8 +1948,10 @@ onUnmounted(() => {
 #appChatPage { height: calc(100dvh - 64px); box-sizing: border-box; }
 .generation-plan-sidebar { width: 320px; max-width: 34%; flex-shrink: 0; overflow-y: auto; padding: 16px; background: var(--bg-base); border-left: 1px solid var(--border-light); }
 .workspace-plan-details > summary { display: none; }
-.compact-plan { padding: 8px 16px; max-height: 38%; overflow: auto; border-bottom: 1px solid var(--border-light); flex-shrink: 0; }
-.compact-plan > summary { cursor: pointer; font-size: 13px; padding: 4px 0; }
+.left-tabs { display: flex; gap: 16px; }
+.left-tabs button { padding: 0; border: 0; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.left-tabs button[aria-selected='true'] { color: var(--text-primary); font-weight: 600; box-shadow: 0 2px 0 var(--text-primary); }
+.plan-tab-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
 .preview-note { position: absolute; bottom: 0; left: 0; right: 0; background: var(--bg-base); padding: 8px; margin: 0; font-size: 12px; }
 .chat-section, .preview-section { min-width: 0; min-height: 0; }
 .main-content { min-height: 0; }
