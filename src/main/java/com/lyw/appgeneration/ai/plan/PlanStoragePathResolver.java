@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.plan;
 
 import com.lyw.appgeneration.constants.AppConstant;
+import com.lyw.appgeneration.utils.SecureFileAccess;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -9,6 +10,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.SecureDirectoryStream;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 
 /** 计划旁车文件的内部安全路径解析器，不暴露给普通文件工具。 */
@@ -39,6 +41,20 @@ public final class PlanStoragePathResolver {
 
     public Path planPath(long appId) {
         return projectRoot(appId).resolve(PLAN_FILE_NAME);
+    }
+
+    /** 查询专用，不创建目录，不把不安全路径伪装成计划缺失。 */
+    public <T> Optional<T> withExistingProjectDirectory(
+            long appId, SecureFileAccess.DirectoryAction<T> action) {
+        Path root = projectRoot(appId);
+        Objects.requireNonNull(action, "只读操作不能为空");
+        try {
+            return Optional.of(SecureFileAccess.withDirectory(root, action));
+        } catch (java.nio.file.NoSuchFileException missing) {
+            return Optional.empty();
+        } catch (IOException exception) {
+            throw new IllegalStateException("无法安全读取计划目录", exception);
+        }
     }
 
     public void ensureSafeProjectRoot(long appId) {

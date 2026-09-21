@@ -3,6 +3,7 @@ package com.lyw.appgeneration.ai.plan;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
+import com.lyw.appgeneration.utils.SecureFileAccess;
 
 import java.io.IOException;
 import java.nio.channels.Channels;
@@ -50,6 +51,24 @@ public final class AppPlanStateManager {
 
     public Optional<AppPlan> load(long appId) {
         return withLock(appId, () -> read(appId));
+    }
+
+    /** 用户查询使用的无副作用快照，不创建目录或重新绑定活动回合。 */
+    public Optional<AppPlan> loadReadOnly(long appId) {
+        return withLock(appId, () -> pathResolver.withExistingProjectDirectory(appId, directory -> {
+            try (var channel = SecureFileAccess.openRegularFile(directory, Path.of(PLAN_FILE_NAME))) {
+                AppPlan plan = objectMapper.readValue(Channels.newInputStream(channel), AppPlan.class);
+                if (plan == null) {
+                    throw new IllegalArgumentException("计划不能为空");
+                }
+                validatePlanFiles(plan.files());
+                return plan;
+            } catch (NoSuchFileException missing) {
+                throw missing;
+            } catch (IOException | IllegalArgumentException exception) {
+                throw new IllegalStateException("计划文件读取失败", exception);
+            }
+        }));
     }
 
     /** 读取上一轮计划，并在当前受信回合开始时重绑定活动 turnId。 */

@@ -20,6 +20,8 @@ import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.web.GenerationSseEncoder;
 import com.lyw.appgeneration.model.vo.app.AppVO;
+import com.lyw.appgeneration.model.vo.app.AppPlanVO;
+import com.lyw.appgeneration.service.AppPlanQueryService;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.GoodAppCacheService;
 import com.lyw.appgeneration.service.UserService;
@@ -59,6 +61,19 @@ public class AppController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private AppPlanQueryService appPlanQueryService;
+
+    /** 所有者计划视图，不暴露项目中的原始旁车文件。 */
+    @GetMapping("/{appId}/plan")
+    public BaseResponse<AppPlanVO> getAppPlan(@PathVariable("appId") Long appId,
+                                             HttpServletRequest request,
+                                             HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-store");
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(appPlanQueryService.getCurrentPlan(appId, loginUser));
+    }
 
     @Resource
     private GoodAppCacheService goodAppCacheService;

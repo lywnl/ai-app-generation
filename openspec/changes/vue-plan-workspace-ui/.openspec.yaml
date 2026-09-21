@@ -1,0 +1,42 @@
+schema: spec-driven
+created: 2026-09-21
+workflow_profile: strict
+risk_reason: >-
+  新增读取受保护计划内容的用户查询接口，涉及应用访问权限、跨应用隔离和文件读取生命周期；
+  前端同时调整生成状态与预览切换，需要验证既有 SSE 契约和终态行为。
+scope:
+  - 静态资源入口拒绝原始计划及计划临时文件的直接或绕过读取，保持正常网页资源公开访问。
+  - 在现有 AppChatPage 中提供面向用户的 Vue 生成工作区，生成期间隐藏网站预览，成功终态后恢复预览。
+  - 展示当前计划目标、版本、文件动作与触达进度、依赖关系、Replan 提示和当前回合执行记录。
+  - 扩展 generationSession 的展示状态，复用现有工具事件并保留对话、工具卡片、下载和部署功能。
+  - 新增只读计划查询接口和用户视图 DTO，用于初次打开、刷新及重新进入项目时加载当前计划。
+non_goals:
+  - 不修改构建产物存储，不增加预览快照、版本目录或历史版本恢复。
+  - 不修改 P/E Replan 判定、计划状态写回、计划工具及构建门禁逻辑。
+  - 不修改文件工具八字段协议，不新增计划专用 SSE 类型。
+  - 不增加开发者诊断页面、完整历史事件查询、数据库迁移或前端计划修改入口。
+requirement_sources:
+  - kind: conversation
+    description: 用户在规划评审 B1 后明确同意将静态入口防护纳入本期，覆盖计划旁车与绕过读取，保持正常网页资源访问。
+  - kind: conversation
+    description: 用户选择上一版预览方案 A：不改构建存储，尽量保留当前已加载预览，刷新或资源失效后提示“上一版预览暂不可用”，不保证历史版本恢复。
+  - kind: conversation
+    description: 用户回复“a，a，a 继续spec”，确认仅所有者查看、失败或取消保留执行区且可主动查看上一版、只读问答结束恢复原预览不刷新，以及事件触发查询和基于现有数据展示原因。
+  - kind: conversation
+    description: 本任务中用户提供的第一期需求全文，以及此前确认的生成中隐藏预览、完成后恢复预览和面向用户展示计划的决定。
+  - kind: conversation
+    description: 本轮 openspec-new-change 请求，只创建骨架并登记范围、来源和风险，完成后停止。
+implementation_references:
+  - src/main/java/com/lyw/appgeneration/controller/StaticResourceController.java
+  - ai-app-generation-frontend/src/pages/app/AppChatPage.vue
+  - ai-app-generation-frontend/src/utils/generationSession.ts
+  - src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java
+  - src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java
+  - src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java
+  - src/main/java/com/lyw/appgeneration/web/GenerationSseEncoder.java
+planning_notes:
+  - 以上源码是允许实施修改的参考，不作为冻结代码约束。
+  - TOUCHED 表示成功触达，不代表单文件通过构建；执行中和依赖等待仅作为展示状态。
+  - 后续规划需核对现有 SSE 对计划整体状态及偏差原因的覆盖，不能仅凭工具结束或文本提示推断全部计划状态。
+  - 查询不得调用会重绑定活动回合的 loadForTurn；需核验缺失计划时的读取路径是否存在创建目录等副作用。
+  - 失败、取消、只读回合布局及权限已由用户选择确认；后续设计细化刷新恢复与实时事件之间的状态一致性。

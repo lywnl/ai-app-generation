@@ -1,8 +1,7 @@
 package com.lyw.appgeneration.controller;
 
-import com.lyw.appgeneration.constants.AppConstant;
+import com.lyw.appgeneration.service.StaticPreviewResourceResolver;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -12,16 +11,18 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.HandlerMapping;
 
-import java.io.File;
+import java.io.IOException;
 
 @RestController
 @RequestMapping("/static")
 public class StaticResourceController {
 
-    // 应用生成根目录（用于浏览）
-    private static final String PREVIEW_ROOT_DIR = AppConstant.CODE_OUTPUT_ROOT_DIR;
+    private final StaticPreviewResourceResolver resourceResolver;
+
+    public StaticResourceController(StaticPreviewResourceResolver resourceResolver) {
+        this.resourceResolver = resourceResolver;
+    }
 
     /**
      * 提供静态资源访问，支持目录重定向
@@ -29,41 +30,30 @@ public class StaticResourceController {
      */
     @GetMapping("/{deployKey}/**")
     public ResponseEntity<Resource> serveStaticResource(
-            @PathVariable String deployKey,
+            @PathVariable("deployKey") String deployKey,
             HttpServletRequest request) {
         try {
-            // 获取资源路径
-            String resourcePath = (String) request.getAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
-            resourcePath = resourcePath.substring(("/static/" + deployKey).length());
-            // 如果是目录访问（不带斜杠），重定向到带斜杠的URL
-            if (resourcePath.isEmpty()) {
+            var resolved = resourceResolver.resolve(deployKey, request.getRequestURI(), request.getContextPath());
+            if (resolved.directoryRedirect()) {
                 HttpHeaders headers = new HttpHeaders();
                 headers.add("Location", request.getRequestURI() + "/");
                 return new ResponseEntity<>(headers, HttpStatus.MOVED_PERMANENTLY);
             }
-            // 默认返回 index.html
-            if (resourcePath.equals("/")) {
-                resourcePath = "/index.html";
-            }
-            // 构建文件路径
-            String filePath = PREVIEW_ROOT_DIR + "/" + deployKey + resourcePath;
-            File file = new File(filePath);
-            // 检查文件是否存在
-            if (!file.exists()) {
-                return ResponseEntity.notFound().build();
-            }
-            // 返回文件资源
-            Resource resource = new FileSystemResource(file);
-            return ResponseEntity.ok()
+            Resource resource = resolved.resource();
+            long lastModified = resource.lastModified();
+            var response = ResponseEntity.ok()
                     .cacheControl(CacheControl.noStore().mustRevalidate())
                     .header(HttpHeaders.PRAGMA, "no-cache")
                     .header(HttpHeaders.EXPIRES, "0")
-                    .header("X-File-Last-Modified", String.valueOf(file.lastModified()))
-                    .lastModified(file.lastModified())
-                    .header("Content-Type", getContentTypeWithCharset(filePath))
-                    .body(resource);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+                    .header("X-File-Last-Modified", String.valueOf(lastModified))
+                    .lastModified(lastModified)
+                    .header("Content-Type", getContentTypeWithCharset(resource.getFilename()));
+            if ("HEAD".equals(request.getMethod())) {
+                return response.contentLength(resource.contentLength()).build();
+            }
+            return response.body(resource);
+        } catch (IOException | IllegalArgumentException exception) {
+            return ResponseEntity.notFound().build();
         }
     }
 
