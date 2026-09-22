@@ -138,6 +138,14 @@ const doLogout = async () => {
 .header {
   background: #fff;
   padding: 0 24px;
+  min-height: 52px;
+  height: 52px;
+  line-height: 52px;
+}
+
+.header > :deep(.ant-row) {
+  height: 52px;
+  line-height: 52px;
 }
 
 .brand-column {
@@ -170,17 +178,29 @@ const doLogout = async () => {
 }
 
 .logo {
-  height: 48px;
-  width: 48px;
+  height: 40px;
+  width: 40px;
 }
 
 .site-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   color: #1890ff;
 }
 
 .ant-menu-horizontal {
   border-bottom: none !important;
+}
+
+.header-menu {
+  height: 52px;
+  line-height: 52px !important;
+  background: #fff;
+}
+
+.header-menu :deep(.ant-menu-item),
+.header-menu :deep(.ant-menu-submenu) {
+  height: 52px;
+  line-height: 52px !important;
 }
 </style>

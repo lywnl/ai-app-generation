@@ -37,9 +37,14 @@
     </div>
 
     <!-- 主要内容区域 -->
-    <div class="main-content" :class="{ 'generation-workspace': isVue && layout === 'workspace' }">
+    <div
+      ref="workspaceContainer"
+      class="main-content"
+      :class="{ 'generation-workspace': isVue && layout === 'workspace', 'resizable-workspace': resizeEnabled, 'is-resizing': isResizing }"
+      :style="resizeStyle"
+    >
       <!-- 左侧对话区域 -->
-      <div class="chat-section">
+      <div id="workspace-left-panel" class="chat-section" :class="{ 'result-chat': showLeftTabs }">
         <div v-if="isVue && isOwner" class="workspace-toolbar">
           <div v-if="showLeftTabs" class="left-tabs" role="tablist" aria-label="对话与计划" @keydown="handleLeftTabKeydown">
             <button id="chat-tab" type="button" role="tab" :aria-selected="activeLeftTab === 'chat'" aria-controls="chat-panel" :tabindex="activeLeftTab === 'chat' ? 0 : -1" @click="activeLeftTab = 'chat'">对话与代码</button>
@@ -75,7 +80,10 @@
               <div class="message-avatar">
                 <a-avatar :src="aiAvatar" />
               </div>
-              <div class="message-content">
+              <div
+                class="message-content"
+                :class="{ 'status-only': message.loading && !message.content && !message.toolCalls?.size && !message.displayBlocks?.length }"
+              >
                 <template v-if="message.displayBlocks">
                   <template v-for="block in message.displayBlocks" :key="block.key">
                     <MarkdownRenderer v-if="block.kind === 'markdown'" :content="block.text" />
@@ -296,6 +304,28 @@
           <GenerationExecutionTimeline :tools="currentTools" :status="lastSession?.status ?? 'done'" @locate="locateTool" />
         </details>
       </aside>
+      <div
+        v-if="resizeEnabled"
+        ref="workspaceSeparator"
+        class="workspace-separator"
+        role="separator"
+        aria-label="调整左侧面板宽度"
+        aria-orientation="vertical"
+        aria-controls="workspace-left-panel"
+        :aria-valuenow="Math.round(leftPercent)"
+        :aria-valuemin="30"
+        :aria-valuemax="50"
+        :aria-valuetext="`左侧 ${Math.round(leftPercent)}%，右侧 ${100 - Math.round(leftPercent)}%`"
+        tabindex="0"
+        title="拖动调整宽度，双击恢复默认比例"
+        @pointerdown="startResize"
+        @pointermove="moveResize"
+        @pointerup="endResize"
+        @pointercancel="endResize"
+        @lostpointercapture="endResize"
+        @keydown="handleResizeKeydown"
+        @dblclick="resetWorkspaceResize"
+      ></div>
       <!-- 右侧网页展示区域 -->
       <div v-show="!isVue || layout !== 'workspace'" class="preview-section">
         <div class="preview-header">
@@ -387,6 +417,7 @@ import { ref, shallowRef, watch, onMounted, nextTick, onUnmounted, computed } fr
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser'
+import { useWorkspaceResize } from '@/composables/useWorkspaceResize'
 import UserAvatar from '@/components/UserAvatar.vue'
 import {
   getAppVoById,
@@ -568,6 +599,11 @@ const isAdmin = computed(() => {
 })
 
 const showLeftTabs = computed(() => isVue.value && isOwner.value && layout.value !== 'workspace')
+const {
+  container: workspaceContainer, separator: workspaceSeparator, leftPercent,
+  enabled: resizeEnabled, isResizing, style: resizeStyle,
+  startResize, moveResize, endResize, handleKeydown: handleResizeKeydown, reset: resetWorkspaceResize,
+} = useWorkspaceResize(showLeftTabs)
 const showPlanTab = computed(() => showLeftTabs.value && activeLeftTab.value === 'plan')
 const showConversation = computed(() => !showPlanTab.value)
 
@@ -1278,6 +1314,7 @@ const handleIframeMessage = (event: MessageEvent) => {
 
 watch(() => [route.params.id, loginUserStore.loginUser.id], () => {
   pageEpoch++; detachSession.value?.(); detachSession.value = null
+  resetWorkspaceResize()
   activeLeftTab.value = 'chat'; chatScrollTop = 0; planScrollTop = 0
   planQuery.dispose(); lastSession.value = null; activeSessionAppId.value = null; sessionMessageKey.value = null
   messages.value = []; appInfo.value = undefined; historyLoaded.value = false; loadingHistory.value = false
@@ -1314,6 +1351,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding: 16px;
+  padding-top: 6px;
   background: var(--bg-soft);
 }
 
@@ -1806,8 +1844,8 @@ onUnmounted(() => {
 }
 
 .main-content {
-  padding: 10px 0 0;
-  gap: 14px;
+  padding: 6px 0 0;
+  gap: 10px;
 }
 
 .chat-section,
@@ -1932,6 +1970,36 @@ onUnmounted(() => {
   transform: translateY(-1px);
 }
 
+.header-bar {
+  padding: 7px 12px;
+}
+
+.header-right {
+  gap: 8px;
+}
+
+.header-right :deep(.ant-btn) {
+  height: 28px;
+  padding: 0 12px;
+}
+
+@media (min-width: 769px) {
+  .result-chat .workspace-toolbar,
+  .preview-header {
+    height: 32px;
+    min-height: 32px;
+    box-sizing: border-box;
+    padding: 0 16px;
+    flex-shrink: 0;
+  }
+
+  .preview-actions :deep(.ant-btn) {
+    height: 28px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
+
 @media (max-width: 768px) {
   .header-bar {
     border-radius: var(--radius-md);
@@ -1952,12 +2020,47 @@ onUnmounted(() => {
 .left-tabs button { padding: 0; border: 0; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
 .left-tabs button[aria-selected='true'] { color: var(--text-primary); font-weight: 600; box-shadow: 0 2px 0 var(--text-primary); }
 .plan-tab-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+.result-chat .messages-container { flex: 1; min-height: 0; }
+.result-chat .input-container { padding: 8px 16px; flex-shrink: 0; }
 .preview-note { position: absolute; bottom: 0; left: 0; right: 0; background: var(--bg-base); padding: 8px; margin: 0; font-size: 12px; }
 .chat-section, .preview-section { min-width: 0; min-height: 0; }
 .main-content { min-height: 0; }
+.main-content.resizable-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, var(--left-share)) 1px minmax(0, var(--right-share));
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+}
+/* 页签已有滚动位置恢复逻辑，避免浏览器在网格重排后再次调整计划位置。 */
+.resizable-workspace .plan-tab-panel { overflow-anchor: none; }
+.resizable-workspace > .chat-section {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: none;
+}
+.resizable-workspace > .preview-section {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  box-shadow: none;
+}
+.resizable-workspace .preview-header { flex-wrap: nowrap; }
+.resizable-workspace .preview-header h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resizable-workspace .preview-actions { flex-shrink: 0; }
+.workspace-separator { position: relative; z-index: 1; background: var(--border-light); cursor: col-resize; touch-action: none; }
+.workspace-separator::after { content: ''; position: absolute; top: 0; bottom: 0; left: -4px; width: 9px; }
+.workspace-separator:hover,
+.workspace-separator:focus-visible,
+.is-resizing .workspace-separator { background: var(--brand-primary); }
+.workspace-separator:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
+.resizable-workspace.is-resizing { cursor: col-resize; user-select: none; }
+/* 拖动跨越 iframe 时，保持指针事件由分隔线捕获。 */
+.is-resizing .preview-iframe { pointer-events: none; }
 .generation-workspace .chat-section { flex: 1; box-shadow: none; border-radius: 0; }
 .generation-workspace .messages-container { flex: 1; min-height: 0; }
 .generation-workspace .ai-message .message-content { width: 100%; max-width: calc(100% - 40px); }
+.generation-workspace .ai-message .message-content.status-only { width: fit-content; }
 .header-left { min-width: 0; }
 .app-name { overflow-wrap: anywhere; }
 .preview-header { flex-wrap: wrap; gap: 8px; }
@@ -1979,6 +2082,12 @@ onUnmounted(() => {
   .generation-workspace .messages-container { padding: 8px; }
   .message-content { min-width: 0; }
   .workspace-toolbar { padding: 6px 10px; }
+  .preview-header {
+    height: auto;
+    min-height: 0;
+    box-sizing: border-box;
+    padding: 6px 10px;
+  }
   .preview-section { min-height: 240px; }
 }
 </style>
