@@ -37,7 +37,7 @@ public final class UpdatePlanTool extends BaseTool {
         this.scopeManager = scopeManager;
     }
 
-    @Tool("修订当前 Vue 执行计划。发现路径、依赖或步骤不合理时必须先调用。")
+    @Tool("修订当前 Vue 执行计划。发现路径、依赖或步骤不合理时必须先调用。初始只读但已经真实修改并启用变更执行时也可调用；已完成且确认无需继续修改的文件明确为 KEEP，非 KEEP 的直接修订仍需后续真实修改。")
     public String updatePlan(
             @P("修订原因") String reason,
             @P("新增文件 JSON 数组") String add,

@@ -177,6 +177,7 @@ public final class ToolLoopTerminationProtocol {
         BUILD_SUCCEEDED,
         BUILD_FAILED,
         BUILD_STALLED,
+        PLAN_INITIALIZATION_FAILED,
         EVALUATION_COMPLETED,
         CANCELLED,
         PROTOCOL_ERROR,
@@ -197,7 +198,7 @@ public final class ToolLoopTerminationProtocol {
             boolean validFinalResponse = switch (reason) {
                 case BUILD_SUCCEEDED -> SUCCESS_RESPONSE.equals(finalResponse);
                 case BUILD_FAILED -> FAILURE_RESPONSE.equals(finalResponse);
-                case EVALUATION_COMPLETED, CANCELLED, PROTOCOL_ERROR, BUILD_STALLED,
+                case EVALUATION_COMPLETED, CANCELLED, PROTOCOL_ERROR, BUILD_STALLED, PLAN_INITIALIZATION_FAILED,
                         LOOP_LIMIT_EXCEEDED, REPEATED_READ_LOOP,
                         INCOMPLETE_TOOL_CHAIN,
                         RESOURCE_LIMIT_EXCEEDED ->

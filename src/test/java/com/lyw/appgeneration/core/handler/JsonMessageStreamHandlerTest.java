@@ -961,6 +961,47 @@ class JsonMessageStreamHandlerTest {
     }
 
     @Test
+    void 初始只读真实修改和构建后发布可刷新成功终态() throws Exception {
+        try (var h = new com.lyw.appgeneration.ai.tools.ReadOnlyMutationPromotionTest.Harness(true)) {
+            h.context.commitUser(() -> true);
+            h.modify();
+            var built = h.build();
+            h.context.recordControlledTermination(dev.langchain4j.service.ToolExecutionGuard.direct()
+                    .execute("buildProject", h.appId, built::toolResult).controlledTermination());
+            when(finalizer.finalizeOnce(eq(h.context), any())).thenAnswer(invocation ->
+                    new VueTurnFinalizer.FinalizationResult(invocation.getArgument(1), true));
+            var output = handler.handle(Flux.empty(), h.context).collectList().block();
+            VueTurnOutcome outcome = outcomeOf(output.getLast());
+            assertEquals(VueTurnOutcome.TurnOutcomeType.SUCCEEDED, outcome.outcome());
+            assertTrue(outcome.shouldRefreshPreview());
+            assertEquals(VueTurnMode.READ_ONLY, h.context.turnMode());
+            assertEquals(1, output.stream().filter(event -> event instanceof GenerationStreamEvent.TurnOutcome).count());
+        }
+    }
+
+    @Test
+    void 计划初始化失败映射系统异常且不刷新预览() {
+        VueTurnContext context = context("promotion-init-failed", VueBuildPhase.GENERATING);
+        var reason = ToolLoopTerminationProtocol.ControlledTerminationReason.PLAN_INITIALIZATION_FAILED;
+        context.recordControlledTermination(new ToolLoopTerminationProtocol.ControlledTermination(reason, null));
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome outcome = invocation.getArgument(1);
+            assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR, outcome.outcome());
+            assertFalse(outcome.shouldRefreshPreview());
+            assertEquals(VueTurnFinalizer.PLAN_INITIALIZATION_FAILED_MESSAGE, outcome.clientMessage());
+            assertFalse(outcome.memoryAiText().contains("三次"));
+            assertTrue(com.lyw.appgeneration.ai.tools.FileToolBudgetGuard.codePointCount(outcome.clientMessage())
+                    < VueTurnFinalizer.terminalReserveCodePoints());
+            return new VueTurnFinalizer.FinalizationResult(outcome, true);
+        });
+        var output = handler.handle(Flux.error(new AiCodeGeneratorFacade.OnlineControlledTerminationException(reason)), context)
+                .collectList().block();
+        assertEquals(1, output.stream().filter(event -> event instanceof GenerationStreamEvent.TurnOutcome).count());
+        assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR, outcomeOf(output.getLast()).outcome());
+        context.closeResources();
+    }
+
+    @Test
     void 构建停滞按FAILED保留实际次数并不刷新预览() {
         for (var reason : List.of(com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.Reason.NO_PLAN,
                 com.lyw.appgeneration.ai.plan.BuildBlockDiagnostic.Reason.CODE_MUTATION_REQUIRED)) {

@@ -1,0 +1,303 @@
+{
+  "version": 1,
+  "profile": "strict",
+  "environment": "Java 25、Maven，user.dir/java.io.tmpdir 隔离到项目 .codex；真实文件工具与受控构建/模型/数据库替身。前端 Vitest，无真实模型或数据库写入。",
+  "requirements": [
+    {
+      "id": "vue-mutation-promotion/真实修改统一升级执行权限",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-mutation-promotion/spec.md",
+      "scenarios": [
+        "首次修改和后续构建",
+        "无真实修改"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-mutation-promotion/首次升级衔接计划且保持现有状态规则",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-mutation-promotion/spec.md",
+      "scenarios": [
+        "有计划和计划外变更",
+        "无计划时补计划"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-mutation-promotion/升级反馈可靠提交后有效送达",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-mutation-promotion/spec.md",
+      "scenarios": [
+        "续行压缩恢复及重复事件"
+      ],
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-mutation-promotion/初始化失败保留真实结果并唯一收口",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-mutation-promotion/spec.md",
+      "scenarios": [
+        "初始化故障或工具结果提交失败",
+        "取消超时删除与迟到回调"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/dev/langchain4j/service/ToolLoopTerminationProtocol.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnCancellationCoordinatorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceDeletionLifecycleTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划工具必须使用独立受信结果协议",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-soft-replan/spec.md",
+      "scenarios": [
+        "计划工具结果进入可信执行记录",
+        "文件工具协议兼容",
+        "只读和评测作用域"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划操作必须遵守作用域和取消边界",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-soft-replan/spec.md",
+      "scenarios": [
+        "只读回合尝试创建计划",
+        "真实修改后计划操作",
+        "回合取消期间写计划"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-build-progress-guard/构建拒绝必须具有可信具体诊断",
+      "source": "openspec/changes/fix-readonly-mutation-promotion/specs/vue-build-progress-guard/spec.md",
+      "scenarios": [
+        "计划与代码阻塞",
+        "不适用的拒绝和正常重试",
+        "首次升级观察"
+      ],
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "1.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "1.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "2.1",
+      "implementation": [
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "2.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java"
+      ],
+      "tests": [
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "3.1",
+      "implementation": [
+        "openspec/specs/vue-soft-replan/spec.md",
+        "openspec/specs/vue-build-progress-guard/spec.md",
+        "openspec/specs/vue-mutation-promotion/spec.md",
+        "src/main/resources/prompt/codegen-vue-project-system-prompt.txt"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/11-openspec.log",
+        ".codex/fix-readonly-mutation-promotion/logs/spec-vue-soft-replan.log",
+        ".codex/fix-readonly-mutation-promotion/logs/spec-vue-build-progress-guard.log",
+        ".codex/fix-readonly-mutation-promotion/logs/spec-vue-mutation-promotion.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "3.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/tools/FileToolExecutionScopeManager.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts"
+      ],
+      "evidence": [
+        ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log",
+        ".codex/fix-readonly-mutation-promotion/logs/10-boundary.log",
+        ".codex/fix-readonly-mutation-promotion/logs/08-frontend.log"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "bash mvnw '-DargLine=-Djava.io.tmpdir=/Users/terminus1/Documents/ai-gen-soft/ai-app-generation/.codex/fix-readonly-mutation-promotion/tmp -Duser.dir=/Users/terminus1/Documents/ai-gen-soft/ai-app-generation/.codex/fix-readonly-mutation-promotion/run-root' -Dtest=ReadOnlyMutationPromotionTest,MutationPromotionStreamingTest,BuildBlockDiagnosticTest,BuildProgressGuardTest,BuildProgressStreamingTest,BuildProjectPlanGateTest,BuildProjectToolTest,VueBuildSessionManagerTest,AiCodeGeneratorFacadeTest,AiServiceStreamingResponseHandlerTest,AiServiceTokenStreamTest,StreamingRequestControllerRecoveryTest,StreamingRequestControllerReplanTest,ReplanContextTest,ReplanDetectorTest,PlanToolTest,PlanToolProtocolSupportTest,AppPlanStateManagerTest,ModelRequestGateTest,ContextCompressionModelRequestGateTest,GenerationSignalPublisherTest,GenerationDisclosureBufferTest,ToolLoopTerminationProtocolTest,JsonMessageStreamHandlerTest,VueTurnContextTest,VueTurnFinalizerTest,VueTurnMemoryProjectionTest,VueTurnCancellationCoordinatorTest,GenerationSseEncoderTest,AppServiceDeletionLifecycleTest,AppPlanQueryServiceTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/09-regression-green.log",
+      "finished_at": "2026-09-22T14:45:51+08:00"
+    },
+    {
+      "command": "bash mvnw '-DargLine=-Djava.io.tmpdir=/Users/terminus1/Documents/ai-gen-soft/ai-app-generation/.codex/fix-readonly-mutation-promotion/tmp -Duser.dir=/Users/terminus1/Documents/ai-gen-soft/ai-app-generation/.codex/fix-readonly-mutation-promotion/run-root' -Dtest=FileToolSecurityTest,FileToolBudgetGuardTest,AppPlanQueryLifecycleTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/10-boundary.log",
+      "finished_at": "2026-09-22T14:46:55+08:00"
+    },
+    {
+      "command": "npm run test",
+      "cwd": "ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/08-frontend.log"
+    },
+    {
+      "command": "openspec validate fix-readonly-mutation-promotion --strict",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/11-openspec.log"
+    },
+    {
+      "command": "openspec validate vue-soft-replan --type spec --strict",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/spec-vue-soft-replan.log"
+    },
+    {
+      "command": "openspec validate vue-build-progress-guard --type spec --strict",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/spec-vue-build-progress-guard.log"
+    },
+    {
+      "command": "openspec validate vue-mutation-promotion --type spec --strict",
+      "cwd": ".",
+      "exit_code": 0,
+      "evidence": ".codex/fix-readonly-mutation-promotion/logs/spec-vue-mutation-promotion.log"
+    }
+  ]
+}

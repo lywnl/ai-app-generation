@@ -1,6 +1,10 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import com.lyw.appgeneration.ai.plan.AppPlan;
+import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
+import com.lyw.appgeneration.ai.plan.PlanStatus;
+import com.lyw.appgeneration.ai.plan.ReplanDetector;
 import dev.langchain4j.service.BuildProgressGuard;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
@@ -84,6 +88,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             new TurnProgressChannel();
     private final FileToolBudgetGuard.Session budgetSession;
     private final ReplanContext replanContext = new ReplanContext();
+    private boolean planContextReady;
     private final BuildProgressGuard buildProgressGuard;
 
     VueTurnContext(long appId, long userId, String turnId,
@@ -306,6 +311,31 @@ public final class VueTurnContext implements ContextContinuationGate {
         VueTurnMode mode = turnMode();
         long mutationRevision = mutationRevision();
         return mode == VueTurnMode.MUTATION_REQUIRED || mutationRevision > 0L;
+    }
+
+    /** 所有入口先取得租约边界，防止初始装配与首次修改走相反锁序。 */
+    public AppPlan initializePlanContext(AppPlanStateManager manager) {
+        if (manager == null) return null;
+        return commitPlanState(() -> {
+            if (planContextReady) return null;
+            var plan = manager.loadForTurn(appId, turnId).orElse(null);
+            replanContext.setDetector(new ReplanDetector(
+                    manager, appId, turnId)::detect);
+            replanContext.setAcceptedDeviationHandler(deviation -> commitPlanState(() -> {
+                manager.markReplanPending(appId, turnId);
+                return null;
+            }));
+            replanContext.setFailOpenHandler(() -> commitPlanState(() -> {
+                manager.clearReplanPending(appId, turnId);
+                return null;
+            }));
+            if (plan != null && plan.status() == PlanStatus.REPLAN_PENDING) {
+                replanContext.restorePending("上一回合计划仍有未处理偏差，请先修订计划",
+                        "计划 version=" + plan.version());
+            }
+            planContextReady = true;
+            return plan;
+        });
     }
 
     /** ANSWERED 只能用于尚未发生真实变更的只读回合。 */

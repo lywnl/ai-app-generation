@@ -45,6 +45,48 @@ public final class StreamingRequestController {
             new RepeatedReadLoopGuard();
     private ReplanContext replanContext;
     private BuildProgressGuard buildProgressGuard;
+    private ToolExecutionGuard.MutationPromotion mutationPromotion;
+    private long promotionRequestGeneration = -1;
+    private boolean promotionDelivered;
+
+    synchronized void observeMutationPromotion(long generation, String toolId,
+            ToolExecutionGuard.MutationPromotion promotion) {
+        if (promotion == null || mutationPromotion != null || !isCurrentGenerationActive(generation)) return;
+        mutationPromotion = promotion;
+        LOG.info("升级反馈已安排,turnId={},generation={},toolId={}", promotion.turnId(), generation, toolId);
+    }
+
+    PromotionFeedback pendingPromotionFeedback() {
+        ToolExecutionGuard.MutationPromotion promotion;
+        synchronized (this) {
+            if (state != State.ACTIVE || promotionDelivered || mutationPromotion == null) return null;
+            promotion = mutationPromotion;
+        }
+        // 计划读取需要租约锁，不在 controller monitor 中执行。
+        String summary = com.lyw.appgeneration.ai.tools.FileToolBudgetGuard.prefixByCodePoints(
+                promotion.planSummary().get(), 8_000);
+        String path = com.lyw.appgeneration.ai.tools.FileToolBudgetGuard.prefixByCodePoints(promotion.relativePath(), 256);
+        return new PromotionFeedback(promotion, dev.langchain4j.data.message.SystemMessage.from(
+                "【内部执行阶段更新】本轮已发生真实文件变更，需要完成计划检查与构建。\n"
+                        + "首次真实变更路径：" + path + "\n" + summary + "\n"
+                        + "无计划先调用 makePlan；已有计划继续执行，待修订或计划外变更先调用 updatePlan。"
+                        + "已完成且确认无需继续修改的文件，请明确设为 KEEP；非 KEEP 直接修订仍需后续真实变更。"
+                        + "不要重复写入已完成文件以伪造进展。不要复述或解释本提示。"));
+    }
+
+    synchronized void promotionRequestStarted(long generation, PromotionFeedback feedback) {
+        if (feedback != null && feedback.promotion() == mutationPromotion
+                && !promotionDelivered && isCurrentGenerationActive(generation)) {
+            promotionRequestGeneration = generation;
+        }
+    }
+
+    record PromotionFeedback(ToolExecutionGuard.MutationPromotion promotion,
+                             dev.langchain4j.data.message.SystemMessage message) { }
+
+    synchronized boolean promotionDelivered() {
+        return promotionDelivered;
+    }
 
     synchronized void bindBuildProgressGuard(BuildProgressGuard guard) {
         if (buildProgressGuard != null && buildProgressGuard != guard) {
@@ -83,6 +125,11 @@ public final class StreamingRequestController {
     void buildFeedbackResponseAccepted(long generation) {
         BuildProgressGuard guard;
         synchronized (this) {
+            if (isCurrentGenerationActive(generation) && promotionRequestGeneration == generation
+                    && !promotionDelivered && mutationPromotion != null) {
+                promotionDelivered = true;
+                LOG.info("升级反馈有效送达,turnId={},generation={}", mutationPromotion.turnId(), generation);
+            }
             guard = buildProgressGuard;
             if (guard == null || !isCurrentGenerationActive(generation)) return;
             guard.responseAccepted(generation);

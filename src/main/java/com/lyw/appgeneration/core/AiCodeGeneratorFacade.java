@@ -9,8 +9,6 @@ import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope;
 import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
 import com.lyw.appgeneration.ai.plan.AppPlan;
-import com.lyw.appgeneration.ai.plan.PlanStatus;
-import com.lyw.appgeneration.ai.plan.ReplanDetector;
 import com.lyw.appgeneration.ai.skill.SkillCatalog;
 import com.lyw.appgeneration.ai.model.HtmlCodeResult;
 import com.lyw.appgeneration.ai.model.MultiFileCodeResult;
@@ -311,30 +309,8 @@ public class AiCodeGeneratorFacade {
                 == VueTurnMode.MUTATION_REQUIRED;
         List<ChatMessage> planTransientMessages = List.of();
         if (mutationTurn && appPlanStateManager != null) {
-            AppPlan currentPlan = turnContext.commitPlanState(() ->
-                    appPlanStateManager.loadForTurn(appId, turnContext.turnId())
-                            .orElse(null));
-            turnContext.replanContext().setDetector(
-                    new ReplanDetector(appPlanStateManager, appId,
-                            turnContext.turnId())::detect);
-            turnContext.replanContext().setAcceptedDeviationHandler(
-                    deviation -> turnContext.commitPlanState(() -> {
-                        appPlanStateManager.markReplanPending(
-                                appId, turnContext.turnId());
-                        return null;
-                    }));
-            turnContext.replanContext().setFailOpenHandler(() ->
-                    turnContext.commitPlanState(() -> {
-                        appPlanStateManager.clearReplanPending(
-                                appId, turnContext.turnId());
-                        return null;
-                    }));
+            AppPlan currentPlan = turnContext.initializePlanContext(appPlanStateManager);
             if (currentPlan != null) {
-                if (currentPlan.status() == PlanStatus.REPLAN_PENDING) {
-                    turnContext.replanContext().restorePending(
-                            "上一回合计划仍有未处理偏差，请先修订计划",
-                            "计划 version=" + currentPlan.version());
-                }
                 planTransientMessages = List.of(
                         SystemMessage.from(
                                 appPlanStateManager.toPromptContext(currentPlan)));
@@ -574,14 +550,16 @@ public class AiCodeGeneratorFacade {
                 fileToolExecutionScopeManager.online(
                         context.lease(), context.turnId(), context.appId(),
                         Set.copyOf(VueToolNames.ONLINE), context.budgetSession(),
-                        () -> context.turnMode() == VueTurnMode.MUTATION_REQUIRED,
-                        context.replanContext());
+                        context::requiresBuild,
+                        context.replanContext(),
+                        () -> context.initializePlanContext(appPlanStateManager));
         ToolExecutionGuard directGuard = ToolExecutionGuard.direct();
         tokenStream.toolExecutionGuard((toolName, memoryId, action) -> {
             var observed = fileToolExecutionScopeManager.callInScopeWithBuildObservation(scope, toolName, action);
             var trusted = directGuard.execute(toolName, memoryId, observed::toolResult);
             return new ToolExecutionGuard.GuardedToolExecution(trusted.toolResult(),
-                    trusted.controlledTermination(), observed.buildObservation());
+                    observed.controlledTermination() != null ? observed.controlledTermination() : trusted.controlledTermination(),
+                    observed.buildObservation(), observed.mutationPromotion());
         });
         return Flux.create(sink -> {
             AtomicBoolean terminated = new AtomicBoolean();
@@ -969,7 +947,7 @@ public class AiCodeGeneratorFacade {
         return switch (termination.reason()) {
             case BUILD_SUCCEEDED, BUILD_FAILED -> null;
             case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                    REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN, BUILD_STALLED,
+                    REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN, BUILD_STALLED, PLAN_INITIALIZATION_FAILED,
                     RESOURCE_LIMIT_EXCEEDED,
                     EVALUATION_COMPLETED -> new OnlineControlledTerminationException(
                     termination.reason());

@@ -33,7 +33,7 @@ public final class MakePlanTool extends BaseTool {
         this.scopeManager = scopeManager;
     }
 
-    @Tool("仅在工程变更回合且项目没有现有计划时创建完整执行计划，必须在文件变更前调用。已有计划时不要调用本工具；需要调整计划时使用 updatePlan，仅继续执行时沿用已有计划。")
+    @Tool("仅在工程变更执行阶段且项目没有现有计划时创建完整执行计划，正常回合必须在文件变更前调用。初始只读但已真实修改并由系统启用变更执行时允许补建计划，已完成且无需继续修改的条目明确为 KEEP。已有计划时不要调用本工具；需要调整计划时使用 updatePlan，仅继续执行时沿用已有计划。")
     public String makePlan(
             @P("项目目标摘要") String summary,
             @P("计划文件 JSON 数组，每项包含 path、purpose、action、dependsOn") String files,

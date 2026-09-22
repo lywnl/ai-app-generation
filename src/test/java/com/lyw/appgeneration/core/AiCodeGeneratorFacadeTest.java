@@ -633,6 +633,11 @@ class AiCodeGeneratorFacadeTest {
         assertEquals("turn-online", stream.observedScope.ownerToken());
         assertTrue(context.controlledTermination().isEmpty());
         assertEquals(1, stream.gateInstallations.get());
+        assertFalse(stream.observedScope.mutationAllowed().getAsBoolean());
+        lease.recordSuccessfulMutation();
+        assertEquals(VueTurnMode.READ_ONLY, context.turnMode());
+        assertTrue(stream.observedScope.mutationAllowed().getAsBoolean(),
+                "facade 必须使用真实变更后的有效权限，不能捕获初始模式");
         context.closeResources();
     }
 
@@ -1301,7 +1306,7 @@ class AiCodeGeneratorFacadeTest {
                 case BUILD_FAILED ->
                         "抱歉，系统遇到了一些问题，请您稍后重试修复";
                 case CANCELLED, PROTOCOL_ERROR, LOOP_LIMIT_EXCEEDED,
-                        REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN, BUILD_STALLED,
+                        REPEATED_READ_LOOP, INCOMPLETE_TOOL_CHAIN, BUILD_STALLED, PLAN_INITIALIZATION_FAILED,
                         RESOURCE_LIMIT_EXCEEDED,
                         EVALUATION_COMPLETED -> null;
             };

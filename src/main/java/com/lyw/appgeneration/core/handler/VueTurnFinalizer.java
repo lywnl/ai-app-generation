@@ -35,6 +35,8 @@ public class VueTurnFinalizer implements InitializingBean {
             BuildProjectToolResult.FAILURE_RESPONSE;
     public static final String SYSTEM_ERROR_MESSAGE =
             "生成过程中遇到系统异常，请稍后重试。";
+    public static final String PLAN_INITIALIZATION_FAILED_MESSAGE =
+            "文件修改已保留，但计划上下文初始化或同步失败，本轮已停止，网站预览未更新。请稍后重试。";
     public static final String PROTOCOL_MESSAGE =
             "项目尚未通过真实构建，请重新生成。";
     public static final String SCOPE_PROTOCOL_MESSAGE =
@@ -59,6 +61,7 @@ public class VueTurnFinalizer implements InitializingBean {
             SUCCESS_MESSAGE,
             BUILD_FAILED_MESSAGE,
             SYSTEM_ERROR_MESSAGE,
+            PLAN_INITIALIZATION_FAILED_MESSAGE,
             PROTOCOL_MESSAGE,
             SCOPE_PROTOCOL_MESSAGE,
             LOOP_LIMIT_MESSAGE,

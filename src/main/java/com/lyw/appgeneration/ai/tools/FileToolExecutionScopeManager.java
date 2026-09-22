@@ -21,6 +21,7 @@ import java.util.function.BooleanSupplier;
 
 /** 为文件类工具提供不跨线程泄漏的词法执行权限。 */
 @Component
+@lombok.extern.slf4j.Slf4j
 public final class FileToolExecutionScopeManager {
 
     private static final ScopedValue<FileToolScope> CURRENT_SCOPE = ScopedValue.newInstance();
@@ -87,6 +88,14 @@ public final class FileToolExecutionScopeManager {
             FileToolBudgetGuard.Session budgetSession,
             BooleanSupplier mutationAllowed,
             ReplanContext replanContext) {
+        return online(lease, ownerToken, appId, allowedTools, budgetSession,
+                mutationAllowed, replanContext, () -> { });
+    }
+
+    public FileToolScope online(
+            VueBuildLease lease, String ownerToken, long appId, Set<String> allowedTools,
+            FileToolBudgetGuard.Session budgetSession, BooleanSupplier mutationAllowed,
+            ReplanContext replanContext, Runnable initializePlanContext) {
         Objects.requireNonNull(lease, "lease 不能为空");
         VueBuildSnapshot snapshot = lease.snapshot();
         if (snapshot.appId() != appId || !snapshot.turnId().equals(ownerToken)) {
@@ -96,7 +105,7 @@ public final class FileToolExecutionScopeManager {
                 ScopeType.ONLINE, appId, ownerToken, Set.copyOf(allowedTools), lease,
                 null, budgetSession, new SkillReadSession(), scopeAuthority,
                 Objects.requireNonNull(mutationAllowed, "计划变更权限不能为空"),
-                replanContext, planStateManager);
+                replanContext, planStateManager, initializePlanContext);
     }
 
     public FileToolScope evaluation(
@@ -148,7 +157,8 @@ public final class FileToolExecutionScopeManager {
             return action.get();
         }));
         BuildProgressGuard.Observation observation = null;
-        if (observe) {
+        if (!capture.initializationFailed && scope.type() == ScopeType.ONLINE
+                && scope.mutationAllowed().getAsBoolean() && scope.planStateManager() != null) {
             var fact = VueToolExecutionFact.parse(toolName, result).orElse(null);
             boolean successfulMutation = fact != null && fact.changedRelativePath() != null;
             boolean successfulPlan = fact != null && ("makePlan".equals(toolName) || "updatePlan".equals(toolName))
@@ -170,7 +180,11 @@ public final class FileToolExecutionScopeManager {
                 // 取消先赢时仍保留真实工具结果，由结果提交栅栏决定发布，观察不得推进。
             }
         }
-        return new ToolExecutionGuard.GuardedToolExecution(result, null, observation);
+        var termination = capture.initializationFailed
+                ? new dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTermination(
+                        dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason.PLAN_INITIALIZATION_FAILED, null)
+                : null;
+        return new ToolExecutionGuard.GuardedToolExecution(result, termination, observation, capture.promotion);
     }
 
     public void recordBuildRejection(FileToolScope scope, BuildBlockDiagnostic diagnostic) {
@@ -191,6 +205,8 @@ public final class FileToolExecutionScopeManager {
         private BuildBlockDiagnostic before;
         private BuildBlockDiagnostic rejection;
         private boolean failOpenBefore;
+        private boolean initializationFailed;
+        private ToolExecutionGuard.MutationPromotion promotion;
     }
 
     private void requireToolName(FileToolScope scope, String toolName) {
@@ -256,21 +272,35 @@ public final class FileToolExecutionScopeManager {
                 && FileToolProtocolSupport.isAppliedMutation(result, toolName)) {
             String relativePath = FileToolProtocolSupport.parseTrustedResult(
                     result, toolName).relativePath();
-            if (scope.replanContext() != null) {
-                // 先观察原始可信结果，再归档计划状态，避免计划外路径被提前加入计划后丢失偏差信号。
-                scope.replanContext().observeToolExecution(toolName, result);
-            }
             scope.lease().commitWhileActive(() -> {
-                if (scope.replanContext() != null
-                        && scope.replanContext().replanPending()
-                        && scope.planStateManager() != null) {
-                    scope.planStateManager().markReplanPending(
-                            scope.appId(), scope.ownerToken());
-                }
+                boolean promoted = !scope.mutationAllowed().getAsBoolean();
                 scope.lease().recordSuccessfulMutation();
-                if (scope.planStateManager() != null) {
-                    scope.planStateManager().recordSuccessfulMutation(
-                            scope.appId(), scope.ownerToken(), relativePath);
+                try {
+                    scope.initializePlanContext().run();
+                    if (scope.replanContext() != null) {
+                        // 先检测再归档路径，避免首次计划外修改被误认成计划内修改。
+                        scope.replanContext().observeToolExecution(toolName, result);
+                    }
+                    if (scope.planStateManager() != null) {
+                        if (scope.replanContext() != null && scope.replanContext().replanPending()) {
+                            scope.planStateManager().markReplanPending(scope.appId(), scope.ownerToken());
+                        }
+                        scope.planStateManager().recordSuccessfulMutation(scope.appId(), scope.ownerToken(), relativePath);
+                    }
+                    if (promoted && BUILD_OBSERVATION.isBound()) {
+                        BUILD_OBSERVATION.get().promotion = new ToolExecutionGuard.MutationPromotion(
+                                scope.ownerToken(), relativePath, () -> scope.lease().commitWhileActive(() ->
+                                scope.planStateManager() == null ? "当前项目没有计划，请调用 makePlan。"
+                                        : scope.planStateManager().load(scope.appId())
+                                        .map(scope.planStateManager()::toPromptContext)
+                                        .orElse("当前项目没有计划，请调用 makePlan。")));
+                        log.info("只读回合真实修改后升级,appId={},turnId={}", scope.appId(), scope.ownerToken());
+                    }
+                } catch (RuntimeException failure) {
+                    if (!BUILD_OBSERVATION.isBound()) throw failure;
+                    BUILD_OBSERVATION.get().initializationFailed = true;
+                    log.warn("真实修改后计划衔接失败,appId={},turnId={},failureType={}",
+                            scope.appId(), scope.ownerToken(), failure.getClass().getSimpleName());
                 }
                 return null;
             });
@@ -375,7 +405,16 @@ public final class FileToolExecutionScopeManager {
                 ScopeAuthority authority,
                 BooleanSupplier mutationAllowed,
                 ReplanContext replanContext,
-                AppPlanStateManager planStateManager) {
+                AppPlanStateManager planStateManager,
+                Runnable initializePlanContext) {
+
+        public FileToolScope(ScopeType type, long appId, String ownerToken, Set<String> allowedTools,
+                VueBuildLease lease, EvaluationGate evaluationGate, FileToolBudgetGuard.Session budgetSession,
+                SkillReadSession skillReadSession, ScopeAuthority authority, BooleanSupplier mutationAllowed,
+                ReplanContext replanContext, AppPlanStateManager planStateManager) {
+            this(type, appId, ownerToken, allowedTools, lease, evaluationGate, budgetSession,
+                    skillReadSession, authority, mutationAllowed, replanContext, planStateManager, () -> { });
+        }
 
         public FileToolScope {
             type = Objects.requireNonNull(type, "type 不能为空");
@@ -384,6 +423,7 @@ public final class FileToolExecutionScopeManager {
                     Objects.requireNonNull(allowedTools, "allowedTools 不能为空"));
             Objects.requireNonNull(authority, "authority 不能为空");
             Objects.requireNonNull(mutationAllowed, "计划变更权限不能为空");
+            Objects.requireNonNull(initializePlanContext, "计划初始化回调不能为空");
             Objects.requireNonNull(budgetSession, "文件工具预算会话不能为空");
             if (type == ScopeType.ONLINE && skillReadSession == null) {
                 throw new IllegalArgumentException("在线作用域必须绑定 Skill 读取会话");

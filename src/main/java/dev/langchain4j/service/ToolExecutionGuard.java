@@ -28,7 +28,14 @@ public interface ToolExecutionGuard {
     record GuardedToolExecution(
             String toolResult,
             ToolLoopTerminationProtocol.ControlledTermination controlledTermination,
-            BuildProgressGuard.Observation buildObservation) {
+            BuildProgressGuard.Observation buildObservation,
+            MutationPromotion mutationPromotion) {
+
+        public GuardedToolExecution(String toolResult,
+                ToolLoopTerminationProtocol.ControlledTermination controlledTermination,
+                BuildProgressGuard.Observation buildObservation) {
+            this(toolResult, controlledTermination, buildObservation, null);
+        }
 
         public GuardedToolExecution(String toolResult,
                 ToolLoopTerminationProtocol.ControlledTermination controlledTermination) {
@@ -37,6 +44,15 @@ public interface ToolExecutionGuard {
 
         public GuardedToolExecution {
             Objects.requireNonNull(toolResult, "toolResult 不能为空");
+        }
+    }
+
+    /** 仅内部使用，计划摘要在下一请求准备时读取，同批工具修订不会留下旧摘要。 */
+    record MutationPromotion(String turnId, String relativePath, Supplier<String> planSummary) {
+        public MutationPromotion {
+            Objects.requireNonNull(turnId);
+            Objects.requireNonNull(relativePath);
+            Objects.requireNonNull(planSummary);
         }
     }
 }
