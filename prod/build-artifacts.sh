@@ -27,4 +27,4 @@ cp -R "$ROOT/embed_text" "$PROD/embed_text"
 cp "$ROOT/grafana/ai-model-observability-dashboard.json" "$PROD/grafana/dashboards/"
 
 date -u +%Y%m%d-%H%M%S > "$PROD/artifacts/RELEASE"
-run python3 "$PROD/package-release.py"
+run python3 -B "$PROD/package-release.py" --manifest-only

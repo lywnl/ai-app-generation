@@ -433,7 +433,7 @@ ai-app-generation/
 │   ├── artifacts/                      # 构建产物（jar + 前端 dist）
 │   ├── build-artifacts.ps1             # 一键打包脚本
 │   ├── build-artifacts.sh              # macOS/Linux 构建入口
-│   ├── package-release.py             # 按清单生成版本发布包及完整校验和
+│   ├── package-release.py             # 生成产物校验清单，保留手动压缩入口
 │   ├── tools/                         # Milvus 模板导入和核验工具
 │   ├── deploy.sh                       # Linux 部署、校验和健康验收
 │   ├── .env.example
@@ -808,9 +808,9 @@ Vue 业务层使用 30 分钟绝对截止，Spring 的 30 分 45 秒用于终态
 # 1. 本地打包前后端产物到 prod/artifacts/
 .\prod\build-artifacts.ps1
 
-# 2. 上传脚本输出的 .codex/releases/<版本>/prod.tar.gz
-# 先解压到临时版本目录，在其中执行 sha256sum -c artifacts/SHA256SUMS
-# 校验通过后更新服务器 prod 目录，保留原 .env
+# 2. 上传构建完成的整个 prod 目录（包含 .dockerignore、.env.example）
+# 不再自动生成压缩包；服务器在 prod 内执行 sha256sum -c artifacts/SHA256SUMS
+# 保留服务器原 .env，不上传本地真实 .env，也不要混入旧 dist 文件
 
 # 3. 服务器进入 prod 目录
 cd /opt/ai-app-generation/prod

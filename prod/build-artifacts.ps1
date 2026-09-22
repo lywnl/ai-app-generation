@@ -44,4 +44,4 @@ Copy-Item -Force (Join-Path $ProjectRoot "grafana\ai-model-observability-dashboa
 
 $release = Get-Date -Format "yyyyMMdd-HHmmss"
 Set-Content -Path $releaseFile -Value $release -Encoding utf8
-Invoke-Checked $Python @((Join-Path $prodDir "package-release.py"))
+Invoke-Checked $Python @("-B", (Join-Path $prodDir "package-release.py"), "--manifest-only")

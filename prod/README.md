@@ -1,4 +1,4 @@
-# 生产部署（上传生成的发布包）
+# 生产部署（上传构建后的 prod 目录）
 
 > 第一版首次升级至第二版必须先完成备份、Milvus 导入和验收。已完成迁移的服务器后续发布无需重复导入，继续复用现有数据卷。
 
@@ -21,9 +21,10 @@ macOS 可执行：
 ```
 
 本地需要 Node/npm、Java/Maven 和 Python 3.9+。macOS 脚本可使用项目 Maven Wrapper。
-脚本严格检查构建退出码，成功后调用 `package-release.py`，在项目根目录
-`.codex/releases/<版本>/` 生成可独立发布的 `prod/` 及 `prod.tar.gz`。
-同版本不覆盖；打包失败不会发布不完整的新版本。
+脚本严格检查构建退出码，成功后调用 `package-release.py --manifest-only`，
+只更新 `prod/artifacts/RELEASE` 和 `prod/artifacts/SHA256SUMS`。
+不会自动生成 `.codex/releases/<版本>/` 发布副本或 `prod.tar.gz`；所有部署产物直接保存在当前 `prod/`。
+构建失败时不要上传目录；只有整个脚本成功退出后，才使用本次产物。
 
 该步骤会生成这些内容：
 
@@ -32,11 +33,13 @@ macOS 可执行：
 - `prod/sql/schema.sql`
 - `prod/embed_text/*`
 - `prod/grafana/dashboards/ai-model-observability-dashboard.json`
+- `prod/artifacts/RELEASE`
+- `prod/artifacts/SHA256SUMS`
 
 ## 2. 上传到服务器
 
-上传脚本输出的 `.codex/releases/<版本>/prod.tar.gz`，先在服务器临时版本目录解压，
-进入解压得到的 `prod/` 校验：
+上传构建完成的整个 `prod/` 目录，包含 `.dockerignore`、`.env.example` 等必要隐藏文件。
+无需上传项目源码，也无需压缩或解压。进入服务器上传目录校验：
 
 ```bash
 sha256sum -c artifacts/SHA256SUMS
@@ -46,17 +49,19 @@ sha256sum -c artifacts/SHA256SUMS
 保留现有 `.env`，将其中的 `RELEASE_ID` 设置为本次 `artifacts/RELEASE` 的版本；
 不要通过整个目录删除或带删除选项的同步来覆盖现有环境。
 
-发布包按明确清单收集 Compose、Dockerfile、前后端、模板、RAG 工具、初始化 SQL 和监控配置，
-SHA-256 覆盖所有打包文件（校验清单自身除外）。真实 `.env`、测试、日志和历史迁移默认不打包。
-`prod/artifacts/SHA256SUMS` 同步记录本地默认发布输入；实际上传以发布包内的清单为准。
+`prod/artifacts/SHA256SUMS` 覆盖部署所需 Compose、Dockerfile、前后端、模板、RAG 工具、
+初始化 SQL、监控配置及目录中已有的 `sql/migrations/*.sql`。上传后不能保留不属于本次构建的旧前端文件；
+先备份再替换 `artifacts/frontend/dist/`，不要把新旧产物混在一起。
+如果本地 `prod/` 存在真实 `.env` 或日志，不要随目录上传；保留服务器自己的 `.env` 和数据卷。
 
-已有应用产物时可单独打包，不重新运行 npm/Maven：
+已有应用产物时可单独更新版本和清单，不重新运行 npm/Maven：
 
 ```bash
-python3 prod/package-release.py --release-id v2-your-release-id
+python3 -B prod/package-release.py --manifest-only --release-id v2-your-release-id
 ```
 
-迁移 SQL 唯一来源为项目根目录 `sql/migrations/`。有数据库变更的发布可以明确选择文件：
+旧的手动压缩入口仍保留，但两个构建脚本不再自动调用。只有明确需要压缩包时才执行不带
+`--manifest-only` 的命令。迁移 SQL 唯一来源为项目根目录 `sql/migrations/`，手动打包可明确选择文件：
 
 ```bash
 python3 prod/package-release.py --release-id v2-your-next-release \
@@ -64,6 +69,7 @@ python3 prod/package-release.py --release-id v2-your-next-release \
 ```
 
 `--migration` 可重复指定，仅打包选中的文件到发布包 `prod/sql/migrations/`，不会执行 SQL。
+采用直接上传方式时，把需要携带的 SQL 复制到 `prod/sql/migrations/` 后再运行 `--manifest-only`。
 执行前仍需备份、判断当前数据库版本并按顺序迁移。普通发布不要重复执行已经完成的迁移，
 已有数据库不能用 `schema.sql` 替代增量迁移。
 
@@ -149,7 +155,7 @@ PEXELS_API_KEY=
 当前完整运行环境要求 Linux AMD64。所有部署应从同一个固定生产目录执行，例如
 `/root/ai_gen_app/prod`，以便共享部署锁与已有相对挂载。
 生产目录需要位于可靠支持 `flock` 的本地文件系统，不应使用不支持该锁语义的共享挂载。
-首次使用新脚本必须重新生成发布包；旧包中的 SHA256SUMS 不包含新脚本及校验工具。
+首次使用新脚本必须重新生成产物和清单；旧 SHA256SUMS 不包含新脚本及校验工具。
 
 普通应用更新：
 
