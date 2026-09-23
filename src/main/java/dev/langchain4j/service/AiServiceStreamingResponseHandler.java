@@ -2,6 +2,7 @@ package dev.langchain4j.service;
 
 import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
+import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -81,6 +82,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             generationStreamSignalHandler;
     private final ContextCompressionAttemptState compressionAttemptState;
     private List<ChatMessage> turnTransientMessages = List.of();
+    private TurnRequestBoundary requestBoundary;
     private final ToolProtocolRecoveryDetector recoveryDetector;
     private final boolean recoveryGeneration;
     private final boolean incompleteRecoveryGeneration;
@@ -1430,7 +1432,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         toolSpecifications,
                         continuationGate,
                         withTurnTransientMessages(recoveryMessages),
-                        compressionAttemptState);
+                        compressionAttemptState,
+                        requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
                         requestGeneration,
@@ -1463,7 +1466,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         continuationGate,
                         withTurnTransientMessages(
                                 recoveryTransientMessages),
-                        compressionAttemptState);
+                        compressionAttemptState,
+                        requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
                         requestGeneration,
@@ -1534,7 +1538,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         toolSpecifications,
                         continuationGate,
                         withTurnTransientMessages(requestTransientMessages),
-                        compressionAttemptState);
+                        compressionAttemptState,
+                        requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.continuation(
                         requestGeneration,
@@ -1636,12 +1641,17 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 compressionAttemptState,
                 generationStreamSignalHandler);
         child.turnTransientMessages(turnTransientMessages);
+        child.turnRequestBoundary(requestBoundary);
         return child;
     }
 
     void turnTransientMessages(List<ChatMessage> messages) {
         this.turnTransientMessages = List.copyOf(
                 messages == null ? List.of() : messages);
+    }
+
+    void turnRequestBoundary(TurnRequestBoundary boundary) {
+        this.requestBoundary = boundary;
     }
 
     private void completeOrdinaryResponse(

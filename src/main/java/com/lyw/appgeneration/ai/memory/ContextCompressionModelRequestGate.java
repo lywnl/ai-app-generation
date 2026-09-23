@@ -96,14 +96,24 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
         }
         ContextContinuationGate continuationGate =
                 ContextContinuationGate.from(request.continuationGate());
-        ContextAdmissionResult admission = coordinator.admit(
+        ContextAdmissionResult admission = request.requestBoundary() == null
+                ? coordinator.admit(
                 memory,
                 request.toolSpecifications(),
                 request.transientMessages(),
                 transition -> publishStarted(
                         continuationGate, transition),
                 continuationGate,
-                request.contextCompressionAttemptState());
+                request.contextCompressionAttemptState())
+                : coordinator.admit(
+                memory,
+                request.toolSpecifications(),
+                request.transientMessages(),
+                transition -> publishStarted(
+                        continuationGate, transition),
+                continuationGate,
+                request.contextCompressionAttemptState(),
+                request.requestBoundary());
         publishCompleted(continuationGate, admission);
         return map(admission);
     }

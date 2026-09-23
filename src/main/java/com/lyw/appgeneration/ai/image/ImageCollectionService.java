@@ -55,11 +55,21 @@ public class ImageCollectionService {
     }
 
     public String enhancePrompt(String originalPrompt) {
+        List<ImageResource> images = collectImages(originalPrompt);
+        return promptBuilder.build(originalPrompt, images);
+    }
+
+    /** 仅收集图片参考资料，不重复包含原始用户需求。 */
+    public String collectPromptContext(String originalPrompt) {
+        return promptBuilder.buildContext(collectImages(originalPrompt));
+    }
+
+    private List<ImageResource> collectImages(String originalPrompt) {
         try {
             ImageCollectionPlan plan = planService.planImageCollection(originalPrompt);
             if (plan == null) {
                 log.warn("图片收集计划为 null,跳过收集");
-                return originalPrompt;
+                return List.of();
             }
             List<CompletableFuture<List<ImageResource>>> futures = new ArrayList<>();
             addFutures(plan.getContentImageTasks(), t ->
@@ -81,10 +91,10 @@ public class ImageCollectionService {
                 }
             }
             log.info("图片并发收集完成,共 {} 张", aggregated.size());
-            return promptBuilder.build(originalPrompt, aggregated);
+            return aggregated;
         } catch (Exception e) {
             log.error("图片收集整体失败,降级为原始提示词: {}", e.getMessage(), e);
-            return originalPrompt;
+            return List.of();
         }
     }
 

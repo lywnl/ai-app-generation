@@ -32,6 +32,7 @@ import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
+import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
@@ -592,6 +593,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private CommittedVueTurn prepareVueTurn(
             long appId, String message, User loginUser,
             VueTurnContext context) {
+        // 在任何历史写入前校验原始用户边界，避免超长请求进入半执行回合。
+        TurnRequestBoundary.of(message, List.of());
         var lastMessage = context.callPreparation(
                 () -> chatHistoryService.getLastMessage(appId));
         boolean hasHistory = lastMessage != null;

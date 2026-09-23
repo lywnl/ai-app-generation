@@ -1,6 +1,7 @@
 package dev.langchain4j.service;
 
 import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
+import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.memory.ChatMemory;
@@ -43,7 +44,8 @@ public interface ModelRequestGate {
             List<ToolSpecification> toolSpecifications,
             ContinuationGate continuationGate,
             List<ChatMessage> transientMessages,
-            ContextCompressionAttemptState contextCompressionAttemptState) {
+            ContextCompressionAttemptState contextCompressionAttemptState,
+            TurnRequestBoundary requestBoundary) {
 
         /** 兼容既有调用；生产模型请求必须显式传入回合共享状态。 */
         public Request(
@@ -53,7 +55,19 @@ public interface ModelRequestGate {
                 ContinuationGate continuationGate,
                 List<ChatMessage> transientMessages) {
             this(memoryId, latestMemory, toolSpecifications, continuationGate,
-                    transientMessages, new ContextCompressionAttemptState());
+                    transientMessages, new ContextCompressionAttemptState(), null);
+        }
+
+        /** 兼容带共享压缩状态的既有调用。 */
+        public Request(
+                Object memoryId,
+                Supplier<ChatMemory> latestMemory,
+                List<ToolSpecification> toolSpecifications,
+                ContinuationGate continuationGate,
+                List<ChatMessage> transientMessages,
+                ContextCompressionAttemptState contextCompressionAttemptState) {
+            this(memoryId, latestMemory, toolSpecifications, continuationGate,
+                    transientMessages, contextCompressionAttemptState, null);
         }
 
         public Request {

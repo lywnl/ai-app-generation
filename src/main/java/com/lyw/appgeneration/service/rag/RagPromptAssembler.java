@@ -15,9 +15,8 @@ import java.util.Map;
 import java.util.StringJoiner;
 
 /**
- * Prompt 拼装器:把召回到的模板片段作为"参考模板"前置到用户消息
- * 之所以前置到 userMessage 而非注入 systemPrompt,是因为项目用 @SystemMessage(fromResource=...)
- * 静态加载,动态替换成本高。前置到 user message 是等效且零 prompt 模板改动的方案。
+ * Prompt 拼装器：把召回到的模板片段整理为有边界的参考上下文。
+ * 在线 Vue 回合通过临时 SystemMessage 注入，兼容入口仍可生成完整增强文本。
  *
  * @author lyw
  */
@@ -104,23 +103,26 @@ public class RagPromptAssembler {
     }
 
     /**
-     * 将完整 Vue 父文档拼装成工程约束明确、检索上下文预算有界的生成请求。
-     * 用户需求不属于检索上下文，因此始终原样放在最后，不参与 12000 字符预算。
+     * 将完整 Vue 父文档拼装成兼容入口使用的生成请求。
      *
-     * @param generationRequest 图片增强后的完整用户需求
+     * @param generationRequest 用户需求或兼容入口的增强需求
      * @param context           Vue 工程骨架与功能片段；目录不可用时可为空
      * @return Vue 工程生成输入
      */
     public String assembleVueProject(String generationRequest, VueRagContext context) {
+        return assembleVueProjectContext(context)
+                + "## 用户生成需求\n"
+                + (generationRequest == null ? "" : generationRequest);
+    }
+
+    /** 仅返回 Vue 工程参考上下文，不包含用户原始需求。 */
+    public String assembleVueProjectContext(VueRagContext context) {
         TemplateDoc skeleton = context == null ? null : context.skeleton();
         List<TemplateDoc> features = context == null ? List.of() : context.features();
         String skeletonSection = renderSkeletonSection(skeleton);
         String featureSection = renderFeatureSection(features);
         metricsCollector.recordContextLength(skeletonSection.length() + featureSection.length());
-        return skeletonSection
-                + featureSection
-                + "## 用户生成需求\n"
-                + (generationRequest == null ? "" : generationRequest);
+        return skeletonSection + featureSection;
     }
 
     private String renderSkeletonSection(TemplateDoc skeleton) {

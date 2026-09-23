@@ -34,6 +34,8 @@ import com.lyw.appgeneration.service.rag.support.TemplateTestData;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
@@ -240,11 +242,12 @@ class VueKnowledgeIngestorTest {
         properties.getHybrid().setEnabled(false);
         AiCodeGeneratorService generator = mock(AiCodeGeneratorService.class);
         ImageCollectionService imageService = mock(ImageCollectionService.class);
-        when(imageService.enhancePrompt("Vue3 基础工程 登录表单"))
-                .thenReturn("Vue3 基础工程 登录表单\n图片增强信息");
+        when(imageService.collectPromptContext("Vue3 基础工程 登录表单"))
+                .thenReturn("图片增强信息");
+        TokenStream stream = mock(TokenStream.class);
         when(generator.generateVueProjectCodeStream(
                 org.mockito.ArgumentMatchers.eq(9L), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(TokenStream.class));
+                .thenReturn(stream);
         AiCodeGeneratorFacade facade = new AiCodeGeneratorFacade();
         ReflectionTestUtils.setField(facade, "imageCollectionService", imageService);
         ReflectionTestUtils.setField(facade, "ragRetrievalService", retrievalService);
@@ -276,12 +279,16 @@ class VueKnowledgeIngestorTest {
                 "Vue3 基础工程 登录表单", 9L, true,
                 turnContext, generator);
 
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(generator).generateVueProjectCodeStream(
-                org.mockito.ArgumentMatchers.eq(9L), promptCaptor.capture());
-        verify(imageService).enhancePrompt("Vue3 基础工程 登录表单");
+        verify(imageService).collectPromptContext("Vue3 基础工程 登录表单");
+        ArgumentCaptor<List<ChatMessage>> transientCaptor =
+                ArgumentCaptor.forClass(List.class);
+        verify(stream).turnTransientMessages(transientCaptor.capture());
         turnContext.closeResources();
-        return promptCaptor.getValue();
+        return transientCaptor.getValue().stream()
+                .filter(SystemMessage.class::isInstance)
+                .map(SystemMessage.class::cast)
+                .map(SystemMessage::text)
+                .reduce("", (left, right) -> left + right);
     }
 
     private ProductionRetrievalHarness productionRetrievalService(

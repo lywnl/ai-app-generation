@@ -328,6 +328,57 @@ class UnfinishedToolChainCheckpointProjectorTest {
     }
 
     @Test
+    void 使用请求边界时以原始用户文本重建检查点并拒绝增强正文身份不匹配() {
+        ToolExecutionRequest read = request(
+                "call-read-boundary", "readFile", "{\"path\":\"src/App.vue\"}");
+        ToolExecutionResultMessage result = ToolExecutionResultMessage.from(
+                read, fileResult("readFile", "src/App.vue", false, "源码"));
+        TurnRequestBoundary boundary = TurnRequestBoundary.of(
+                "创建一个登录页", List.of(SystemMessage.from("RAG 参考")));
+
+        ToolChainCheckpointResult projected = projector.project(
+                snapshot(List.of(
+                        boundary.userMessage(), AiMessage.from(read), result)),
+                REGISTERED_TOOLS, boundary);
+
+        assertTrue(projected.complete());
+        assertEquals(boundary.userMessage(), projected.requestMessages().getFirst());
+        assertEquals(boundary.rawUserText(),
+                ((UserMessage) projected.requestMessages().getFirst()).singleText());
+
+        ToolChainCheckpointResult mismatch = projector.project(
+                snapshot(List.of(
+                        UserMessage.from(
+                                TokenAwareChatMemory.canonicalUserName("另一条需求"),
+                                "另一条需求"),
+                        AiMessage.from(read), result)),
+                REGISTERED_TOOLS, boundary);
+        assertFalse(mismatch.complete());
+        assertEquals(ToolChainCheckpointResult.FailureReason
+                        .CANONICAL_IDENTITY_MISMATCH,
+                mismatch.failureReason());
+    }
+
+    @Test
+    void 请求边界允许六千一百四十四个字符但拒绝更长原始需求() {
+        ToolExecutionRequest read = request(
+                "call-read-length", "readFile", "{\"path\":\"src/App.vue\"}");
+        ToolExecutionResultMessage result = ToolExecutionResultMessage.from(
+                read, fileResult("readFile", "src/App.vue", false, "源码"));
+        String raw = "a".repeat(TurnRequestBoundary.MAX_RAW_USER_TEXT_LENGTH);
+        TurnRequestBoundary boundary = TurnRequestBoundary.of(raw, List.of());
+        ToolChainCheckpointResult accepted = projector.project(
+                snapshot(List.of(boundary.userMessage(), AiMessage.from(read), result)),
+                REGISTERED_TOOLS, boundary);
+        assertTrue(accepted.complete());
+
+        assertThrows(IllegalArgumentException.class, () ->
+                TurnRequestBoundary.of(
+                        "a".repeat(TurnRequestBoundary.MAX_RAW_USER_TEXT_LENGTH + 1),
+                        List.of()));
+    }
+
+    @Test
     void 缺失单文本用户边界未注册工具非法路径和畸形事实都拒绝() {
         ToolExecutionRequest read = request(
                 "call-read", "readFile", "{\"path\":\"../secret\"}");

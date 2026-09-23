@@ -1,5 +1,6 @@
 package dev.langchain4j.service;
 
+import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -41,6 +42,17 @@ public interface TokenStream {
     /** 为当前模型回合安装不会写入 ChatMemory 的临时上下文消息。 */
     default TokenStream turnTransientMessages(
             List<ChatMessage> messages) {
+        return this;
+    }
+
+    /** 为当前在线回合安装不可变的原始用户请求边界。 */
+    default TokenStream turnRequestBoundary(
+            TurnRequestBoundary boundary) {
+        return this;
+    }
+
+    /** 要求当前流在启动前必须具备请求边界。 */
+    default TokenStream requestBoundaryRequired(boolean required) {
         return this;
     }
 

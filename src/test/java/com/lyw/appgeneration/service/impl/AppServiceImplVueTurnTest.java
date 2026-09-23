@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.VueTurnModeRoutingService;
 import com.lyw.appgeneration.ai.VueTurnModeRoutingServiceFactory;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
+import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.ai.model.message.ContextCompressionMessage;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
@@ -83,6 +84,20 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.times;
 
 class AppServiceImplVueTurnTest {
+
+    @Test
+    void Vue原始需求超过请求边界时不得写入用户消息或启动模型() {
+        String oversizedMessage = "a".repeat(
+                TurnRequestBoundary.MAX_RAW_USER_TEXT_LENGTH + 1);
+
+        assertThrows(GenerationPreflightException.class, () ->
+                service.chatToGenCode(
+                                APP_ID, oversizedMessage,
+                                User.builder().id(USER_ID).build())
+                        .blockLast());
+
+        verifyNoInteractions(history, facade, executor);
+    }
 
     @Test
     void Vue服务真实回合在模型正文前合并压缩进度且只订阅业务一次() {

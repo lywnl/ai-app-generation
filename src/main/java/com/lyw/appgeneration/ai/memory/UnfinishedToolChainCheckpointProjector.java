@@ -19,11 +19,19 @@ import java.util.Set;
 /** 将已完整配对的未完成工具链投影为不含源码和工具参数的请求级检查点。 */
 public final class UnfinishedToolChainCheckpointProjector {
 
-    private static final int MAX_USER_REQUEST_LENGTH = 4096;
+    private static final int MAX_USER_REQUEST_LENGTH =
+            TurnRequestBoundary.MAX_RAW_USER_TEXT_LENGTH;
 
     public ToolChainCheckpointResult project(
             ConversationTurnSnapshotParser.Snapshot snapshot,
             Set<String> registeredToolNames) {
+        return project(snapshot, registeredToolNames, null);
+    }
+
+    public ToolChainCheckpointResult project(
+            ConversationTurnSnapshotParser.Snapshot snapshot,
+            Set<String> registeredToolNames,
+            TurnRequestBoundary requestBoundary) {
         Objects.requireNonNull(snapshot, "回合快照不能为空");
         Set<String> tools = copyRegisteredTools(registeredToolNames);
         List<ChatMessage> tail = snapshot.unfinishedTail();
@@ -31,7 +39,7 @@ public final class UnfinishedToolChainCheckpointProjector {
             return ToolChainCheckpointResult.failed(
                     ToolChainCheckpointResult.FailureReason.EMPTY_TAIL);
         }
-        UserRequest userRequest = parseUserRequest(tail);
+        UserRequest userRequest = parseUserRequest(tail, requestBoundary);
         if (!userRequest.valid()) {
             return ToolChainCheckpointResult.failed(userRequest.failureReason());
         }
@@ -56,11 +64,14 @@ public final class UnfinishedToolChainCheckpointProjector {
         return tools;
     }
 
-    private UserRequest parseUserRequest(List<ChatMessage> tail) {
+    private UserRequest parseUserRequest(
+            List<ChatMessage> tail, TurnRequestBoundary requestBoundary) {
         if (!(tail.getFirst() instanceof UserMessage userMessage)
                 || !userMessage.hasSingleText()) {
             return UserRequest.failed(
-                    ToolChainCheckpointResult.FailureReason.MISSING_USER_REQUEST);
+                    requestBoundary == null
+                            ? ToolChainCheckpointResult.FailureReason.MISSING_USER_REQUEST
+                            : ToolChainCheckpointResult.FailureReason.NON_TEXT_USER_REQUEST);
         }
         if (tail.subList(1, tail.size()).stream()
                 .anyMatch(UserMessage.class::isInstance)) {
@@ -72,9 +83,19 @@ public final class UnfinishedToolChainCheckpointProjector {
                 || text.length() > MAX_USER_REQUEST_LENGTH
                 || containsUnsafeControl(text)) {
             return UserRequest.failed(
-                    ToolChainCheckpointResult.FailureReason.MISSING_USER_REQUEST);
+                    text != null && text.length() > MAX_USER_REQUEST_LENGTH
+                            ? ToolChainCheckpointResult.FailureReason.RAW_USER_REQUEST_TOO_LONG
+                            : ToolChainCheckpointResult.FailureReason.MISSING_USER_REQUEST);
         }
-        return UserRequest.success(userMessage);
+        if (requestBoundary == null) {
+            return UserRequest.success(userMessage);
+        }
+        if (!Objects.equals(userMessage.name(),
+                requestBoundary.canonicalUserName())) {
+            return UserRequest.failed(
+                    ToolChainCheckpointResult.FailureReason.CANONICAL_IDENTITY_MISMATCH);
+        }
+        return UserRequest.success(requestBoundary.userMessage());
     }
 
     private FactProjection parseFacts(

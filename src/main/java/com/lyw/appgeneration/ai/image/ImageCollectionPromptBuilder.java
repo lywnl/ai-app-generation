@@ -16,7 +16,16 @@ public class ImageCollectionPromptBuilder {
         if (CollUtil.isEmpty(images)) {
             return originalPrompt;
         }
-        StringBuilder sb = new StringBuilder(originalPrompt);
+        String context = buildContext(images);
+        return originalPrompt + context;
+    }
+
+    /** 仅返回图片参考资料，供在线回合临时 SystemMessage 使用。 */
+    public String buildContext(List<ImageResource> images) {
+        if (CollUtil.isEmpty(images)) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
         sb.append("\n\n## 可用素材资源\n");
         sb.append("请在生成网站使用以下图片资源，将这些图片合理地嵌入到网站的相应位置中。\n");
         for (ImageResource img : images) {

@@ -229,6 +229,18 @@ public class ContextCompressionCoordinator {
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate,
             ContextCompressionAttemptState attemptState) {
+        return admit(memory, tools, transientMessages, transitionListener,
+                continuationGate, attemptState, null);
+    }
+
+    public ContextAdmissionResult admit(
+            CompressionAwareChatMemory memory,
+            List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages,
+            Consumer<ContextAdmissionResult> transitionListener,
+            ContextContinuationGate continuationGate,
+            ContextCompressionAttemptState attemptState,
+            TurnRequestBoundary requestBoundary) {
         AdmissionDeadline deadline = AdmissionDeadline.start(
                 properties.getBlockingTimeout(), nanoTime,
                 System::currentTimeMillis,
@@ -237,7 +249,8 @@ public class ContextCompressionCoordinator {
                 memory, tools, transientMessages, transitionListener,
                 continuationGate,
                 deadline, Objects.requireNonNull(
-                        attemptState, "上下文压缩尝试状态不能为空"));
+                        attemptState, "上下文压缩尝试状态不能为空"),
+                requestBoundary);
         metricsCollector.recordContextGate(
                 result.mode(), result.failureReason());
         return result;
@@ -250,7 +263,8 @@ public class ContextCompressionCoordinator {
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate,
             AdmissionDeadline deadline,
-            ContextCompressionAttemptState attemptState) {
+            ContextCompressionAttemptState attemptState,
+            TurnRequestBoundary requestBoundary) {
         Objects.requireNonNull(memory, "在线记忆不能为空");
         Objects.requireNonNull(transitionListener, "状态监听器不能为空");
         Objects.requireNonNull(continuationGate, "回合原子提交门不能为空");
@@ -314,7 +328,8 @@ public class ContextCompressionCoordinator {
             return checkpointOrReject(
                     appId, memory, stableTools, stableTransientMessages,
                     initialRequest, initialRequest, 0L, continuationGate,
-                    attemptState, null, transitionListener, deadline);
+                    attemptState, null, transitionListener, deadline,
+                    requestBoundary);
         }
         if (initialTokens < properties.getAsyncCompressionThreshold()) {
             if (!tryCommitContinuation(continuationGate)) {
@@ -362,7 +377,8 @@ public class ContextCompressionCoordinator {
                 return checkpointOrReject(
                         appId, memory, stableTools, stableTransientMessages,
                         initialRequest, initialRequest, 0L, continuationGate,
-                        attemptState, null, transitionListener, deadline);
+                        attemptState, null, transitionListener, deadline,
+                        requestBoundary);
             }
             return failure(planningFailureMode(initialTokens),
                     initialRequest, initialRequest, 0L,
@@ -371,7 +387,8 @@ public class ContextCompressionCoordinator {
         return blockAndRecheck(
                 appId, memory, stableTools, stableTransientMessages,
                 initialRequest, plan,
-                transitionListener, continuationGate, deadline, attemptState);
+                transitionListener, continuationGate, deadline, attemptState,
+                requestBoundary);
     }
 
     private ContextAdmissionResult scheduleAsyncCompressionPlanning(
@@ -414,7 +431,8 @@ public class ContextCompressionCoordinator {
             ContextCompressionAttemptState attemptState,
             PreparedBlockingRequest blockingPreparation,
             Consumer<ContextAdmissionResult> transitionListener,
-            AdmissionDeadline deadline) {
+            AdmissionDeadline deadline,
+            TurnRequestBoundary requestBoundary) {
         MemoryCompressionMetricsCollector.CheckpointObservation observation =
                 metricsCollector.startToolChainCheckpoint(
                         currentRequest.estimatedTokens());
@@ -422,7 +440,7 @@ public class ContextCompressionCoordinator {
                 appId, memory, tools, transientMessages,
                 initialRequest, currentRequest, summarizeThroughId,
                 continuationGate, attemptState, blockingPreparation,
-                transitionListener, deadline);
+                transitionListener, deadline, requestBoundary);
         observation.complete(
                 checkpointOutcome(result), result.finalTokens());
         return result;
@@ -440,7 +458,8 @@ public class ContextCompressionCoordinator {
             ContextCompressionAttemptState attemptState,
             PreparedBlockingRequest blockingPreparation,
             Consumer<ContextAdmissionResult> transitionListener,
-            AdmissionDeadline deadline) {
+            AdmissionDeadline deadline,
+            TurnRequestBoundary requestBoundary) {
         ContextCompressionAttemptState.CheckpointClaim claim =
                 attemptState.tryEnterCheckpointMode();
         ContextCompressionAttemptState.EnterDecision enterDecision =
@@ -478,7 +497,8 @@ public class ContextCompressionCoordinator {
             }
             CheckpointPreparation preparation = prepareCheckpointRequest(
                     appId, tools, transientMessages,
-                    currentRequest, blockingPreparation, deadline);
+                    currentRequest, blockingPreparation, deadline,
+                    requestBoundary);
             if (!preparation.complete()) {
                 attemptState.markCheckpointFailed(claim);
                 return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
@@ -537,7 +557,8 @@ public class ContextCompressionCoordinator {
             List<ChatMessage> transientMessages,
             RequestSnapshot currentRequest,
             PreparedBlockingRequest blockingPreparation,
-            AdmissionDeadline deadline) {
+            AdmissionDeadline deadline,
+            TurnRequestBoundary requestBoundary) {
         if (deadline.remainingNanos() <= 0L) {
             return CheckpointPreparation.failed(
                     FailureReason.TIMED_OUT,
@@ -554,7 +575,7 @@ public class ContextCompressionCoordinator {
                     "当前请求达到输入硬上限，但没有可安全压缩的未完成工具链");
         }
         ToolChainCheckpointResult projection = checkpointProjector.project(
-                snapshot, registeredToolNames(tools));
+                snapshot, registeredToolNames(tools), requestBoundary);
         if (!projection.complete()) {
             metricsCollector.recordToolChainCheckpointFailure(
                     projection.failureReason());
@@ -833,7 +854,8 @@ public class ContextCompressionCoordinator {
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate,
             AdmissionDeadline deadline,
-            ContextCompressionAttemptState attemptState) {
+            ContextCompressionAttemptState attemptState,
+            TurnRequestBoundary requestBoundary) {
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
                     initialRequest, plan.summarizeThroughId(), appId);
@@ -956,7 +978,8 @@ public class ContextCompressionCoordinator {
                     appId, memory, tools, transientMessages,
                     initialRequest, prepared.request(),
                     prepared.summarizedThroughId(), continuationGate,
-                    attemptState, prepared, transitionListener, deadline);
+                    attemptState, prepared, transitionListener, deadline,
+                    requestBoundary);
         }
         return commitPreparedBlockingRequest(
                 appId, memory, initialRequest, plan,

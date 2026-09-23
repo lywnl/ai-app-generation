@@ -402,17 +402,17 @@ class AiCodeGeneratorFacadeTest {
         VueRagContext context = context("vue-skeleton");
         VueTurnContext turnContext = newVueTurnContext("hybrid-first");
         when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
-        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
-        when(promptAssembler.assembleVueProject(ENHANCED_QUERY, context)).thenReturn(AUGMENTED_QUERY);
+        when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenReturn("图片资源");
+        when(promptAssembler.assembleVueProjectContext(context)).thenReturn("RAG 上下文\n");
 
         facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         InOrder order = inOrder(retrievalService, imageCollectionService, promptAssembler, generatorService);
-        order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(imageCollectionService).collectPromptContext(RAW_QUERY);
         order.verify(retrievalService).retrieveVueProject(RAW_QUERY);
-        order.verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, context);
-        order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
+        order.verify(promptAssembler).assembleVueProjectContext(context);
+        order.verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         verify(retrievalService, never()).retrieve(any(), any());
         verify(promptAssembler, never()).assemble(any(), anyList());
         turnContext.closeResources();
@@ -458,17 +458,17 @@ class AiCodeGeneratorFacadeTest {
         VueRagContext context = context("dense-skeleton");
         VueTurnContext turnContext = newVueTurnContext("dense-only");
         when(retrievalService.retrieveVueProjectDenseOnly(RAW_QUERY)).thenReturn(context);
-        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
-        when(promptAssembler.assembleVueProject(ENHANCED_QUERY, context)).thenReturn(AUGMENTED_QUERY);
+        when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenReturn("图片资源");
+        when(promptAssembler.assembleVueProjectContext(context)).thenReturn("RAG 上下文\n");
 
         facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         InOrder order = inOrder(retrievalService, imageCollectionService, promptAssembler, generatorService);
-        order.verify(imageCollectionService).enhancePrompt(RAW_QUERY);
+        order.verify(imageCollectionService).collectPromptContext(RAW_QUERY);
         order.verify(retrievalService).retrieveVueProjectDenseOnly(RAW_QUERY);
-        order.verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, context);
-        order.verify(generatorService).generateVueProjectCodeStream(APP_ID, AUGMENTED_QUERY);
+        order.verify(promptAssembler).assembleVueProjectContext(context);
+        order.verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         verify(retrievalService, never()).retrieve(any(), any());
         verify(retrievalService, never()).retrieveVueProject(any());
         verify(promptAssembler, never()).assemble(any(), anyList());
@@ -481,14 +481,14 @@ class AiCodeGeneratorFacadeTest {
         properties.setEnabled(false);
         properties.getHybrid().setEnabled(true);
         VueTurnContext turnContext = newVueTurnContext("rag-disabled");
-        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
+        when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenReturn("图片资源");
 
         facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
         verifyNoInteractions(retrievalService, promptAssembler);
-        verify(imageCollectionService).enhancePrompt(RAW_QUERY);
-        verify(generatorService).generateVueProjectCodeStream(APP_ID, ENHANCED_QUERY);
+        verify(imageCollectionService).collectPromptContext(RAW_QUERY);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         turnContext.closeResources();
     }
 
@@ -499,16 +499,16 @@ class AiCodeGeneratorFacadeTest {
         VueTurnContext turnContext = newVueTurnContext("rag-failure");
         when(retrievalService.retrieveVueProject(RAW_QUERY))
                 .thenThrow(new IllegalStateException("检索依赖失败"));
-        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(ENHANCED_QUERY);
-        when(promptAssembler.assembleVueProject(ENHANCED_QUERY, VueRagContext.unavailable()))
+        when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenReturn("图片资源");
+        when(promptAssembler.assembleVueProjectContext(VueRagContext.unavailable()))
                 .thenReturn("无 RAG 拼装");
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, true, turnContext, generatorService));
 
-        verify(imageCollectionService).enhancePrompt(RAW_QUERY);
-        verify(promptAssembler).assembleVueProject(ENHANCED_QUERY, VueRagContext.unavailable());
-        verify(generatorService).generateVueProjectCodeStream(APP_ID, "无 RAG 拼装");
+        verify(imageCollectionService).collectPromptContext(RAW_QUERY);
+        verify(promptAssembler).assembleVueProjectContext(VueRagContext.unavailable());
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         turnContext.closeResources();
     }
 
@@ -519,14 +519,14 @@ class AiCodeGeneratorFacadeTest {
         VueRagContext context = context("vue-skeleton");
         VueTurnContext turnContext = newVueTurnContext("image-fallback");
         when(retrievalService.retrieveVueProject(RAW_QUERY)).thenReturn(context);
-        when(imageCollectionService.enhancePrompt(RAW_QUERY)).thenReturn(RAW_QUERY);
-        when(promptAssembler.assembleVueProject(RAW_QUERY, context)).thenReturn("原消息拼装");
+        when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenReturn("");
+        when(promptAssembler.assembleVueProjectContext(context)).thenReturn("原消息拼装");
 
         facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, true, turnContext, generatorService);
 
-        verify(promptAssembler).assembleVueProject(RAW_QUERY, context);
-        verify(generatorService).generateVueProjectCodeStream(APP_ID, "原消息拼装");
+        verify(promptAssembler).assembleVueProjectContext(context);
+        verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         turnContext.closeResources();
     }
 

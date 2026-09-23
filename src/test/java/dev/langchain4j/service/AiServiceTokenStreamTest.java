@@ -86,6 +86,17 @@ class AiServiceTokenStreamTest {
     }
 
     @Test
+    void 在线回合缺少请求边界时在启动前拒绝() {
+        AiServiceTokenStream stream = tokenStreamWithTools(
+                List.of(), Map.of());
+        stream.requestBoundaryRequired(true)
+                .onPartialResponse(ignored -> { })
+                .onError(ignored -> { });
+
+        assertThrows(IllegalConfigurationException.class, stream::start);
+    }
+
+    @Test
     void 工具参数分片通过统一回调保留原始delta()
             throws Exception {
         MutableChatMemory memory = memoryWithQuestion();

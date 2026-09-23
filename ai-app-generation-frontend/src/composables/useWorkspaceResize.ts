@@ -1,6 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 
-const DEFAULT_PERCENT = 40
+const DEFAULT_PERCENT = 35
 const MIN_PERCENT = 30
 const MAX_PERCENT = 50
 

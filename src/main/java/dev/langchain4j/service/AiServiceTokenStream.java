@@ -1,6 +1,7 @@
 package dev.langchain4j.service;
 
 import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
+import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -46,6 +47,8 @@ public class AiServiceTokenStream implements TokenStream {
     private final GuardrailRequestParams commonGuardrailParams;
     private final Object methodKey;
     private List<ChatMessage> turnTransientMessages = List.of();
+    private TurnRequestBoundary requestBoundary;
+    private boolean requestBoundaryRequired;
 
     private Consumer<String> partialResponseHandler;
     private Consumer<List<Content>> contentsHandler;
@@ -193,6 +196,18 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream turnRequestBoundary(TurnRequestBoundary boundary) {
+        this.requestBoundary = ensureNotNull(boundary, "请求边界不能为空");
+        return this;
+    }
+
+    @Override
+    public TokenStream requestBoundaryRequired(boolean required) {
+        this.requestBoundaryRequired = required;
+        return this;
+    }
+
+    @Override
     public TokenStream toolProtocolRecoveryPolicy(
             ToolProtocolRecoveryPolicy policy) {
         ToolProtocolRecoveryPolicy checkedPolicy = ensureNotNull(
@@ -281,7 +296,8 @@ public class AiServiceTokenStream implements TokenStream {
                         toolSpecifications,
                         continuationGate,
                         transientSnapshot,
-                        compressionAttemptState);
+                        compressionAttemptState,
+                        requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.initial(
                         gateRequest,
@@ -341,6 +357,7 @@ public class AiServiceTokenStream implements TokenStream {
                 incompleteRecoveryCoordinator,
                 compressionAttemptState,
                 generationStreamSignalHandler);
+        handler.turnRequestBoundary(requestBoundary);
         handler.turnTransientMessages(transientSnapshot);
 
         if (contentsHandler != null && retrievedContents != null) {
@@ -411,6 +428,10 @@ public class AiServiceTokenStream implements TokenStream {
     }
 
     private void validateConfiguration() {
+        if (requestBoundaryRequired && requestBoundary == null) {
+            throw new IllegalConfigurationException(
+                    "在线 Vue 回合缺少可信用户请求边界");
+        }
         if (onGenerationStreamSignalInvoked > 1) {
             throw new IllegalConfigurationException(
                     "TokenStream 最多只能安装一次统一 generation 信号监听器");
