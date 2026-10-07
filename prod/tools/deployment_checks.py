@@ -1,5 +1,7 @@
 """发布输入与部署校验，共享给打包入口和 Linux 部署入口。"""
 
+from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path
@@ -81,6 +83,16 @@ def verify_package(prod: Path) -> str:
     return release
 
 
+def validate_shared_password(password: str | None) -> None:
+    """校验最终生效的共享密码，不在异常中输出密码。"""
+    if not password:
+        raise ValueError("INFRA_SHARED_PASSWORD 未填写，请设置中间件共享密码")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", password):
+        raise ValueError("INFRA_SHARED_PASSWORD 仅允许英文字母、数字和 _-.")
+    if len(password) < 8:
+        raise ValueError("INFRA_SHARED_PASSWORD 至少需要 8 位，以满足 MinIO 的密码长度要求")
+
+
 def verify_config(config: dict, release: str) -> list[str]:
     if config.get("name") != "ai-app-generation-prod":
         raise ValueError("Compose 项目名称不匹配")
@@ -94,6 +106,7 @@ def verify_config(config: dict, release: str) -> list[str]:
             raise ValueError(f"{name} 不能把输出镜像作为自身运行时基础")
         images.append(expected)
     backend_env = config["services"]["backend"].get("environment", {})
+    validate_shared_password(backend_env.get("INFRA_SHARED_PASSWORD"))
     if str(backend_env.get("RAG_INGEST_ENABLED", "false")).lower() != "false":
         raise ValueError("普通部署必须关闭 RAG_INGEST_ENABLED，模板导入请独立执行")
     nginx_ports = config["services"]["nginx"].get("ports", [])

@@ -24,7 +24,9 @@ docker compose --env-file .env -f docker-compose.yml logs --tail 100 backend
 从头安装依赖，详见 [README.md](README.md)。
 
 第二版升级已完成环境配置转换：保留原有 MySQL、Redis、Grafana 和 API 凭据，
-为新 Milvus/MinIO 使用独立密码。后续部署继续复用服务器已有 `.env`，
+当时为新 Milvus/MinIO 使用独立密码。当前配置已统一使用 `INFRA_SHARED_PASSWORD`，
+至少 8 位，仅允许英文字母、数字和 `_-.`。应用当前配置前，须先同步各中间件的实际密码；
+仅修改 `.env` 不会迁移已有账号密码。后续部署继续复用服务器已有 `.env`，
 不要重新生成或用示例覆盖。凭据文件只保存在服务器受限目录中，不提交、不打印。
 
 ## 数据库与备份

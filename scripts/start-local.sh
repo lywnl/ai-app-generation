@@ -57,6 +57,9 @@ load_environment() {
   source "$ENV_FILE"
   set +a
   [[ -n "${INFRA_SHARED_PASSWORD:-}" ]] || fail "dev/.env 未配置 INFRA_SHARED_PASSWORD"
+  local LC_ALL=C
+  [[ "$INFRA_SHARED_PASSWORD" != *[!A-Za-z0-9._-]* ]] || fail "INFRA_SHARED_PASSWORD 仅允许英文字母、数字和 _-."
+  ((${#INFRA_SHARED_PASSWORD} >= 8)) || fail "INFRA_SHARED_PASSWORD 至少需要 8 位，以满足 MinIO 的密码长度要求"
 }
 
 ipv4_port_in_use() {
@@ -171,7 +174,7 @@ ensure_mysql() {
     wait_for_port "$MYSQL_PORT" "MySQL"
     return 0
   fi
-  log "MySQL 未监听 $MYSQL_PORT，启动本地 Docker 容器"
+  log "MySQL 未监听 ${MYSQL_PORT}，启动本地 Docker 容器"
   compose_up mysql
   wait_for_port "$MYSQL_PORT" "MySQL"
 }
@@ -187,7 +190,7 @@ ensure_redis() {
     wait_for_port "$REDIS_PORT" "Redis"
     return 0
   fi
-  log "Redis 未监听 $REDIS_PORT，启动本地 Docker 容器"
+  log "Redis 未监听 ${REDIS_PORT}，启动本地 Docker 容器"
   compose_up redis
   wait_for_port "$REDIS_PORT" "Redis"
 }
@@ -205,10 +208,8 @@ ensure_milvus() {
     return 0
   fi
   if [[ "$grpc_ready" == true || "$health_ready" == true ]]; then
-    fail "Milvus 端口状态不完整：$MILVUS_PORT=$grpc_ready，$MILVUS_HEALTH_PORT=$health_ready；为避免误覆盖，未启动或重启容器"
+    fail "Milvus 端口状态不完整：$MILVUS_PORT=${grpc_ready}，$MILVUS_HEALTH_PORT=${health_ready}；为避免误覆盖，未启动或重启容器"
   fi
-
-  [[ -n "${MILVUS_MINIO_PASSWORD:-}" ]] || fail "Milvus 未运行，且 dev/.env 未配置 MILVUS_MINIO_PASSWORD；未启动或重启任何 Milvus 容器"
 
   local container
   for container in ai-codegen-milvus-etcd ai-codegen-milvus-minio ai-codegen-milvus; do
@@ -253,7 +254,7 @@ ensure_nginx() {
     wait_for_ipv4_http "http://127.0.0.1:$NGINX_PORT/" "Nginx"
     return 0
   fi
-  log "Nginx 未监听 $NGINX_PORT，启动开发 Docker 容器"
+  log "Nginx 未监听 ${NGINX_PORT}，启动开发 Docker 容器"
   compose_up nginx
   wait_for_ipv4_http "http://127.0.0.1:$NGINX_PORT/" "Nginx"
 }

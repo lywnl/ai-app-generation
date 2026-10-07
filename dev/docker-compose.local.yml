@@ -63,12 +63,12 @@ services:
       retries: 3
 
   minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: ai-codegen-milvus-minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}
+      MINIO_ROOT_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
     command: minio server /minio_data --console-address ":9001"
     volumes:
       - milvus_minio_data:/minio_data
@@ -88,7 +88,7 @@ services:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
       MINIO_ACCESS_KEY_ID: minioadmin
-      MINIO_SECRET_ACCESS_KEY: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}
+      MINIO_SECRET_ACCESS_KEY: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
       COMMON_SECURITY_DEFAULTROOTPASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}
       QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: "-1"

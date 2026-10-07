@@ -108,9 +108,9 @@ class ProductionRagDeploymentConfigTest {
         assertTrue(compose.contains("ETCD_ENDPOINTS: milvus-etcd:2379"));
         assertTrue(compose.contains("MINIO_ADDRESS: milvus-minio:9000"));
         assertTrue(compose.contains(
-                "MINIO_ROOT_PASSWORD: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}"));
+                "MINIO_ROOT_PASSWORD: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}"));
         assertTrue(compose.contains(
-                "MINIO_SECRET_ACCESS_KEY: ${MILVUS_MINIO_PASSWORD:?MILVUS_MINIO_PASSWORD不能为空}"));
+                "MINIO_SECRET_ACCESS_KEY: ${INFRA_SHARED_PASSWORD:?INFRA_SHARED_PASSWORD不能为空}"));
         assertTrue(serviceBlock(compose, "milvus").contains(
                 "QUOTAANDLIMITS_FLUSHRATE_COLLECTION_MAX: \"-1\""));
         assertServiceUsesAiNet(compose, "milvus-etcd");

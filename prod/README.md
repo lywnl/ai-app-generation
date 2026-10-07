@@ -95,7 +95,6 @@ RELEASE_ID=v2-your-release-id
 INFRA_SHARED_PASSWORD=请填写新的随机强密码
 MYSQL_USER=admin
 REDIS_USERNAME=admin
-MILVUS_MINIO_PASSWORD=请填写至少8位的MinIO随机强密码
 GRAFANA_ADMIN_USER=admin
 ```
 
@@ -120,10 +119,11 @@ GRAFANA_ADMIN_USER=admin
 基础设施密码：
 
 - 在 `.env` 中填写 `INFRA_SHARED_PASSWORD`。
-- 新环境可使用该默认值；已有环境分别保留 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、
-  `REDIS_PASSWORD`、`GRAFANA_ADMIN_PASSWORD`，新 Milvus 使用 `RAG_MILVUS_PASSWORD`。
-  未设置独立值时才回退到共享密码，不要用示例配置覆盖已有 `.env`。
-- MinIO 使用独立的 `MILVUS_MINIO_PASSWORD`，不能复用当前长度不足 8 的共享密码；该密码至少为 8 个字符。
+- MySQL root/普通用户、Redis、Milvus、MinIO 和 Grafana 统一使用共享密码，不再读取独立密码覆盖项。
+- 至少 8 位，仅允许英文字母、数字和 `_-.`；不强制字符组合，建议至少 16 位随机混合。
+- 本地启动脚本、生产部署检查和后端启动入口均校验密码；直接执行 Compose 会绕过脚本的格式校验。
+- 已有数据卷、账号密码不会因修改 `.env` 自动迁移，已有容器的 `docker start` 也不会更新环境变量。
+  升级前需要将实际账号密码同步为共享密码，并按需重建容器；不要删除数据卷来处理密码问题。
 - MinIO 用户固定为 `minioadmin`，仅供 Milvus 内部对象存储使用，不对公网暴露。
 - 建议使用新的随机强密码；仓库历史中的旧口令不应继续复用。
 - 密码只能使用字母、数字、点、下划线和短横线，建议生成足够长的随机值。
@@ -286,7 +286,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/deployment -v
 ```
 
 该命令在项目根目录执行，检查合并前后九个服务的运行配置、数据卷和网络完全一致，
-以及完整构建默认值、运行时复用参数、必填发布版本和独立密码回退规则。
+以及完整构建默认值、运行时复用参数、必填发布版本和统一共享密码规则。
 同时验证发布包的内容清单、完整校验和、可选迁移、失败保护和版本防覆盖。
 测试代码只在源码仓库中保留，不随发布包上传。
 
