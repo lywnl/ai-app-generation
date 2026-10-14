@@ -47,6 +47,9 @@ spring:
 langchain4j:
   open-ai:
     chat-model:
+      # 默认模型也仅协商 gzip/deflate，规避旧版 Brotli 响应截断。
+      custom-headers:
+        Accept-Encoding: "gzip, deflate"
       base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY}
       model-name: deepseek-flash

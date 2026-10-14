@@ -21,6 +21,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /** 命名使用独立的短超时和输出预算，不影响路由或生成模型。 */
 @Configuration
@@ -56,6 +57,7 @@ public class AppNameAiConfig {
             @Qualifier("appNameTransport") CloseableHttpClient transport,
             AiModelMonitorListener listener) {
         return OpenAiChatModel.builder()
+                .customHeaders(Map.of("Accept-Encoding", "gzip, deflate"))
                 .httpClientBuilder(new AppNameHttpClientBuilder(transport))
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)

@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /** L2 偏好抽取专用模型，限制单次等待且禁用 SDK 自动重试。 */
 @Configuration
@@ -54,6 +55,7 @@ public class UserMemoryExtractionChatModelConfig {
             httpClientBuilder = SpringRestClient.builder();
         }
         return OpenAiChatModel.builder()
+                .customHeaders(Map.of("Accept-Encoding", "gzip, deflate"))
                 .httpClientBuilder(httpClientBuilder)
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)

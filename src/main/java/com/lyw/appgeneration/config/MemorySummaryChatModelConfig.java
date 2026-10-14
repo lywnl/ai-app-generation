@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /** L1 摘要专用模型，复用主模型参数但禁止 SDK 在截止时间后自动重试。 */
 @Configuration
@@ -55,6 +56,7 @@ public class MemorySummaryChatModelConfig {
             httpClientBuilder = SpringRestClient.builder();
         }
         return OpenAiChatModel.builder()
+                .customHeaders(Map.of("Accept-Encoding", "gzip, deflate"))
                 .httpClientBuilder(httpClientBuilder)
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)

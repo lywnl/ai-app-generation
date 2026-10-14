@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 
+import java.util.Map;
+
 @Configuration
 @ConfigurationProperties(prefix = "langchain4j.open-ai.routing-chat-model")
 @Data
@@ -34,6 +36,8 @@ public class RoutingAiModelConfig {
     @Scope("prototype")
     public ChatModel routingChatModelPrototype() {
         return OpenAiChatModel.builder()
+                // 避免旧版 Brotli 解码器在响应预读后丢失剩余 JSON。
+                .customHeaders(Map.of("Accept-Encoding", "gzip, deflate"))
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .baseUrl(baseUrl)

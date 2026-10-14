@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 
 import java.util.List;
+import java.util.Map;
 
 @Configuration
 @ConfigurationProperties(prefix = "langchain4j.open-ai.reasoning-streaming-chat-model")
@@ -49,6 +50,7 @@ public class ReasoningStreamingChatModelConfig {
 
     private StreamingChatModel createReasoningStreamingChatModel() {
         return OpenAiStreamingChatModel.builder()
+                .customHeaders(Map.of("Accept-Encoding", "gzip, deflate"))
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)
                 .modelName(modelName)
