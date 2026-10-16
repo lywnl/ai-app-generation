@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.rag.monitor;
 
+import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +13,36 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class VueRagMetricsCollectorTest {
+
+    @Test
+    void 区分入口排队任务排队调用时长和逻辑向量次数() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        try {
+            VueRagMetricsCollector collector = new VueRagMetricsCollector(registry);
+            collector.recordAdmissionWait(Duration.ofMillis(50));
+            collector.recordEmbeddingCall();
+            collector.recordStageDuration(VueRagStage.EMBEDDING, null, Duration.ofMillis(300));
+            collector.recordExecutorQueueDuration(VueRagStage.DENSE, RagDocumentKind.PROJECT_SKELETON,
+                    Duration.ofMillis(80));
+            assertEquals(50, registry.get("vue_rag_admission_wait_seconds").timer()
+                    .totalTime(TimeUnit.MILLISECONDS), 0.001);
+            assertEquals(1, registry.get("vue_rag_embedding_calls_total").counter().count());
+            assertEquals(300, registry.get("vue_rag_stage_duration_seconds")
+                    .tags("stage", "embedding", "document_kind", "shared").timer()
+                    .totalTime(TimeUnit.MILLISECONDS), 0.001);
+            assertEquals(80, registry.get("vue_rag_executor_queue_seconds")
+                    .tags("stage", "dense", "document_kind", "project_skeleton").timer()
+                    .totalTime(TimeUnit.MILLISECONDS), 0.001);
+            assertEquals(Set.of("embedding", "bm25", "dense", "rerank"),
+                    registry.get("vue_rag_stage_duration_seconds").timers().stream()
+                            .map(timer -> timer.getId().getTag("stage")).collect(Collectors.toSet()));
+            assertEquals(Set.of("shared", "project_skeleton", "feature_snippet"),
+                    registry.get("vue_rag_stage_duration_seconds").timers().stream()
+                            .map(timer -> timer.getId().getTag("document_kind")).collect(Collectors.toSet()));
+        } finally {
+            registry.close();
+        }
+    }
 
     @Test
     void recordsRealStageCountsDurationAndContextLength() {

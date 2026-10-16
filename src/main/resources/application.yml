@@ -140,6 +140,11 @@ rag:
   enabled: true
   hybrid:
     enabled: ${RAG_HYBRID_ENABLED:true}
+  execution:
+    worker-threads: ${RAG_EXECUTION_WORKER_THREADS:12}
+    max-concurrent-requests: ${RAG_EXECUTION_MAX_CONCURRENT_REQUESTS:4}
+    # 每个已接纳请求最多提交 7 个外部任务，队列容量不得小于并发请求数的 7 倍。
+    queue-capacity: ${RAG_EXECUTION_QUEUE_CAPACITY:64}
   # 模板库根目录(文件系统路径,非 classpath)
   templates-dir: ${RAG_TEMPLATES_DIR:embed_text}
   ingest:

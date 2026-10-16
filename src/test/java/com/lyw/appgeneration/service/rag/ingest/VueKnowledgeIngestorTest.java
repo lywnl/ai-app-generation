@@ -28,6 +28,7 @@ import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
+import com.lyw.appgeneration.service.rag.retrieval.VueRagExecutor;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
 import com.lyw.appgeneration.service.rag.support.TemplateTestData;
@@ -46,6 +47,7 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.ModelRequestGate;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -81,6 +83,12 @@ class VueKnowledgeIngestorTest {
     );
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final List<VueRagExecutor> executors = new ArrayList<>();
+
+    @AfterEach
+    void closeExecutors() {
+        executors.forEach(VueRagExecutor::close);
+    }
 
     @Test
     void splitsTwentyThreeChunksIntoDashScopeCompatibleEmbeddingBatches() {
@@ -302,9 +310,12 @@ class VueKnowledgeIngestorTest {
                 new VueRetrievalResources(catalog)));
         RrfFusionService fusion = mock(RrfFusionService.class);
         RagRerankService rerank = mock(RagRerankService.class);
+        VueRagMetricsCollector metrics = mock(VueRagMetricsCollector.class);
+        VueRagExecutor execution = new VueRagExecutor(properties, metrics);
+        executors.add(execution);
         VueHybridRetrievalService vueService = new VueHybridRetrievalService(
                 provider, mock(MilvusBm25Retriever.class), denseRetriever, fusion, rerank,
-                mock(VueRagMetricsCollector.class), properties);
+                metrics, properties, execution);
         RagRetrievalService retrievalService = new RagRetrievalService(
                 embeddingModel, Map.of(CodeGenTypeEnum.VUE_PROJECT, store),
                 properties, rerank, vueService, mock(

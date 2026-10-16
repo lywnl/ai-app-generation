@@ -64,12 +64,29 @@ public class DenseRetriever {
         if (isInvalid(rawQuery, catalogVersion, documentKind, topK)) {
             return List.of();
         }
-        EmbeddingStore<TextSegment> store = embeddingStores.get(CodeGenTypeEnum.VUE_PROJECT);
-        if (store == null) {
-            throw new IllegalStateException("Vue 稠密向量存储不可用");
-        }
+        return retrieveWithEmbedding(embedQuery(rawQuery), catalogVersion, documentKind, topK);
+    }
 
-        Embedding queryEmbedding = embeddingModel.embed(rawQuery).content();
+    /** 计算本次请求的查询向量，由调用方在两个文档池之间复用，不做跨请求缓存。 */
+    public Embedding embedQuery(String rawQuery) {
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return null;
+        }
+        vueStore();
+        return java.util.Objects.requireNonNull(
+                embeddingModel.embed(rawQuery).content(), "查询向量不能为空");
+    }
+
+    /** 使用已计算的查询向量搜索，筛选条件、TopK 与父文档聚合规则保持不变。 */
+    public List<RankedCandidate> retrieveWithEmbedding(Embedding queryEmbedding,
+                                                       String catalogVersion,
+                                                       RagDocumentKind documentKind,
+                                                       int topK) {
+        if (queryEmbedding == null || catalogVersion == null || catalogVersion.isBlank()
+                || documentKind == null || topK <= 0) {
+            return List.of();
+        }
+        EmbeddingStore<TextSegment> store = vueStore();
         Filter metadataFilter = metadataKey("catalogVersion").isEqualTo(catalogVersion)
                 .and(metadataKey("documentKind").isEqualTo(documentKind.name()));
         EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
@@ -81,6 +98,14 @@ public class DenseRetriever {
 
         List<EmbeddingMatch<TextSegment>> matches = store.search(request).matches();
         return aggregate(matches, catalogVersion, documentKind, topK);
+    }
+
+    private EmbeddingStore<TextSegment> vueStore() {
+        EmbeddingStore<TextSegment> store = embeddingStores.get(CodeGenTypeEnum.VUE_PROJECT);
+        if (store == null) {
+            throw new IllegalStateException("Vue 稠密向量存储不可用");
+        }
+        return store;
     }
 
     private boolean isInvalid(String rawQuery,

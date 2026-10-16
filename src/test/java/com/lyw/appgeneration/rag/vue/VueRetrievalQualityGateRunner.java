@@ -14,6 +14,7 @@ import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
+import com.lyw.appgeneration.service.rag.retrieval.VueRagExecutor;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.store.MilvusCollectionSchemaVerifier;
 import com.lyw.appgeneration.service.rag.store.MilvusEmbeddingStoreFactory;
@@ -92,17 +93,21 @@ public final class VueRetrievalQualityGateRunner {
                 properties, new MilvusCollectionSchemaVerifier(), v2ClientProvider,
                 new MilvusVueBm25CollectionProvisioner());
         VueRetrievalResourceProvider resourceProvider = null;
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        VueRagExecutor execution = null;
         try {
             EmbeddingStore<TextSegment> store = factory.create(RagConstants.VUE_BM25_COLLECTION);
             resourceProvider = VueRetrievalResourceProvider.forEvaluation(catalog);
             RagRerankService rerankService = new RagRerankService(properties, apiKey);
+            VueRagMetricsCollector metrics = new VueRagMetricsCollector(registry);
+            execution = new VueRagExecutor(properties, metrics);
             RagRetrievalService retrievalService = createRetrievalService(
                     embeddingModel, store, resourceProvider, rerankService, properties,
                     new MilvusBm25Retriever(new com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClient(
-                            v2ClientProvider.getClient())));
-            return new EvaluationServices(retrievalService, resourceProvider, factory);
+                            v2ClientProvider.getClient())), metrics, execution);
+            return new EvaluationServices(retrievalService, resourceProvider, factory, execution, registry);
         } catch (RuntimeException | Error exception) {
-            closeOnCreationFailure(resourceProvider, factory, exception);
+            closeOnCreationFailure(exception, execution, resourceProvider, factory, registry);
             throw exception;
         }
     }
@@ -125,39 +130,36 @@ public final class VueRetrievalQualityGateRunner {
             VueRetrievalResourceProvider resourceProvider,
             RagRerankService rerankService,
             RagProperties properties,
-            MilvusBm25Retriever bm25Retriever) {
+            MilvusBm25Retriever bm25Retriever,
+            VueRagMetricsCollector metrics,
+            VueRagExecutor execution) {
         Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> stores = Map.of(
                 CodeGenTypeEnum.VUE_PROJECT, store);
-            VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
-                    resourceProvider,
-                    bm25Retriever,
-                    new DenseRetriever(embeddingModel, stores, properties),
+        VueHybridRetrievalService hybridService = new VueHybridRetrievalService(
+                resourceProvider,
+                bm25Retriever,
+                new DenseRetriever(embeddingModel, stores, properties),
                 new RrfFusionService(),
                 rerankService,
-                new VueRagMetricsCollector(new SimpleMeterRegistry()),
-                properties);
+                metrics,
+                properties, execution);
         return new RagRetrievalService(
                 embeddingModel, stores, properties, rerankService, hybridService,
                 org.mockito.Mockito.mock(
                         com.lyw.appgeneration.service.rag.retrieval.NativeTemplateCatalogProvider.class));
     }
 
-    private void closeOnCreationFailure(
-            VueRetrievalResourceProvider resourceProvider,
-            MilvusEmbeddingStoreFactory factory,
-            Throwable originalFailure) {
+    private void closeOnCreationFailure(Throwable originalFailure, VueRagExecutor execution,
+                                       VueRetrievalResourceProvider resourceProvider,
+                                       MilvusEmbeddingStoreFactory factory, SimpleMeterRegistry registry) {
+        if (execution != null) {
+            try { execution.close(); } catch (RuntimeException failure) { originalFailure.addSuppressed(failure); }
+        }
         if (resourceProvider != null) {
-            try {
-                resourceProvider.close();
-            } catch (RuntimeException closeFailure) {
-                originalFailure.addSuppressed(closeFailure);
-            }
+            try { resourceProvider.close(); } catch (RuntimeException failure) { originalFailure.addSuppressed(failure); }
         }
-        try {
-            factory.close();
-        } catch (RuntimeException closeFailure) {
-            originalFailure.addSuppressed(closeFailure);
-        }
+        try { factory.close(); } catch (RuntimeException failure) { originalFailure.addSuppressed(failure); }
+        registry.close();
     }
 
     static RagProperties evaluationProperties(VueMilvusTarget target, String password) {
@@ -176,15 +178,19 @@ public final class VueRetrievalQualityGateRunner {
     private record EvaluationServices(
             RagRetrievalService retrievalService,
             VueRetrievalResourceProvider resourceProvider,
-            MilvusEmbeddingStoreFactory factory
+            MilvusEmbeddingStoreFactory factory,
+            VueRagExecutor execution,
+            SimpleMeterRegistry registry
     ) implements AutoCloseable {
 
         @Override
         public void close() {
             try {
-                resourceProvider.close();
+                execution.close();
             } finally {
-                factory.close();
+                try { resourceProvider.close(); } finally {
+                    try { factory.close(); } finally { registry.close(); }
+                }
             }
         }
     }

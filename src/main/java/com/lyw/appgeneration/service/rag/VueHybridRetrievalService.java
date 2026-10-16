@@ -10,11 +10,14 @@ import com.lyw.appgeneration.service.rag.model.VueRagContext;
 import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
+import com.lyw.appgeneration.service.rag.monitor.VueRagStage;
 import com.lyw.appgeneration.service.rag.retrieval.DenseRetriever;
 import com.lyw.appgeneration.service.rag.retrieval.MilvusBm25Retriever;
 import com.lyw.appgeneration.service.rag.retrieval.RrfFusionService;
+import com.lyw.appgeneration.service.rag.retrieval.VueRagExecutor;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResourceProvider;
 import com.lyw.appgeneration.service.rag.retrieval.VueRetrievalResources;
+import dev.langchain4j.data.embedding.Embedding;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -25,7 +28,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Supplier;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -58,6 +62,7 @@ public class VueHybridRetrievalService {
     private final RagRerankService rerankService;
     private final VueRagMetricsCollector metricsCollector;
     private final RagProperties properties;
+    private final VueRagExecutor execution;
 
     public VueHybridRetrievalService(VueRetrievalResourceProvider resourceProvider,
                                      MilvusBm25Retriever bm25Retriever,
@@ -65,7 +70,8 @@ public class VueHybridRetrievalService {
                                      RrfFusionService fusionService,
                                      RagRerankService rerankService,
                                      VueRagMetricsCollector metricsCollector,
-                                     RagProperties properties) {
+                                     RagProperties properties,
+                                     VueRagExecutor execution) {
         this.resourceProvider = resourceProvider;
         this.bm25Retriever = bm25Retriever;
         this.denseRetriever = denseRetriever;
@@ -73,6 +79,7 @@ public class VueHybridRetrievalService {
         this.rerankService = rerankService;
         this.metricsCollector = metricsCollector;
         this.properties = properties;
+        this.execution = execution;
     }
 
     /**
@@ -92,13 +99,9 @@ public class VueHybridRetrievalService {
             }
 
             TemplateCatalog catalog = resources.catalog();
-            Map<String, Double> qualityScores = qualityScores(catalog);
-            ChainResult skeletonChain = retrieveChain(
-                    rawQuery, RagDocumentKind.PROJECT_SKELETON, SKELETON_RERANK_TOP_K,
-                    resources, qualityScores);
-            ChainResult featureChain = retrieveChain(
-                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K,
-                    resources, qualityScores);
+            ChainPair chains = retrieveChains(rawQuery, resources);
+            ChainResult skeletonChain = chains.skeleton();
+            ChainResult featureChain = chains.feature();
             boolean degraded = skeletonChain.degraded() || featureChain.degraded();
 
             TemplateDoc skeleton = firstOfKind(
@@ -146,10 +149,15 @@ public class VueHybridRetrievalService {
             return VueRagContext.unavailable();
         }
         TemplateCatalog catalog = resources.catalog();
-        try {
+        if (invalidQuery(rawQuery, catalog)) {
+            return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
+        }
+        try (var request = execution.openRequest()) {
+            Embedding embedding = request.await(queryEmbedding(request, rawQuery));
             List<TemplateDoc> skeletonCandidates = resolveParents(
-                    denseRetriever.retrieve(rawQuery, catalog.getCatalogVersion(),
-                            RagDocumentKind.PROJECT_SKELETON, CHANNEL_TOP_K),
+                    request.await(request.submit(VueRagStage.DENSE, RagDocumentKind.PROJECT_SKELETON,
+                            () -> denseRetriever.retrieveWithEmbedding(embedding, catalog.getCatalogVersion(),
+                                    RagDocumentKind.PROJECT_SKELETON, CHANNEL_TOP_K))),
                     RagDocumentKind.PROJECT_SKELETON,
                     catalog);
             TemplateDoc skeleton = firstOfKind(
@@ -158,8 +166,9 @@ public class VueHybridRetrievalService {
                 return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
             }
             List<TemplateDoc> featureCandidates = resolveParents(
-                    denseRetriever.retrieve(rawQuery, catalog.getCatalogVersion(),
-                            RagDocumentKind.FEATURE_SNIPPET, CHANNEL_TOP_K),
+                    request.await(request.submit(VueRagStage.DENSE, RagDocumentKind.FEATURE_SNIPPET,
+                            () -> denseRetriever.retrieveWithEmbedding(embedding, catalog.getCatalogVersion(),
+                                    RagDocumentKind.FEATURE_SNIPPET, CHANNEL_TOP_K))),
                     RagDocumentKind.FEATURE_SNIPPET,
                     catalog);
             List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
@@ -192,10 +201,9 @@ public class VueHybridRetrievalService {
                 return VueRagContext.unavailable();
             }
             TemplateCatalog catalog = resources.catalog();
-            DenseResult skeletonResult = retrieveDenseParents(
-                    rawQuery, RagDocumentKind.PROJECT_SKELETON, catalog);
-            DenseResult featureResult = retrieveDenseParents(
-                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, catalog);
+            DensePair results = retrieveDensePools(rawQuery, catalog);
+            DenseResult skeletonResult = results.skeleton();
+            DenseResult featureResult = results.feature();
             boolean degraded = skeletonResult.failed() || skeletonResult.documents().isEmpty()
                     || featureResult.failed() || featureResult.documents().isEmpty();
 
@@ -222,23 +230,67 @@ public class VueHybridRetrievalService {
         }
     }
 
-    private DenseResult retrieveDenseParents(String rawQuery,
-                                             RagDocumentKind documentKind,
-                                             TemplateCatalog catalog) {
-        try {
-            List<RankedCandidate> candidates = denseRetriever.retrieve(
-                    rawQuery, catalog.getCatalogVersion(), documentKind, CHANNEL_TOP_K);
-            List<RankedCandidate> safeCandidates = candidates == null ? List.of() : candidates;
-            metricsCollector.recordDenseCandidates(safeCandidates.size());
-            return new DenseResult(resolveParents(safeCandidates, documentKind, catalog), false);
-        } catch (Exception exception) {
-            log.warn("[Vue RAG][Dense] 检索失败,queryHash={},catalogVersion={},documentKind={},"
-                            + "candidateCount=0",
-                    VueRagLogSanitizer.queryHash(rawQuery), catalog.getCatalogVersion(), documentKind);
-            metricsCollector.recordDenseCandidates(0);
-            metricsCollector.recordDegradation(VueRagDegradationReason.DENSE_FAILED);
-            return new DenseResult(List.of(), true);
+    private ChainPair retrieveChains(String rawQuery, VueRetrievalResources resources) {
+        TemplateCatalog catalog = resources.catalog();
+        if (invalidQuery(rawQuery, catalog)) {
+            return new ChainPair(new ChainResult(List.of(), true), new ChainResult(List.of(), true));
         }
+        Map<String, Double> qualityScores = qualityScores(catalog);
+        try (var request = execution.openRequest()) {
+            CompletableFuture<Embedding> embedding = queryEmbedding(request, rawQuery);
+            CompletableFuture<ChannelResult> skeletonBm25 = bm25Channel(
+                    request, rawQuery, catalog, RagDocumentKind.PROJECT_SKELETON);
+            CompletableFuture<ChannelResult> featureBm25 = bm25Channel(
+                    request, rawQuery, catalog, RagDocumentKind.FEATURE_SNIPPET);
+            CompletableFuture<ChainResult> skeleton = retrieveChain(request, embedding, skeletonBm25,
+                    rawQuery, RagDocumentKind.PROJECT_SKELETON, SKELETON_RERANK_TOP_K, resources, qualityScores);
+            CompletableFuture<ChainResult> feature = retrieveChain(request, embedding, featureBm25,
+                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K, resources, qualityScores);
+            return request.await(skeleton.thenCombine(feature, ChainPair::new));
+        }
+    }
+
+    private DensePair retrieveDensePools(String rawQuery, TemplateCatalog catalog) {
+        if (invalidQuery(rawQuery, catalog)) {
+            return new DensePair(new DenseResult(List.of(), false), new DenseResult(List.of(), false));
+        }
+        try (var request = execution.openRequest()) {
+            CompletableFuture<Embedding> embedding = queryEmbedding(request, rawQuery);
+            CompletableFuture<DenseResult> skeleton = denseChannel(
+                    request, embedding, catalog, RagDocumentKind.PROJECT_SKELETON)
+                    .thenApply(result -> new DenseResult(resolveParents(result.candidates(),
+                            RagDocumentKind.PROJECT_SKELETON, catalog), result.failed()));
+            CompletableFuture<DenseResult> feature = denseChannel(
+                    request, embedding, catalog, RagDocumentKind.FEATURE_SNIPPET)
+                    .thenApply(result -> new DenseResult(resolveParents(result.candidates(),
+                            RagDocumentKind.FEATURE_SNIPPET, catalog), result.failed()));
+            return request.await(skeleton.thenCombine(feature, DensePair::new));
+        }
+    }
+
+    private boolean invalidQuery(String rawQuery, TemplateCatalog catalog) {
+        return rawQuery == null || rawQuery.isBlank()
+                || catalog.getCatalogVersion() == null || catalog.getCatalogVersion().isBlank();
+    }
+
+    private CompletableFuture<Embedding> queryEmbedding(VueRagExecutor.RequestScope request, String rawQuery) {
+        return request.submit(VueRagStage.EMBEDDING, null, () -> denseRetriever.embedQuery(rawQuery));
+    }
+
+    private CompletableFuture<ChannelResult> bm25Channel(VueRagExecutor.RequestScope request,
+                                                         String rawQuery, TemplateCatalog catalog,
+                                                         RagDocumentKind kind) {
+        return recall(VueRagDegradationReason.BM25_FAILED, request.submit(VueRagStage.BM25, kind,
+                () -> bm25Retriever.retrieve(rawQuery, catalog.getCatalogVersion(), kind, CHANNEL_TOP_K)));
+    }
+
+    private CompletableFuture<ChannelResult> denseChannel(VueRagExecutor.RequestScope request,
+                                                          CompletableFuture<Embedding> embedding,
+                                                          TemplateCatalog catalog, RagDocumentKind kind) {
+        // 共享计算失败时，两池都走原来的 Dense 失败分支，不额外重算向量。
+        return recall(VueRagDegradationReason.DENSE_FAILED, embedding.thenCompose(value ->
+                request.submit(VueRagStage.DENSE, kind, () -> denseRetriever.retrieveWithEmbedding(
+                        value, catalog.getCatalogVersion(), kind, CHANNEL_TOP_K))));
     }
 
     private TemplateDoc basicSkeleton(TemplateCatalog catalog) {
@@ -247,17 +299,23 @@ public class VueHybridRetrievalService {
                 .orElse(null);
     }
 
-    private ChainResult retrieveChain(String rawQuery,
-                                      RagDocumentKind documentKind,
-                                      int rerankTopK,
-                                      VueRetrievalResources resources,
-                                      Map<String, Double> qualityScores) {
-        ChannelResult bm25 = recall(VueRagDegradationReason.BM25_FAILED,
-                () -> bm25Retriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
-                        documentKind, CHANNEL_TOP_K));
-        ChannelResult dense = recall(VueRagDegradationReason.DENSE_FAILED,
-                () -> denseRetriever.retrieve(rawQuery, resources.catalog().getCatalogVersion(),
-                        documentKind, CHANNEL_TOP_K));
+    private CompletableFuture<ChainResult> retrieveChain(VueRagExecutor.RequestScope request,
+                                                         CompletableFuture<Embedding> embedding,
+                                                         CompletableFuture<ChannelResult> bm25,
+                                                         String rawQuery, RagDocumentKind documentKind,
+                                                         int rerankTopK, VueRetrievalResources resources,
+                                                         Map<String, Double> qualityScores) {
+        return bm25.thenCombine(denseChannel(request, embedding, resources.catalog(), documentKind),
+                        RecallPair::new)
+                .thenCompose(pair -> finishChain(request, pair.bm25(), pair.dense(), rawQuery,
+                        documentKind, rerankTopK, resources, qualityScores));
+    }
+
+    private CompletableFuture<ChainResult> finishChain(VueRagExecutor.RequestScope request,
+                                                       ChannelResult bm25, ChannelResult dense,
+                                                       String rawQuery, RagDocumentKind documentKind,
+                                                       int rerankTopK, VueRetrievalResources resources,
+                                                       Map<String, Double> qualityScores) {
         boolean degraded = bm25.failed() || bm25.candidates().isEmpty()
                 || dense.failed() || dense.candidates().isEmpty();
 
@@ -268,22 +326,26 @@ public class VueHybridRetrievalService {
                 VueRagLogSanitizer.queryHash(rawQuery), resources.catalog().getCatalogVersion(),
                 VueRagLogSanitizer.candidateIds(fused), fused.size());
         if (fused.isEmpty()) {
-            return new ChainResult(List.of(), true);
+            return CompletableFuture.completedFuture(new ChainResult(List.of(), true));
         }
         List<TemplateDoc> parentDocuments = resolveParents(
                 fused, documentKind, resources.catalog());
         if (parentDocuments.isEmpty()) {
-            return new ChainResult(List.of(), true);
+            return CompletableFuture.completedFuture(new ChainResult(List.of(), true));
         }
         if (!properties.getRerank().isEnabled()) {
-            return new ChainResult(parentDocuments.stream().limit(rerankTopK).toList(), degraded);
+            return CompletableFuture.completedFuture(
+                    new ChainResult(parentDocuments.stream().limit(rerankTopK).toList(), degraded));
         }
-        try {
-            List<TemplateDoc> reranked = rerankService.rerankVue(
-                    rawQuery, parentDocuments, rerankTopK);
-            metricsCollector.recordRerankCandidates(reranked.size());
-            return new ChainResult(reranked, degraded);
-        } catch (RerankException exception) {
+        return request.submit(VueRagStage.RERANK, documentKind,
+                () -> rerankService.rerankVue(rawQuery, parentDocuments, rerankTopK)).handle((reranked, failure) -> {
+            if (failure == null) {
+                metricsCollector.recordRerankCandidates(reranked.size());
+                return new ChainResult(reranked, degraded);
+            }
+            if (!(unwrap(failure) instanceof RerankException)) {
+                throw new CompletionException(failure);
+            }
             log.warn("[Vue RAG][Rerank] 失败,按 RRF 顺序降级,queryHash={},catalogVersion={},"
                             + "candidateIds={},candidateCount={}",
                     VueRagLogSanitizer.queryHash(rawQuery),
@@ -293,21 +355,31 @@ public class VueHybridRetrievalService {
             metricsCollector.recordDegradation(VueRagDegradationReason.RERANK_FAILED);
             return new ChainResult(
                     parentDocuments.stream().limit(rerankTopK).toList(), true);
-        }
+        });
     }
 
-    private ChannelResult recall(VueRagDegradationReason failureReason,
-                                 Supplier<List<RankedCandidate>> retrieval) {
-        try {
-            List<RankedCandidate> candidates = retrieval.get();
-            List<RankedCandidate> safeCandidates = candidates == null ? List.of() : candidates;
-            recordChannelCandidates(failureReason, safeCandidates.size());
-            return new ChannelResult(safeCandidates, false);
-        } catch (Exception exception) {
+    private CompletableFuture<ChannelResult> recall(VueRagDegradationReason failureReason,
+                                                     CompletableFuture<List<RankedCandidate>> retrieval) {
+        return retrieval.handle((candidates, failure) -> {
+            if (failure == null) {
+                List<RankedCandidate> safeCandidates = candidates == null ? List.of() : candidates;
+                recordChannelCandidates(failureReason, safeCandidates.size());
+                return new ChannelResult(safeCandidates, false);
+            }
+            if (unwrap(failure) instanceof Error error) {
+                throw error;
+            }
             recordChannelCandidates(failureReason, 0);
             metricsCollector.recordDegradation(failureReason);
             return new ChannelResult(List.of(), true);
+        });
+    }
+
+    private Throwable unwrap(Throwable failure) {
+        while (failure instanceof CompletionException && failure.getCause() != null) {
+            failure = failure.getCause();
         }
+        return failure;
     }
 
     private void recordChannelCandidates(VueRagDegradationReason channel, int count) {
@@ -493,6 +565,15 @@ public class VueHybridRetrievalService {
     }
 
     private record ChainResult(List<TemplateDoc> documents, boolean degraded) {
+    }
+
+    private record ChainPair(ChainResult skeleton, ChainResult feature) {
+    }
+
+    private record DensePair(DenseResult skeleton, DenseResult feature) {
+    }
+
+    private record RecallPair(ChannelResult bm25, ChannelResult dense) {
     }
 
     private record DependencyVersionRange(DependencyRangeKind kind, int major) {

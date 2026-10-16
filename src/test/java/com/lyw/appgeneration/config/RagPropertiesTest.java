@@ -6,9 +6,37 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RagPropertiesTest {
+
+    @Test
+    void 执行器默认限制允许每个请求完整提交七个任务() {
+        RagProperties.Execution execution = new RagProperties().getExecution();
+        assertEquals(12, execution.getWorkerThreads());
+        assertEquals(4, execution.getMaxConcurrentRequests());
+        assertEquals(64, execution.getQueueCapacity());
+        assertDoesNotThrow(execution::validate);
+        execution.setQueueCapacity(27);
+        assertThrows(IllegalArgumentException.class, execution::validate);
+        execution.setQueueCapacity(28);
+        assertDoesNotThrow(execution::validate);
+        execution.setMaxConcurrentRequests(Integer.MAX_VALUE);
+        assertThrows(IllegalArgumentException.class, execution::validate);
+    }
+
+    @Test
+    void 拒绝非正数线程数或请求数() {
+        RagProperties.Execution execution = new RagProperties.Execution();
+        execution.setWorkerThreads(0);
+        assertThrows(IllegalArgumentException.class, execution::validate);
+        execution.setWorkerThreads(4);
+        execution.setMaxConcurrentRequests(0);
+        assertThrows(IllegalArgumentException.class, execution::validate);
+    }
 
     @Test
     void hybridRetrievalIsEnabledByDefault() {

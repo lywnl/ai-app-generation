@@ -38,6 +38,9 @@ public class RagProperties {
     /** 检索参数 */
     private Retrieval retrieval = new Retrieval();
 
+    /** Vue 检索的请求接纳与外部调用并发上限 */
+    private Execution execution = new Execution();
+
     /** Rerank 精排参数 */
     private Rerank rerank = new Rerank();
 
@@ -80,6 +83,24 @@ public class RagProperties {
         /** 向量相似度下限。Rerank 开启时应调低以便给精排留候选池 */
         private double minScore = 0.30;
         private long timeoutMs = 2000L;
+    }
+
+    @Data
+    public static class Execution {
+        private int workerThreads = 12;
+        private int maxConcurrentRequests = 4;
+        private int queueCapacity = 64;
+
+        public void validate() {
+            if (workerThreads <= 0 || maxConcurrentRequests <= 0) {
+                throw new IllegalArgumentException("RAG 工作线程数和最大并发请求数必须大于 0");
+            }
+            // 每个已接纳的混合请求最多提交 1 次向量计算、4 次搜索、2 次重排。
+            if (queueCapacity < 7L * maxConcurrentRequests) {
+                throw new IllegalArgumentException(
+                        "rag.execution.queue-capacity 必须不少于 7 × max-concurrent-requests");
+            }
+        }
     }
 
     @Data

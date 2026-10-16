@@ -1,6 +1,6 @@
 # AI App Generation
 
-基于 **Java 25、Spring Boot、LangChain4j、MyBatis-Flex 和 Vue 3** 的 AI Web 应用生成平台，结合 **P/E（Plan / Execute）、软 Replan、ReAct、Skill、RAG、分层记忆和工具调用**，通过自然语言完成应用生成、修改、构建与发布。
+基于 **Java 25、Spring Boot、LangChain4j、MyBatis-Flex 和 Vue 3** 的 AI Web 应用生成平台，结合 **P/E（Plan-Execute-Replan）、ReAct、Skill、RAG、分层记忆和工具调用**，通过自然语言完成应用生成、修改、构建与发布。
 
 支持单文件 HTML、多文件网页和 Vue 工程；用户可以查看生成过程、文件变更和计划进度，预览网站、下载源码或发布网站。
 

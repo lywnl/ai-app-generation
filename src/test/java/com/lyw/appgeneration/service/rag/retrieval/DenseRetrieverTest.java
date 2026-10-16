@@ -22,6 +22,9 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DenseRetrieverTest {
@@ -105,6 +108,45 @@ class DenseRetrieverTest {
         assertTrue(retriever.retrieve("登录", CATALOG_VERSION, RagDocumentKind.FEATURE_SNIPPET, 0).isEmpty());
         assertEquals(0, vueStore.searchCount);
         assertTrue(embeddingModel.queries.isEmpty());
+    }
+
+    @Test
+    void sharesOneEmbeddingBetweenSearchesButDoesNotCacheOtherRequests() {
+        RecordingStore store = new RecordingStore(List.of());
+        RecordingEmbeddingModel model = new RecordingEmbeddingModel();
+        DenseRetriever retriever = retriever(model, store, new RecordingStore(List.of()), properties(0.3));
+
+        Embedding embedding = retriever.embedQuery("同一请求");
+        for (RagDocumentKind kind : List.of(RagDocumentKind.PROJECT_SKELETON, RagDocumentKind.FEATURE_SNIPPET)) {
+            retriever.retrieveWithEmbedding(embedding, CATALOG_VERSION, kind, 10);
+            assertSame(embedding, store.request.queryEmbedding());
+        }
+        assertEquals(2, store.searchCount);
+        assertEquals(List.of("同一请求"), model.queries);
+        retriever.embedQuery("同一请求");
+        assertEquals(List.of("同一请求", "同一请求"), model.queries);
+    }
+
+    @Test
+    void splitInterfacesDoNotCallDependenciesForInvalidInputOrMissingStore() {
+        RecordingEmbeddingModel model = new RecordingEmbeddingModel();
+        RecordingStore store = new RecordingStore(List.of());
+        DenseRetriever retriever = retriever(model, store, new RecordingStore(List.of()), properties(0.3));
+        Embedding embedding = Embedding.from(new float[]{1.0f});
+
+        assertNull(retriever.embedQuery(null));
+        assertNull(retriever.embedQuery("  "));
+        assertTrue(retriever.retrieveWithEmbedding(null, CATALOG_VERSION, RagDocumentKind.FEATURE_SNIPPET, 10).isEmpty());
+        assertTrue(retriever.retrieveWithEmbedding(embedding, "", RagDocumentKind.FEATURE_SNIPPET, 10).isEmpty());
+        assertTrue(retriever.retrieveWithEmbedding(embedding, CATALOG_VERSION, null, 10).isEmpty());
+        assertTrue(retriever.retrieveWithEmbedding(embedding, CATALOG_VERSION, RagDocumentKind.FEATURE_SNIPPET, 0).isEmpty());
+        assertEquals(0, store.searchCount);
+
+        DenseRetriever missing = new DenseRetriever(model, Map.of(), properties(0.3));
+        assertThrows(IllegalStateException.class, () -> missing.embedQuery("登录"));
+        assertThrows(IllegalStateException.class,
+                () -> missing.retrieve("登录", CATALOG_VERSION, RagDocumentKind.FEATURE_SNIPPET));
+        assertTrue(model.queries.isEmpty());
     }
 
     private DenseRetriever retriever(EmbeddingModel embeddingModel,

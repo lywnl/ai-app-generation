@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.rag.monitor;
 
+import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -8,6 +9,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -17,6 +21,10 @@ import java.util.Map;
 public class VueRagMetricsCollector {
 
     private final Timer retrievalDuration;
+    private final Timer admissionWait;
+    private final Counter embeddingCalls;
+    private final Map<StageKey, Timer> stageDurations;
+    private final Map<StageKey, Timer> queueDurations;
     private final DistributionSummary bm25Candidates;
     private final DistributionSummary denseCandidates;
     private final DistributionSummary rrfCandidates;
@@ -30,6 +38,24 @@ public class VueRagMetricsCollector {
         retrievalDuration = Timer.builder("vue_rag_retrieval_duration_seconds")
                 .description("Vue RAG 混合检索总耗时")
                 .register(registry);
+        admissionWait = Timer.builder("vue_rag_admission_wait_seconds")
+                .description("Vue RAG 等待请求许可的耗时")
+                .register(registry);
+        embeddingCalls = Counter.builder("vue_rag_embedding_calls_total")
+                .description("Vue RAG 逻辑查询向量调用次数，不含客户端内部重试")
+                .register(registry);
+        stageDurations = new HashMap<>();
+        queueDurations = new HashMap<>();
+        for (VueRagStage stage : VueRagStage.values()) {
+            if (stage == VueRagStage.EMBEDDING) {
+                registerStage(registry, stage, null);
+            } else {
+                for (RagDocumentKind kind : List.of(RagDocumentKind.PROJECT_SKELETON,
+                        RagDocumentKind.FEATURE_SNIPPET)) {
+                    registerStage(registry, stage, kind);
+                }
+            }
+        }
         bm25Candidates = summary(registry, "vue_rag_bm25_candidates", "BM25 候选数量");
         denseCandidates = summary(registry, "vue_rag_dense_candidates", "Dense 候选数量");
         rrfCandidates = summary(registry, "vue_rag_rrf_candidates", "RRF 融合后候选数量");
@@ -48,6 +74,33 @@ public class VueRagMetricsCollector {
 
     public void recordRetrievalDuration(Duration duration) {
         retrievalDuration.record(duration);
+    }
+
+    public void recordAdmissionWait(Duration duration) {
+        admissionWait.record(duration);
+    }
+
+    public void recordEmbeddingCall() {
+        embeddingCalls.increment();
+    }
+
+    public void recordStageDuration(VueRagStage stage, RagDocumentKind kind, Duration duration) {
+        stageDurations.get(new StageKey(stage, kind)).record(duration);
+    }
+
+    public void recordExecutorQueueDuration(VueRagStage stage, RagDocumentKind kind, Duration duration) {
+        queueDurations.get(new StageKey(stage, kind)).record(duration);
+    }
+
+    private void registerStage(MeterRegistry registry, VueRagStage stage, RagDocumentKind kind) {
+        StageKey key = new StageKey(stage, kind);
+        String kindTag = kind == null ? "shared" : kind.name().toLowerCase(Locale.ROOT);
+        stageDurations.put(key, Timer.builder("vue_rag_stage_duration_seconds")
+                .description("Vue RAG 外部调用耗时，不含执行器排队")
+                .tag("stage", stage.tagValue()).tag("document_kind", kindTag).register(registry));
+        queueDurations.put(key, Timer.builder("vue_rag_executor_queue_seconds")
+                .description("Vue RAG 子任务在执行器中排队的耗时")
+                .tag("stage", stage.tagValue()).tag("document_kind", kindTag).register(registry));
     }
 
     public void recordBm25Candidates(int count) {
@@ -83,5 +136,8 @@ public class VueRagMetricsCollector {
         return DistributionSummary.builder(name)
                 .description(description)
                 .register(registry);
+    }
+
+    private record StageKey(VueRagStage stage, RagDocumentKind kind) {
     }
 }
