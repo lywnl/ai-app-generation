@@ -6,8 +6,7 @@ import lombok.Getter;
 @Getter
 public enum ImageCategoryEnum {
     CONTENT("内容图片", "CONTENT"),
-    LOGO("LOGO图片", "LOGO"),
-    ILLUSTRATION("插画图片", "ILLUSTRATION");
+    LOGO("LOGO图片", "LOGO");
 
     private final String text;
     private final String value;

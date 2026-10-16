@@ -30,14 +30,16 @@
 
 **统一生成入口：`POST /api/app/chat/gen/code`**，前端发送 `appId`、用户提示词 `message` 和本次任务标识 `generationId`。
 
-新应用先通过 `POST /api/app/add` 确定生成类型并取得 `appId`；后续修改复用原应用。下面以需要修改文件的 Vue 回合为例：
+新应用先调用 `POST /api/app/add`：校验参数与登录后，**并行选择生成类型、生成应用名称**；两个结果就绪后，由请求线程统一入库并返回 `appId`，再发起代码生成请求。命名使用独立执行器，后续修改复用原应用。
+
+下面以需要修改文件的 Vue 回合为例：
 
 ```mermaid
 flowchart TD
     USER(["用户输入提示词"])
     ENTRY["发送生成请求<br/>POST /api/app/chat/gen/code"]
     CHECK["后端检查权限，建立回合<br/>保存用户消息"]
-    CONTEXT["准备上下文<br/>历史记忆 + 当前计划 + 按需 RAG / 图片"]
+    CONTEXT["准备上下文：历史记忆 + 当前计划<br/>首轮按需并行准备图片与 RAG"]
     PLAN["Plan：制定或调整文件计划<br/>makePlan / updatePlan，保存 .plan.json"]
     EXEC["Execute：进入 ReAct 工具循环<br/>读取文件 / Skill → 修改文件 → 观察真实结果"]
     NEXT{"下一步？"}
@@ -60,6 +62,8 @@ flowchart TD
 ```
 
 模型决定“改什么、下一步做什么”，后端负责真实执行和状态确认。循环中的每次模型请求都检查 Token 预算，必要时压缩历史；正文、工具结果和计划进度通过 SSE 实时展示。
+
+Vue 首轮需要修改文件时，图片准备与 RAG 检索并行执行，RAG 受 `rag.enabled` 控制。两路完成后，按“图片 → RAG”的固定顺序加入临时上下文，再请求代码模型；后续修改和只读回合不自动重复准备这些参考资料。
 
 已有计划可直接复用，不必每轮重新创建。真实构建最多 3 次，构建前拒绝不计次数；纠偏后仍无进展也会受控停止。HTML、多文件和纯只读问答不走这套完整的 Vue 构建流程，网站发布则是预览之后的独立操作。
 
@@ -160,18 +164,49 @@ protocol、operation、status、relativePath、changed、message、failureReason
 
 ### RAG：提供模板参考
 
-RAG 检索 `embed_text/` 中的模板知识，帮助模型选择页面结构和实现方式；它不是聊天历史，也不替模型决定当前计划。
+RAG 检索 `embed_text/` 中的模板知识，帮助模型选择页面结构和实现方式；它不是聊天历史，也不替模型决定当前计划。Vue 将工程骨架与功能片段按 `documentKind` 分池检索，并按 `catalogVersion` 限定模板版本。
 
-```text
-Vue 需求 → Dense 向量召回 + Milvus 原生 BM25 关键词召回
-        → RRF 融合 → Rerank 重排 → 受长度限制的模板上下文 → 主生成模型
+```mermaid
+flowchart TD
+    QUERY["Vue 原始需求"] --> EMBED["计算一次查询向量"]
+    QUERY --> SB["骨架 BM25"]
+    QUERY --> FB["功能 BM25"]
+    EMBED --> SD["骨架 Dense"]
+    EMBED --> FD["功能 Dense"]
+    SB --> SK["骨架池：RRF 融合 → 父文档回查 → Rerank"]
+    SD --> SK
+    FB --> FT["功能池：RRF 融合 → 父文档回查 → Rerank"]
+    FD --> FT
+    SK --> SELECT["选择骨架，筛选兼容的功能片段"]
+    FT --> SELECT
+    SELECT --> CONTEXT["按长度预算组装模板上下文 → 主生成模型"]
 ```
 
-HTML 和多文件模式使用 Dense 链路。Embedding 使用 DashScope `text-embedding-v4`，重排使用 `gte-rerank-v2`。检索异常有降级处理，重排异常可退回原候选顺序。
+一次正常混合检索执行 **1 次 Embedding、4 次 Milvus 搜索、最多 2 次 Rerank**，调用数不含客户端内部重试。查询向量只在当前请求内共享；Embedding 与两路 BM25 同时提交，向量就绪后两路 Dense 并发执行。每个池自己的召回完成后即可融合、回查和重排，最后按骨架、功能的固定身份合并结果。
+
+Milvus 检索命中的是模板的短子块；召回通道按父文档 ID 聚合去重，再从内存模板目录取回完整父文档用于重排和上下文组装。并发执行保留原有 RRF 排序、兼容筛选和上下文长度限制。
+
+Embedding 使用 DashScope `text-embedding-v4`，重排使用 `gte-rerank-v2`。共享 Embedding 失败时，两路 Dense 都不可用，继续使用 BM25；重排失败退回原候选顺序，缺少骨架候选时尝试固定基础骨架兜底。
+
+关闭 `rag.hybrid.enabled` 后，Vue 的生产 Dense-only 入口仍复用一次 Embedding、并发执行两路 Dense，并保留父文档回查和骨架兜底。HTML 和多文件模式使用各自的 Dense 链路。
 
 模板文件必须完成摄取才能进入 Milvus。普通启动和部署默认不重新导入；已有模板与索引保存在数据卷中，重启不用重新 Embedding。首次导入或更新见 [模板导入说明](prod/UPGRADE-V2.md#模板导入与验收)，导入会调用 Embedding 并产生费用。
 
-核心代码：[service/rag](src/main/java/com/lyw/appgeneration/service/rag)。
+核心代码：[VueHybridRetrievalService](src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java)、[DenseRetriever](src/main/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetriever.java)、[VueRagExecutor](src/main/java/com/lyw/appgeneration/service/rag/retrieval/VueRagExecutor.java)。
+
+### 图片素材：照片搜索与 Logo 生成
+
+图片规划只输出照片搜索和 Logo 任务。规划完成后，先提交 Logo，再提交照片；两类任务共用独立图片池并发执行，默认 **15 个工作线程、100 个排队位置**。照片通过 Pexels 搜索，最终上下文仍按照片、Logo 的顺序交付。
+
+Logo 默认使用 DashScope `wan2.2-t2i-flash`，每个 Logo 任务生成 **1 张 `512×512` 图片**；一次规划可以包含多个 Logo 任务。通过 SDK 的 `asyncCall()` 提交一次生成任务，随后用 `fetch()` 查询同一个任务 ID。
+
+正常查询间隔默认 **1000 毫秒**，从上次发起查询时计算；单次查询先返回再继续下一次，当前后端实例共享 **每秒 10 次查询额度**。遇到 429、503、504 时退避后查询；生成失败、取消或状态异常时跳过该 Logo。
+
+`image.collection.timeout-seconds` 默认 30 秒，表示依次收集结果时，对当前结果的等待窗口，整个图片准备可能超过 30 秒。外层等待超时或中断后会停止 Logo 后续轮询；已发出的网络请求仍受客户端超时约束，云端已提交的生成任务可能继续执行。
+
+图片与 RAG 的并行准备适用于上述 Vue 首轮修改回合。多文件网页首轮仍先准备图片、再执行 RAG；HTML 模式不调用图片采集。
+
+核心代码：[ImageCollectionService](src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java)、[LogoGeneratorTool](src/main/java/com/lyw/appgeneration/ai/image/tools/LogoGeneratorTool.java)。
 
 ### 记忆管理：延续多轮需求
 
@@ -248,8 +283,7 @@ bash scripts/stop-local.sh --confirm
 
 | 常用变量 | 用途 |
 | --- | --- |
-| `INFRA_SHARED_PASSWORD` | 本地 MySQL、Redis、Milvus root 的共享密码；生产可使用独立密码覆盖 |
-| `MILVUS_MINIO_PASSWORD` | Milvus 内部 MinIO 密码，至少 8 位 |
+| `INFRA_SHARED_PASSWORD` | MySQL、Redis、Milvus、MinIO 的共享密码；生产 Grafana 同样使用，至少 8 位 |
 | `DEEPSEEK_API_KEY` | 主生成与路由等模型调用 |
 | `DASHSCOPE_API_KEY` | Embedding、Rerank 和图片相关能力 |
 | `PEXELS_API_KEY` | 图片素材搜索 |
@@ -261,7 +295,26 @@ bash scripts/stop-local.sh --confirm
 | `RAG_INGEST_ENABLED`、`RAG_INGEST_TYPES` | 启动时模板摄取开关与类型；普通运行保持关闭，仅填写类型不会开启摄取 |
 | `AI_MODEL_LOG_REQUESTS`、`AI_MODEL_LOG_RESPONSES` | 本地模型诊断日志开关，生产 Compose 强制关闭 |
 
-真实 `.env` 不提交 Git。已有数据卷密码必须与配置匹配，单改 `.env` 不会自动修改 MySQL 或 Milvus 内部密码。COS 地域和桶名目前在 `application.yml` 中，换桶时只改 `COS_HOST` 不够。
+真实 `.env` 不提交 Git。共享密码仅允许英文字母、数字和 `_-.`，建议至少 16 位随机混合。已有数据卷密码必须与配置匹配，单改 `.env` 不会自动修改 MySQL 或 Milvus 内部密码。COS 地域和桶名目前在 `application.yml` 中，换桶时只改 `COS_HOST` 不够。
+
+### 并发与 Logo 查询参数
+
+以下限制均按**单个后端实例**生效。应用命名、图片采集、Vue RAG 外部调用各用独立执行资源；表中的请求上限只约束 Vue RAG 检索。
+
+| 配置项或环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `app.creation.naming-concurrency` | 4 | Spring 配置项，限制创建应用时同时运行的命名任务数 |
+| `IMAGE_COLLECTION_WORKER_THREADS` | 15 | 图片池工作线程数，照片与 Logo 共用 |
+| `IMAGE_COLLECTION_QUEUE_CAPACITY` | 100 | 图片子任务等待队列容量 |
+| `IMAGE_LOGO_POLL_INTERVAL_MS` | 1000 | 单个 Logo 任务的正常查询间隔，单位毫秒 |
+| `IMAGE_LOGO_MAX_POLL_QPS` | 10 | 当前实例所有 Logo 任务共享的每秒查询额度 |
+| `RAG_EXECUTION_WORKER_THREADS` | 12 | Vue RAG 外部调用工作线程数，供 Embedding、BM25、Dense、Rerank 使用 |
+| `RAG_EXECUTION_MAX_CONCURRENT_REQUESTS` | 4 | 同时获准进入 Vue RAG 内部编排的请求数 |
+| `RAG_EXECUTION_QUEUE_CAPACITY` | 64 | Vue RAG 外部调用子任务等待队列容量 |
+
+Vue RAG 超过准入上限的请求在入口等待资源，等待计入检索总耗时。队列容量必须至少为 `7 × RAG_EXECUTION_MAX_CONCURRENT_REQUESTS`；提高请求上限时需要同时核对队列。当前沿用各客户端超时，没有启用整条 Vue RAG 的总时限，`rag.retrieval.timeout-ms` 不能当作整条链的 2 秒上限。
+
+图片与 RAG 环境变量由 `application.yml` 读取，本地启动脚本可从 `dev/.env` 导出。当前生产 Compose 尚未映射表中的可调参数；生产要覆盖默认值，需在 `backend.environment` 中补充对应映射，再重建后端容器。命名并发使用 Spring 配置项，例如启动参数 `--app.creation.naming-concurrency=4`。
 
 ## 4. 构建与云端部署
 
@@ -326,7 +379,7 @@ chmod 600 .env
 | `RELEASE_ID` | 与 `artifacts/RELEASE` 一致，每次发布使用新版本 |
 | `APP_CODE_DEPLOY_BASE_URL` | 浏览器和截图服务可访问的公网源站，只保留一项，不填 `localhost` |
 | `MYSQL_USER`、`REDIS_USERNAME` | 必须匹配实际服务账号 |
-| `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`REDIS_PASSWORD`、`RAG_MILVUS_PASSWORD`、`GRAFANA_ADMIN_PASSWORD` | 已有环境保留实际密码；未配置独立值时按 Compose 回退到共享密码 |
+| `INFRA_SHARED_PASSWORD` | MySQL、Redis、Milvus、MinIO、Grafana 统一使用；已有环境先确认各服务实际账号密码一致，当前 Compose 不读取独立密码覆盖项 |
 | `BACKEND_RUNTIME_IMAGE`、`NGINX_RUNTIME_IMAGE` | 新环境可留空；已有环境可指定兼容运行时镜像，复用 Java、Node、Chrome 等 |
 | `BACKEND_HOST_PORT`、`PROMETHEUS_HOST_PORT`、`GRAFANA_HOST_PORT` | 宿主机暴露端口，默认 9025、9090、3000 |
 
@@ -356,7 +409,11 @@ bash deploy.sh
 
 | 位置 | 从这里看什么 |
 | --- | --- |
+| [AppServiceImpl](src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java) / [AppCreationExecutorConfig](src/main/java/com/lyw/appgeneration/config/AppCreationExecutorConfig.java) | 创建应用时并行选型、命名，汇总结果后入库 |
 | [AiCodeGeneratorFacade](src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java) | 生成入口、上下文准备、工具与流装配 |
+| [VueContextPreparationExecutorConfig](src/main/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfig.java) | Vue 首轮 RAG 分支使用的独立入口执行器 |
+| [VueHybridRetrievalService](src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java) | 查询向量复用、骨架与功能分池并发检索 |
+| [ImageCollectionService](src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java) / [LogoGeneratorTool](src/main/java/com/lyw/appgeneration/ai/image/tools/LogoGeneratorTool.java) | 图片规划与并发采集、Logo 提交与可取消轮询 |
 | [ai/plan](src/main/java/com/lyw/appgeneration/ai/plan) | 计划持久化、状态更新与偏差检测 |
 | [ai/tools](src/main/java/com/lyw/appgeneration/ai/tools) | 工具实现与结果协议 |
 | [dev/langchain4j/service](src/main/java/dev/langchain4j/service) | 定制的流式请求、工具循环、纠偏与恢复控制 |
@@ -372,6 +429,36 @@ npm --prefix ai-app-generation-frontend test
 
 # 后端按改动选择测试，例如计划逻辑的定向回归
 bash mvnw -Dtest=AppPlanStateManagerTest,PlanToolTest,BuildProjectPlanGateTest test
+
+# 应用创建与 Vue 首轮上下文并行准备
+bash mvnw -Dtest=AppServiceNamingTest,AppCreationExecutorConfigTest,AiCodeGeneratorFacadeTest,VueContextPreparationExecutorConfigTest test
+
+# Vue RAG 向量复用、并发控制与指标
+bash mvnw -Dtest=VueHybridRetrievalServiceTest,VueRagExecutorTest,VueRagMetricsCollectorTest test
+
+# 图片收集、Logo 轮询与超时取消
+bash mvnw -Dtest=ImageCollectionServiceTest,LogoGeneratorToolTest,LogoPollingIntegrationTest,LogoPollingRateLimiterTest test
 ```
 
 监控数据由 `/api/actuator/prometheus` 提供。排查时先看工具结果、回合终态及后端日志，再判断是模型生成、计划阻塞、真实构建还是外部依赖问题。
+
+### 创建与首轮生成耗时排查
+
+| 日志前缀 | 重点查看 |
+| --- | --- |
+| `[应用创建耗时]` | 创建请求 `totalMs`，登录、选型、`parallel_models` 并行合计及入库阶段 |
+| `[应用命名]` | `durationMs`、命名来源与失败类型；用创建请求的 `requestId` 关联 |
+| `[Vue 准备]` | 图片与 RAG 并行准备的总耗时，RAG 分支的 `queueMs`、`executeMs`，关联 `appId`、`turnId` |
+| `[Vue RAG]` | 检索模板 ID、降级信息与混合检索总耗时 |
+| `[图片耗时]` | `planMs`、`collectionMs`、`totalMs`，照片和 Logo 批次耗时、任务排队与执行耗时 |
+| `[Logo耗时]` | `submitMs`、`pollCount`、`retryCount`、`queryMs`、`intervalWaitMs`、`rateWaitMs`、`totalMs` |
+
+例如，使用本地启动脚本时可筛选：
+
+```bash
+rg '\[(应用创建耗时|应用命名|Vue 准备|Vue RAG|图片耗时|Logo耗时)\]' logs/runtime/
+```
+
+RAG 的阶段执行、准入等待、子任务排队分别记录到 `vue_rag_stage_duration_seconds`、`vue_rag_admission_wait_seconds`、`vue_rag_executor_queue_seconds`；`vue_rag_embedding_calls_total` 统计逻辑 Embedding 调用数，不含客户端内部重试。
+
+并行阶段的耗时不能直接相加：图片与 RAG 的准备总耗时主要由较慢分支决定，Logo 查询间隔内云端仍在生成图片。创建接口耗时、生成准备耗时、代码模型的首 Token 等待属于不同阶段，应分开衡量。

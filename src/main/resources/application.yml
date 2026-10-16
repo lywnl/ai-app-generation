@@ -134,6 +134,16 @@ dashscope:
   api-key: ${DASHSCOPE_API_KEY}
   image-model: wan2.2-t2i-flash
 
+# 图片素材收集：固定工作线程数，避免任务优先排队而无法使用配置的并发额度。
+image:
+  collection:
+    worker-threads: ${IMAGE_COLLECTION_WORKER_THREADS:15}
+    queue-capacity: ${IMAGE_COLLECTION_QUEUE_CAPACITY:100}
+  logo:
+    # 正常间隔从上次查询发起时计算；慢查询先返回，每个任务同一时间只有一次查询。
+    poll-interval-ms: ${IMAGE_LOGO_POLL_INTERVAL_MS:1000}
+    # 当前后端实例共享查询额度，领取额度后才发出请求。
+    max-poll-qps: ${IMAGE_LOGO_MAX_POLL_QPS:10}
 
 # RAG 检索增强配置(接入点 B:主生成前注入)
 rag:

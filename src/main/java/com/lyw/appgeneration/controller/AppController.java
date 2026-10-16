@@ -18,6 +18,7 @@ import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.monitor.AppCreationTiming;
 import com.lyw.appgeneration.web.GenerationSseEncoder;
 import com.lyw.appgeneration.model.vo.app.AppVO;
 import com.lyw.appgeneration.model.vo.app.AppPlanVO;
@@ -289,11 +290,14 @@ public class AppController {
      */
     @PostMapping("/add")
     public BaseResponse<Long> addApp(@RequestBody AppAddRequest appAddRequest, HttpServletRequest request) {
-        ThrowUtils.throwIf(appAddRequest == null, ErrorCode.PARAMS_ERROR);
-        // 获取当前登录用户
-        User loginUser = userService.getLoginUser(request);
-        Long appId = appService.addApp(appAddRequest, loginUser);
-        return ResultUtils.success(appId);
+        return AppCreationTiming.measure("controller", () -> {
+            ThrowUtils.throwIf(appAddRequest == null, ErrorCode.PARAMS_ERROR);
+            // 获取当前登录用户，包括会话读取和用户信息查库。
+            User loginUser = AppCreationTiming.measure("login", () -> userService.getLoginUser(request));
+            Long appId = appService.addApp(appAddRequest, loginUser);
+            request.setAttribute(AppCreationTiming.APP_ID_ATTRIBUTE, appId);
+            return ResultUtils.success(appId);
+        });
     }
 
     /**

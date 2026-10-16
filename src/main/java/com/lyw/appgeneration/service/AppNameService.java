@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service;
 
 import com.lyw.appgeneration.ai.AiAppNameService;
+import com.lyw.appgeneration.monitor.AppCreationTiming;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -91,7 +92,7 @@ public class AppNameService {
     }
 
     private void recordResult(String source, String failure, long started) {
-        log.info("[应用命名] source={},failureKind={},durationMs={}", source, failure,
-                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
+        log.info("[应用命名] source={},failureKind={},durationMs={},requestId={}", source, failure,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), AppCreationTiming.requestId());
     }
 }

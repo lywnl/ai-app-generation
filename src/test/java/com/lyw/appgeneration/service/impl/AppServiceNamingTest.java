@@ -2,6 +2,7 @@ package com.lyw.appgeneration.service.impl;
 
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingService;
 import com.lyw.appgeneration.ai.AiCodeGenTypeRoutingServiceFactory;
+import com.lyw.appgeneration.config.AppCreationExecutorConfig;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.model.dto.app.AppAddRequest;
 import com.lyw.appgeneration.model.entity.App;
@@ -12,12 +13,23 @@ import com.lyw.appgeneration.controller.AppController;
 import com.lyw.appgeneration.model.dto.app.AppUpdateRequest;
 import com.lyw.appgeneration.service.UserService;
 import com.lyw.appgeneration.service.GoodAppCacheService;
+import com.lyw.appgeneration.monitor.AppCreationTiming;
+import org.slf4j.MDC;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -28,6 +40,7 @@ class AppServiceNamingTest {
     private final AppNameService naming = mock(AppNameService.class);
     private final AppAddRequest request = new AppAddRequest();
     private final User user = new User();
+    private SimpleAsyncTaskExecutor namingExecutor;
 
     @BeforeEach
     void setup() {
@@ -35,6 +48,8 @@ class AppServiceNamingTest {
         when(factory.createAiCodeGenTypeRoutingService()).thenReturn(route);
         ReflectionTestUtils.setField(service, "aiCodeGenTypeRoutingServiceFactory", factory);
         ReflectionTestUtils.setField(service, "appNameService", naming);
+        namingExecutor = new AppCreationExecutorConfig().appCreationNamingExecutor(4);
+        ReflectionTestUtils.setField(service, "appCreationNamingExecutor", namingExecutor);
         request.setInitPrompt("创建一个个人博客");
         user.setId(7L);
         when(naming.generateName(request.getInitPrompt())).thenReturn("个人博客");
@@ -48,15 +63,23 @@ class AppServiceNamingTest {
         }).when(service).save(any(App.class));
     }
 
+    @AfterEach
+    void closeExecutor() {
+        namingExecutor.close();
+    }
+
     @ParameterizedTest
     @EnumSource(CodeGenTypeEnum.class)
-    void 三类应用路由后命名再保存(CodeGenTypeEnum type) {
+    void 三类应用均在路由和命名完成后只保存一次(CodeGenTypeEnum type) {
         when(route.routeCodeGenType(request.getInitPrompt())).thenReturn(type);
         assertEquals(99L, service.addApp(request, user));
-        var order = inOrder(route, naming, service);
-        order.verify(route).routeCodeGenType(request.getInitPrompt());
-        order.verify(naming).generateName(request.getInitPrompt());
-        order.verify(service).save(argThat(app -> type.getValue().equals(app.getCodeGenType())));
+        var routeOrder = inOrder(route, service);
+        routeOrder.verify(route).routeCodeGenType(request.getInitPrompt());
+        routeOrder.verify(service).save(argThat(app -> type.getValue().equals(app.getCodeGenType())));
+        var nameOrder = inOrder(naming, service);
+        nameOrder.verify(naming).generateName(request.getInitPrompt());
+        nameOrder.verify(service).save(any(App.class));
+        verify(service, times(1)).save(any(App.class));
     }
 
     @Test
@@ -75,11 +98,127 @@ class AppServiceNamingTest {
     }
 
     @Test
-    void 路由失败不调用命名或保存() {
-        when(route.routeCodeGenType(anyString())).thenThrow(new IllegalStateException("路由失败"));
-        assertThrows(IllegalStateException.class, () -> service.addApp(request, user));
-        verifyNoInteractions(naming);
-        verify(service, never()).save(any(App.class));
+    void 路由失败取消已启动的命名且不保存() throws Exception {
+        CountDownLatch nameStarted = new CountDownLatch(1);
+        CountDownLatch nameInterrupted = new CountDownLatch(1);
+        CountDownLatch releaseName = new CountDownLatch(1);
+        when(naming.generateName(request.getInitPrompt())).thenAnswer(ignored -> {
+            nameStarted.countDown();
+            try {
+                releaseName.await();
+            } catch (InterruptedException interrupted) {
+                nameInterrupted.countDown();
+                Thread.currentThread().interrupt();
+            }
+            return "备用名称";
+        });
+        IllegalStateException failure = new IllegalStateException("路由失败");
+        when(route.routeCodeGenType(anyString())).thenAnswer(ignored -> {
+            assertTrue(nameStarted.await(3, TimeUnit.SECONDS));
+            throw failure;
+        });
+        try {
+            assertSame(failure, assertThrows(IllegalStateException.class, () -> service.addApp(request, user)));
+            assertTrue(nameInterrupted.await(3, TimeUnit.SECONDS));
+            verify(service, never()).save(any(App.class));
+        } finally {
+            releaseName.countDown();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void 路由与命名重叠执行且任一路未完成都不入库(boolean nameFinishesFirst) throws Exception {
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        CountDownLatch releaseRoute = new CountDownLatch(1);
+        CountDownLatch releaseName = new CountDownLatch(1);
+        CountDownLatch routeFinished = new CountDownLatch(1);
+        CountDownLatch nameFinished = new CountDownLatch(1);
+        AtomicReference<Thread> callerThread = new AtomicReference<>();
+        String requestId = "创建并发请求";
+        when(route.routeCodeGenType(request.getInitPrompt())).thenAnswer(ignored -> {
+            assertSame(callerThread.get(), Thread.currentThread());
+            assertEquals(requestId, AppCreationTiming.requestId());
+            bothStarted.countDown();
+            assertTrue(releaseRoute.await(5, TimeUnit.SECONDS));
+            routeFinished.countDown();
+            return CodeGenTypeEnum.VUE_PROJECT;
+        });
+        when(naming.generateName(request.getInitPrompt())).thenAnswer(ignored -> {
+            assertTrue(Thread.currentThread().getName().startsWith("app-create-name-"));
+            assertEquals(requestId, AppCreationTiming.requestId());
+            bothStarted.countDown();
+            assertTrue(releaseName.await(5, TimeUnit.SECONDS));
+            nameFinished.countDown();
+            return "个人博客";
+        });
+        var caller = Executors.newSingleThreadExecutor();
+        try {
+            var result = caller.submit(() -> {
+                callerThread.set(Thread.currentThread());
+                try (var ignored = MDC.putCloseable(AppCreationTiming.REQUEST_ID_KEY, requestId)) {
+                    return service.addApp(request, user);
+                }
+            });
+            assertTrue(bothStarted.await(3, TimeUnit.SECONDS), "两次模型调用必须能同时开始");
+            verify(service, never()).save(any(App.class));
+            if (nameFinishesFirst) {
+                releaseName.countDown();
+                assertTrue(nameFinished.await(3, TimeUnit.SECONDS));
+            } else {
+                releaseRoute.countDown();
+                assertTrue(routeFinished.await(3, TimeUnit.SECONDS));
+            }
+            assertFalse(result.isDone());
+            verify(service, never()).save(any(App.class));
+            releaseName.countDown();
+            releaseRoute.countDown();
+            assertEquals(99L, result.get(3, TimeUnit.SECONDS));
+            verify(service, times(1)).save(argThat(app ->
+                    "个人博客".equals(app.getAppName())
+                            && CodeGenTypeEnum.VUE_PROJECT.getValue().equals(app.getCodeGenType())));
+        } finally {
+            releaseName.countDown();
+            releaseRoute.countDown();
+            caller.shutdownNow();
+            assertTrue(caller.awaitTermination(3, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void 等待命名时中断会取消任务且不入库() throws Exception {
+        CountDownLatch nameStarted = new CountDownLatch(1);
+        CountDownLatch nameInterrupted = new CountDownLatch(1);
+        CountDownLatch releaseName = new CountDownLatch(1);
+        AtomicReference<Thread> callerThread = new AtomicReference<>();
+        when(route.routeCodeGenType(anyString())).thenReturn(CodeGenTypeEnum.HTML);
+        when(naming.generateName(request.getInitPrompt())).thenAnswer(ignored -> {
+            nameStarted.countDown();
+            try {
+                releaseName.await();
+            } catch (InterruptedException interrupted) {
+                nameInterrupted.countDown();
+                Thread.currentThread().interrupt();
+            }
+            return "个人博客";
+        });
+        var caller = Executors.newSingleThreadExecutor();
+        try {
+            var result = caller.submit(() -> {
+                callerThread.set(Thread.currentThread());
+                assertThrows(CancellationException.class, () -> service.addApp(request, user));
+                return Thread.currentThread().isInterrupted();
+            });
+            assertTrue(nameStarted.await(3, TimeUnit.SECONDS));
+            callerThread.get().interrupt();
+            assertTrue(result.get(3, TimeUnit.SECONDS));
+            assertTrue(nameInterrupted.await(3, TimeUnit.SECONDS));
+            verify(service, never()).save(any(App.class));
+        } finally {
+            releaseName.countDown();
+            caller.shutdownNow();
+            assertTrue(caller.awaitTermination(3, TimeUnit.SECONDS));
+        }
     }
 
     @Test

@@ -126,7 +126,6 @@ GRAFANA_ADMIN_USER=admin
   升级前需要将实际账号密码同步为共享密码，并按需重建容器；不要删除数据卷来处理密码问题。
 - MinIO 用户固定为 `minioadmin`，仅供 Milvus 内部对象存储使用，不对公网暴露。
 - 建议使用新的随机强密码；仓库历史中的旧口令不应继续复用。
-- 密码只能使用字母、数字、点、下划线和短横线，建议生成足够长的随机值。
 - Redis ACL 由 `redis/start-redis.sh` 在容器启动时生成，仓库不保存明文 ACL。
 
 注意：Redis 会在每次容器启动时应用新密码；MySQL、Milvus root 和 Grafana
@@ -134,8 +133,8 @@ GRAFANA_ADMIN_USER=admin
 修改现有账号密码，再更新 `.env` 并重启；不能通过删除数据卷来“同步密码”。
 
 Milvus root 初始密码仅在全新的 etcd 元数据中生效。已有 `milvus_etcd_data` 卷改密时，
-必须先在 Milvus 内完成 root 密码修改，再更新 `.env` 中的 `RAG_MILVUS_PASSWORD`
-（未单独配置时才使用 `INFRA_SHARED_PASSWORD`）。
+必须先在 Milvus 内完成 root 密码修改，再更新 `.env` 中的 `INFRA_SHARED_PASSWORD`，
+并同步其余使用共享密码的服务；单独设置 `RAG_MILVUS_PASSWORD` 不会覆盖当前 Compose 的配置。
 旧 PG 数据卷在迁移验收完成前只读保留，验收后先备份，再由人工删除；应用不会再连接旧卷。
 
 如果暂时不填 API Key，请保留这些键且值为空：

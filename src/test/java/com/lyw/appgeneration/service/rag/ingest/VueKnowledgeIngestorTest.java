@@ -3,6 +3,7 @@ package com.lyw.appgeneration.service.rag.ingest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.config.VueContextPreparationExecutorConfig;
 import com.lyw.appgeneration.ai.AiCodeGeneratorService;
 import com.lyw.appgeneration.ai.image.ImageCollectionService;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
@@ -283,20 +284,25 @@ class VueKnowledgeIngestorTest {
                 permit, budgetGuard.newSession(), true);
         turnContext.initializeMode(VueTurnMode.MUTATION_REQUIRED);
 
-        facade.generateVueProjectStream(
-                "Vue3 基础工程 登录表单", 9L, true,
-                turnContext, generator);
+        try (var preparationExecutor = new VueContextPreparationExecutorConfig()
+                .vueContextPreparationExecutor(properties)) {
+            ReflectionTestUtils.setField(facade, "vueContextPreparationExecutor", preparationExecutor);
+            facade.generateVueProjectStream(
+                    "Vue3 基础工程 登录表单", 9L, true,
+                    turnContext, generator);
 
-        verify(imageService).collectPromptContext("Vue3 基础工程 登录表单");
-        ArgumentCaptor<List<ChatMessage>> transientCaptor =
-                ArgumentCaptor.forClass(List.class);
-        verify(stream).turnTransientMessages(transientCaptor.capture());
-        turnContext.closeResources();
-        return transientCaptor.getValue().stream()
-                .filter(SystemMessage.class::isInstance)
-                .map(SystemMessage.class::cast)
-                .map(SystemMessage::text)
-                .reduce("", (left, right) -> left + right);
+            verify(imageService).collectPromptContext("Vue3 基础工程 登录表单");
+            ArgumentCaptor<List<ChatMessage>> transientCaptor =
+                    ArgumentCaptor.forClass(List.class);
+            verify(stream).turnTransientMessages(transientCaptor.capture());
+            return transientCaptor.getValue().stream()
+                    .filter(SystemMessage.class::isInstance)
+                    .map(SystemMessage.class::cast)
+                    .map(SystemMessage::text)
+                    .reduce("", (left, right) -> left + right);
+        } finally {
+            turnContext.closeResources();
+        }
     }
 
     private ProductionRetrievalHarness productionRetrievalService(

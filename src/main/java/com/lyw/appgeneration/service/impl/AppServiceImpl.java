@@ -29,6 +29,7 @@ import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController;
 import com.lyw.appgeneration.monitor.AppLifecycleMetricsCollector;
+import com.lyw.appgeneration.monitor.AppCreationTiming;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
@@ -72,6 +73,7 @@ import com.mybatisflex.spring.service.impl.ServiceImpl;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -90,6 +92,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
 /**
  * 应用 服务层实现。
@@ -104,6 +108,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private AppNameService appNameService;
+
+    @Resource(name = "appCreationNamingExecutor")
+    private AsyncTaskExecutor appCreationNamingExecutor;
 
     @Resource
     private GoodAppCacheService goodAppCacheService;
@@ -1100,14 +1107,69 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         BeanUtil.copyProperties(appAddRequest, app);
         app.setUserId(loginUser.getId());
         // 根据 AI 选择代码生成类型
-        AiCodeGenTypeRoutingService routingService = aiCodeGenTypeRoutingServiceFactory.createAiCodeGenTypeRoutingService();
-        CodeGenTypeEnum selectGenType = routingService.routeCodeGenType(initPrompt);
-        app.setCodeGenType(selectGenType.getValue());
-        app.setAppName(appNameService.generateName(initPrompt));
+        AiCodeGenTypeRoutingService routingService = AppCreationTiming.measure("routing_init",
+                aiCodeGenTypeRoutingServiceFactory::createAiCodeGenTypeRoutingService);
+        AppCreationMetadata metadata = AppCreationTiming.measure("parallel_models",
+                () -> prepareAppCreationMetadata(initPrompt, routingService));
+        // 两路只返回计算结果，应用对象和数据库仍只由当前请求线程修改。
+        app.setCodeGenType(metadata.codeGenType());
+        app.setAppName(metadata.appName());
         // 插入数据库
-        boolean result = save(app);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        AppCreationTiming.measure("save", () -> {
+            boolean result = save(app);
+            ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+            return result;
+        });
 
         return app.getId();
+    }
+
+    private AppCreationMetadata prepareAppCreationMetadata(
+            String initPrompt, AiCodeGenTypeRoutingService routingService) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("创建应用请求已中断");
+        }
+        long submittedAt = System.nanoTime();
+        Future<String> nameFuture = appCreationNamingExecutor.submit(() -> {
+            log.info("[应用创建耗时] 命名分支开始,requestId={},queueMs={}",
+                    AppCreationTiming.requestId(), AppCreationTiming.elapsedMillis(submittedAt));
+            return appNameService.generateName(initPrompt);
+        });
+        try {
+            CodeGenTypeEnum type = AppCreationTiming.measure("routing",
+                    () -> routingService.routeCodeGenType(initPrompt));
+            String codeGenType = type.getValue();
+            return new AppCreationMetadata(codeGenType, awaitAppCreationName(nameFuture));
+        } finally {
+            // 路由失败或请求中断时取消命名；执行器在物理任务退出后才释放并发名额。
+            if (!nameFuture.isDone()) {
+                nameFuture.cancel(true);
+            }
+        }
+    }
+
+    private String awaitAppCreationName(Future<String> nameFuture) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("创建应用请求已中断");
+        }
+        try {
+            return nameFuture.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            CancellationException cancelled = new CancellationException("创建应用请求已中断");
+            cancelled.initCause(interrupted);
+            throw cancelled;
+        } catch (ExecutionException failure) {
+            if (failure.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (failure.getCause() instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("创建应用的名称准备失败", failure.getCause());
+        }
+    }
+
+    private record AppCreationMetadata(String codeGenType, String appName) {
     }
 }
