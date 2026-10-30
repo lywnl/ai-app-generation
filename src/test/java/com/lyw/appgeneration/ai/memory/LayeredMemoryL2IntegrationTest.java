@@ -69,7 +69,7 @@ class LayeredMemoryL2IntegrationTest {
                 new ConservativeChatTokenEstimator(tokenProperties);
 
         // 跨包使用正式生产构造器，验证 Spring 依赖签名与真实召回契约一致。
-        UserMemoryServiceImpl l2 = new UserMemoryServiceImpl(chatHistory, memMapper, cursorMapper,
+        UserMemoryServiceImpl l2 = new UserMemoryServiceImpl(chatHistory, com.lyw.appgeneration.service.impl.MemoryTestSupport.repository(memMapper), cursorMapper,
                 appMapper, model, mock(ExecutorService.class),
                 mock(TaskScheduler.class), redis,
                 new AppDataLifecycleFence(), tokenEstimator,
@@ -91,13 +91,9 @@ class LayeredMemoryL2IntegrationTest {
         when(cursorMapper.insert(any())).thenReturn(1);
         when(model.chat(anyString()))
                 .thenReturn("""
-                        [
-                          {"name":"语言偏好","valueCodes":["ZH_CN"],
-                           "evidenceType":"EXPLICIT","turnIds":[11]},
-                          {"name":"视觉风格","valueCodes":["MINIMAL","FLAT"],
-                           "evidenceType":"EXPLICIT","turnIds":[11]}
-                        ]
-                        """);
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["11"]}, {"action": "ADD", "category": "视觉风格", "attribute": "视觉样式", "content": "极简、扁平化", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["11"]}]}
+                """);
+        when(appMapper.selectOneById(appA)).thenReturn(App.builder().id(appA).userId(user).build());
         l2.extractNow(user, appA);
         assertEquals(2, table.size(), "appA 抽取应落 2 条偏好");
         assertTrue(table.stream().allMatch(
@@ -105,7 +101,7 @@ class LayeredMemoryL2IntegrationTest {
 
         // —— appB:召回(缓存未命中),应带出 appA 的偏好 ——
         when(appMapper.selectOneById(appB)).thenReturn(App.builder().id(appB).userId(user).build());
-        when(ops.get("mem:pref:v2:" + user)).thenReturn(null);
+        when(ops.get("mem:pref:v3:" + user)).thenReturn(null);
 
         MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
                 .id(appB)
@@ -121,7 +117,7 @@ class LayeredMemoryL2IntegrationTest {
         // 首条应是 appB 召回的 L2 偏好,内容来自 appA
         assertTrue(((UserMessage) msgs.get(0)).singleText().contains("简体中文"));
         assertTrue(((UserMessage) msgs.get(0)).singleText().contains("极简、扁平化"));
-        verify(ops).get("mem:pref:v2:" + user);
+        verify(ops).get("mem:pref:v3:" + user);
         verify(ops, never()).get("mem:pref:" + user);
     }
 }

@@ -20,7 +20,7 @@ import java.time.LocalDateTime;
  * @author <a href="https://gitee.com/lywynl">lyw</a>
  */
 @Data
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 @Table("app_memory")
@@ -43,17 +43,47 @@ public class AppMemory implements Serializable {
     /** 记忆类型(二期固定 USER_PREFERENCE) */
     private String type;
 
-    /** 偏好类别(去重键):语言偏好/视觉风格/技术栈倾向/交互习惯/其他 */
+    /** 固定类别：语言偏好/视觉风格/技术栈倾向/体验偏好；类别不是唯一键。 */
     private String name;
 
     /** 偏好内容 */
     private String content;
 
+    /** 稳定属性键；同一用户同一属性只能有一个生效版本。 */
+    @Column("memoryKey")
+    private String memoryKey;
+
+    /** 属性名称，供抽取模型复用；不限制偏好的具体取值。 */
+    @Column("attributeName")
+    private String attributeName;
+
+    /** 乐观版本，防止过期抽取结果覆盖新的状态。 */
+    private Long revision;
+
+    /** 替代当前历史版本的新记忆 ID。 */
+    @Column("supersededBy")
+    private Long supersededBy;
+
+    /** 从候选晋升时关联原候选。 */
+    @Column("originCandidateId")
+    private Long originCandidateId;
+
+    /** 用户明确撤销时的证据回合。 */
+    @Column("revokedByTurnId")
+    private Long revokedByTurnId;
+
+    /** 旧系统无法还原明细的证据基线，不能伪造为新的证据行。 */
+    @Column("legacyEvidenceCount")
+    private Integer legacyEvidenceCount;
+
+    @Column("legacyEvidenceTurnId")
+    private Long legacyEvidenceTurnId;
+
     /** 证据类型：EXPLICIT / IMPLICIT */
     @Column("evidenceType")
     private String evidenceType;
 
-    /** 证据状态：CANDIDATE / ACTIVE */
+    /** 正式状态：ACTIVE / SUPERSEDED / REVOKED；候选存放在独立表。 */
     private String status;
 
     /** 已累计的不同完整回合证据数 */

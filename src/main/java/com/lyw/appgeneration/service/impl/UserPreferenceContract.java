@@ -3,7 +3,7 @@ package com.lyw.appgeneration.service.impl;
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.MemoryTextSafety;
-import com.lyw.appgeneration.ai.memory.UserPreferenceValueCatalog;
+import com.lyw.appgeneration.ai.memory.UserPreferenceAttributes;
 import com.lyw.appgeneration.ai.memory.UserPreferenceMessageFragmentBuilder;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 
@@ -12,13 +12,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-/** 统一封闭模型输出、历史偏好和召回缓存使用的 L2 偏好契约。 */
+/** 固定类别与自由内容的 L2 契约；候选不进入正式召回缓存。 */
 final class UserPreferenceContract {
 
-    static final int MAX_CANDIDATES = 5;
-
     private static final List<String> ALLOWED_NAMES =
-            UserPreferenceValueCatalog.categoryNames();
+            UserPreferenceAttributes.CATEGORIES;
     private static final Set<String> ALLOWED_NAME_SET =
             Set.copyOf(ALLOWED_NAMES);
 
@@ -36,10 +34,6 @@ final class UserPreferenceContract {
                 this.tokenEstimator, this.tokenProperties);
     }
 
-    List<String> allowedNames() {
-        return ALLOWED_NAMES;
-    }
-
     boolean isAllowedName(String name) {
         return ALLOWED_NAME_SET.contains(StrUtil.trim(name));
     }
@@ -51,25 +45,29 @@ final class UserPreferenceContract {
 
     boolean isPreferenceWithinBudget(String name, String content) {
         String normalizedContent =
-                UserPreferenceCandidateParser.normalizeContent(content);
+                UserPreferenceAttributes.normalizeContent(content);
         return isAllowedName(name)
                 && MemoryTextSafety.isSafe(content)
                 && StrUtil.isNotBlank(normalizedContent)
                 && content.equals(normalizedContent)
-                && UserPreferenceValueCatalog.isCanonical(
-                StrUtil.trim(name), content)
                 && fragmentBuilder.isWithinBudget(
                 renderPreferenceLine(name, normalizedContent));
     }
 
     String renderPreferenceLine(String name, String content) {
         return "- " + StrUtil.trim(name) + ":"
-                + UserPreferenceCandidateParser.normalizeContent(content);
+                + UserPreferenceAttributes.normalizeContent(content);
     }
 
-    int estimatePreferenceLine(String name, String content) {
-        return tokenEstimator.estimateText(
-                renderPreferenceLine(name, content));
+    String renderPreferenceLine(String name, String attribute, String content) {
+        return renderPreferenceLine(name, attribute + "：" + content);
+    }
+
+    boolean isPreferenceWithinBudget(String name, String attribute, String content) {
+        return attribute != null && !attribute.isBlank() && attribute.length() <= 128
+                && MemoryTextSafety.isSafe(attribute)
+                && isPreferenceWithinBudget(name, content)
+                && fragmentBuilder.isWithinBudget(renderPreferenceLine(name, attribute, content));
     }
 
     boolean isValidRecallCache(String cached) {
@@ -79,14 +77,14 @@ final class UserPreferenceContract {
         if (cached.isEmpty()) {
             return true;
         }
-        Set<String> names = new HashSet<>();
+        Set<String> lines = new HashSet<>();
         for (String line : cached.split("\\n", -1)) {
             String name = resolveCachedLineName(line);
-            if (name == null || !names.add(name)) {
+            if (name == null || !lines.add(line)) {
                 return false;
             }
         }
-        return names.size() <= MAX_CANDIDATES;
+        return true;
     }
 
     private String resolveCachedLineName(String line) {

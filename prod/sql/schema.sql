@@ -81,23 +81,90 @@ create table if not exists app_memory_summary
 ) comment 'L1 滚动摘要（每app一行）' collate = utf8mb4_unicode_ci;
 
 
--- L2 用户偏好:结构化离散条目,每条一行
+-- L2 正式记忆及历史：同一属性只允许一个生效版本
 CREATE TABLE IF NOT EXISTS app_memory (
-    id          BIGINT       NOT NULL COMMENT '主键(snowflake)' PRIMARY KEY,
-    userId      BIGINT       NOT NULL COMMENT '用户id',
-    appId       BIGINT       NULL     COMMENT '来源app溯源(USER_PREFERENCE可空)',
-    type        VARCHAR(32)  NOT NULL DEFAULT 'USER_PREFERENCE' COMMENT '记忆类型(二期固定USER_PREFERENCE)',
-    name        VARCHAR(128) NOT NULL COMMENT '偏好类别(去重键):语言偏好/视觉风格/技术栈倾向/交互习惯/其他',
-    content     TEXT         NOT NULL COMMENT '偏好内容',
-    status      VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT '证据状态:CANDIDATE/ACTIVE',
-    evidenceType VARCHAR(16) NOT NULL DEFAULT 'EXPLICIT' COMMENT '证据类型:EXPLICIT/IMPLICIT',
-    evidenceCount INT        NOT NULL DEFAULT 1 COMMENT '不同完整回合证据数',
-    lastEvidenceTurnId BIGINT NULL COMMENT '已累计证据中的最大User回合ID',
-    createTime  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updateTime  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    isDelete    TINYINT      NOT NULL DEFAULT 0 COMMENT '是否删除',
-    UNIQUE KEY uk_userId_type_name (userId, type, name)
-) COMMENT 'L2 跨app用户长期记忆' COLLATE = utf8mb4_unicode_ci;
+    id BIGINT NOT NULL COMMENT '后端生成的记录ID' PRIMARY KEY,
+    userId BIGINT NOT NULL COMMENT '用户ID',
+    appId BIGINT NULL COMMENT '来源应用，删除应用只解绑来源',
+    type VARCHAR(32) NOT NULL DEFAULT 'USER_PREFERENCE' COMMENT '记忆类型',
+    name VARCHAR(128) NOT NULL COMMENT '语言偏好/视觉风格/技术栈倾向/体验偏好',
+    memoryKey VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '稳定属性键',
+    attributeName VARCHAR(128) NOT NULL COMMENT '属性名称，不含取值',
+    content TEXT NOT NULL COMMENT '自由内容，每条表达独立偏好',
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/SUPERSEDED/REVOKED',
+    supersededBy BIGINT NULL COMMENT '替代本版本的新正式ID',
+    originCandidateId BIGINT NULL COMMENT '晋升来源候选ID',
+    evidenceType VARCHAR(16) NOT NULL DEFAULT 'EXPLICIT' COMMENT 'EXPLICIT/IMPLICIT',
+    evidenceCount INT NOT NULL DEFAULT 1 COMMENT '旧证据基线加去重后的新证据数',
+    lastEvidenceTurnId BIGINT NULL COMMENT '最大有效用户回合ID',
+    legacyEvidenceCount INT NOT NULL DEFAULT 0 COMMENT '无法还原明细的旧证据基线',
+    legacyEvidenceTurnId BIGINT NULL COMMENT '已知的旧证据回合，不重复计数',
+    revision BIGINT NOT NULL DEFAULT 1 COMMENT '并发校验版本',
+    revokedByTurnId BIGINT NULL COMMENT '明确撤销依据',
+    createTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updateTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    isDelete TINYINT NOT NULL DEFAULT 0 COMMENT '是否删除',
+    activeSlot TINYINT GENERATED ALWAYS AS (
+        CASE WHEN status = 'ACTIVE' AND isDelete = 0 THEN 1 ELSE NULL END
+    ) STORED,
+    UNIQUE KEY uk_active_memory (userId, type, memoryKey, activeSlot),
+    KEY idx_memory_recall (userId, type, status, isDelete, evidenceType, updateTime, id),
+    KEY idx_memory_source (appId),
+    CONSTRAINT ck_memory_status CHECK (status IN ('ACTIVE', 'SUPERSEDED', 'REVOKED')),
+    CONSTRAINT ck_memory_category CHECK (name IN ('语言偏好', '视觉风格', '技术栈倾向', '体验偏好')),
+    CONSTRAINT ck_memory_evidence CHECK (evidenceType IN ('EXPLICIT', 'IMPLICIT') AND evidenceCount >= 0
+        AND legacyEvidenceCount >= 0 AND evidenceCount >= legacyEvidenceCount AND revision >= 1)
+) COMMENT 'L2 正式记忆及历史版本' COLLATE = utf8mb4_unicode_ci;
+
+-- L2 候选：独立证据、独立状态，不参与生成模型召回
+CREATE TABLE IF NOT EXISTS app_memory_candidate (
+    id BIGINT NOT NULL COMMENT '后端生成的记录ID' PRIMARY KEY,
+    userId BIGINT NOT NULL COMMENT '用户ID',
+    appId BIGINT NULL COMMENT '来源应用，删除应用只解绑来源',
+    type VARCHAR(32) NOT NULL DEFAULT 'USER_PREFERENCE' COMMENT '记忆类型',
+    name VARCHAR(128) NOT NULL COMMENT '语言偏好/视觉风格/技术栈倾向/体验偏好',
+    memoryKey VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '稳定属性键',
+    attributeName VARCHAR(128) NOT NULL COMMENT '属性名称，不含取值',
+    content TEXT NOT NULL COMMENT '自由内容，每条表达独立偏好',
+    contentHash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范化内容SHA256',
+    status VARCHAR(16) NOT NULL DEFAULT 'CANDIDATE' COMMENT 'CANDIDATE/PROMOTED/REVOKED',
+    promotedMemoryId BIGINT NULL COMMENT '晋升后的正式版本ID',
+    evidenceType VARCHAR(16) NOT NULL DEFAULT 'EXPLICIT' COMMENT 'EXPLICIT/IMPLICIT',
+    evidenceCount INT NOT NULL DEFAULT 1 COMMENT '旧证据基线加去重后的新证据数',
+    lastEvidenceTurnId BIGINT NULL COMMENT '最大有效用户回合ID',
+    legacyEvidenceCount INT NOT NULL DEFAULT 0 COMMENT '无法还原明细的旧证据基线',
+    legacyEvidenceTurnId BIGINT NULL COMMENT '已知的旧证据回合，不重复计数',
+    revision BIGINT NOT NULL DEFAULT 1 COMMENT '并发校验版本',
+    revokedByTurnId BIGINT NULL COMMENT '明确撤销依据',
+    createTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updateTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    isDelete TINYINT NOT NULL DEFAULT 0 COMMENT '是否删除',
+    pendingSlot TINYINT GENERATED ALWAYS AS (
+        CASE WHEN status = 'CANDIDATE' AND isDelete = 0 THEN 1 ELSE NULL END
+    ) STORED,
+    UNIQUE KEY uk_pending_memory (userId, type, memoryKey, contentHash, pendingSlot),
+    KEY idx_candidate_user (userId, type, status, isDelete, id),
+    KEY idx_candidate_source (appId),
+    CONSTRAINT ck_candidate_status CHECK (status IN ('CANDIDATE', 'PROMOTED', 'REVOKED')),
+    CONSTRAINT ck_candidate_category CHECK (name IN ('语言偏好', '视觉风格', '技术栈倾向', '体验偏好')),
+    CONSTRAINT ck_candidate_evidence CHECK (evidenceType IN ('EXPLICIT', 'IMPLICIT') AND evidenceCount >= 0
+        AND legacyEvidenceCount >= 0 AND evidenceCount >= legacyEvidenceCount AND revision >= 1)
+) COMMENT 'L2 独立候选及处理记录' COLLATE = utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS app_memory_evidence (
+    id BIGINT NOT NULL PRIMARY KEY,
+    userId BIGINT NOT NULL,
+    appId BIGINT NULL COMMENT '证据来源应用，删除只解绑',
+    targetKind VARCHAR(16) NOT NULL COMMENT 'FORMAL/CANDIDATE',
+    targetId BIGINT NOT NULL COMMENT '对应区域内的目标ID',
+    turnId BIGINT NOT NULL COMMENT '完整回合中的用户消息ID',
+    evidenceType VARCHAR(16) NOT NULL COMMENT 'EXPLICIT/IMPLICIT',
+    createTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_memory_evidence (userId, targetKind, targetId, turnId),
+    KEY idx_evidence_source (appId),
+    CONSTRAINT ck_evidence_kind CHECK (targetKind IN ('FORMAL', 'CANDIDATE')),
+    CONSTRAINT ck_evidence_type CHECK (evidenceType IN ('EXPLICIT', 'IMPLICIT'))
+) COMMENT 'L2 回合证据去重账本' COLLATE = utf8mb4_unicode_ci;
 
 -- L2 抽取游标:per-app 一行
 CREATE TABLE IF NOT EXISTS app_memory_extract_cursor (

@@ -101,7 +101,7 @@ class UserMemoryServiceImplTest {
     void exposesMetricsAwareProductionConstructor() {
         assertDoesNotThrow(() -> UserMemoryServiceImpl.class.getConstructor(
                 ChatHistoryService.class,
-                AppMemoryMapper.class,
+                VersionedUserMemoryRepository.class,
                 AppMemoryExtractCursorMapper.class,
                 AppMapper.class,
                 ChatModel.class,
@@ -122,6 +122,7 @@ class UserMemoryServiceImplTest {
         memoryMapper = mock(AppMemoryMapper.class);
         cursorMapper = mock(AppMemoryExtractCursorMapper.class);
         appMapper = mock(AppMapper.class);
+        when(appMapper.selectOneById(anyLong())).thenAnswer(inv -> App.builder().id(inv.getArgument(0)).userId(USER_ID).build());
         model = mock(ChatModel.class);
         redisTemplate = mock(StringRedisTemplate.class);
         valueOperations = mock(ValueOperations.class);
@@ -158,8 +159,7 @@ class UserMemoryServiceImplTest {
                 "以后所有应用都使用简体中文", "已收到"));
         when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
         when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                "evidenceType":"EXPLICIT","turnIds":[11]}]
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["11"]}]}
                 """);
 
         service.extractNow(USER_ID, APP_ID);
@@ -183,7 +183,7 @@ class UserMemoryServiceImplTest {
             TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
             UserMemoryServiceImpl defaultClockService =
                     new UserMemoryServiceImpl(
-                            chatHistoryService, memoryMapper, cursorMapper,
+                            chatHistoryService, MemoryTestSupport.repository(memoryMapper), cursorMapper,
                             appMapper, model, mock(ExecutorService.class),
                             mock(TaskScheduler.class), redisTemplate,
                             lifecycleFence, tokenEstimator, properties,
@@ -192,9 +192,8 @@ class UserMemoryServiceImplTest {
             提供历史(完整回合(13L, 14L,
                     "以后所有应用都使用简体中文", "已收到"));
             when(model.chat(any(String.class))).thenReturn("""
-                    [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                    "evidenceType":"EXPLICIT","turnIds":[13]}]
-                    """);
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["13"]}]}
+                """);
             LocalDateTime before = LocalDateTime.now();
 
             defaultClockService.extractNow(USER_ID, APP_ID);
@@ -211,130 +210,13 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("隐式偏好只有一个不同完整回合时保持候选")
-    void 隐式一次证据保持候选() {
-        提供历史(完整回合(21L, 22L,
-                "这个页面看起来偏冷色", "已生成"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[21]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        AppMemory inserted = 捕获新增偏好();
-        assertEquals("CANDIDATE", inserted.getStatus());
-        assertEquals("IMPLICIT", inserted.getEvidenceType());
-        assertEquals(1, inserted.getEvidenceCount());
-        assertEquals(1D, counter(metricsRegistry,
-                "memory_l2_candidate_total",
-                "status", "candidate").count());
-    }
-
-    @Test
-    @DisplayName("同一 turnId 重试时不得重复累计证据")
-    void 相同回合重试不重复累计() {
-        提供历史(完整回合(31L, 32L,
-                "这个页面看起来偏冷色", "已生成"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "深色",
-                        "IMPLICIT", "CANDIDATE", 1, 31L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[31,31]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(memoryMapper, never()).update(any());
-        断言游标新增到(32L);
-        assertEquals(1D, counter(metricsRegistry,
-                "memory_l2_candidate_total",
-                "status", "unchanged").count());
-    }
-
-    @Test
-    @DisplayName("第二个不同隐式回合把候选升级为激活")
-    void 第二个不同隐式回合完成激活() {
-        提供历史(完整回合(41L, 42L,
-                "还是更喜欢冷色界面", "已调整"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "深色",
-                        "IMPLICIT", "CANDIDATE", 1, 31L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[41]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        AppMemory updated = 捕获更新偏好();
-        assertEquals("ACTIVE", updated.getStatus());
-        assertEquals(2, updated.getEvidenceCount());
-        assertEquals(41L, updated.getLastEvidenceTurnId());
-    }
-
-    @Test
-    @DisplayName("跨 app 后处理的较小 turnId 仍属于新的隐式证据")
-    void 跨应用乱序TurnId仍累计不同证据() {
-        long appB = 200L;
-        when(chatHistoryService.listMessagesAfterCursor(
-                eq(APP_ID), anyLong(), anyInt()))
-                .thenReturn(完整回合(2001L, 2002L,
-                        "应用甲偏好冷色", "已调整"));
-        when(chatHistoryService.listMessagesAfterCursor(
-                eq(appB), anyLong(), anyInt()))
-                .thenReturn(List.of(
-                        ChatHistory.builder().id(1801L).appId(appB)
-                                .userId(USER_ID).messageType("user")
-                                .message("应用乙仍偏好冷色").build(),
-                        ChatHistory.builder().id(1802L).appId(appB)
-                                .userId(USER_ID).messageType("ai")
-                                .message("已调整")
-                                .memoryMessage("已调整")
-                                .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED)
-                                .build()));
-        AtomicReference<AppMemory> stored = new AtomicReference<>();
-        when(memoryMapper.selectOneByQuery(any()))
-                .thenAnswer(invocation -> stored.get());
-        when(memoryMapper.insert(any())).thenAnswer(invocation -> {
-            stored.set(invocation.getArgument(0));
-            return 1;
-        });
-        when(memoryMapper.update(any())).thenAnswer(invocation -> {
-            stored.set(invocation.getArgument(0));
-            return 1;
-        });
-        when(model.chat(any(String.class))).thenReturn(
-                """
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[2001]}]
-                """,
-                """
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[1801]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-        service.extractNow(USER_ID, appB);
-
-        assertEquals(2, stored.get().getEvidenceCount());
-        assertEquals("ACTIVE", stored.get().getStatus());
-        assertEquals(2001L, stored.get().getLastEvidenceTurnId());
-        assertEquals(APP_ID, stored.get().getAppId(),
-                "同内容的跨应用佐证不应改写最初来源");
-    }
-
-    @Test
     @DisplayName("偏好 upsert 与游标推进必须处于同一事务边界")
     void 偏好与游标在同一事务内提交() {
         提供历史(完整回合(45L, 46L,
                 "以后都使用中文", "已收到"));
         when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
         when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                "evidenceType":"EXPLICIT","turnIds":[45]}]
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["45"]}]}
                 """);
         when(memoryMapper.insert(any())).thenAnswer(invocation -> {
             assertTrue(transactions.isActive());
@@ -357,8 +239,7 @@ class UserMemoryServiceImplTest {
                 "以后都使用中文", "已收到"));
         when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
         when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                "evidenceType":"EXPLICIT","turnIds":[47]}]
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["47"]}]}
                 """);
         transactions.afterCallback(() -> assertTrue(metricsRegistry
                 .find("memory_l2_candidate_total").counters().isEmpty()));
@@ -377,8 +258,7 @@ class UserMemoryServiceImplTest {
                 "以后都使用中文", "已收到"));
         when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
         when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                "evidenceType":"EXPLICIT","turnIds":[49]}]
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["49"]}]}
                 """);
         transactions.failAfterCallback(
                 new IllegalStateException("模拟事务提交失败"));
@@ -419,7 +299,7 @@ class UserMemoryServiceImplTest {
                 });
         提供历史(完整回合(41L, 42L,
                 "这轮没有稳定偏好", "已收到"));
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
         transactions.failAfterCallback(
                 new IllegalStateException("commit acknowledgement lost"));
 
@@ -432,147 +312,6 @@ class UserMemoryServiceImplTest {
                 any(AppMemoryExtractCursor.class), eq(false));
         verify(cursorMapper, never()).update(
                 any(AppMemoryExtractCursor.class));
-    }
-
-    @Test
-    @DisplayName("合法非空数组全部候选因证据规则过滤时成功推进")
-    void 全部候选因证据规则过滤时成功推进() {
-        提供历史(完整回合(51L, 52L,
-                "以后都用中文", "已收到"));
-        when(model.chat(any(String.class))).thenReturn("""
-                [
-                  {"name":"语言偏好","content":"中文","evidenceType":"EXPLICIT","turnIds":[999]},
-                  {"name":"视觉风格","valueCodes":["MINIMAL"],"evidenceType":"UNKNOWN","turnIds":[51]},
-                  {"name":"交互习惯","valueCodes":["KEYBOARD_FIRST"],"evidenceType":"IMPLICIT","turnIds":[]},
-                  {"name":"其他","content":"","evidenceType":"EXPLICIT","turnIds":[51]}
-                ]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(memoryMapper, never()).insert(any());
-        verify(memoryMapper, never()).update(any());
-        断言游标新增到(52L);
-        assertEquals(1, transactions.executionCount());
-        assertTrue(metricsRegistry.find("memory_l2_candidate_total")
-                .counters().isEmpty());
-    }
-
-    @Test
-    @DisplayName("内容实质变化后证据重新累计")
-    void 内容变化重置证据状态() {
-        提供历史(完整回合(61L, 62L,
-                "最近更喜欢深色页面", "已调整"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "浅色",
-                        "EXPLICIT", "ACTIVE", 5, 55L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[61]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        AppMemory updated = 捕获更新偏好();
-        assertEquals("深色", updated.getContent());
-        assertEquals("IMPLICIT", updated.getEvidenceType());
-        assertEquals("CANDIDATE", updated.getStatus());
-        assertEquals(1, updated.getEvidenceCount());
-        assertEquals(61L, updated.getLastEvidenceTurnId());
-    }
-
-    @Test
-    @DisplayName("跨应用更新偏好内容时同步更新来源应用")
-    void 跨应用新内容更新来源应用() {
-        when(chatHistoryService.listMessagesAfterCursor(
-                eq(APP_B), anyLong(), anyInt()))
-                .thenReturn(List.of(
-                        ChatHistory.builder().id(61L).appId(APP_B)
-                                .userId(USER_ID).messageType("user")
-                                .message("最近更喜欢深色页面").build(),
-                        ChatHistory.builder().id(62L).appId(APP_B)
-                                .userId(USER_ID).messageType("ai")
-                                .message("已调整")
-                                .memoryMessage("已调整")
-                                .memoryOutcome(ChatMemoryOutcome.LEGACY_IMPORTED)
-                                .build()));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "浅色",
-                        "EXPLICIT", "ACTIVE", 5, 55L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[61]}]
-                """);
-
-        service.extractNow(USER_ID, APP_B);
-
-        AppMemory updated = 捕获更新偏好();
-        assertEquals(APP_B, updated.getAppId());
-        assertEquals("深色", updated.getContent());
-    }
-
-    @Test
-    @DisplayName("跨应用迟到的旧回合不得覆盖较新冲突偏好")
-    void 较旧回合的冲突内容不倒退长期偏好() {
-        提供历史(完整回合(201L, 202L,
-                "以前更喜欢浅色页面", "已调整"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "深色",
-                        "EXPLICIT", "ACTIVE", 1, 301L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["LIGHT"],
-                "evidenceType":"EXPLICIT","turnIds":[201]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(memoryMapper, never()).update(any());
-        断言游标新增到(202L);
-        assertEquals(1D, counter(metricsRegistry,
-                "memory_l2_candidate_total",
-                "status", "unchanged").count());
-    }
-
-    @Test
-    @DisplayName("同内容显式激活偏好不得被后续隐式输出降级")
-    void 同内容显式激活状态不会降级() {
-        提供历史(完整回合(71L, 72L,
-                "这个风格也可以", "已生成"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "深色",
-                        "EXPLICIT", "ACTIVE", 1, 61L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[71]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        AppMemory updated = 捕获更新偏好();
-        assertEquals("EXPLICIT", updated.getEvidenceType());
-        assertEquals("ACTIVE", updated.getStatus());
-        assertEquals(2, updated.getEvidenceCount());
-    }
-
-    @Test
-    @DisplayName("旧自由正文即使含相似词也按新规范值重置证据")
-    void 旧自由正文不会伪装成规范值累计证据() {
-        提供历史(完整回合(81L, 82L,
-                "依旧偏好深色极简", "已生成"));
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(
-                偏好("视觉风格", "偏好  深色极简",
-                        "IMPLICIT", "CANDIDATE", 1, 71L));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK","MINIMAL"],
-                "evidenceType":"IMPLICIT","turnIds":[81]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        AppMemory updated = 捕获更新偏好();
-        assertEquals(1, updated.getEvidenceCount());
-        assertEquals("CANDIDATE", updated.getStatus());
-        assertEquals("深色、极简", updated.getContent());
     }
 
     @Test
@@ -624,7 +363,7 @@ class UserMemoryServiceImplTest {
     void 空数组正常推进游标() {
         提供历史(完整回合(101L, 102L,
                 "帮我做个页面", "已完成"));
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
 
         service.extractNow(USER_ID, APP_ID);
 
@@ -649,7 +388,7 @@ class UserMemoryServiceImplTest {
         when(cursorMapper.selectOneByQuery(any())).thenReturn(current);
         提供历史(完整回合(103L, 104L,
                 "帮我做个页面", "已完成"));
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
 
         service.extractNow(USER_ID, APP_ID);
 
@@ -706,7 +445,7 @@ class UserMemoryServiceImplTest {
                 消息(11L, "user", "所有应用都使用深色极简"),
                 消息(12L, "ai", aiCode),
                 消息(13L, "user", "未完成尾部不得处理")));
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
 
         service.extractNow(USER_ID, APP_ID);
@@ -743,7 +482,7 @@ class UserMemoryServiceImplTest {
                 .isDelete(0)
                 .build();
         when(cursorMapper.selectOneByQuery(any()))
-                .thenReturn(null, secondCursor);
+                .thenReturn(null, null, secondCursor, secondCursor);
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(APP_ID), eq(0L), anyInt())).thenReturn(List.of(
                 消息(111L, "user", firstUser),
@@ -754,7 +493,7 @@ class UserMemoryServiceImplTest {
                 eq(APP_ID), eq(112L), anyInt())).thenReturn(List.of(
                 消息(121L, "user", secondUser),
                 消息(122L, "ai", "第二轮闭合")));
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
         ArgumentCaptor<String> prompts = ArgumentCaptor.forClass(String.class);
 
         service.extractNow(USER_ID, APP_ID);
@@ -793,41 +532,6 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("偏好 upsert 成功而游标失败后重试多 turnId 不重复累计")
-    void 多回合批次游标失败重试不重复累计证据() {
-        List<ChatHistory> history = new ArrayList<>();
-        history.addAll(完整回合(141L, 142L,
-                "第一次倾向冷色", "已完成"));
-        history.addAll(完整回合(151L, 152L,
-                "第二次仍倾向冷色", "已完成"));
-        提供历史(history);
-        AtomicReference<AppMemory> stored = new AtomicReference<>();
-        when(memoryMapper.selectOneByQuery(any()))
-                .thenAnswer(invocation -> stored.get());
-        AtomicInteger insertAttempts = new AtomicInteger();
-        when(memoryMapper.insert(any())).thenAnswer(invocation -> {
-            if (insertAttempts.incrementAndGet() == 2) {
-                stored.set(invocation.getArgument(0));
-            }
-            return 1;
-        });
-        when(cursorMapper.insert(any())).thenReturn(0, 1, 1);
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"IMPLICIT","turnIds":[151,141]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-        service.extractNow(USER_ID, APP_ID);
-
-        assertEquals(2, stored.get().getEvidenceCount());
-        assertEquals(151L, stored.get().getLastEvidenceTurnId());
-        verify(memoryMapper, times(2)).insert(any());
-        verify(memoryMapper, never()).update(any());
-        verify(cursorMapper, atLeastOnce()).insert(any());
-    }
-
-    @Test
     @DisplayName("Mapper 影响行数异常时批次不得成功推进游标")
     void 偏好写入影响行数异常时只记录失败游标() {
         提供历史(完整回合(161L, 162L,
@@ -835,8 +539,7 @@ class UserMemoryServiceImplTest {
         when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
         when(memoryMapper.insert(any())).thenReturn(0);
         when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                "evidenceType":"EXPLICIT","turnIds":[161]}]
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["161"]}]}
                 """);
 
         service.extractNow(USER_ID, APP_ID);
@@ -855,7 +558,7 @@ class UserMemoryServiceImplTest {
                 "以后都使用中文", "已收到"));
         when(memoryMapper.selectListByQuery(any()))
                 .thenThrow(new IllegalStateException("数据库不可用"));
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
 
         service.extractNow(USER_ID, APP_ID);
 
@@ -863,125 +566,6 @@ class UserMemoryServiceImplTest {
         verify(chatHistoryService, never()).listMessagesAfterCursor(
                 anyLong(), anyLong(), anyInt());
         断言失败游标保留在(0L);
-    }
-
-    @Test
-    @DisplayName("超限旧偏好被过滤后基础 Prompt 可继续处理正常回合")
-    void 超限旧偏好不会永久阻断后续抽取() {
-        String oversizedExisting = "既有偏好".repeat(2_000);
-        String renderedExisting = "- name=视觉风格; status=ACTIVE; "
-                + "evidenceType=EXPLICIT; content=" + oversizedExisting;
-        int basePromptTokens = tokenEstimator.estimateText(
-                UserPreferencePromptBuilder.build(
-                        renderedExisting, "", List.of()));
-        properties.setAsyncCompressionThreshold(basePromptTokens - 1);
-        提供历史(完整回合(191L, 192L,
-                "以后都使用中文", "已收到"));
-        when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
-                偏好("视觉风格", oversizedExisting,
-                        "EXPLICIT", "ACTIVE", 1, 171L)));
-        when(model.chat(any(String.class))).thenReturn("[]");
-        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(model).chat(prompt.capture());
-        assertFalse(prompt.getValue().contains(oversizedExisting));
-        assertTrue(tokenEstimator.estimateText(prompt.getValue())
-                <= properties.getAsyncCompressionThreshold());
-        断言游标新增到(192L);
-    }
-
-    @Test
-    @DisplayName("合法 JSON 去重后只剩冲突候选时成功推进")
-    void 只剩同名冲突候选时成功推进() {
-        List<ChatHistory> history = new ArrayList<>();
-        history.addAll(完整回合(201L, 202L,
-                "深色", "已完成"));
-        history.addAll(完整回合(211L, 212L,
-                "浅色", "已完成"));
-        提供历史(history);
-        when(model.chat(any(String.class))).thenReturn("""
-                [
-                  {"name":"视觉风格","valueCodes":["DARK"],
-                   "evidenceType":"EXPLICIT","turnIds":[201]},
-                  {"name":"视觉风格","valueCodes":["LIGHT"],
-                   "evidenceType":"EXPLICIT","turnIds":[211]}
-                ]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(memoryMapper, never()).insert(any());
-        verify(memoryMapper, never()).update(any());
-        断言游标新增到(212L);
-        assertEquals(1, transactions.executionCount());
-        assertTrue(metricsRegistry.find("memory_l2_candidate_total")
-                .counters().isEmpty());
-    }
-
-    @Test
-    @DisplayName("同名冲突只丢弃该名称且后续同名不得重新进入结果")
-    void 同名冲突保留其他合法候选() {
-        List<ChatHistory> history = new ArrayList<>();
-        history.addAll(完整回合(201L, 202L,
-                "深色", "已完成"));
-        history.addAll(完整回合(211L, 212L,
-                "浅色", "已完成"));
-        history.addAll(完整回合(221L, 222L,
-                "以后都使用中文", "已收到"));
-        提供历史(history);
-        when(model.chat(any(String.class))).thenReturn("""
-                [
-                  {"name":"视觉风格","valueCodes":["DARK"],
-                   "evidenceType":"EXPLICIT","turnIds":[201]},
-                  {"name":"视觉风格","valueCodes":["LIGHT"],
-                   "evidenceType":"EXPLICIT","turnIds":[211]},
-                  {"name":"视觉风格","valueCodes":["DARK"],
-                   "evidenceType":"EXPLICIT","turnIds":[201]},
-                  {"name":"语言偏好","valueCodes":["ZH_CN"],
-                   "evidenceType":"EXPLICIT","turnIds":[221]}
-                ]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        AppMemory inserted = 捕获新增偏好();
-        assertEquals("语言偏好", inserted.getName());
-        assertEquals("简体中文", inserted.getContent());
-        verify(memoryMapper, never()).update(any());
-        断言游标新增到(222L);
-        assertEquals(1D, counter(metricsRegistry,
-                "memory_l2_candidate_total",
-                "status", "active").count());
-        assertEquals(1D, metricsRegistry
-                .find("memory_l2_candidate_total")
-                .counters().stream()
-                .mapToDouble(Counter::count)
-                .sum());
-    }
-
-    @Test
-    @DisplayName("Prompt 中已有偏好明确携带状态证据类型和内容")
-    void 已有偏好以证据状态契约注入Prompt() {
-        提供历史(完整回合(171L, 172L,
-                "这次仍然选择冷色界面", "已完成"));
-        when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
-                偏好("视觉风格", "深色",
-                        "IMPLICIT", "CANDIDATE", 1, 161L)));
-        when(model.chat(any(String.class))).thenReturn("[]");
-        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(model).chat(prompt.capture());
-        assertTrue(prompt.getValue().contains("status=CANDIDATE"));
-        assertTrue(prompt.getValue().contains("evidenceType=IMPLICIT"));
-        assertTrue(prompt.getValue().contains("content=深色"));
-        ArgumentCaptor<QueryWrapper> existingQuery =
-                ArgumentCaptor.forClass(QueryWrapper.class);
-        verify(memoryMapper).selectListByQuery(existingQuery.capture());
-        assertNull(读取限制(existingQuery.getValue()));
     }
 
     @Test
@@ -994,7 +578,7 @@ class UserMemoryServiceImplTest {
 
         String recalled = service.recallByApp(APP_ID);
 
-        assertEquals("- 语言偏好:简体中文", recalled);
+        assertEquals("- 语言偏好:页面默认语言：简体中文", recalled);
         DistributionSummary recallTokens = summary(
                 metricsRegistry, "memory_l2_recall_tokens");
         assertEquals(1L, recallTokens.count());
@@ -1007,11 +591,11 @@ class UserMemoryServiceImplTest {
         assertEquals(Map.of(
                         "userId", USER_ID,
                         "type", "USER_PREFERENCE",
-                        "status", "ACTIVE"),
+                        "status", "ACTIVE", "isDelete", 0),
                 读取等值条件(query.getValue()));
         assertEquals(List.of(
                         "evidenceType ASC",
-                        "updateTime DESC"),
+                        "updateTime DESC", "id DESC"),
                 读取排序(query.getValue()));
     }
 
@@ -1025,9 +609,8 @@ class UserMemoryServiceImplTest {
                     "以后所有应用都使用简体中文", "已收到"));
             when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
             when(model.chat(any(String.class))).thenReturn("""
-                    [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                    "evidenceType":"EXPLICIT","turnIds":[301]}]
-                    """);
+                {"operations": [{"action": "ADD", "category": "语言偏好", "attribute": "页面默认语言", "content": "简体中文", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["301"]}]}
+                """);
             UserMemoryServiceImpl observed = newService(
                     new MemoryCompressionMetricsCollector(registry));
 
@@ -1056,7 +639,7 @@ class UserMemoryServiceImplTest {
 
             String recalled = observed.recallByApp(APP_ID);
 
-            assertEquals("- 语言偏好:简体中文", recalled);
+            assertEquals("- 语言偏好:页面默认语言：简体中文", recalled);
             assertTrue(registry.failureTriggered());
         } finally {
             registry.close();
@@ -1064,8 +647,8 @@ class UserMemoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("召回结果按完整条目拼接且严格不超过一千零二十四 Token")
-    void 召回结果严格受一千零二十四Token限制() {
+    @DisplayName("召回结果按完整条目拼接且严格不超过 512 Token")
+    void 召回结果严格受512Token限制() {
         提供应用归属();
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
                 偏好("语言偏好", "简体中文",
@@ -1078,17 +661,17 @@ class UserMemoryServiceImplTest {
         String recalled = service.recallByApp(APP_ID);
 
         assertTrue(new UserPreferenceMessageFragmentBuilder(
-                tokenEstimator, properties).estimate(recalled) <= 1_024);
+                tokenEstimator, properties).estimate(recalled) <= 512);
         assertTrue(recalled.contains("语言偏好"));
         assertTrue(recalled.contains("视觉风格"));
         assertTrue(recalled.contains("技术栈倾向"));
     }
 
     @Test
-    @DisplayName("单条偏好自身超过一千零二十四 Token 时整条跳过且不截断")
+    @DisplayName("单条偏好自身超过 512 Token 时整条跳过且不截断")
     void 单条超限时跳过并继续召回后续完整条目() {
         提供应用归属();
-        String sensitiveContent = "敏感偏好正文-" + "超".repeat(1_100);
+        String sensitiveContent = "敏感偏好正文-" + "超".repeat(600);
         AppMemory oversizedPreference = 偏好(
                 "敏感偏好名称", sensitiveContent,
                 "EXPLICIT", "ACTIVE", 1, 221L);
@@ -1099,7 +682,7 @@ class UserMemoryServiceImplTest {
         validPreference.setId(222L);
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
                 oversizedPreference, validPreference));
-        String oversizedLine = "- 敏感偏好名称:" + sensitiveContent;
+        String oversizedLine = "- 敏感偏好名称:" + oversizedPreference.getAttributeName() + "：" + sensitiveContent;
         int estimatedTokens = new UserPreferenceMessageFragmentBuilder(
                 tokenEstimator, properties).estimate(oversizedLine);
         Logger logger = (Logger) LoggerFactory.getLogger(
@@ -1111,7 +694,7 @@ class UserMemoryServiceImplTest {
         try {
             String recalled = service.recallByApp(APP_ID);
 
-            assertEquals("- 语言偏好:简体中文", recalled);
+            assertEquals("- 语言偏好:页面默认语言：简体中文", recalled);
             assertFalse(recalled.contains("敏感偏好正文"));
             List<String> logs = appender.list.stream()
                     .map(ILoggingEvent::getFormattedMessage)
@@ -1140,25 +723,28 @@ class UserMemoryServiceImplTest {
 
         String recalled = service.recallByApp(APP_ID);
 
-        assertEquals("- 语言偏好:简体中文", recalled);
+        assertEquals("- 语言偏好:页面默认语言：简体中文", recalled);
         verify(valueOperations, never()).get("mem:pref:" + USER_ID);
-        verify(valueOperations).get("mem:pref:v2:" + USER_ID);
+        verify(valueOperations).get("mem:pref:v3:" + USER_ID);
     }
 
     @Test
-    @DisplayName("新版缓存超限时删除并从数据库重建")
+    @DisplayName("符合旧预算的缓存超过 512 Token 时删除并从数据库重建")
     void 新缓存超限后失效并回源重建() {
         提供应用归属();
-        String newCacheKey = "mem:pref:v2:" + USER_ID;
-        when(valueOperations.get(newCacheKey))
-                .thenReturn("- 超长偏好:" + "超".repeat(1_100));
+        String newCacheKey = "mem:pref:v3:" + USER_ID;
+        String oversizedCache = "- 语言偏好:页面默认语言：" + "超".repeat(600);
+        int cachedTokens = new UserPreferenceMessageFragmentBuilder(
+                tokenEstimator, properties).estimate(oversizedCache);
+        assertTrue(cachedTokens > 512 && cachedTokens <= 1_024);
+        when(valueOperations.get(newCacheKey)).thenReturn(oversizedCache);
         when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
                 偏好("语言偏好", "简体中文",
                         "EXPLICIT", "ACTIVE", 1, 241L)));
 
         String recalled = service.recallByApp(APP_ID);
 
-        assertEquals("- 语言偏好:简体中文", recalled);
+        assertEquals("- 语言偏好:页面默认语言：简体中文", recalled);
         verify(redisTemplate).delete(newCacheKey);
         verify(memoryMapper).selectListByQuery(any());
         verify(valueOperations).set(eq(newCacheKey), eq(recalled), any());
@@ -1168,7 +754,7 @@ class UserMemoryServiceImplTest {
     @DisplayName("偏好缓存回源回填期间必须持有应用写许可")
     void 缓存回源期间删除门不得越过并导致缓存复活() throws Exception {
         提供应用归属();
-        when(valueOperations.get("mem:pref:v2:" + USER_ID))
+        when(valueOperations.get("mem:pref:v3:" + USER_ID))
                 .thenReturn(null);
         CountDownLatch databaseReadEntered = new CountDownLatch(1);
         CountDownLatch allowDatabaseRead = new CountDownLatch(1);
@@ -1194,11 +780,11 @@ class UserMemoryServiceImplTest {
                     "read-through 完成前删除门不得越过并执行缓存失效");
 
             allowDatabaseRead.countDown();
-            assertEquals("- 语言偏好:简体中文",
+            assertEquals("- 语言偏好:页面默认语言：简体中文",
                     recall.get(1, TimeUnit.SECONDS));
         }
-        verify(valueOperations).set(eq("mem:pref:v2:" + USER_ID),
-                eq("- 语言偏好:简体中文"), any());
+        verify(valueOperations).set(eq("mem:pref:v3:" + USER_ID),
+                eq("- 语言偏好:页面默认语言：简体中文"), any());
     }
 
     @Test
@@ -1206,8 +792,8 @@ class UserMemoryServiceImplTest {
     void 同用户跨应用删除失效不得被迟到回填覆盖() throws Exception {
         提供应用归属(APP_B);
         String legacyCacheKey = "mem:pref:" + USER_ID;
-        String cacheKey = "mem:pref:v2:" + USER_ID;
-        String staleRecall = "- 语言偏好:简体中文";
+        String cacheKey = "mem:pref:v3:" + USER_ID;
+        String staleRecall = "- 语言偏好:页面默认语言：简体中文";
         when(valueOperations.get(cacheKey)).thenReturn(null);
         CountDownLatch snapshotRead = new CountDownLatch(1);
         CountDownLatch allowSnapshotReturn = new CountDownLatch(1);
@@ -1257,12 +843,11 @@ class UserMemoryServiceImplTest {
         提供历史(完整回合(271L, 272L,
                 "以后都使用深色界面", "已调整"));
         when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"EXPLICIT","turnIds":[271]}]
+                {"operations": [{"action": "ADD", "category": "视觉风格", "attribute": "视觉样式", "content": "深色", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["271"]}]}
                 """);
         String legacyCacheKey = "mem:pref:" + USER_ID;
-        String cacheKey = "mem:pref:v2:" + USER_ID;
-        String staleRecall = "- 语言偏好:简体中文";
+        String cacheKey = "mem:pref:v3:" + USER_ID;
+        String staleRecall = "- 语言偏好:页面默认语言：简体中文";
         when(valueOperations.get(cacheKey)).thenReturn(null);
         CountDownLatch snapshotRead = new CountDownLatch(1);
         CountDownLatch allowSnapshotReturn = new CountDownLatch(1);
@@ -1318,17 +903,17 @@ class UserMemoryServiceImplTest {
 
         assertTrue(result.failures().isEmpty());
         verify(redisTemplate).delete("mem:pref:" + USER_ID);
-        verify(redisTemplate).delete("mem:pref:v2:" + USER_ID);
+        verify(redisTemplate).delete("mem:pref:v3:" + USER_ID);
     }
 
     @Test
     @DisplayName("tombstone 后 L2 召回不得重建归属或 Redis 缓存")
     void 删除接管后迟到召回不复活本地映射或缓存() {
         提供应用归属();
-        String cacheKey = "mem:pref:v2:" + USER_ID;
+        String cacheKey = "mem:pref:v3:" + USER_ID;
         when(valueOperations.get(cacheKey))
-                .thenReturn("- 语言偏好:简体中文");
-        assertEquals("- 语言偏好:简体中文",
+                .thenReturn("- 语言偏好:页面默认语言：简体中文");
+        assertEquals("- 语言偏好:页面默认语言：简体中文",
                 service.recallByApp(APP_ID));
 
         AppDataLifecycleFence.DeletePermit deletion =
@@ -1354,7 +939,7 @@ class UserMemoryServiceImplTest {
     private UserMemoryServiceImpl newService(
             MemoryCompressionMetricsCollector collector) {
         return new UserMemoryServiceImpl(
-                chatHistoryService, memoryMapper, cursorMapper, appMapper,
+                chatHistoryService, MemoryTestSupport.repository(memoryMapper), cursorMapper, appMapper,
                 model, mock(ExecutorService.class),
                 mock(TaskScheduler.class), redisTemplate,
                 lifecycleFence, tokenEstimator, properties,
@@ -1549,8 +1134,11 @@ class UserMemoryServiceImplTest {
                          long lastEvidenceTurnId) {
         LocalDateTime now = LocalDateTime.of(2026, 8, 16, 8, 0);
         return AppMemory.builder()
-                .id(1L).userId(USER_ID).appId(APP_ID)
+                .id(lastEvidenceTurnId).userId(USER_ID).appId(APP_ID)
                 .type("USER_PREFERENCE").name(name).content(content)
+                .memoryKey("test." + lastEvidenceTurnId).attributeName(switch (name) {
+                    case "语言偏好" -> "页面默认语言"; case "视觉风格" -> "视觉样式"; default -> "前端框架"; })
+                .revision(1L).legacyEvidenceCount(evidenceCount).legacyEvidenceTurnId(lastEvidenceTurnId)
                 .evidenceType(evidenceType).status(status)
                 .evidenceCount(evidenceCount)
                 .lastEvidenceTurnId(lastEvidenceTurnId)

@@ -84,7 +84,7 @@ class ContextCompressionCoordinatorTest {
 
         assertEquals(12_288, properties.getL0RetainedTokens());
         assertEquals(3_072, properties.getL1MaxSummaryTokens());
-        assertEquals(1_024, properties.getL2MaxRecallTokens());
+        assertEquals(512, properties.getL2MaxRecallTokens());
         assertEquals(49_152, properties.getAsyncCompressionThreshold());
         assertEquals(57_344, properties.getBlockingCompressionThreshold());
         assertEquals(65_536, properties.getHardInputLimit());

@@ -17,7 +17,7 @@ class MemoryTokenPropertiesTest {
 
         assertEquals(12_288, properties.getL0RetainedTokens());
         assertEquals(3_072, properties.getL1MaxSummaryTokens());
-        assertEquals(1_024, properties.getL2MaxRecallTokens());
+        assertEquals(512, properties.getL2MaxRecallTokens());
         assertEquals(49_152, properties.getAsyncCompressionThreshold());
         assertEquals(57_344, properties.getBlockingCompressionThreshold());
         assertEquals(65_536, properties.getHardInputLimit());
@@ -54,10 +54,10 @@ class MemoryTokenPropertiesTest {
     }
 
     @Test
-    @DisplayName("启动校验拒绝任何非 1024 的 L2 召回上限")
+    @DisplayName("启动校验拒绝旧的 1024 Token L2 召回上限")
     void 启动拒绝非固定L2召回上限() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setL2MaxRecallTokens(1_025);
+        properties.setL2MaxRecallTokens(1_024);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }

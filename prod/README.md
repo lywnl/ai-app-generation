@@ -334,7 +334,7 @@ mysql --default-character-set=utf8mb4 < sql/migrations/2026-08-15-token-layered-
 ai.memory.token:
   l0-retained-tokens: 12288
   l1-max-summary-tokens: 3072
-  l2-max-recall-tokens: 1024
+  l2-max-recall-tokens: 512
   async-compression-threshold: 49152
   blocking-compression-threshold: 57344
   hard-input-limit: 65536

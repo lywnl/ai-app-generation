@@ -100,6 +100,7 @@ class UserMemoryDebounceBehaviorTest {
         memoryMapper = mock(AppMemoryMapper.class);
         cursorMapper = mock(AppMemoryExtractCursorMapper.class);
         appMapper = mock(AppMapper.class);
+        when(appMapper.selectOneById(anyLong())).thenAnswer(inv -> com.lyw.appgeneration.model.entity.App.builder().id(inv.getArgument(0)).userId(USER_ID).build());
         model = mock(ChatModel.class);
         redisTemplate = mock(StringRedisTemplate.class);
         ValueOperations<String, String> valueOperations =
@@ -124,7 +125,7 @@ class UserMemoryDebounceBehaviorTest {
         when(cursorMapper.update(any())).thenReturn(1);
         when(cursorMapper.update(
                 any(AppMemoryExtractCursor.class), eq(false))).thenReturn(1);
-        when(model.chat(any(String.class))).thenReturn("[]");
+        when(model.chat(any(String.class))).thenReturn("{\"operations\":[]}");
         when(chatHistoryService.getLastMessage(anyLong()))
                 .thenAnswer(invocation -> {
                     long appId = invocation.getArgument(0);
@@ -273,7 +274,7 @@ class UserMemoryDebounceBehaviorTest {
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             modelEntered.countDown();
             assertTrue(allowModelReturn.await(1, TimeUnit.SECONDS));
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         触发(service, APP_A);
@@ -481,7 +482,7 @@ class UserMemoryDebounceBehaviorTest {
         List<String> prompts = new ArrayList<>();
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             prompts.add(invocation.getArgument(0));
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         触发(service, APP_A);
@@ -681,7 +682,7 @@ class UserMemoryDebounceBehaviorTest {
     void 旧轮次不得提前处理执行中升版的应用() throws Exception {
         UserMemoryServiceImpl service = newService();
         when(cursorMapper.selectOneByQuery(any()))
-                .thenReturn(游标(APP_A, 10L), 游标(APP_B, 20L));
+                .thenReturn(游标(APP_A, 10L), 游标(APP_A, 10L), 游标(APP_B, 20L), 游标(APP_B, 20L));
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(APP_A), anyLong(), anyInt()))
                 .thenReturn(八条完整消息(APP_A, "应用甲"));
@@ -700,7 +701,7 @@ class UserMemoryDebounceBehaviorTest {
             } else {
                 processedApps.add("appB");
             }
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         触发(service, APP_A);
@@ -753,7 +754,7 @@ class UserMemoryDebounceBehaviorTest {
             } else {
                 processedApps.add("appB");
             }
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         触发(service, APP_A);
@@ -826,7 +827,7 @@ class UserMemoryDebounceBehaviorTest {
         AtomicReference<String> prompt = new AtomicReference<>();
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             prompt.set(invocation.getArgument(0));
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         service.triggerPreferenceExtractionAsync(USER_ID, APP_A, 2L);
@@ -866,7 +867,7 @@ class UserMemoryDebounceBehaviorTest {
         AtomicReference<String> prompt = new AtomicReference<>();
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             prompt.set(invocation.getArgument(0));
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         service.triggerPreferenceExtractionAsync(USER_ID, APP_A, 2L);
@@ -1098,14 +1099,14 @@ class UserMemoryDebounceBehaviorTest {
                         mock(AppDataLifecycleFence.WriterPermit.class));
         UserMemoryServiceImpl service = newService();
         when(cursorMapper.selectOneByQuery(any()))
-                .thenReturn(游标(APP_A, 10L), 游标(APP_B, 20L));
+                .thenReturn(游标(APP_A, 10L), 游标(APP_A, 10L), 游标(APP_B, 20L), 游标(APP_B, 20L));
         when(chatHistoryService.listMessagesAfterCursor(
                 eq(APP_B), anyLong(), anyInt()))
                 .thenReturn(八条完整消息(APP_B, "正常应用"));
         List<String> prompts = new ArrayList<>();
         when(model.chat(any(String.class))).thenAnswer(invocation -> {
             prompts.add(invocation.getArgument(0));
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         触发(service, APP_A);
@@ -1167,7 +1168,7 @@ class UserMemoryDebounceBehaviorTest {
                 throw new IllegalStateException("模型暂不可用");
             }
             processedApps.add("appB");
-            return "[]";
+            return "{\"operations\":[]}";
         });
 
         触发(service, APP_A);
@@ -1201,7 +1202,7 @@ class UserMemoryDebounceBehaviorTest {
             MemoryCompressionMetricsCollector collector) {
         return new UserMemoryServiceImpl(
                 chatHistoryService,
-                memoryMapper,
+                MemoryTestSupport.repository(memoryMapper),
                 cursorMapper,
                 appMapper,
                 model,

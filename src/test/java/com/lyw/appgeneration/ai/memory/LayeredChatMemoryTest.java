@@ -244,7 +244,7 @@ class LayeredChatMemoryTest {
     }
 
     @Test
-    @DisplayName("实际注入的 L2 两消息完整片段不得超过一千零二十四 Token")
+    @DisplayName("实际注入的 L2 两消息完整片段不得超过 512 Token")
     void actualL2FragmentIncludesWrappingInTokenBudget() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
         ChatTokenEstimator estimator =

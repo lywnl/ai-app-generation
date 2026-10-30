@@ -166,7 +166,7 @@ final class UserPreferenceBatchBuilder {
                     .toList();
             String prompt = UserPreferencePromptBuilder.build(
                     existingPreferences, renderUserEvidence(turns), turnIds);
-            return new Batch(turnIds, prompt, completedId, hasMore);
+            return new Batch(turnIds, prompt, completedId, hasMore, renderUserEvidence(turns));
         }
 
         private String renderUserEvidence(List<StableTurn> turns) {
@@ -193,7 +193,8 @@ final class UserPreferenceBatchBuilder {
     record Batch(List<Long> turnIds,
                  String prompt,
                  long completedThroughId,
-                 boolean hasMore) {
+                 boolean hasMore,
+                 String userEvidence) {
 
         Batch {
             turnIds = List.copyOf(turnIds);

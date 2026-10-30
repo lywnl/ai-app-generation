@@ -61,7 +61,7 @@ public class UserMemoryExtractionChatModelConfig {
                 .baseUrl(baseUrl)
                 .modelName(modelName)
                 .maxTokens(maxTokens)
-                .temperature(temperature)
+                .temperature(temperature == null ? 0D : temperature)
                 .timeout(MODEL_TIMEOUT)
                 .maxRetries(SDK_MAX_RETRIES)
                 .logRequests(logRequests)

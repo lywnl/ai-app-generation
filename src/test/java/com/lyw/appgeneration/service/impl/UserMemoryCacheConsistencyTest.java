@@ -73,9 +73,9 @@ class UserMemoryCacheConsistencyTest {
         ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
         CountingTransactions transactions = new CountingTransactions();
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        String cacheKey = "mem:pref:v2:" + USER_ID;
+        String cacheKey = "mem:pref:v3:" + USER_ID;
         String legacyKey = "mem:pref:" + USER_ID;
-        String oldRecall = "- 视觉风格:浅色";
+        String oldRecall = "- 视觉风格:视觉样式：浅色";
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(cacheKey)).thenReturn(oldRecall);
@@ -91,17 +91,17 @@ class UserMemoryCacheConsistencyTest {
         when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
         when(cursorMapper.insert(any(AppMemoryExtractCursor.class)))
                 .thenReturn(1);
+        when(appMapper.selectOneById(APP_A)).thenReturn(App.builder().id(APP_A).userId(USER_ID).build());
         when(appMapper.selectOneById(APP_B)).thenReturn(
                 App.builder().id(APP_B).userId(USER_ID).build());
         when(model.chat(anyString())).thenReturn("""
-                [{"name":"视觉风格","valueCodes":["DARK"],
-                "evidenceType":"EXPLICIT","turnIds":[11]}]
+                {"operations": [{"action": "ADD", "category": "视觉风格", "attribute": "视觉样式", "content": "深色", "scope": "USER", "evidenceType": "EXPLICIT", "turnIds": ["11"]}]}
                 """);
         when(estimator.estimateText(anyString())).thenReturn(100);
 
         UserMemoryServiceImpl service = new UserMemoryServiceImpl(
                 historyService,
-                memoryMapper,
+                MemoryTestSupport.repository(memoryMapper),
                 cursorMapper,
                 appMapper,
                 model,
@@ -119,7 +119,8 @@ class UserMemoryCacheConsistencyTest {
         service.extractNow(USER_ID, APP_A);
         String recalledFromOtherApp = service.recallByApp(APP_B);
 
-        assertEquals(0, transactions.executionCount());
+        // 偏好事务失败后，独立事务只记录失败元数据，不推进已处理位置。
+        assertEquals(2, transactions.executionCount());
         verify(memoryMapper, never()).insert(any(AppMemory.class));
         ArgumentCaptor<AppMemoryExtractCursor> failedCursor =
                 ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
@@ -139,6 +140,8 @@ class UserMemoryCacheConsistencyTest {
                 .userId(USER_ID)
                 .messageType(type)
                 .message(text)
+                .memoryMessage("ai".equals(type) ? text : null)
+                .memoryOutcome("ai".equals(type) ? com.lyw.appgeneration.model.enums.ChatMemoryOutcome.SUCCEEDED : null)
                 .build();
     }
 

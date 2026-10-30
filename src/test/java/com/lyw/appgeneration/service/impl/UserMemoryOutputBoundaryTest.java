@@ -1,394 +1,181 @@
 package com.lyw.appgeneration.service.impl;
 
-import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.ConservativeChatTokenEstimator;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
-import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.model.entity.App;
-import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.AppMemoryExtractCursor;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
-import com.mybatisflex.core.query.QueryWrapper;
 import dev.langchain4j.model.chat.ChatModel;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.scheduling.TaskScheduler;
-import org.springframework.transaction.support.SimpleTransactionStatus;
-import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
 
-import java.time.Clock;
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.LongStream;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static com.lyw.appgeneration.service.impl.UserMemoryState.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 class UserMemoryOutputBoundaryTest {
-
-    private static final long USER_ID = 7L;
-    private static final long APP_ID = 100L;
-    private static final String CACHE_KEY = "mem:pref:v2:" + USER_ID;
-    private static final Set<String> ALLOWED_NAMES = Set.of(
-            "语言偏好", "视觉风格", "技术栈倾向", "交互习惯");
-
-    private ChatHistoryService chatHistoryService;
-    private AppMemoryMapper memoryMapper;
-    private AppMemoryExtractCursorMapper cursorMapper;
-    private AppMapper appMapper;
-    private ChatModel model;
-    private StringRedisTemplate redisTemplate;
-    private ValueOperations<String, String> valueOperations;
-    private MemoryTokenProperties properties;
-    private ChatTokenEstimator tokenEstimator;
-    private SimpleMeterRegistry meterRegistry;
-    private RecordingTransactionOperations transactions;
+    private final VersionedUserMemoryRepository repository = mock(VersionedUserMemoryRepository.class);
+    private final ChatHistoryService history = mock(ChatHistoryService.class);
+    private final AppMemoryExtractCursorMapper cursor = mock(AppMemoryExtractCursorMapper.class);
+    private final AppMapper apps = mock(AppMapper.class);
+    private final ChatModel model = mock(ChatModel.class);
+    private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
+    private final MemoryTokenProperties properties = new MemoryTokenProperties();
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private UserMemoryServiceImpl service;
+    private static final String ADD = """
+            {"operations":[{"action":"ADD","category":"视觉风格","attribute":"主色","content":"新应用主色使用紫色",
+            "scope":"USER","evidenceType":"EXPLICIT","turnIds":["11"]}]}
+            """;
 
-    @BeforeEach
-    @SuppressWarnings("unchecked")
-    void setUp() {
-        chatHistoryService = mock(ChatHistoryService.class);
-        memoryMapper = mock(AppMemoryMapper.class);
-        cursorMapper = mock(AppMemoryExtractCursorMapper.class);
-        appMapper = mock(AppMapper.class);
-        model = mock(ChatModel.class);
-        redisTemplate = mock(StringRedisTemplate.class);
-        valueOperations = mock(ValueOperations.class);
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        properties = new MemoryTokenProperties();
-        tokenEstimator = new ConservativeChatTokenEstimator(properties);
-        meterRegistry = new SimpleMeterRegistry();
-        transactions = new RecordingTransactionOperations();
-        service = new UserMemoryServiceImpl(
-                chatHistoryService, memoryMapper, cursorMapper, appMapper,
-                model, mock(ExecutorService.class), mock(TaskScheduler.class),
-                redisTemplate, new AppDataLifecycleFence(), tokenEstimator,
-                properties, transactions,
-                new MemoryCompressionMetricsCollector(meterRegistry),
-                Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"),
-                        ZoneOffset.UTC));
+    @BeforeEach void 初始化() {
+        when(repository.load(7)).thenReturn(Snapshot.of(List.of()));
+        when(repository.loadCurrent(7)).thenAnswer(inv -> repository.load(7));
+        when(repository.nextId()).thenAnswer(inv -> ids.incrementAndGet());
+        when(repository.evidence(any())).thenReturn(java.util.Map.of());
+        when(apps.selectOneById(100L)).thenReturn(App.builder().id(100L).userId(7L).build());
+        when(cursor.insert(any())).thenReturn(1);
+        when(cursor.update(any())).thenReturn(1);
+        when(history.listMessagesAfterCursor(eq(100L), anyLong(), anyInt())).thenReturn(List.of(
+                ChatHistory.builder().id(11L).messageType("user").message("以后所有应用主色用紫色").build(),
+                ChatHistory.builder().id(12L).messageType("ai").message("已收到").memoryMessage("已收到")
+                        .memoryOutcome(ChatMemoryOutcome.SUCCEEDED).build()));
+        service = new UserMemoryServiceImpl(history, repository, cursor, apps, model,
+                mock(ExecutorService.class), mock(TaskScheduler.class), redis, new AppDataLifecycleFence(),
+                new ConservativeChatTokenEstimator(properties), properties, TransactionOperations.withoutTransaction(),
+                new MemoryCompressionMetricsCollector(registry));
+    }
+    private final AtomicLong ids = new AtomicLong(10000);
+    @AfterEach void 关闭() { registry.close(); }
 
-        when(cursorMapper.selectOneByQuery(any())).thenReturn(null);
-        when(memoryMapper.selectListByQuery(any())).thenReturn(List.of());
-        when(memoryMapper.selectOneByQuery(any())).thenReturn(null);
-        when(memoryMapper.insert(any())).thenReturn(1);
-        when(memoryMapper.update(any())).thenReturn(1);
-        when(cursorMapper.insert(any())).thenReturn(1);
-        when(cursorMapper.update(any())).thenReturn(1);
-        when(cursorMapper.update(any(AppMemoryExtractCursor.class), eq(false)))
-                .thenReturn(1);
+    @ParameterizedTest
+    @ValueSource(strings = {"[]", "{}", "not-json", "{\"operations\":[{}]}", "{\"operations\":[],\"sql\":\"DELETE\"}"})
+    void 非法输出不写记忆也不推进游标(String raw) {
+        when(model.chat(anyString())).thenReturn(raw);
+        service.extractNow(7L, 100L);
+        verify(repository, never()).insert(any());
+        verify(repository, never()).update(any(), any());
+        assertCursor(0, 1);
     }
 
-    @AfterEach
-    void tearDown() {
-        meterRegistry.close();
-    }
-
-    @Test
-    @DisplayName("合法非空数组被固定类别过滤后成功推进游标")
-    void 合法非空数组被固定类别过滤后成功推进游标() {
-        provideStableTurn();
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"未允许类别","content":"任意内容",
-                  "evidenceType":"EXPLICIT","turnIds":[11]}]
+    @Test void 未展示目标不能被写入() {
+        when(model.chat(anyString())).thenReturn("""
+                {"operations":[{"action":"RETRACT","targetId":"999","scope":"USER","evidenceType":"EXPLICIT","turnIds":["11"]}]}
                 """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        assertSuccessfulCursorAdvancedTo(12L);
-        assertEquals(1, transactions.executionCount());
-        verify(memoryMapper, never()).insert(any());
-        verify(memoryMapper, never()).update(any());
+        service.extractNow(7L, 100L);
+        verify(repository, never()).update(any(), any());
+        assertCursor(0, 1);
     }
 
-    @Test
-    @DisplayName("模型整批原始输出超过八千一百九十二 Token 时拒绝")
-    void rawModelOutputOverMaxOutputTokensFailsBatch() {
-        provideStableTurn();
-        String raw = """
-                [{"name":"语言偏好","content":"%s",
-                  "evidenceType":"EXPLICIT","turnIds":[11]}]
-                """.formatted("超".repeat(20_000));
-        assertTrue(tokenEstimator.estimateText(raw)
-                > properties.getMaxOutputTokens());
-        when(model.chat(any(String.class))).thenReturn(raw);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        assertFailedCursorRemainsAtZero();
-        assertEquals(0, transactions.executionCount());
-        verify(memoryMapper, never()).insert(any());
+    @Test void 非所属用户不能抽取应用证据() {
+        service.extractNow(8L, 100L);
+        verify(model, never()).chat(anyString());
+        verify(repository, never()).insert(any());
     }
 
-    @Test
-    @DisplayName("单条偏好超过一千零二十四 Token 时过滤并推进游标")
-    void 单条偏好超过一千零二十四Token时过滤并推进游标() {
-        provideStableTurn();
-        String content = "超".repeat(2_000);
-        String raw = """
-                [{"name":"语言偏好","content":"%s",
-                  "evidenceType":"EXPLICIT","turnIds":[11]}]
-                """.formatted(content);
-        assertTrue(tokenEstimator.estimateText("- 语言偏好:" + content)
-                > properties.getL2MaxRecallTokens());
-        assertTrue(tokenEstimator.estimateText(raw)
-                <= properties.getMaxOutputTokens());
-        when(model.chat(any(String.class))).thenReturn(raw);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        assertSuccessfulCursorAdvancedTo(12L);
-        assertEquals(1, transactions.executionCount());
-        verify(memoryMapper, never()).insert(any());
+    @Test void 只有当前应用的要求正常推进且不动正式缓存() {
+        when(model.chat(anyString())).thenReturn(ADD.replace("\"USER\"", "\"APP\""));
+        service.extractNow(7L, 100L);
+        verify(repository, never()).insert(any());
+        verifyNoInteractions(redis);
+        assertCursor(12, 0);
     }
 
-    @Test
-    @DisplayName("合法与非法候选混合时只保留固定五类")
-    void mixedCandidatesPersistOnlyFiveAllowedNames() {
-        provideStableTurn();
-        when(model.chat(any(String.class))).thenReturn("""
-                [
-                  {"name":"语言偏好","valueCodes":["ZH_CN"],"evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"视觉风格","valueCodes":["DARK","MINIMAL"],"evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"技术栈倾向","valueCodes":["VUE3"],"evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"交互习惯","valueCodes":["KEYBOARD_FIRST"],"evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"其他","content":"减少动画","evidenceType":"EXPLICIT","turnIds":[11]},
-                  {"name":"第六类别","content":"不得持久化","evidenceType":"EXPLICIT","turnIds":[11]}
-                ]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        ArgumentCaptor<AppMemory> inserted =
-                ArgumentCaptor.forClass(AppMemory.class);
-        verify(memoryMapper, times(4)).insert(inserted.capture());
-        assertEquals(ALLOWED_NAMES, inserted.getAllValues().stream()
-                .map(AppMemory::getName)
-                .collect(java.util.stream.Collectors.toSet()));
-        assertSuccessfulCursorAdvancedTo(12L);
-        assertEquals(1, transactions.executionCount());
+    @Test void 纯隐式候选新增不读写或删除正式缓存() {
+        when(model.chat(anyString())).thenReturn(ADD.replace("EXPLICIT", "IMPLICIT"));
+        service.extractNow(7L, 100L);
+        ArgumentCaptor<Item> saved = ArgumentCaptor.forClass(Item.class);
+        verify(repository).insert(saved.capture());
+        assertEquals(Kind.CANDIDATE, saved.getValue().kind());
+        assertEquals("CANDIDATE", saved.getValue().status());
+        verifyNoInteractions(redis);
+        assertCursor(12, 0);
     }
 
-    @Test
-    @DisplayName("已有偏好 Prompt 过滤旧异常类别和超限条目并保持有界")
-    void existingPreferencesPromptFiltersLegacyAnomaliesAndStaysBounded() {
-        provideStableTurn();
-        List<AppMemory> legacyRows = new ArrayList<>();
-        for (int index = 0; index < 24; index++) {
-            legacyRows.add(preference(index + 1L, "旧异常类别" + index,
-                    "异常旧值".repeat(500)));
-        }
-        legacyRows.add(preference(100L, "技术栈倾向", "超限旧值".repeat(600)));
-        legacyRows.add(preference(101L, "语言偏好", "简体中文"));
-        when(memoryMapper.selectListByQuery(any())).thenReturn(legacyRows);
-        when(model.chat(any(String.class))).thenReturn("[]");
-        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<QueryWrapper> query =
-                ArgumentCaptor.forClass(QueryWrapper.class);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(model).chat(prompt.capture());
-        verify(memoryMapper).selectListByQuery(query.capture());
-        assertTrue(prompt.getValue().contains(
-                "name 字段只能使用以下固定类别"));
-        assertTrue(prompt.getValue().contains("name=语言偏好"));
-        assertFalse(prompt.getValue().contains("旧异常类别"));
-        assertFalse(prompt.getValue().contains("超限旧值"));
-        assertTrue(tokenEstimator.estimateText(prompt.getValue())
-                <= properties.getAsyncCompressionThreshold());
-        assertTrue(hasNameWhitelistCondition(query.getValue()));
-        assertSuccessfulCursorAdvancedTo(12L);
+    @Test void 候选写入在Redis不可用时仍能提交() {
+        doThrow(new IllegalStateException("缓存不可用")).when(redis).delete(anyString());
+        when(model.chat(anyString())).thenReturn(ADD.replace("EXPLICIT", "IMPLICIT"));
+        service.extractNow(7L, 100L);
+        verify(repository).insert(any());
+        verifyNoInteractions(redis);
+        assertCursor(12, 0);
     }
 
-    @Test
-    @DisplayName("召回拒绝旧异常缓存并只回填固定类别完整条目")
-    void recallRejectsLegacyCacheAndFiltersDatabaseRows() {
-        when(appMapper.selectOneById(APP_ID)).thenReturn(
-                App.builder().id(APP_ID).userId(USER_ID).build());
-        when(valueOperations.get(CACHE_KEY))
-                .thenReturn("- 旧异常类别:不应继续注入");
-        when(memoryMapper.selectListByQuery(any())).thenReturn(List.of(
-                preference(1L, "旧异常类别", "不应继续注入"),
-                preference(2L, "视觉风格", "超".repeat(2_000)),
-                preference(3L, "语言偏好", "简体中文")));
-        ArgumentCaptor<QueryWrapper> query =
-                ArgumentCaptor.forClass(QueryWrapper.class);
-
-        String recalled = service.recallByApp(APP_ID);
-
-        assertEquals("- 语言偏好:简体中文", recalled);
-        verify(redisTemplate).delete(CACHE_KEY);
-        verify(memoryMapper).selectListByQuery(query.capture());
-        assertTrue(hasNameWhitelistCondition(query.getValue()));
-        verify(valueOperations).set(eq(CACHE_KEY), eq(recalled), any());
+    @Test void 模型原始输出超过预算时整批失败() {
+        properties.setMaxOutputTokens(20);
+        when(model.chat(anyString())).thenReturn(ADD);
+        service.extractNow(7L, 100L);
+        verify(repository, never()).insert(any());
+        assertCursor(0, 1);
     }
 
-    @Test
-    @DisplayName("空数组仍是合法输出并正常推进游标")
-    void emptyArrayRemainsValid() {
-        provideStableTurn();
-        when(model.chat(any(String.class))).thenReturn("[]");
-
-        service.extractNow(USER_ID, APP_ID);
-
-        assertSuccessfulCursorAdvancedTo(12L);
-        assertEquals(1, transactions.executionCount());
-        verify(memoryMapper, never()).insert(any());
+    @Test void 分页覆盖旧目标后才一次性提交() {
+        List<Item> rows = LongStream.rangeClosed(1, 300).mapToObj(this::formal).toList();
+        when(repository.load(7)).thenReturn(Snapshot.of(rows));
+        when(model.chat(anyString())).thenAnswer(inv -> {
+            String prompt = inv.getArgument(0);
+            assertTrue(new ConservativeChatTokenEstimator(properties).estimateText(prompt)
+                    <= properties.getAsyncCompressionThreshold());
+            return prompt.contains("\"id\":\"1\"") ? """
+                    {"operations":[{"action":"RETRACT","targetId":"1","scope":"USER","evidenceType":"EXPLICIT","turnIds":["11"]}]}
+                    """ : "{\"operations\":[]}";
+        });
+        service.extractNow(7L, 100L);
+        verify(model, atLeast(2)).chat(anyString());
+        ArgumentCaptor<Item> next = ArgumentCaptor.forClass(Item.class);
+        verify(repository).update(eq(rows.getFirst()), next.capture());
+        assertEquals("REVOKED", next.getValue().status());
+        assertCursor(12, 0);
     }
 
-    @Test
-    @DisplayName("雪花 turnId 带小数时不得截断后命中白名单")
-    void fractionalSnowflakeTurnIdMustNotMatchWhitelist() {
-        long userTurnId = 446_663_972_690_808_832L;
-        when(chatHistoryService.listMessagesAfterCursor(
-                eq(APP_ID), anyLong(), anyInt())).thenReturn(List.of(
-                ChatHistory.builder()
-                        .id(userTurnId).appId(APP_ID).userId(USER_ID)
-                        .messageType("user").message("以后都使用中文")
-                        .build(),
-                ChatHistory.builder()
-                        .id(userTurnId + 1).appId(APP_ID).userId(USER_ID)
-                        .messageType("ai").message("已收到")
-                        .memoryMessage("已收到")
-                        .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
-                        .build()));
-        when(model.chat(any(String.class))).thenReturn("""
-                [{"name":"语言偏好","valueCodes":["ZH_CN"],
-                  "evidenceType":"EXPLICIT",
-                  "turnIds":[446663972690808832.1]}]
-                """);
-
-        service.extractNow(USER_ID, APP_ID);
-
-        verify(memoryMapper, never()).insert(any());
-        assertSuccessfulCursorAdvancedTo(userTurnId + 1);
+    @Test void 后续分页失败不提交前一页结果() {
+        when(repository.load(7)).thenReturn(Snapshot.of(LongStream.rangeClosed(1, 300).mapToObj(this::formal).toList()));
+        when(model.chat(anyString())).thenReturn(ADD).thenThrow(new IllegalStateException("模型超时"));
+        service.extractNow(7L, 100L);
+        verify(repository, never()).insert(any());
+        verify(repository, never()).update(any(), any());
+        assertCursor(0, 1);
     }
 
-    private void provideStableTurn() {
-        when(chatHistoryService.listMessagesAfterCursor(
-                eq(APP_ID), anyLong(), anyInt())).thenReturn(List.of(
-                ChatHistory.builder()
-                        .id(11L).appId(APP_ID).userId(USER_ID)
-                        .messageType("user").message("以后都使用中文")
-                        .build(),
-                ChatHistory.builder()
-                        .id(12L).appId(APP_ID).userId(USER_ID)
-                        .messageType("ai").message("已收到")
-                        .memoryMessage("已收到")
-                        .memoryOutcome(ChatMemoryOutcome.SUCCEEDED)
-                        .build()));
+    @Test void 同类别多条正式缓存可召回且不接受注入文本() {
+        UserPreferenceContract contract = new UserPreferenceContract(new ConservativeChatTokenEstimator(properties), properties);
+        assertTrue(contract.isValidRecallCache("- 语言偏好:页面默认语言：中文\n- 语言偏好:代码注释语言：日语"));
+        assertFalse(contract.isValidRecallCache("- 语言偏好:中文\n- 语言偏好:中文"));
+        assertFalse(contract.isValidRecallCache("- 非法类别:中文"));
     }
 
-    private AppMemory preference(long id, String name, String content) {
-        LocalDateTime now = LocalDateTime.of(2026, 8, 16, 8, 0);
-        return AppMemory.builder()
-                .id(id).userId(USER_ID).appId(APP_ID)
-                .type("USER_PREFERENCE").name(name).content(content)
-                .evidenceType("EXPLICIT").status("ACTIVE")
-                .evidenceCount(1).lastEvidenceTurnId(11L)
-                .createTime(now).updateTime(now).build();
+    private Item formal(long id) {
+        return Item.builder().id(id).userId(7).appId(100L).kind(Kind.FORMAL).category("视觉风格")
+                .memoryKey("test." + id).attributeName("布局属性" + id).content("偏好规则" + id)
+                .status("ACTIVE").evidenceType("EXPLICIT").evidenceCount(1).legacyEvidenceCount(1)
+                .legacyEvidenceTurnId(1L).lastEvidenceTurnId(1).revision(1)
+                .createTime(LocalDateTime.of(2026, 10, 30, 10, 0)).updateTime(LocalDateTime.of(2026, 10, 30, 10, 0)).build();
     }
-
-    private void assertFailedCursorRemainsAtZero() {
-        AppMemoryExtractCursor cursor = captureInsertedCursor();
-        assertEquals(0L, cursor.getLastExtractedId());
-        assertEquals(1, cursor.getFailCount());
-    }
-
-    private void assertSuccessfulCursorAdvancedTo(long expectedId) {
-        AppMemoryExtractCursor cursor = captureInsertedCursor();
-        assertEquals(expectedId, cursor.getLastExtractedId());
-        assertEquals(0, cursor.getFailCount());
-    }
-
-    private AppMemoryExtractCursor captureInsertedCursor() {
-        ArgumentCaptor<AppMemoryExtractCursor> cursor =
-                ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
-        verify(cursorMapper).insert(cursor.capture());
-        return cursor.getValue();
-    }
-
-    private boolean hasNameWhitelistCondition(QueryWrapper query) {
-        try {
-            java.lang.reflect.Field whereField = query.getClass()
-                    .getSuperclass().getDeclaredField("whereQueryCondition");
-            whereField.setAccessible(true);
-            Object condition = whereField.get(query);
-            while (condition != null) {
-                java.lang.reflect.Field columnField = condition.getClass()
-                        .getDeclaredField("column");
-                java.lang.reflect.Field logicField = condition.getClass()
-                        .getDeclaredField("logic");
-                java.lang.reflect.Field nextField = condition.getClass()
-                        .getDeclaredField("next");
-                columnField.setAccessible(true);
-                logicField.setAccessible(true);
-                nextField.setAccessible(true);
-                Object column = columnField.get(condition);
-                String logic = String.valueOf(logicField.get(condition));
-                if ("name".equals(readColumnName(column))
-                        && logic.trim().equalsIgnoreCase("IN")) {
-                    return true;
-                }
-                condition = nextField.get(condition);
-            }
-            return false;
-        } catch (ReflectiveOperationException exception) {
-            throw new AssertionError(exception);
-        }
-    }
-
-    private String readColumnName(Object queryColumn)
-            throws ReflectiveOperationException {
-        java.lang.reflect.Field contentField = queryColumn.getClass()
-                .getDeclaredField("content");
-        contentField.setAccessible(true);
-        return String.valueOf(contentField.get(queryColumn));
-    }
-
-    private static final class RecordingTransactionOperations
-            implements TransactionOperations {
-
-        private final AtomicInteger executionCount = new AtomicInteger();
-
-        @Override
-        public <T> T execute(TransactionCallback<T> action) {
-            executionCount.incrementAndGet();
-            return action.doInTransaction(new SimpleTransactionStatus());
-        }
-
-        private int executionCount() {
-            return executionCount.get();
-        }
+    private void assertCursor(long id, int failCount) {
+        ArgumentCaptor<AppMemoryExtractCursor> captured = ArgumentCaptor.forClass(AppMemoryExtractCursor.class);
+        verify(cursor).insert(captured.capture());
+        assertEquals(id, captured.getValue().getLastExtractedId());
+        assertEquals(failCount, captured.getValue().getFailCount());
     }
 }

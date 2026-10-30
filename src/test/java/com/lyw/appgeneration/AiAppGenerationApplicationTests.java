@@ -7,6 +7,8 @@ import com.lyw.appgeneration.ai.image.tools.LogoGeneratorTool;
 import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
+import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.mapper.UserMapper;
@@ -90,6 +92,12 @@ class AiAppGenerationApplicationTests {
 
     @MockitoBean
     private AppMemoryMapper appMemoryMapper;
+
+    @MockitoBean
+    private AppMemoryCandidateMapper appMemoryCandidateMapper;
+
+    @MockitoBean
+    private AppMemoryEvidenceMapper appMemoryEvidenceMapper;
 
     @MockitoBean
     private AppMemorySummaryMapper appMemorySummaryMapper;

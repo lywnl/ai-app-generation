@@ -3,6 +3,8 @@ package com.lyw.appgeneration.service.impl;
 import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
+import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
@@ -20,6 +22,8 @@ public class AppDeletionPersistenceServiceImpl
     private final AppMemorySummaryMapper summaryMapper;
     private final AppMemoryExtractCursorMapper cursorMapper;
     private final AppMemoryMapper memoryMapper;
+    private final AppMemoryCandidateMapper candidateMapper;
+    private final AppMemoryEvidenceMapper evidenceMapper;
     private final AppMapper appMapper;
     private final GoodAppCacheService goodAppCacheService;
 
@@ -28,12 +32,16 @@ public class AppDeletionPersistenceServiceImpl
             AppMemorySummaryMapper summaryMapper,
             AppMemoryExtractCursorMapper cursorMapper,
             AppMemoryMapper memoryMapper,
+            AppMemoryCandidateMapper candidateMapper,
+            AppMemoryEvidenceMapper evidenceMapper,
             AppMapper appMapper,
             GoodAppCacheService goodAppCacheService) {
         this.chatHistoryMapper = chatHistoryMapper;
         this.summaryMapper = summaryMapper;
         this.cursorMapper = cursorMapper;
         this.memoryMapper = memoryMapper;
+        this.candidateMapper = candidateMapper;
+        this.evidenceMapper = evidenceMapper;
         this.appMapper = appMapper;
         this.goodAppCacheService = goodAppCacheService;
     }
@@ -47,6 +55,8 @@ public class AppDeletionPersistenceServiceImpl
         summaryMapper.deleteByQuery(appIdQuery(appId));
         cursorMapper.deleteByQuery(appIdQuery(appId));
         memoryMapper.unlinkAppId(appId);
+        candidateMapper.unlinkAppId(appId);
+        evidenceMapper.unlinkAppId(appId);
         appMapper.deleteById(appId);
         goodAppCacheService.evictAfterCommit(appId, "删除应用");
     }

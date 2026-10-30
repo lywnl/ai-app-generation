@@ -23,6 +23,38 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MemorySchemaMigrationContractTest {
 
+    @Test
+    void l2VersionedSchemasPhysicallyIsolateCandidatesAndConstrainActiveSlot() throws Exception {
+        for (String path : SCHEMA_FILES) {
+            String schema = read(path);
+            String formal = normalize(tableDefinition(schema, "app_memory"));
+            String candidates = normalize(tableDefinition(schema, "app_memory_candidate"));
+            String evidence = normalize(tableDefinition(schema, "app_memory_evidence"));
+            assertTrue(formal.contains("uk_active_memory (userid, type, memorykey, activeslot)"));
+            assertTrue(formal.contains("status in ('active', 'superseded', 'revoked')"));
+            assertFalse(formal.contains("uk_userid_type_name"));
+            assertTrue(candidates.contains("status in ('candidate', 'promoted', 'revoked')"));
+            assertTrue(candidates.contains("uk_pending_memory (userid, type, memorykey, contenthash, pendingslot)"));
+            assertTrue(evidence.contains("uk_memory_evidence (userid, targetkind, targetid, turnid)"));
+            assertTrue(formal.contains("legacyevidencecount"));
+        }
+    }
+
+    @Test
+    void l2MigrationKeepsOriginalTableAndVerifiesMappingBeforeAtomicSwitch() throws Exception {
+        String sql = normalize(read("sql/migrations/2026-10-30-l2-user-memory-isolation.sql"));
+        assertTrue(sql.contains("mysql 8.0.40"));
+        assertTrue(sql.contains("app_memory_legacy_20261030"));
+        assertTrue(sql.contains("app_memory_migration_20261030"));
+        assertTrue(sql.contains("signal sqlstate '45000'"));
+        assertTrue(sql.contains("rollback; resignal;"));
+        assertTrue(sql.contains("9223372036854775807 - v_extra"));
+        assertTrue(sql.contains("rename table app_memory to app_memory_legacy_20261030"));
+        assertFalse(sql.contains("truncate table app_memory"));
+        assertFalse(Pattern.compile("\\bdelete\\s+from\\s+app_memory\\b").matcher(sql).find());
+        assertTrue(sql.indexOf("迁移数据验收失败") < sql.indexOf("rename table app_memory to"));
+    }
+
     private static final List<String> SCHEMA_FILES = List.of(
             "sql/schema.sql",
             "prod/sql/schema.sql");

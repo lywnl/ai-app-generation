@@ -235,6 +235,8 @@ class AppControllerGoodAppCacheTest {
         @Bean AppMemorySummaryMapper summaryMapper() { return mock(AppMemorySummaryMapper.class); }
         @Bean AppMemoryExtractCursorMapper cursorMapper() { return mock(AppMemoryExtractCursorMapper.class); }
         @Bean AppMemoryMapper memoryMapper() { return mock(AppMemoryMapper.class); }
+        @Bean AppMemoryCandidateMapper candidateMapper() { return mock(AppMemoryCandidateMapper.class); }
+        @Bean AppMemoryEvidenceMapper evidenceMapper() { return mock(AppMemoryEvidenceMapper.class); }
         @Bean AppMapper appMapper() { return mock(AppMapper.class); }
         @Bean AbstractPlatformTransactionManager transactionManager() {
             return new AbstractPlatformTransactionManager() {
@@ -243,6 +245,10 @@ class AppControllerGoodAppCacheTest {
                 @Override protected void doCommit(DefaultTransactionStatus status) { }
                 @Override protected void doRollback(DefaultTransactionStatus status) { }
             };
+        }
+        @Bean
+        com.lyw.appgeneration.service.AppPlanQueryService appPlanQueryService() {
+            return mock(com.lyw.appgeneration.service.AppPlanQueryService.class);
         }
         @Bean
         AppService appService() { return mock(AppService.class); }
