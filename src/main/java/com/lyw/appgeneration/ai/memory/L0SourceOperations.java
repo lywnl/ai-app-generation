@@ -94,6 +94,54 @@ public final class L0SourceOperations {
         return copy(source, source.memoryEpoch(), source.nextSequence(), source.appliedSummaryRevision(), source.entries(), turns);
     }
 
+    /**
+     * 在可信 AI 记录已经保存后关闭来源。合法原文保留，终态单独带持久记录身份；
+     * 未完成链仍整轮丢弃，协议失败仍只保留用户与可信结果，破坏性恢复同时更换 epoch。
+     */
+    public static L0Snapshot finishTurn(L0Snapshot source, long userHistoryId, String turnId,
+                                        long historyId, ChatMemoryOutcome outcome, String trustedText,
+                                        long committedSummaryRevision) {
+        requireSource(source);
+        var active = source.turn(userHistoryId);
+        if (active == null || !active.turnId().equals(turnId) || source.turns().getLast().userHistoryId() != userHistoryId
+                || historyId <= userHistoryId || outcome == null || trustedText == null || trustedText.isBlank()
+                || committedSummaryRevision < source.appliedSummaryRevision()) {
+            throw new IllegalStateException("关闭来源的持久回合、结果或摘要依赖无效");
+        }
+        if (active.closed()) {
+            if (active.terminalHistoryId() != historyId || active.terminalOutcome() != outcome) {
+                throw new IllegalStateException("不能覆盖已经关闭的来源回合");
+            }
+            return source;
+        }
+        if (outcome == ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN) {
+            return copy(source, UUID.randomUUID().toString(), source.nextSequence(), committedSummaryRevision,
+                    source.entries().stream().filter(entry -> entry.userHistoryId() != userHistoryId).toList(),
+                    source.turns().stream().filter(turn -> turn.userHistoryId() != userHistoryId).toList());
+        }
+        L0Snapshot working = source;
+        if (outcome == ChatMemoryOutcome.PROTOCOL_ERROR) {
+            var retained = new ArrayList<ChatMessage>();
+            source.entries().stream().filter(entry -> entry.userHistoryId() != userHistoryId
+                    || entry.payload() instanceof UserMessage).map(L0Snapshot.Message::payload).forEach(retained::add);
+            working = resetActive(source, retained);
+            working = copy(working, working.memoryEpoch(), working.nextSequence(), committedSummaryRevision,
+                    working.entries(), working.turns());
+        } else {
+            var parsed = new L0SourceParser().parse(source);
+            if (parsed.units().stream().anyMatch(unit -> !unit.complete())) {
+                throw new IllegalStateException("未完成工具批次不能被正常关闭为完整原文");
+            }
+        }
+        var entries = new ArrayList<>(working.entries());
+        long sequence = working.nextSequence();
+        entries.add(new L0Snapshot.Message(sequence, userHistoryId,
+                dev.langchain4j.data.message.AiMessage.from(trustedText), historyId));
+        var turns = new ArrayList<>(working.turns());
+        turns.set(turns.size() - 1, new L0Snapshot.Turn(userHistoryId, turnId, active.userSequence(), historyId, outcome, sequence));
+        return copy(working, working.memoryEpoch(), Math.addExact(sequence, 1), working.appliedSummaryRevision(), entries, turns);
+    }
+
     /** 只替换已知活动回合的原文；此前回合必须保持原样，旧草稿因新 epoch 失效。 */
     public static L0Snapshot resetActive(L0Snapshot source, List<ChatMessage> replacement) {
         requireSource(source);

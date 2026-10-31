@@ -425,6 +425,71 @@
         ".codex/unify-context-summarization/runs/035-real-storage/output.log",
         ".codex/unify-context-summarization/runs/035-real-storage/code-state.json"
       ]
+    },
+    {
+      "id": "task:6.1",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryTerminalTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/038-terminal-real-storage/command.json",
+        ".codex/unify-context-summarization/runs/038-terminal-real-storage/output.log",
+        ".codex/unify-context-summarization/runs/038-terminal-real-storage/code-state.json",
+        ".codex/unify-context-summarization/runs/037-terminal-persistence/command.json",
+        ".codex/unify-context-summarization/runs/037-terminal-persistence/output.log",
+        ".codex/unify-context-summarization/runs/037-terminal-persistence/code-state.json"
+      ]
+    },
+    {
+      "id": "task:6.2",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ToolMessageCollapser.java",
+        "README.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/VueTurnSourceRetentionTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/040-source-retention/command.json",
+        ".codex/unify-context-summarization/runs/040-source-retention/output.log",
+        ".codex/unify-context-summarization/runs/040-source-retention/code-state.json",
+        ".codex/unify-context-summarization/runs/041-retention-real-storage/command.json",
+        ".codex/unify-context-summarization/runs/041-retention-real-storage/output.log",
+        ".codex/unify-context-summarization/runs/041-retention-real-storage/code-state.json"
+      ]
+    },
+    {
+      "id": "task:6.3",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/service/CompatibleMemorySnapshot.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredChatMemoryTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/042-trusted-request-view/command.json",
+        ".codex/unify-context-summarization/runs/042-trusted-request-view/output.log",
+        ".codex/unify-context-summarization/runs/042-trusted-request-view/code-state.json"
+      ]
     }
   ],
   "commands": [
@@ -635,6 +700,51 @@
       "finished_at": "2026-10-31T15:21:14.149198+00:00",
       "evidence": ".codex/unify-context-summarization/runs/035-real-storage/output.log",
       "code_state": ".codex/unify-context-summarization/runs/035-real-storage/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/038-terminal-real-storage/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/038-terminal-real-storage/tmp -Dtest=UnifiedSummaryStorageIntegrationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:33:59.879714+00:00",
+      "finished_at": "2026-10-31T15:34:07.524320+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/038-terminal-real-storage/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/038-terminal-real-storage/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/037-terminal-persistence/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/037-terminal-persistence/tmp -Dtest=UnifiedSummaryTerminalTest,ConversationDecisionEvidenceServiceTest,VueTurnFinalizerTest,VueTurnMemoryProjectionTest,VueTurnCancellationCoordinatorTest,JsonMessageStreamHandlerTest,AppServiceImplVueTurnTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:32:32.133768+00:00",
+      "finished_at": "2026-10-31T15:32:43.045426+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/037-terminal-persistence/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/037-terminal-persistence/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/040-source-retention/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/040-source-retention/tmp -Dtest=VueTurnSourceRetentionTest,VueTurnFinalizerTest,JsonMessageStreamHandlerTest,VueTurnCancellationCoordinatorTest,AppServiceImplVueTurnTest,ToolMessageCollapserTest,TokenAwareChatMemoryTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:41:14.308166+00:00",
+      "finished_at": "2026-10-31T15:41:26.937075+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/040-source-retention/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/040-source-retention/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/041-retention-real-storage/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/041-retention-real-storage/tmp -Dtest=UnifiedSummaryStorageIntegrationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:42:41.016592+00:00",
+      "finished_at": "2026-10-31T15:42:48.421477+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/041-retention-real-storage/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/041-retention-real-storage/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/042-trusted-request-view/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/042-trusted-request-view/tmp -Dtest=TrustedTurnRequestViewProjectorTest,LayeredChatMemoryTest,CompatibleMemorySnapshotTest,L0SourceParserTest,UnifiedSummaryReclamationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:47:27.827308+00:00",
+      "finished_at": "2026-10-31T15:47:39.853352+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/042-trusted-request-view/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/042-trusted-request-view/code-state.json"
     }
   ]
 }

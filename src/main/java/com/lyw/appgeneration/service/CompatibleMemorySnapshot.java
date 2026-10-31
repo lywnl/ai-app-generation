@@ -2,6 +2,7 @@ package com.lyw.appgeneration.service;
 
 import com.lyw.appgeneration.ai.memory.L0Snapshot;
 import com.lyw.appgeneration.ai.memory.L0SourceOperations;
+import com.lyw.appgeneration.ai.memory.MemorySummaryFormat;
 import dev.langchain4j.data.message.UserMessage;
 
 import java.util.Objects;
@@ -21,6 +22,9 @@ public record CompatibleMemorySnapshot(long appId, long userHistoryId, String tu
             throw new IllegalArgumentException("摘要无法承接原文窗口的已应用修订");
         }
         var active = source.turn(userHistoryId);
+        if (!summary.summary().isEmpty() && !MemorySummaryFormat.isValid(summary.summary())) {
+            throw new IllegalArgumentException("相容快照的摘要正文格式无效");
+        }
         if (active == null || !active.turnId().equals(turnId) || active.closed()
                 || source.turns().getLast().userHistoryId() != userHistoryId
                 || source.entries().stream().noneMatch(entry -> entry.userHistoryId() == userHistoryId

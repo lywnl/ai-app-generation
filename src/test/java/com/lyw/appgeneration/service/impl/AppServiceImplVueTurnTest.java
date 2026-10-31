@@ -293,7 +293,7 @@ class AppServiceImplVueTurnTest {
         AtomicReference<VueTurnContext> capturedContext = new AtomicReference<>();
         AtomicReference<Throwable> droppedError = new AtomicReference<>();
         ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
-        MemorySummaryService summary = mock(MemorySummaryService.class);
+        MemorySummaryService summary = com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub();
         UserMemoryService preference = mock(UserMemoryService.class);
         var repairMetrics = new VueBuildRepairMetricsCollector(metricsRegistry);
         VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
@@ -309,8 +309,7 @@ class AppServiceImplVueTurnTest {
                 eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
                 .thenReturn(savedAiMessage(
                         VueTurnFinalizer.CANCELLED_MESSAGE));
-        when(collapser.collapseLastTurn(
-                eq(APP_ID), eq(cancelledMemoryProjection())))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
                         List.of()));
@@ -706,8 +705,7 @@ class AppServiceImplVueTurnTest {
                 eq(systemErrorMemoryProjection()),
                 eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
-        when(collapser.collapseLastTurn(
-                eq(APP_ID), eq(systemErrorMemoryProjection())))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(collapsed());
         when(facade.generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
@@ -728,8 +726,7 @@ class AppServiceImplVueTurnTest {
                 eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
                 eq(systemErrorMemoryProjection()),
                 eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
-        verify(collapser, times(1)).collapseLastTurn(
-                eq(APP_ID), eq(systemErrorMemoryProjection()));
+        verify(collapser, times(1)).finishLastTurn(any(), any(), any());
         operationManager.acquire(APP_ID,
                 AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-system-error-finalization").close();
@@ -743,8 +740,7 @@ class AppServiceImplVueTurnTest {
                 eq(systemErrorMemoryProjection()),
                 eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
-        when(collapser.collapseLastTurn(
-                eq(APP_ID), eq(systemErrorMemoryProjection())))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(collapsed());
         String turnId = "turn-registration-closed";
         var operation = operationManager.acquire(
@@ -779,8 +775,7 @@ class AppServiceImplVueTurnTest {
                 eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
                 eq(systemErrorMemoryProjection()),
                 eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
-        verify(collapser, times(1)).collapseLastTurn(
-                eq(APP_ID), eq(systemErrorMemoryProjection()));
+        verify(collapser, times(1)).finishLastTurn(any(), any(), any());
         operationManager.acquire(APP_ID,
                 AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-registration-failure").close();
@@ -982,7 +977,7 @@ class AppServiceImplVueTurnTest {
             ToolMessageCollapser collapser) {
         var repairMetrics = new VueBuildRepairMetricsCollector(metricsRegistry);
         VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
-                history, collapser, mock(MemorySummaryService.class),
+                history, collapser, com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub(),
                 mock(UserMemoryService.class), factory,
                 new AppDataLifecycleFence(), repairMetrics,
                 new FileToolBudgetGuard());
@@ -1084,8 +1079,7 @@ class AppServiceImplVueTurnTest {
                 eq(cancelledMemoryProjection()),
                 eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
                 .thenReturn(savedAiMessage(VueTurnFinalizer.CANCELLED_MESSAGE));
-        when(collapser.collapseLastTurn(
-                eq(APP_ID), eq(cancelledMemoryProjection())))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(collapsed());
         return collapser;
     }

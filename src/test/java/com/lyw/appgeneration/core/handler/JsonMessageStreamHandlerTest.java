@@ -350,12 +350,12 @@ class JsonMessageStreamHandlerTest {
                 .thenReturn("第 1 次真实构建成功");
         ChatHistoryService history = mock(ChatHistoryService.class);
         ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
-        MemorySummaryService summary = mock(MemorySummaryService.class);
+        MemorySummaryService summary = com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub();
         UserMemoryService preference = mock(UserMemoryService.class);
         when(history.addAiMessageAndReturn(
                 anyLong(), any(), any(), any(), anyLong()))
                 .thenReturn(ChatHistory.builder().id(903L).build());
-        when(collapser.collapseLastTurn(anyLong(), any()))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
                         List.of()));
@@ -454,8 +454,8 @@ class JsonMessageStreamHandlerTest {
         assertFalse(display.getValue().contains("不得泄漏的伪源码"));
         assertFalse(display.getValue().contains(correctionPromptMarker));
         assertEquals(expectedMemory, memory.getValue());
-        verify(collapser).collapseLastTurn(APP_ID, expectedMemory);
-        verify(summary).triggerSummarizationAsync(APP_ID);
+        verify(collapser).finishLastTurn(any(), any(), any());
+        verify(summary, never()).triggerSummarizationAsync(APP_ID);
         verify(preference).triggerPreferenceExtractionAsync(
                 USER_ID, APP_ID, 903L);
     }
@@ -642,11 +642,11 @@ class JsonMessageStreamHandlerTest {
         when(history.addAiMessageAndReturn(
                 anyLong(), any(), any(), any(), anyLong()))
                 .thenReturn(ChatHistory.builder().id(901L).build());
-        when(collapser.collapseLastTurn(anyLong(), any()))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of()));
         VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
-                history, collapser, mock(MemorySummaryService.class),
+                history, collapser, com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub(),
                 mock(UserMemoryService.class), mock(AiGeneratorServiceFactory.class),
                 new AppDataLifecycleFence(),
                 new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()),
@@ -688,7 +688,7 @@ class JsonMessageStreamHandlerTest {
                                 && display.contains("[工具调用]")
                                 && display.contains("diff")),
                 eq(expectedMemory), eq(ChatMemoryOutcome.SUCCEEDED), eq(USER_ID));
-        verify(collapser).collapseLastTurn(APP_ID, expectedMemory);
+        verify(collapser).finishLastTurn(any(), any(), any());
         assertFalse(expectedMemory.contains("模型声称已经完成"));
         assertFalse(expectedMemory.contains("diff"));
     }
@@ -722,11 +722,11 @@ class JsonMessageStreamHandlerTest {
         when(history.addAiMessageAndReturn(
                 anyLong(), any(), any(), any(), anyLong()))
                 .thenReturn(ChatHistory.builder().id(902L).build());
-        when(collapser.collapseLastTurn(anyLong(), any()))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of()));
         VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
-                history, collapser, mock(MemorySummaryService.class),
+                history, collapser, com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub(),
                 mock(UserMemoryService.class), mock(AiGeneratorServiceFactory.class),
                 new AppDataLifecycleFence(),
                 new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()),
@@ -754,7 +754,7 @@ class JsonMessageStreamHandlerTest {
         verify(history).addAiMessageAndReturn(
                 APP_ID, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE,
                 expectedMemory, ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
-        verify(collapser).collapseLastTurn(APP_ID, expectedMemory);
+        verify(collapser).finishLastTurn(any(), any(), any());
     }
 
     @Test

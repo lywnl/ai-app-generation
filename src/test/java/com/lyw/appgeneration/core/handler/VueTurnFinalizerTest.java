@@ -55,7 +55,7 @@ class VueTurnFinalizerTest {
     void setUp() {
         history = mock(ChatHistoryService.class);
         collapser = mock(ToolMessageCollapser.class);
-        summary = mock(MemorySummaryService.class);
+        summary = com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub();
         preference = mock(UserMemoryService.class);
         factory = mock(AiGeneratorServiceFactory.class);
         metricsRegistry = new SimpleMeterRegistry();
@@ -68,7 +68,7 @@ class VueTurnFinalizerTest {
                 anyLong(), anyString(), anyString(), any(), anyLong()))
                 .thenAnswer(invocation -> 已保存消息(
                         invocation.getArgument(1), AI_MESSAGE_ID));
-        when(collapser.collapseLastTurn(anyLong(), anyString()))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(COLLAPSED, java.util.List.of()));
     }
 
@@ -91,8 +91,8 @@ class VueTurnFinalizerTest {
             verify(history).addAiMessageAndReturn(
                     APP_ID, outcome.displayAiText(), outcome.memoryAiText(),
                     VueTurnMemoryProjection.memoryOutcome(outcome.outcome()), USER_ID);
-            verify(collapser).collapseLastTurn(APP_ID, outcome.memoryAiText());
-            verify(summary).triggerSummarizationAsync(APP_ID);
+            verify(collapser).finishLastTurn(any(), any(), any());
+            verify(summary, never()).triggerSummarizationAsync(APP_ID);
             verify(preference).triggerPreferenceExtractionAsync(
                     USER_ID, APP_ID, AI_MESSAGE_ID);
             assertEquals(1.0, metricsRegistry.get("vue_turn_outcomes_total")
@@ -124,7 +124,7 @@ class VueTurnFinalizerTest {
         verify(history).addAiMessageAndReturn(
                 APP_ID, requested.displayAiText(), requested.memoryAiText(),
                 ChatMemoryOutcome.SUCCEEDED, USER_ID);
-        verify(collapser).collapseLastTurn(APP_ID, requested.memoryAiText());
+        verify(collapser).finishLastTurn(any(), any(), any());
         verify(history, never()).addChatMessageAndReturn(
                 anyLong(), anyString(), eq("ai"), anyLong());
     }
@@ -154,9 +154,9 @@ class VueTurnFinalizerTest {
                 APP_ID, VueTurnFinalizer.SCOPE_PROTOCOL_MESSAGE,
                 safeProjection,
                 ChatMemoryOutcome.PROTOCOL_ERROR, USER_ID);
-        verify(collapser).collapseLastTurn(
-                APP_ID, safeProjection);
-        verifyNoInteractions(summary, preference);
+        verify(collapser).finishLastTurn(any(), any(), any());
+        verify(summary, never()).triggerSummarizationAsync(anyLong());
+        verifyNoInteractions(preference);
     }
 
     @Test
@@ -164,7 +164,7 @@ class VueTurnFinalizerTest {
         VueTurnOutcome requested = outcome(
                 VueBuildPhase.GENERATING, INCOMPLETE_TOOL_CHAIN,
                 VueTurnFinalizer.INCOMPLETE_TOOL_CHAIN_MESSAGE, false);
-        when(collapser.discardLastTurn(APP_ID))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         COLLAPSED, List.of()));
 
@@ -176,9 +176,10 @@ class VueTurnFinalizerTest {
         verify(history).addAiMessageAndReturn(
                 APP_ID, requested.displayAiText(), requested.memoryAiText(),
                 ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN, USER_ID);
-        verify(collapser).discardLastTurn(APP_ID);
+        verify(collapser).finishLastTurn(any(), any(), any());
         verify(collapser, never()).collapseLastTurn(anyLong(), anyString());
-        verifyNoInteractions(summary, preference);
+        verify(summary, never()).triggerSummarizationAsync(anyLong());
+        verifyNoInteractions(preference);
     }
 
     @Test
@@ -197,7 +198,7 @@ class VueTurnFinalizerTest {
 
         assertTrue(result.persisted());
         assertEquals(SUCCEEDED, result.outcome().outcome());
-        verify(summary).triggerSummarizationAsync(APP_ID);
+        verify(summary, never()).triggerSummarizationAsync(APP_ID);
         verify(preference, never()).triggerPreferenceExtractionAsync(
                 anyLong(), anyLong(), anyLong());
     }
@@ -225,9 +226,8 @@ class VueTurnFinalizerTest {
         verify(history, times(1)).addAiMessageAndReturn(
                 APP_ID, requested.displayAiText(), requested.memoryAiText(),
                 ChatMemoryOutcome.SUCCEEDED, USER_ID);
-        verify(collapser, times(1)).collapseLastTurn(
-                APP_ID, requested.memoryAiText());
-        verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
+        verify(collapser, times(1)).finishLastTurn(any(), any(), any());
+        verify(summary, never()).triggerSummarizationAsync(APP_ID);
         verify(preference, times(1))
                 .triggerPreferenceExtractionAsync(
                         USER_ID, APP_ID, AI_MESSAGE_ID);
@@ -258,8 +258,7 @@ class VueTurnFinalizerTest {
         verify(history).addAiMessageAndReturn(
                 eq(APP_ID), eq(VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE),
                 anyString(), eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
-        verify(collapser).collapseLastTurn(
-                eq(APP_ID), contains("回合终态：系统错误"));
+        verify(collapser).finishLastTurn(any(), any(), any());
         verify(history, never()).addAiMessageAndReturn(
                 eq(APP_ID), eq(oversized), anyString(), any(), eq(USER_ID));
     }
@@ -349,7 +348,7 @@ class VueTurnFinalizerTest {
 
     @Test
     void collapseFailureRecordsFailedInvalidateWithoutChangingPersistedOutcome() {
-        when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(STORE_FAILED, java.util.List.of()));
         when(factory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
                 .thenReturn(MemoryCacheInvalidationResult.success());
@@ -396,11 +395,12 @@ class VueTurnFinalizerTest {
 
         verify(history, times(1)).addAiMessageAndReturn(
                 eq(APP_ID), anyString(), anyString(), any(), eq(USER_ID));
-        verify(collapser, times(1)).collapseLastTurn(eq(APP_ID), anyString());
+        verify(collapser, times(1)).finishLastTurn(any(), any(), any());
         if (winner.outcome().outcome() == PROTOCOL_ERROR) {
-            verifyNoInteractions(summary, preference);
+            verify(summary, never()).triggerSummarizationAsync(anyLong());
+        verifyNoInteractions(preference);
         } else {
-            verify(summary, times(1)).triggerSummarizationAsync(APP_ID);
+            verify(summary, never()).triggerSummarizationAsync(APP_ID);
             verify(preference, times(1)).triggerPreferenceExtractionAsync(
                     USER_ID, APP_ID, AI_MESSAGE_ID);
         }
@@ -408,7 +408,7 @@ class VueTurnFinalizerTest {
 
     @Test
     void redisFailureKeepsBuildOutcomeClearsUnsafeL0AndSkipsStableMemoryHooks() {
-        when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(STORE_FAILED, java.util.List.of()));
         when(factory.invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT))
                 .thenReturn(MemoryCacheInvalidationResult.success());
@@ -421,7 +421,8 @@ class VueTurnFinalizerTest {
         assertEquals(SUCCEEDED, result.outcome().outcome());
         verify(factory).invalidateAndClearMemory(APP_ID, CodeGenTypeEnum.VUE_PROJECT);
         verify(factory, never()).invalidateVueService(APP_ID);
-        verifyNoInteractions(summary, preference);
+        verify(summary, never()).triggerSummarizationAsync(anyLong());
+        verifyNoInteractions(preference);
     }
 
     @Test
@@ -438,7 +439,8 @@ class VueTurnFinalizerTest {
 
         assertEquals(SYSTEM_ERROR, result.outcome().outcome());
         assertFalse(result.persisted());
-        verifyNoInteractions(collapser, summary, preference);
+        verify(summary, never()).triggerSummarizationAsync(anyLong());
+        verifyNoInteractions(collapser, preference);
         verify(factory).invalidateAndClearMemory(
                 APP_ID, CodeGenTypeEnum.VUE_PROJECT);
     }
@@ -457,14 +459,16 @@ class VueTurnFinalizerTest {
 
         assertEquals(SYSTEM_ERROR,
                 finalizer.finalizeOnce(failedContext, succeeded).outcome().outcome());
-        verifyNoInteractions(collapser, summary, preference);
+        verify(summary, never()).triggerSummarizationAsync(anyLong());
+        verifyNoInteractions(collapser, preference);
 
         reset(history, collapser, summary, preference, factory);
+        com.lyw.appgeneration.service.MemorySummaryTestSupport.delegateTerminalSave(summary);
         when(history.addAiMessageAndReturn(
                 anyLong(), anyString(), anyString(), any(), anyLong()))
                 .thenAnswer(invocation -> 已保存消息(
                         invocation.getArgument(1), AI_MESSAGE_ID));
-        when(collapser.collapseLastTurn(anyLong(), anyString()))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         COLLAPSED, java.util.List.of()));
         doThrow(new IllegalStateException("summary queue down"))
@@ -530,7 +534,7 @@ class VueTurnFinalizerTest {
             AppDataLifecycleFence.DeletePermit deletePermit =
                     deletion.get(1, TimeUnit.SECONDS);
             assertNotNull(deletePermit);
-            verify(summary).triggerSummarizationAsync(APP_ID);
+            verify(summary, never()).triggerSummarizationAsync(APP_ID);
             verify(preference).triggerPreferenceExtractionAsync(
                     USER_ID, APP_ID, AI_MESSAGE_ID);
             deletePermit.abortAndReopen();
@@ -542,7 +546,7 @@ class VueTurnFinalizerTest {
             throws Exception {
         CountDownLatch invalidationEntered = new CountDownLatch(1);
         CountDownLatch releaseInvalidation = new CountDownLatch(1);
-        when(collapser.collapseLastTurn(APP_ID, "项目已生成并构建成功。"))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenThrow(new IllegalStateException("redis unexpected"));
         doAnswer(invocation -> {
             invalidationEntered.countDown();

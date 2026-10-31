@@ -12,8 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 把"一轮 AI 工具调用"在 L0 热窗口里折叠为恒 1 条 {@link dev.langchain4j.data.message.AiMessage},
- * 与 MySQL / 冷启动的合并态对齐 —— 一轮 AI 输出无论调用了多少次工具,折叠后恒占 1 个窗口槽位。
+ * 回合结束时同步 L0。Vue 合法原文通过来源关闭接口保留，并单独关联后端终态；
+ * 旧的折叠与丢弃入口仍用于兼容调用，不再作为 Vue 正常收尾的无条件操作。
  *
  * @author <a href="https://gitee.com/lywynl">lyw</a>
  */
@@ -27,6 +27,36 @@ public class ToolMessageCollapser {
         this.store = store instanceof AtomicChatMemoryStore atomicStore
                 ? atomicStore
                 : new AtomicChatMemoryStore(store);
+    }
+
+    /** Vue 正常收尾保留合法原文；旧折叠接口仅保留给既有兼容调用。 */
+    public CollapseResult finishLastTurn(com.lyw.appgeneration.core.handler.VueTurnContext context,
+                                         com.lyw.appgeneration.model.entity.ChatHistory saved,
+                                         com.lyw.appgeneration.service.MemorySummarySnapshot summary) {
+        try {
+            if (saved == null || !java.util.Objects.equals(saved.getAppId(), context.appId())
+                    || !java.util.Objects.equals(saved.getUserId(), context.userId()) || summary == null
+                    || context.turnState().stage() != com.lyw.appgeneration.core.handler.VueTurnContext.TurnStage.FINALIZING) {
+                return new CollapseResult(CollapseStatus.STORE_FAILED, List.of());
+            }
+            AdmissionDeadline deadline = AdmissionDeadline.start(java.time.Duration.ofSeconds(60));
+            return store.withMemoryLock(context.appId(), deadline, () -> {
+                if (!store.supportsSourceSnapshots()) return new CollapseResult(CollapseStatus.STORE_FAILED, List.of());
+                L0Snapshot source = store.getSnapshot(context.appId());
+                if (!source.hasKnownSource()) return new CollapseResult(CollapseStatus.STORE_FAILED, source.messages());
+                L0Snapshot closed = L0SourceOperations.finishTurn(source, context.userHistoryId(), context.turnId(),
+                        saved.getId(), saved.getMemoryOutcome(), saved.getMemoryMessage(), summary.summaryRevision());
+                if (closed.equals(source)) return new CollapseResult(CollapseStatus.COLLAPSED, source.messages());
+                if (store.replaceSnapshotIfMatches(context.appId(), source, closed, deadline) != DeadlineAwareReplaceResult.REPLACED) {
+                    return new CollapseResult(CollapseStatus.STORE_FAILED, source.messages());
+                }
+                // 保持原同步结果类型及指标标签，COLLAPSED 在此表示已完成来源同步。
+                return new CollapseResult(CollapseStatus.COLLAPSED, closed.messages());
+            });
+        } catch (RuntimeException exception) {
+            log.warn("L0 回合来源关闭失败 appId={} type={}", context.appId(), exception.getClass().getSimpleName());
+            return new CollapseResult(CollapseStatus.STORE_FAILED, List.of());
+        }
     }
 
     /**

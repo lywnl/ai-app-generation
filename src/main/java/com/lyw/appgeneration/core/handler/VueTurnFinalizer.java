@@ -236,12 +236,12 @@ public class VueTurnFinalizer implements InitializingBean {
             VueTurnContext context, VueTurnOutcome requestedOutcome) {
         ChatHistory saved;
         try {
-            saved = chatHistoryService.addAiMessageAndReturn(
+            saved = memorySummaryService.persistTurnOutcome(context, () -> chatHistoryService.addAiMessageAndReturn(
                     context.appId(), requestedOutcome.displayAiText(),
                     requestedOutcome.memoryAiText(),
                     VueTurnMemoryProjection.memoryOutcome(
                             requestedOutcome.outcome()),
-                    context.userId());
+                    context.userId()));
         } catch (RuntimeException exception) {
             log.error("Vue 回合 AI 消息保存异常,appId={},turnId={}",
                     context.appId(), context.turnId(), exception);
@@ -256,7 +256,7 @@ public class VueTurnFinalizer implements InitializingBean {
         }
 
         ToolMessageCollapser.CollapseResult collapse =
-                synchronizeL0(context, requestedOutcome);
+                synchronizeL0(context, saved);
         recordCollapse(collapse.status());
         if (collapse.status() != COLLAPSED) {
             log.warn("Vue 回合 L0 未稳定同步,appId={},turnId={},stage={}",
@@ -273,22 +273,19 @@ public class VueTurnFinalizer implements InitializingBean {
     }
 
     private ToolMessageCollapser.CollapseResult synchronizeL0(
-            VueTurnContext context, VueTurnOutcome outcome) {
-        if (outcome.outcome() == INCOMPLETE_TOOL_CHAIN) {
-            return toolMessageCollapser.discardLastTurn(context.appId());
+            VueTurnContext context, ChatHistory saved) {
+        com.lyw.appgeneration.service.MemorySummarySnapshot snapshot;
+        try {
+            snapshot = memorySummaryService.readSnapshot(context.appId());
+        } catch (RuntimeException exception) {
+            log.warn("Vue 终态已保存但 L0 来源同步失败 appId={} type={}", context.appId(), exception.getClass().getSimpleName());
+            return new ToolMessageCollapser.CollapseResult(ToolMessageCollapser.CollapseStatus.STORE_FAILED, List.of());
         }
-        return toolMessageCollapser.collapseLastTurn(
-                context.appId(), outcome.memoryAiText());
+        return toolMessageCollapser.finishLastTurn(context, saved, snapshot);
     }
 
     private void triggerStableMemoryHooks(
             VueTurnContext context, Long stableAiMessageId) {
-        try {
-            memorySummaryService.triggerSummarizationAsync(context.appId());
-        } catch (RuntimeException exception) {
-            log.warn("Vue 回合 L1 摘要触发失败,appId={},turnId={}",
-                    context.appId(), context.turnId(), exception);
-        }
         if (stableAiMessageId == null || stableAiMessageId <= 0L) {
             log.warn("Vue 稳定 AI 消息缺少有效 ID，跳过 L2 触发 appId={},turnId={}",
                     context.appId(), context.turnId());

@@ -952,14 +952,14 @@ class VueTurnCancellationCoordinatorTest {
                 .addAiMessageAndReturn(
                         anyLong(), anyString(), anyString(),
                         any(ChatMemoryOutcome.class), anyLong());
-        when(collapser.collapseLastTurn(anyLong(), anyString()))
+        when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(new ToolMessageCollapser.CollapseResult(
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
                         java.util.List.of()));
         VueBuildRepairMetricsCollector metrics =
                 new VueBuildRepairMetricsCollector(new SimpleMeterRegistry());
         VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
-                history, collapser, mock(MemorySummaryService.class),
+                history, collapser, com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub(),
                 mock(UserMemoryService.class),
                 mock(AiGeneratorServiceFactory.class),
                 new AppDataLifecycleFence(), metrics,

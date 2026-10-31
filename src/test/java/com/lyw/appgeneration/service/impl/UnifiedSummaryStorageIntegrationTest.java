@@ -193,4 +193,64 @@ class UnifiedSummaryStorageIntegrationTest extends UnifiedMemoryStorageFixture {
         assertEquals(DeadlineAwareReplaceResult.PREFIX_CHANGED, service.reclaimUnified(request, deadline()));
         assertEquals(replacement, memory.sourceSnapshot());
     }
+
+    @Test
+    void 最终证据AI结果与前沿结束在真实事务中一同回滚() throws Exception {
+        service.commitUnifiedDraft(prepared());
+        var previous = service.readSnapshot(appId);
+        String evidenceBefore = historiesMapper.selectOneById(10L).getDecisionEvidence();
+        append(11, 20);
+        var source = memory.sourceSnapshot();
+        var failing = createService(afterMapperCall((name, result) -> {
+            if (name.equals("commitSnapshot")) throw new IllegalStateException("终态登记 UPDATE 后注入失败");
+        }), transactions);
+        context.tryStartFinalization(VueTurnContext.TerminalTrigger.FAILED);
+        assertThrows(IllegalStateException.class, () -> failing.persistTurnOutcome(context, () ->
+                histories.addAiMessageAndReturn(appId, "模型声称成功", "实际构建失败", com.lyw.appgeneration.model.enums.ChatMemoryOutcome.FAILED, 9L)));
+        assertEquals(previous, service.readSnapshot(appId));
+        assertEquals(evidenceBefore, historiesMapper.selectOneById(10L).getDecisionEvidence());
+        assertEquals(0L, count("SELECT COUNT(*) FROM chat_history WHERE messageType='ai'"));
+        assertEquals(source, memory.sourceSnapshot());
+        verifyNoInteractions(model);
+    }
+
+    @Test
+    void 未触发摘要的回合只保存证据与真实结果不创建摘要() throws Exception {
+        var source = memory.sourceSnapshot();
+        var shortWindow = L0SourceOperations.resetActive(source, java.util.List.of(source.messages().getFirst()));
+        assertEquals(DeadlineAwareReplaceResult.REPLACED, memory.replaceSourceSnapshot(source, shortWindow, deadline()));
+        context.decisionSources().transcript().appendAiText(21, "建议保持中文，因为用户已经明确要求。");
+        context.tryStartFinalization(VueTurnContext.TerminalTrigger.FAILED);
+        var saved = service.persistTurnOutcome(context, () -> histories.addAiMessageAndReturn(appId,
+                "模型声称成功", "实际构建失败", com.lyw.appgeneration.model.enums.ChatMemoryOutcome.FAILED, 9L));
+        assertEquals(com.lyw.appgeneration.model.enums.ChatMemoryOutcome.FAILED, historiesMapper.selectOneById(saved.getId()).getMemoryOutcome());
+        var decision = DecisionEvidenceCodec.decode(historiesMapper.selectOneById(10L).getDecisionEvidence(), 10);
+        assertTrue(decision.entries().stream().anyMatch(entry -> entry.text().contains("因为用户已经明确要求")));
+        assertEquals(0L, count("SELECT COUNT(*) FROM app_memory_summary"));
+        assertEquals(shortWindow, memory.sourceSnapshot());
+        verifyNoInteractions(model);
+    }
+
+    @Test
+    void 真实收尾关闭保留原文与后端身份并可追加下一回合() {
+        var original = memory.sourceSnapshot();
+        context.tryStartFinalization(VueTurnContext.TerminalTrigger.FAILED);
+        var saved = service.persistTurnOutcome(context, () -> histories.addAiMessageAndReturn(appId,
+                "展示回答", "真实失败，需要继续修复", com.lyw.appgeneration.model.enums.ChatMemoryOutcome.FAILED, 9L));
+        var closer = new ToolMessageCollapser(sourceStore);
+        var result = closer.finishLastTurn(context, saved, service.readSnapshot(appId));
+        assertEquals(ToolMessageCollapser.CollapseStatus.COLLAPSED, result.status());
+        var closed = memory.sourceSnapshot();
+        assertEquals(original.entries(), closed.entries().subList(0, original.entries().size()));
+        assertEquals(saved.getId(), closed.entries().getLast().historyRecordId());
+        assertTrue(closed.turn(10L).closed());
+        var nextUser = histories.addChatMessageAndReturn(appId, "继续修复上一轮问题", "user", 9L);
+        assertTrue(nextUser.getId() > saved.getId());
+        CanonicalUserMessageScope.call(TurnRequestBoundary.of(nextUser.getMessage(), java.util.List.of(), nextUser.getId(), "next"), () -> {
+            memory.add(dev.langchain4j.data.message.UserMessage.from(nextUser.getMessage())); return null;
+        });
+        assertEquals(closed.entries(), memory.sourceSnapshot().entries().subList(0, closed.entries().size()));
+        assertEquals(0, memory.sourceSnapshot().appliedSummaryRevision());
+        verifyNoInteractions(model);
+    }
 }

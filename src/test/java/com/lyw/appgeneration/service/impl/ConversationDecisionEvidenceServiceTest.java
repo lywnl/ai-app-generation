@@ -155,6 +155,28 @@ class ConversationDecisionEvidenceServiceTest {
             assertThrows(IllegalStateException.class, () -> service.validateSummaryInput(input));
         }
     }
+
+    @Test void 未压缩短回合保留最后原始解释但不把正文当作实施或验证依据() {
+        var context = realContext();
+        context.commitUserAndBindHistory(() -> row);
+        context.decisionSources().transcript().appendAiText(1, "建议取消轮播，因为它遮挡移动内容；尚未修改。");
+        var source = new L0Snapshot(1, "7", "short-epoch", 2, 0L,
+                List.of(new L0Snapshot.Message(1, 10, UserMessage.from(row.getMessage()))),
+                List.of(new L0Snapshot.Turn(10, "turn", 1, null, null, null)));
+        context.tryStartFinalization(VueTurnContext.TerminalTrigger.COMPLETED);
+        try {
+            var saved = service.mergeFinalAtCommit(context, source);
+            assertEquals(saved, service.mergeFinalAtCommit(context, source));
+            var explanation = saved.entries().stream().filter(entry -> entry.kind() == DecisionEvidence.SourceKind.MODEL_TEXT)
+                    .findFirst().orElseThrow();
+            assertEquals("建议取消轮播，因为它遮挡移动内容；尚未修改。", explanation.text());
+            assertTrue(explanation.implementations().isEmpty());
+            assertTrue(explanation.verifications().isEmpty());
+            assertNull(row.getMemoryMessage());
+            assertNull(row.getMemoryOutcome());
+            verify(histories, times(1)).updateByQuery(any(com.lyw.appgeneration.model.entity.ChatHistory.class), eq(true), any(QueryWrapper.class));
+        } finally { context.closeResources(); }
+    }
     private VueTurnContext realContext() {
         var operations = new com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager();
         var operation = operations.acquire(7L,

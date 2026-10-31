@@ -25,6 +25,9 @@
 | 5.4 | 每次以 REQUIRES_NEW/READ_COMMITTED 读取完整摘要再原子读 L0，按版本下界整对重试；新版完整快照缓存与新旧失效均已接入，115 项回归通过。 | `.codex/unify-context-summarization/runs/028-compatible-snapshots/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 7.1 | 请求边界绑定只读计划接口，固定资料移除旧计划，说明补充动作依赖并区分触达与验证；105 项回归通过，测试临时目录固定到项目内。 | `.codex/unify-context-summarization/runs/033-latest-plan/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 5.5 | 已授权的 MySQL 8.0.40 与 Redis 真实组合共 7 项通过，无跳过；真实 r1/r2 回收交错、RR 外层隔离、回滚、修订与唯一键冲突、COMMIT 确认丢失、Redis Lua 截止及重试均已验证，每项随机库和 3 个键清理成功。 | `.codex/unify-context-summarization/runs/035-real-storage/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 6.1 | 终态赢家在短事务中合并最终证据、保存 AI 可信结果并仅登记前沿结束；132 项本地回归及 9 项真实存储测试通过，真实故障证明证据、AI 行与摘要终态同步回滚，未增加模型调用。 | `.codex/unify-context-summarization/runs/038-terminal-real-storage/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 6.2 | 合法完整回合保留原文并以稳定 ID 附加后端终态，错误分支更换 epoch 保持原恢复语义，收尾不再触发 L1；138 项回归及 10 项真实存储测试通过，L2 仍单次使用稳定 AI ID。 | `.codex/unify-context-summarization/runs/040-source-retention/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 6.3 | 26 项聚焦测试通过；请求投影只消费相容快照，保留原始工具批次，将带持久身份的后端终态去重汇入状态说明；完整旧副本不受之后的回收影响，分层组装不再隐式读活动 L0/L1。实际模型调用链由后续 7.2 接线。 | `.codex/unify-context-summarization/runs/042-trusted-request-view/command.json`、原始日志、JUnit 与代码内容哈希 |
 
 ## 环境边界
 

@@ -75,6 +75,7 @@ abstract class UnifiedMemoryStorageFixture {
     protected MemorySummaryServiceImpl service;
     protected VueTurnContext context;
     protected TokenAwareChatMemory memory;
+    protected AtomicChatMemoryStore sourceStore;
     protected UnifiedSummaryRequest request;
     protected JedisConnectionFactory redisFactory;
     protected StringRedisTemplate redis;
@@ -142,9 +143,9 @@ abstract class UnifiedMemoryStorageFixture {
         var admission = new VueTurnAdmissionController(new VueBuildRepairMetricsCollector(registry));
         context = new VueTurnContext(appId, 9, "storage-turn", operation, lease, admission.tryAcquire().orElseThrow(), new FileToolBudgetGuard().newSession());
         context.commitUserAndBindHistory(() -> userRow);
-        var store = new AtomicChatMemoryStore(new SpringRedisChatMemoryStore(redis, 600, Duration.ZERO, Duration.ofSeconds(1), Duration.ofSeconds(1)));
-        memory = new TokenAwareChatMemory(MessageWindowChatMemory.builder().id(appId).chatMemoryStore(store)
-                .maxMessages(Integer.MAX_VALUE).build(), store);
+        sourceStore = new AtomicChatMemoryStore(new SpringRedisChatMemoryStore(redis, 600, Duration.ZERO, Duration.ofSeconds(1), Duration.ofSeconds(1)));
+        memory = new TokenAwareChatMemory(MessageWindowChatMemory.builder().id(appId).chatMemoryStore(sourceStore)
+                .maxMessages(Integer.MAX_VALUE).build(), sourceStore);
         CanonicalUserMessageScope.call(TurnRequestBoundary.of(userRow.getMessage(), List.of(), 10L, context.turnId()), () -> {
             memory.add(UserMessage.from(userRow.getMessage())); return null;
         });
@@ -162,6 +163,7 @@ abstract class UnifiedMemoryStorageFixture {
         var result = new MemorySummaryServiceImpl(mapper, engine, workers, redis, lifecycle, estimator, properties,
                 new MemoryCompressionMetricsCollector(registry), provider);
         result.configureUnifiedInputs(new SummaryMaterialReader(histories), new SummaryWindowSelector(estimator, properties), new SummaryCoveragePlanner(), evidence);
+        result.configureTerminalStore(sourceStore);
         return result;
     }
 

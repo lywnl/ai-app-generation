@@ -59,6 +59,11 @@ public interface MemorySummaryService {
     CompatibleMemorySnapshot readCompatible(UnifiedSummaryRequest request,
                               com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
 
+    /** 终态赢家在短事务中合并最终证据、保存 AI 记录并登记部分前沿结束，不触发摘要模型。 */
+    com.lyw.appgeneration.model.entity.ChatHistory persistTurnOutcome(
+            com.lyw.appgeneration.core.handler.VueTurnContext context,
+            java.util.function.Supplier<com.lyw.appgeneration.model.entity.ChatHistory> saveAi);
+
     /**
      * 读取当前摘要(供 {@code LayeredChatMemory.messages()} 拼接)。无则返回空串。
      *

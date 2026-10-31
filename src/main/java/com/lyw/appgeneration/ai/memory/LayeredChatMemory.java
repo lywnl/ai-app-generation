@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai.memory;
 
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.CompatibleMemorySnapshot;
 import com.lyw.appgeneration.service.UserMemoryService;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import dev.langchain4j.data.message.AiMessage;
@@ -89,14 +90,32 @@ public class LayeredChatMemory implements ChatMemory {
     @Override
     public List<ChatMessage> messages() {
         List<ChatMessage> base = delegate.messages();
+        // Vue 框架入口只获取缓冲原文；实际发送必须由门禁传入整对相容快照。
+        if (isolateTrustedAiProjection) return List.copyOf(base);
         return layeredRequestView(base, null);
+    }
+
+    /** 固定 L1/L0 后拼接一次 L2；不重读活动 L0，也不另取摘要正文。 */
+    public List<ChatMessage> prepareCompatible(CompatibleMemorySnapshot snapshot) {
+        if (snapshot.appId() != appId) throw new IllegalArgumentException("分层记忆与相容快照不属于同一应用");
+        var projected = requestViewProjector.project(snapshot);
+        return composeLayered(projected, snapshot.summary().summary());
+    }
+
+    public List<ChatMessage> prepareCompatible(CompatibleMemorySnapshot snapshot, String currentTrustedState) {
+        if (snapshot.appId() != appId) throw new IllegalArgumentException("分层记忆与相容快照不属于同一应用");
+        return composeLayered(requestViewProjector.project(snapshot, currentTrustedState), snapshot.summary().summary());
     }
 
     private List<ChatMessage> layeredRequestView(
             List<ChatMessage> base, String requiredSummary) {
         TrustedTurnRequestViewProjector.ProjectedView projected =
                 projectRequestView(base);
-        List<ChatMessage> result = new ArrayList<>(base.size() + 5);
+        return composeLayered(projected, requiredSummary);
+    }
+
+    private List<ChatMessage> composeLayered(TrustedTurnRequestViewProjector.ProjectedView projected, String requiredSummary) {
+        List<ChatMessage> result = new ArrayList<>(projected.conversationMessages().size() + 5);
         result.addAll(projected.leadingMessages());
         if (projected.trustedState() != null) {
             result.add(projected.trustedState());
@@ -116,14 +135,11 @@ public class LayeredChatMemory implements ChatMemory {
         }
 
         result.addAll(projected.conversationMessages());
-        return result;
+        return List.copyOf(result);
     }
 
     private TrustedTurnRequestViewProjector.ProjectedView projectRequestView(
             List<ChatMessage> base) {
-        if (isolateTrustedAiProjection) {
-            return requestViewProjector.project(base);
-        }
         int leadingCount = leadingSystemMessageCount(base);
         return new TrustedTurnRequestViewProjector.ProjectedView(
                 base.subList(0, leadingCount), null,
@@ -133,6 +149,7 @@ public class LayeredChatMemory implements ChatMemory {
     PreparedLayeredMessages prepareMessagesAfterCompletedPrefix(
             List<ChatMessage> expectedPrefix,
             String requiredSummary) {
+        if (isolateTrustedAiProjection) throw new IllegalStateException("Vue 准入必须提供相容快照，不能隐式重读来源");
         List<ChatMessage> base = List.copyOf(delegate.messages());
         List<ChatMessage> retained = withoutCompletedPrefix(
                 base, expectedPrefix);

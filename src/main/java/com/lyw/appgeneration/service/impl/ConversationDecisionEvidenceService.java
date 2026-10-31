@@ -48,16 +48,65 @@ public class ConversationDecisionEvidenceService {
                 requireUser(row, appId, userId, userHistoryId);
                 DecisionEvidence previous = DecisionEvidenceCodec.decode(row.getDecisionEvidence(), userHistoryId, turnId);
                 DecisionEvidence next = previous.merge(entries, epoch, through, generation, textLimit);
-                if (next.equals(previous)) return next;
-                QueryWrapper condition = userQuery(appId, userId, userHistoryId);
-                if (row.getDecisionEvidence() == null) condition.isNull("decisionEvidence");
-                else condition.eq("decisionEvidence", row.getDecisionEvidence());
-                int changed = histories.updateByQuery(ChatHistory.builder()
-                        .decisionEvidence(DecisionEvidenceCodec.encode(next)).build(), true, condition);
-                if (changed != 1) throw new IllegalStateException("决策证据修订条件已变化");
+                persistMerged(row, previous, next);
                 return next;
             });
         }
+    }
+
+    /** 由终态短事务调用；已有来源可包括未完成批次，它们不因此获得回收或实施权限。 */
+    public DecisionEvidence mergeFinalAtCommit(VueTurnContext context, L0Snapshot source) {
+        long userHistoryId = context.userHistoryId();
+        requireOwner(context.appId(), context.userId());
+        ChatHistory row = histories.selectOneByQuery(userQuery(context.appId(), context.userId(), userHistoryId).forUpdate());
+        requireUser(row, context.appId(), context.userId(), userHistoryId);
+        DecisionEvidence previous = DecisionEvidenceCodec.decode(row.getDecisionEvidence(), userHistoryId, context.turnId());
+        var collector = context.decisionSources();
+        var observed = collector.snapshot();
+        var turn = source.hasKnownSource() ? source.turn(userHistoryId) : null;
+        boolean linked = turn != null && turn.turnId().equals(context.turnId());
+        long through = linked ? source.entries().stream().filter(entry -> entry.userHistoryId() == userHistoryId)
+                .mapToLong(L0Snapshot.Message::sequence).max().orElse(0) : 0;
+        if (linked && !collector.collectedThrough(source, userHistoryId, through)) {
+            throw new SourceCollectionPendingException("终态保存前的原始来源采集尚未齐备");
+        }
+        var additions = new java.util.ArrayList<DecisionEvidence.Entry>(linked
+                ? new DecisionEvidenceAssembler().collect(userHistoryId, source, through, observed, previous)
+                : previous.entries());
+        if (additions.stream().noneMatch(entry -> entry.kind() == DecisionEvidence.SourceKind.USER)) {
+            additions.add(new DecisionEvidence.Entry("user:" + userHistoryId, DecisionEvidence.SourceKind.USER, "", 0,
+                    List.of(), List.of(), List.of(), List.of(), 0));
+        }
+        // 只读共享转录中的 AI 正文；没有进入 L0 的最后一段仍保留原始 generation，且保持未确认。
+        var textByGeneration = new java.util.LinkedHashMap<Long, StringBuilder>();
+        var represented = additions.stream().filter(entry -> entry.kind() == DecisionEvidence.SourceKind.MODEL_TEXT)
+                .map(DecisionEvidence.Entry::generation).collect(java.util.stream.Collectors.toSet());
+        for (var fragment : collector.transcript().snapshot().fragments()) {
+            if (!represented.contains(fragment.generation())
+                    && fragment.source() == com.lyw.appgeneration.core.handler.VueTurnTranscriptAccumulator.FragmentSource.AI_TEXT) {
+                textByGeneration.computeIfAbsent(fragment.generation(), ignored -> new StringBuilder()).append(fragment.text());
+            }
+        }
+        for (var text : textByGeneration.entrySet()) {
+            if (!text.getValue().isEmpty()) additions.add(new DecisionEvidence.Entry("transcript:" + context.turnId() + ":" + text.getKey(),
+                    DecisionEvidence.SourceKind.MODEL_TEXT, text.getValue().toString(), text.getKey(),
+                    List.of(), List.of(), List.of(), List.of(), 0));
+        }
+        long generation = observed.sources().values().stream().filter(ref -> linked && ref.memoryEpoch().equals(source.memoryEpoch()))
+                .mapToLong(ref -> ref.generation()).max().orElse(previous.collectionGeneration());
+        DecisionEvidence next = previous.merge(additions, linked ? source.memoryEpoch() : null, through, generation,
+                context.budgetSession().canonicalLimitCodePoints());
+        persistMerged(row, previous, next);
+        return next;
+    }
+
+    private void persistMerged(ChatHistory row, DecisionEvidence previous, DecisionEvidence next) {
+        if (next.equals(previous)) return;
+        QueryWrapper condition = userQuery(row.getAppId(), row.getUserId(), row.getId());
+        if (row.getDecisionEvidence() == null) condition.isNull("decisionEvidence");
+        else condition.eq("decisionEvidence", row.getDecisionEvidence());
+        int changed = histories.updateByQuery(ChatHistory.builder().decisionEvidence(DecisionEvidenceCodec.encode(next)).build(), true, condition);
+        if (changed != 1) throw new IllegalStateException("决策证据修订条件已变化");
     }
 
     public DecisionEvidence read(long appId, long userId, long userHistoryId) {

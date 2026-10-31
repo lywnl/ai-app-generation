@@ -78,7 +78,7 @@ public final class CompressionAwareChatMemory extends LayeredChatMemory {
                 prepared.l0Snapshot(), prepared.retainedL0(), deadline);
     }
 
-    private TokenAwareChatMemory l0Memory() {
+    public TokenAwareChatMemory l0Memory() {
         return (TokenAwareChatMemory) delegateMemory();
     }
 }

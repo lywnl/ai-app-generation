@@ -173,6 +173,7 @@ class UnifiedSummaryCoordinationTest {
             var context = new VueTurnContext(7, 9, "turn", operation, lease, admission.tryAcquire().orElseThrow(), new FileToolBudgetGuard().newSession());
             context.commitUserAndBindHistory(() -> row);
             var atomic = new AtomicChatMemoryStore(store);
+            service.configureTerminalStore(atomic);
             var memory = new TokenAwareChatMemory(MessageWindowChatMemory.builder().id(7L).chatMemoryStore(atomic)
                     .maxMessages(Integer.MAX_VALUE).build(), atomic);
             CanonicalUserMessageScope.call(TurnRequestBoundary.of(row.getMessage(), List.of(), 10, "turn"), () -> {

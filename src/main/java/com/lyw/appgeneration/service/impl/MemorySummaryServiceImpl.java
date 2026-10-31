@@ -17,6 +17,9 @@ import com.lyw.appgeneration.ai.memory.SummaryUnit;
 import com.lyw.appgeneration.ai.memory.DeadlineAwareReplaceResult;
 import com.lyw.appgeneration.ai.memory.MemorySummarySnapshotCodec;
 import com.lyw.appgeneration.service.CompatibleMemorySnapshot;
+import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
+import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
@@ -86,6 +89,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
     private SummaryWindowSelector unifiedWindowSelector;
     private SummaryCoveragePlanner unifiedCoveragePlanner;
     private ConversationDecisionEvidenceService decisionEvidenceService;
+    private AtomicChatMemoryStore terminalStore;
     private final AppMemorySummaryConsistencyCoordinator
             consistencyCoordinator =
             new AppMemorySummaryConsistencyCoordinator();
@@ -205,6 +209,70 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         unifiedWindowSelector = selector;
         unifiedCoveragePlanner = coverage;
         decisionEvidenceService = evidence;
+    }
+
+    @Autowired
+    void configureTerminalStore(AtomicChatMemoryStore store) {
+        terminalStore = Objects.requireNonNull(store);
+    }
+
+    @Override
+    public ChatHistory persistTurnOutcome(VueTurnContext context, java.util.function.Supplier<ChatHistory> saveAi) {
+        Objects.requireNonNull(context);
+        Objects.requireNonNull(saveAi);
+        Objects.requireNonNull(terminalStore, "终态来源存储未装配");
+        if (context.turnState().stage() != VueTurnContext.TurnStage.FINALIZING) {
+            throw new IllegalStateException("只有已取得终态的分支可以保存回合");
+        }
+        long userHistoryId = context.userHistoryId();
+        AdmissionDeadline deadline = AdmissionDeadline.start(properties.getBlockingTimeout());
+        try (var writer = lifecycleFence.tryAcquireWriter(context.appId())) {
+            if (writer == null) throw new IllegalStateException("应用删除流程已接管终态保存");
+            return terminalStore.withMemoryLock(context.appId(), deadline, () -> {
+                L0Snapshot source = terminalStore.supportsSourceSnapshots() ? terminalStore.getSnapshot(context.appId())
+                        : L0Snapshot.legacy(Long.toString(context.appId()), terminalStore.getMessages(context.appId()));
+                long end = monotonicDeadline(deadline);
+                try (var consistency = consistencyCoordinator.tryAcquireUntil(context.appId(), end)) {
+                    if (consistency == null) throw new java.util.concurrent.CancellationException("终态摘要登记等待截止");
+                    var saved = new java.util.concurrent.atomic.AtomicReference<ChatHistory>();
+                    PersistenceOutcome outcome = executePersistenceTransaction(end, status -> {
+                        var finalEvidence = Objects.requireNonNull(decisionEvidenceService.mergeFinalAtCommit(context, source),
+                                "终态证据没有可靠保存");
+                        if (finalEvidence.revision() <= 0 || finalEvidence.userHistoryId() != userHistoryId) {
+                            throw new IllegalStateException("终态证据的持久身份或修订无效");
+                        }
+                        ChatHistory ai = Objects.requireNonNull(saveAi.get(), "AI 终态没有成功保存");
+                        if (ai.getId() == null || ai.getId() <= userHistoryId || !Objects.equals(ai.getAppId(), context.appId())
+                                || !Objects.equals(ai.getUserId(), context.userId()) || !"ai".equals(ai.getMessageType())
+                                || ai.getMemoryOutcome() == null || StrUtil.isBlank(ai.getMemoryMessage())) {
+                            throw new IllegalStateException("AI 终态的持久身份或可信结果无效");
+                        }
+                        AppMemorySummary current = summaryMapper.selectOneByQuery(QueryWrapper.create()
+                                .eq("appId", context.appId()).eq("isDelete", 0).forUpdate());
+                        MemorySummarySnapshot previous = snapshotOf(current);
+                        var frontier = previous.coverageState();
+                        if (frontier != null && frontier.userHistoryId() == userHistoryId) {
+                            if (!frontier.turnId().equals(context.turnId())) throw new IllegalStateException("部分前沿不属于终态回合");
+                            var ended = frontier.withTerminal(ai.getId(), ai.getMemoryOutcome());
+                            if (!ended.equals(frontier)) {
+                                deleteCacheStrict(CACHE_KEY_PREFIX + context.appId(), context.appId());
+                                var next = new MemorySummarySnapshot(previous.summary(), previous.lastSummarizedId(),
+                                        Math.addExact(previous.summaryRevision(), 1), previous.coverageVersion(), ended);
+                                persistSnapshot(context.appId(), current, next, tokenEstimator.estimateText(next.summary()));
+                            }
+                        }
+                        if (deadline.remainingNanos() <= 0) {
+                            status.setRollbackOnly();
+                            return PersistenceOutcome.TIMED_OUT;
+                        }
+                        saved.set(ai);
+                        return PersistenceOutcome.PERSISTED;
+                    });
+                    if (outcome != PersistenceOutcome.PERSISTED) throw new java.util.concurrent.CancellationException("终态保存截止");
+                    return saved.get();
+                }
+            });
+        }
     }
 
     @Override

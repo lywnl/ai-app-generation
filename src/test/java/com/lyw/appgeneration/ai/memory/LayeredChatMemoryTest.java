@@ -27,7 +27,7 @@ import static org.mockito.Mockito.*;
 class LayeredChatMemoryTest {
 
     @Test
-    void messagesMovesCompletedAiProjectionToTrustedSystemState() {
+    void messagesWithoutSourceCannotPromoteOrdinaryAiTextToTrustedState() {
         MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
                 .id(1L).maxMessages(Integer.MAX_VALUE).build();
         String projection = "Vue 项目回合结果：成功\n实际变更文件：src/App.vue";
@@ -41,21 +41,10 @@ class LayeredChatMemoryTest {
                 delegate, summaryService, userMemoryService,
                 defaultFragmentBuilder(), true).messages();
 
-        assertEquals(3, messages.size());
-        assertInstanceOf(SystemMessage.class, messages.getFirst());
-        String trustedState = ((SystemMessage) messages.getFirst()).text();
-        assertTrue(trustedState.contains(projection));
-        assertTrue(trustedState.contains("服务端验证"));
-        assertTrue(trustedState.contains("不得复述或模仿"));
-        assertEquals(UserMessage.from("生成首页"), messages.get(1));
-        assertEquals(AiMessage.from(
-                SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK),
-                messages.get(2));
-        assertFalse(messages.stream()
-                .filter(AiMessage.class::isInstance)
-                .map(AiMessage.class::cast)
-                .map(AiMessage::text)
-                .anyMatch(projection::equals));
+        assertEquals(delegate.messages(), messages);
+        assertTrue(messages.stream().noneMatch(SystemMessage.class::isInstance));
+        verifyNoInteractions(summaryService, userMemoryService);
+
     }
 
     @Test
@@ -91,34 +80,24 @@ class LayeredChatMemoryTest {
 
     @Test
     void messagesOrdersTrustedStateBeforeL2AndL1Fragments() {
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
-                .id(1L).maxMessages(Integer.MAX_VALUE).build();
-        delegate.add(SystemMessage.from("系统约束"));
-        delegate.add(UserMessage.from("历史需求"));
-        delegate.add(AiMessage.from("历史受信投影"));
-        delegate.add(UserMessage.from("当前需求"));
+        var source = TrustedTurnRequestViewProjectorTest.source();
+        var snapshot = new com.lyw.appgeneration.service.CompatibleMemorySnapshot(1, 50, "current",
+                TrustedTurnRequestViewProjectorTest.summary(1), source);
+        dev.langchain4j.memory.ChatMemory delegate = mock(dev.langchain4j.memory.ChatMemory.class);
+        when(delegate.id()).thenReturn(1L);
         MemorySummaryService summaryService = mock(MemorySummaryService.class);
-        when(summaryService.getCurrentSummary(1L)).thenReturn("L1 摘要");
         UserMemoryService userMemoryService = mock(UserMemoryService.class);
         when(userMemoryService.recallByApp(1L)).thenReturn("L2 偏好");
-
-        List<ChatMessage> messages = new LayeredChatMemory(
-                delegate, summaryService, userMemoryService,
-                defaultFragmentBuilder(), true).messages();
-
+        List<ChatMessage> messages = new LayeredChatMemory(delegate, summaryService, userMemoryService,
+                defaultFragmentBuilder(), true).prepareCompatible(snapshot);
         assertEquals(SystemMessage.from("系统约束"), messages.getFirst());
-        assertInstanceOf(SystemMessage.class, messages.get(1));
-        assertTrue(((SystemMessage) messages.get(1)).text()
-                .contains("历史受信投影"));
-        assertTrue(((UserMessage) messages.get(2)).singleText()
-                .contains("L2 偏好"));
-        assertTrue(((UserMessage) messages.get(4)).singleText()
-                .contains("L1 摘要"));
-        assertEquals(UserMessage.from("历史需求"), messages.get(6));
-        assertEquals(AiMessage.from(
-                        SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK),
-                messages.get(7));
-        assertEquals(UserMessage.from("当前需求"), messages.getLast());
+        assertTrue(((SystemMessage) messages.get(1)).text().contains("真实失败结果"));
+        assertTrue(((UserMessage) messages.get(2)).singleText().contains("L2 偏好"));
+        assertTrue(((UserMessage) messages.get(4)).singleText().contains("L1 摘要"));
+        assertEquals("历史需求", ((UserMessage) messages.get(6)).singleText());
+        assertEquals("当前需求", ((UserMessage) messages.getLast()).singleText());
+        verifyNoInteractions(summaryService);
+        verify(delegate, never()).messages();
     }
 
     @Test
