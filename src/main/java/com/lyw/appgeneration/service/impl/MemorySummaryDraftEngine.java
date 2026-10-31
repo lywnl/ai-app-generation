@@ -337,7 +337,11 @@ public class MemorySummaryDraftEngine {
         Future<String> modelCall;
         try {
             modelCall = modelExecutor.submit(() -> {
-                if (isDeadlineExpired(deadlineNanos) || !modelStartPermit.getAsBoolean()) {
+                if (Thread.currentThread().isInterrupted() || isDeadlineExpired(deadlineNanos) || !modelStartPermit.getAsBoolean()) {
+                    throw new ModelStartRejectedException();
+                }
+                // 回合许可可能等待租约／回调锁；返回后沿用原截止，不能启动已经取消或迟到的调用。
+                if (Thread.currentThread().isInterrupted() || isDeadlineExpired(deadlineNanos)) {
                     throw new ModelStartRejectedException();
                 }
                 started.set(true);

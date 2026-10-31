@@ -58,7 +58,7 @@ public final class DecisionEvidenceAssembler {
                     if (fact == null || ref == null || receipt.generation() < entry.generation()) continue;
                     boolean explicit = entry.kind() == SourceKind.MODEL_TEXT
                             ? entry.sourceToolIds().contains(receipt.toolRequestId())
-                            : entry.relatedFiles().contains(fact.changedRelativePath());
+                            : fact.changedRelativePath() != null && entry.relatedFiles().contains(fact.changedRelativePath());
                     if (explicit && fact.changedRelativePath() != null) changes.add(new ChangeFact(receipt.toolRequestId(),
                             receipt.generation(), ref.sequence(), fact.changedRelativePath(), fact.toolName()));
                     if ("buildProject".equals(fact.toolName()) && fact.buildAttempt() != null && fact.buildAttempt() > 0) {

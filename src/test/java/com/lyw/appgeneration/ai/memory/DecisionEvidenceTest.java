@@ -81,4 +81,44 @@ class DecisionEvidenceTest {
         return new Entry("ai:epoch:2", SourceKind.MODEL_TEXT, "拆分 src/App.vue 为了复用", 1,
                 List.of("src/App.vue"), List.of("write"), changes, builds, 0);
     }
+
+    @Test
+    void 计划理由遇到读取计划及构建事实仍可采集且只关联真实文件变更() throws Exception {
+        var budget = new FileToolBudgetGuard().newSession();
+        var collector = new VueDecisionSourceCollector(budget, new VueTurnTranscriptAccumulator(budget, 0));
+        var file = new com.lyw.appgeneration.ai.plan.PlanFile("src/App.vue", "保留移动端品牌入口",
+                com.lyw.appgeneration.ai.plan.PlanFileAction.MODIFY, List.of(), com.lyw.appgeneration.ai.plan.PlanFileState.PENDING);
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var outputs = List.of(
+                com.lyw.appgeneration.ai.tools.PlanToolProtocolSupport.json(com.lyw.appgeneration.ai.tools.PlanToolResult.applied(
+                        "makePlan", "plan", 1, "修复品牌入口并保留中文", List.of(file))),
+                json.writeValueAsString(com.lyw.appgeneration.ai.tools.FileToolResult.readApplied(
+                        "readFile", "src/App.vue", "读取成功", "组件原文")),
+                json.writeValueAsString(com.lyw.appgeneration.ai.tools.FileToolResult.applied(
+                        "modifyFile", "src/App.vue", true, "标题已修改")),
+                json.writeValueAsString(com.lyw.appgeneration.ai.tools.BuildProjectToolResult.completedFailure(
+                        1, com.lyw.appgeneration.core.builder.BuildStage.NPM_BUILD,
+                        com.lyw.appgeneration.core.builder.VueBuildFailureKind.CODE, false, "MissingBanner.vue 不存在")));
+        var names = List.of("makePlan", "readFile", "modifyFile", "buildProject");
+        var messages = new java.util.ArrayList<L0Snapshot.Message>();
+        messages.add(new L0Snapshot.Message(1, 10, UserMessage.from("不要轮播图")));
+        for (int index = 0; index < outputs.size(); index++) {
+            var tool = ToolExecutionRequest.builder().id("tool-" + index).name(names.get(index)).arguments("{}").build();
+            var ai = new L0Snapshot.Message(2L + index * 2, 10, AiMessage.from(tool));
+            var result = new L0Snapshot.Message(3L + index * 2, 10, ToolExecutionResultMessage.from(tool, outputs.get(index)));
+            messages.add(ai);
+            messages.add(result);
+            collector.sourceCommitted(index + 1, "epoch", ai);
+            collector.sourceCommitted(index + 1, "epoch", result);
+            collector.toolCommitted(index + 1, ToolExecution.builder().request(tool).result(outputs.get(index)).build());
+        }
+        var source = new L0Snapshot(1, "7", "epoch", 10, 0L, messages,
+                List.of(new L0Snapshot.Turn(10, "turn", 1, null, null, null)));
+        var assembled = new DecisionEvidenceAssembler().collect(10, source, 9, collector.snapshot(), null);
+        var planned = assembled.stream().filter(entry -> entry.kind() == SourceKind.PLAN_SUMMARY).findFirst().orElseThrow();
+        assertEquals("修复品牌入口并保留中文", planned.text());
+        assertEquals(List.of("tool-2"), planned.implementations().stream().map(ChangeFact::toolRequestId).toList());
+        assertEquals(List.of("tool-3"), planned.verifications().stream().map(BuildFact::toolRequestId).toList());
+        assertEquals(ValidationStatus.FAILED, planned.validationStatus());
+    }
 }

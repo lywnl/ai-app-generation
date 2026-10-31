@@ -137,24 +137,38 @@ abstract class UnifiedMemoryStorageFixture {
         assertTrue(ownsRedisKeys, "未获得独立 Redis 测试键");
         sql("INSERT INTO app(id,appName,userId,codeGenType) VALUES (" + appId + ",'统一摘要存储测试',9,'vue_project')");
         ChatHistory userRow = ChatHistory.builder().id(10L).appId(appId).userId(9L).messageType("user")
-                .message("保留中文，不要轮播图，因为移动端会遮挡内容。").isDelete(0).build();
+                .message(initialUserText()).isDelete(0).build();
         assertTrue(histories.save(userRow), "沿生产服务的选择性插入使用数据库默认时间");
         var operation = new AppOperationLeaseManager().acquire(appId, AppOperationLeaseManager.AppOperationType.GENERATE, "storage-turn");
         var lease = new VueBuildSessionManager().open(operation, 9L, "storage-turn");
         var admission = new VueTurnAdmissionController(new VueBuildRepairMetricsCollector(registry));
-        context = new VueTurnContext(appId, 9, "storage-turn", operation, lease, admission.tryAcquire().orElseThrow(), new FileToolBudgetGuard().newSession());
+        context = new VueTurnContext(appId, 9, "storage-turn", operation, lease, admission.tryAcquire().orElseThrow(),
+                new FileToolBudgetGuard().newSession(), true);
+        context.initializeMode(initialTurnMode());
         context.commitUserAndBindHistory(() -> userRow);
         sourceStore = new AtomicChatMemoryStore(new SpringRedisChatMemoryStore(redis, 600, Duration.ZERO, Duration.ofSeconds(1), Duration.ofSeconds(1)));
         memory = new TokenAwareChatMemory(MessageWindowChatMemory.builder().id(appId).chatMemoryStore(sourceStore)
                 .maxMessages(Integer.MAX_VALUE).build(), sourceStore);
-        CanonicalUserMessageScope.call(TurnRequestBoundary.of(userRow.getMessage(), List.of(), 10L, context.turnId()), () -> {
-            memory.add(UserMessage.from(userRow.getMessage())); return null;
-        });
-        append(1, 10);
+        seedInitialMessages(userRow);
         request = new UnifiedSummaryRequest(memory, context);
         when(model.chat(anyString())).thenReturn(UnifiedSummaryCoordinationTest.SUMMARY);
         service = createService(summaries, transactions);
         System.out.println("真实存储夹具=" + database + "；随机应用=" + appId + "；MySQL=" + admin.getMetaData().getDatabaseProductVersion());
+    }
+
+    protected String initialUserText() {
+        return "保留中文，不要轮播图，因为移动端会遮挡内容。";
+    }
+
+    protected com.lyw.appgeneration.core.handler.VueTurnMode initialTurnMode() {
+        return com.lyw.appgeneration.core.handler.VueTurnMode.READ_ONLY;
+    }
+
+    protected void seedInitialMessages(ChatHistory userRow) {
+        CanonicalUserMessageScope.call(TurnRequestBoundary.of(userRow.getMessage(), List.of(), userRow.getId(), context.turnId()), () -> {
+            memory.add(UserMessage.from(userRow.getMessage())); return null;
+        });
+        append(1, 10);
     }
 
     protected MemorySummaryServiceImpl createService(AppMemorySummaryMapper mapper, PlatformTransactionManager manager) {

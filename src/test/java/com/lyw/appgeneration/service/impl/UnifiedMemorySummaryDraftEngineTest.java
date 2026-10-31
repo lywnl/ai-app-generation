@@ -6,10 +6,15 @@ import com.lyw.appgeneration.service.*;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -88,6 +93,53 @@ class UnifiedMemorySummaryDraftEngineTest {
         var properties = new MemoryTokenProperties();
         return new MemorySummaryDraftEngine(mock(ChatHistoryService.class), model, executor,
                 new ConservativeChatTokenEstimator(properties), properties);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void 等待启动许可后必须复检截止及中断且不虚增调用计数(boolean expired) throws Exception {
+        var source = L0Snapshot.empty("7", 0);
+        var model = mock(ChatModel.class);
+        when(model.chat(anyString())).thenReturn(SUMMARY);
+        var clock = new AtomicLong();
+        long deadline = TimeUnit.MILLISECONDS.toNanos(500);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var properties = new MemoryTokenProperties();
+        var registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        try (var executor = Executors.newSingleThreadExecutor();
+             var caller = Executors.newSingleThreadExecutor()) {
+            var engine = new MemorySummaryDraftEngine(mock(ChatHistoryService.class), model, executor,
+                    new ConservativeChatTokenEstimator(properties), properties, clock::get);
+            engine.configureMetrics(new com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector(registry));
+            var pending = caller.submit(() -> engine.buildDraft(input(source, MemorySummarySnapshot.empty(),
+                    List.of(unit("来源已经就绪，等待回合锁", 2))), deadline, () -> {
+                entered.countDown();
+                boolean interrupted = false;
+                while (true) {
+                    try { release.await(); break; }
+                    catch (InterruptedException ignored) { interrupted = true; }
+                }
+                // 模拟不可中断 monitor 等待，或依赖清除中断后迟到返回许可的两种情况。
+                if (!expired && interrupted) Thread.currentThread().interrupt();
+                return true;
+            }));
+            try {
+                assertTrue(entered.await(3, TimeUnit.SECONDS));
+                var outcome = pending.get(3, TimeUnit.SECONDS);
+                assertEquals(MemoryCompressionResult.Status.TIMED_OUT, outcome.failureStatus());
+                assertFalse(outcome.changed());
+                if (expired) clock.set(deadline + 1);
+                release.countDown();
+                executor.submit(() -> { }).get(3, TimeUnit.SECONDS);
+                assertAll(() -> verifyNoInteractions(model), () -> {
+                    var counter = registry.find("memory_summary_model_calls_total").counter();
+                    assertEquals(0, counter == null ? 0 : counter.count());
+                });
+            } finally {
+                release.countDown();
+            }
+        } finally { registry.close(); }
     }
     private SummaryUnit unit(String text, long sequence) {
         return new SummaryUnit("source-" + sequence, 10, SummaryUnit.Kind.MODEL_TEXT, "epoch", sequence, sequence,
