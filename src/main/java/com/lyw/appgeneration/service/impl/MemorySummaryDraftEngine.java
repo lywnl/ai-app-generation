@@ -7,6 +7,8 @@ import com.lyw.appgeneration.ai.memory.MemorySummaryFormat;
 import com.lyw.appgeneration.ai.memory.MemorySummaryContract;
 import com.lyw.appgeneration.ai.memory.MemorySummaryPromptBuilder;
 import com.lyw.appgeneration.ai.memory.SummaryCompressionPromptBuilder;
+import com.lyw.appgeneration.ai.memory.SummaryInput;
+import dev.langchain4j.data.message.UserMessage;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.model.entity.AppMemorySummary;
 import com.lyw.appgeneration.model.entity.ChatHistory;
@@ -140,6 +142,23 @@ public class MemorySummaryDraftEngine {
                 persistedCursor,
                 deadlineNanos,
                 accumulator);
+        return accumulator.finish();
+    }
+
+    /** 历史、当前完整批次、真实终态和证据共用原有分块／收敛流程。 */
+    DraftResult buildDraft(SummaryInput input, long deadlineNanos, BooleanSupplier modelStartPermit) {
+        var previous = input.previous();
+        if (!MemorySummaryContract.isUsablePersistedState(previous, tokenEstimator)) {
+            return DraftResult.failure(previous.lastSummarizedId(), tokenEstimator.estimateText(previous.summary()), 0,
+                    MemoryCompressionResult.Status.MODEL_FAILED, "旧摘要及覆盖快照不可用");
+        }
+        var accumulator = new RollingSummaryAccumulator(input.appId(), previous.summary(), previous.lastSummarizedId(), deadlineNanos);
+        accumulator.modelStartPermit = Objects.requireNonNull(modelStartPermit);
+        accumulator.initialize();
+        for (var unit : input.selected()) {
+            if (accumulator.hasFailed()) break;
+            accumulator.accept(new SummaryChunk(input.targetHistoryCursor(), unit.promptMaterial() + "\n"));
+        }
         return accumulator.finish();
     }
 
@@ -312,7 +331,7 @@ public class MemorySummaryDraftEngine {
         Future<String> modelCall;
         try {
             modelCall = modelExecutor.submit(() -> {
-                if (!modelStartPermit.getAsBoolean()) {
+                if (isDeadlineExpired(deadlineNanos) || !modelStartPermit.getAsBoolean()) {
                     throw new ModelStartRejectedException();
                 }
                 started.set(true);
@@ -389,8 +408,9 @@ public class MemorySummaryDraftEngine {
     }
 
     private boolean isPromptWithinInputBudget(String prompt) {
-        return tokenEstimator.estimateText(prompt)
-                < properties.getHardInputLimit();
+        // 取保守上界，并计入 chat(String) 实际产生的单条用户消息和请求封装。
+        return Math.max(tokenEstimator.estimateText(prompt),
+                tokenEstimator.estimateRequest(List.of(UserMessage.from(prompt)), List.of())) < properties.getHardInputLimit();
     }
 
     private boolean isDeadlineExpired(long deadlineNanos) {
@@ -421,7 +441,7 @@ public class MemorySummaryDraftEngine {
         private final Long appId;
         private final long persistedCursor;
         private final long deadlineNanos;
-        private final List<SummaryTurn> batch = new ArrayList<>();
+        private final List<SummaryChunk> batch = new ArrayList<>();
         private String workingSummary;
         private int persistedSummaryTokens;
         private int workingTokens;
@@ -462,6 +482,10 @@ public class MemorySummaryDraftEngine {
         }
 
         private void accept(SummaryTurn turn) {
+            accept(new SummaryChunk(turn.completedThroughId(), turn.render()));
+        }
+
+        private void accept(SummaryChunk turn) {
             if (hasFailed()) {
                 return;
             }
@@ -474,7 +498,7 @@ public class MemorySummaryDraftEngine {
             }
             if (batch.isEmpty()) {
                 fail(MemoryCompressionResult.Status.MODEL_FAILED,
-                        "单个完整回合超过摘要输入预算");
+                        "单个完整来源单元超过摘要输入预算");
                 return;
             }
             flush();
@@ -485,7 +509,7 @@ public class MemorySummaryDraftEngine {
                     workingSummary, turn.render());
             if (!isPromptWithinInputBudget(singleTurnPrompt)) {
                 fail(MemoryCompressionResult.Status.MODEL_FAILED,
-                        "单个完整回合超过摘要输入预算");
+                        "单个完整来源单元超过摘要输入预算");
                 return;
             }
             batch.add(turn);
@@ -548,9 +572,9 @@ public class MemorySummaryDraftEngine {
             workingTokens = output.tokens();
         }
 
-        private String renderBatch(SummaryTurn additionalTurn) {
+        private String renderBatch(SummaryChunk additionalTurn) {
             StringBuilder rendered = new StringBuilder();
-            for (SummaryTurn turn : batch) {
+            for (SummaryChunk turn : batch) {
                 rendered.append(turn.render());
             }
             if (additionalTurn != null) {
@@ -569,6 +593,8 @@ public class MemorySummaryDraftEngine {
             failureDetail = detail;
         }
     }
+
+    private record SummaryChunk(long completedThroughId, String render) { }
 
     private record SummaryTurn(
             long turnId,

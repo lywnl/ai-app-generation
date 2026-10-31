@@ -15,6 +15,10 @@
 | 3.2 | 用户记录独立 JSON 合并、原文不可改写、实施与验证分离、重复及迟到更新幂等；8 项聚焦测试通过。 | `.codex/unify-context-summarization/runs/010-decision-evidence/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 3.3 | 完整批次与采集边界、保存成功及截止共同约束准备凭据，同边界重试幂等；12 项测试通过。首次跨包测试工厂调用问题已修复，失败日志保留于 011-evidence-preparation。 | `.codex/unify-context-summarization/runs/012-evidence-preparation/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 3.4 | 分页 API 与反序列化隔离证据，决策指令不覆盖可信失败或进入 L2，归属与删除回填受控；47 项测试通过。 | `.codex/unify-context-summarization/runs/013-evidence-isolation/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 4.1 | 显式输入与来源单元合并，分页补齐历史缺口，后端投影按记录 ID 去重且模型同文不提升权限；20 项测试通过。 | `.codex/unify-context-summarization/runs/015-summary-sources/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 4.2 | 按 12,288 Token 软目标从最新完整单元回选，保护当前原话、最新超目标批次及未完成批次；11 项测试通过，选择没有存储副作用。 | `.codex/unify-context-summarization/runs/016-summary-window/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 4.3 | 统一草稿共用完整单元分块和 3,072 Token 收敛器，输入包含请求封装，旧游标零摘要复用；26 项测试通过，017 的测试重载歧义已修复。 | `.codex/unify-context-summarization/runs/018-unified-draft/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 4.4 | 三次只合并新增批次，结束后前沿保持直到剩余材料与终态完整覆盖，证据修订单独增量；37 项组合测试通过。 | `.codex/unify-context-summarization/runs/020-unified-material-coverage/command.json`、原始日志、JUnit 与代码内容哈希 |
 
 ## 环境边界
 

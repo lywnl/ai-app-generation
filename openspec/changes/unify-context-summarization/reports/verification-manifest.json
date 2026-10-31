@@ -224,6 +224,84 @@
         ".codex/unify-context-summarization/runs/013-evidence-isolation/output.log",
         ".codex/unify-context-summarization/runs/013-evidence-isolation/code-state.json"
       ]
+    },
+    {
+      "id": "task:4.1",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryInput.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryUnit.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterials.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceParserTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/015-summary-sources/command.json",
+        ".codex/unify-context-summarization/runs/015-summary-sources/output.log",
+        ".codex/unify-context-summarization/runs/015-summary-sources/code-state.json"
+      ]
+    },
+    {
+      "id": "task:4.2",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReaderTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/016-summary-window/command.json",
+        ".codex/unify-context-summarization/runs/016-summary-window/output.log",
+        ".codex/unify-context-summarization/runs/016-summary-window/code-state.json"
+      ]
+    },
+    {
+      "id": "task:4.3",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryDraftEngine.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/MemorySummaryPromptBuilder.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryCompressionPromptBuilder.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryUnit.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedMemorySummaryDraftEngineTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryDraftEngineTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/MemorySummaryPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryCompressionPromptBuilderTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/018-unified-draft/command.json",
+        ".codex/unify-context-summarization/runs/018-unified-draft/output.log",
+        ".codex/unify-context-summarization/runs/018-unified-draft/code-state.json"
+      ]
+    },
+    {
+      "id": "task:4.4",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryCoveragePlanner.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryInput.java",
+        "README.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryCoveragePlannerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedMemorySummaryDraftEngineTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/020-unified-material-coverage/command.json",
+        ".codex/unify-context-summarization/runs/020-unified-material-coverage/output.log",
+        ".codex/unify-context-summarization/runs/020-unified-material-coverage/code-state.json"
+      ]
     }
   ],
   "commands": [
@@ -344,6 +422,42 @@
       "finished_at": "2026-10-31T14:14:52.322385+00:00",
       "evidence": ".codex/unify-context-summarization/runs/011-evidence-preparation/output.log",
       "code_state": ".codex/unify-context-summarization/runs/011-evidence-preparation/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=SummaryMaterialReaderTest,L0SourceParserTest,L0SnapshotCodecTest,L0SourceOperationsTest,DecisionEvidenceTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:22:58.657148+00:00",
+      "finished_at": "2026-10-31T14:23:11.887801+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/015-summary-sources/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/015-summary-sources/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=SummaryWindowSelectorTest,SummaryMaterialReaderTest,L0SourceParserTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:25:22.059781+00:00",
+      "finished_at": "2026-10-31T14:25:35.895696+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/016-summary-window/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/016-summary-window/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=UnifiedMemorySummaryDraftEngineTest,MemorySummaryDraftEngineTest,MemorySummaryPromptBuilderTest,SummaryCompressionPromptBuilderTest,L0SnapshotCodecTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:30:10.593209+00:00",
+      "finished_at": "2026-10-31T14:30:22.198483+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/018-unified-draft/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/018-unified-draft/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=SummaryCoveragePlannerTest,SummaryWindowSelectorTest,SummaryMaterialReaderTest,UnifiedMemorySummaryDraftEngineTest,MemorySummaryDraftEngineTest,MemorySummaryPromptBuilderTest,SummaryCompressionPromptBuilderTest,L0SnapshotCodecTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:34:24.602599+00:00",
+      "finished_at": "2026-10-31T14:34:35.620120+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/020-unified-material-coverage/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/020-unified-material-coverage/code-state.json"
     }
   ]
 }

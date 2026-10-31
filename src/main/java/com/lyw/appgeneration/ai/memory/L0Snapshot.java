@@ -55,7 +55,7 @@ public record L0Snapshot(int formatVersion, String memoryId, String memoryEpoch,
             previous = entry.sequence();
             if (formatVersion == CURRENT_VERSION) {
                 if (entry.payload() instanceof SystemMessage) {
-                    if (entry.sequence() != 0L || entry.userHistoryId() != 0L) {
+                    if (entry.sequence() != 0L || entry.userHistoryId() != 0L || entry.historyRecordId() != null) {
                         throw new IllegalArgumentException("系统消息不得冒充回合来源");
                     }
                 } else {
@@ -64,6 +64,14 @@ public record L0Snapshot(int formatVersion, String memoryId, String memoryEpoch,
                             || (turn.endSequence() != null && entry.sequence() > turn.endSequence())
                             || (entry.payload() instanceof UserMessage && entry.sequence() != turn.userSequence())) {
                         throw new IllegalArgumentException("L0 消息缺少一致的持久回合来源");
+                    }
+                    if (entry.historyRecordId() != null
+                            && !(entry.payload() instanceof UserMessage && entry.historyRecordId() == entry.userHistoryId())
+                            && !(entry.payload() instanceof dev.langchain4j.data.message.AiMessage ai
+                            && !ai.hasToolExecutionRequests() && turn.closed()
+                            && entry.historyRecordId().equals(turn.terminalHistoryId())
+                            && entry.sequence() == turn.endSequence())) {
+                        throw new IllegalArgumentException("L0 持久记录引用与后端回合边界不符");
                     }
                 }
             }
@@ -96,10 +104,15 @@ public record L0Snapshot(int formatVersion, String memoryId, String memoryEpoch,
         return new L0Snapshot(0, memoryId, null, sequence, null, entries, List.of());
     }
 
-    public record Message(long sequence, long userHistoryId, ChatMessage payload) {
+    public record Message(long sequence, long userHistoryId, ChatMessage payload, Long historyRecordId) {
+        /** 运行期模型／工具原文没有后端历史记录引用，不能凭文字充当可信终态。 */
+        public Message(long sequence, long userHistoryId, ChatMessage payload) {
+            this(sequence, userHistoryId, payload, null);
+        }
         public Message {
             if (sequence < 0 || userHistoryId < 0) throw new IllegalArgumentException("L0 消息身份无效");
             Objects.requireNonNull(payload, "L0 原消息不能为空");
+            if (historyRecordId != null && historyRecordId <= 0) throw new IllegalArgumentException("持久记录引用无效");
         }
     }
 

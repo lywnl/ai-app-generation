@@ -35,13 +35,15 @@ public final class L0SnapshotCodec {
             if (version != L0Snapshot.CURRENT_VERSION) throw new IllegalArgumentException("未知 L0 版本");
             var entries = new ArrayList<L0Snapshot.Message>();
             for (JsonNode message : node.get("messages")) {
-                if (!message.isObject() || message.size() != 3 || !message.path("payload").isObject()) {
+                if (!message.isObject() || (message.size() != 3 && message.size() != 4) || !message.path("payload").isObject()) {
                     throw new IllegalArgumentException("L0 消息封装无效");
                 }
+                if (message.size() == 4 && !message.has("historyRecordId")) throw new IllegalArgumentException("未知 L0 消息来源字段");
                 var payload = ChatMessageDeserializer.messagesFromJson("[" + message.get("payload") + "]");
                 if (payload.size() != 1) throw new IllegalArgumentException("L0 原消息无效");
                 entries.add(new L0Snapshot.Message(number(message, "sequence"),
-                        number(message, "userHistoryId"), payload.getFirst()));
+                        number(message, "userHistoryId"), payload.getFirst(),
+                        !message.hasNonNull("historyRecordId") ? null : number(message, "historyRecordId")));
             }
             var turns = new ArrayList<L0Snapshot.Turn>();
             for (JsonNode turn : node.get("turns")) turns.add(MAPPER.treeToValue(turn, L0Snapshot.Turn.class));
@@ -68,6 +70,7 @@ public final class L0SnapshotCodec {
                 var entry = messages.addObject();
                 entry.put("sequence", message.sequence());
                 entry.put("userHistoryId", message.userHistoryId());
+                if (message.historyRecordId() != null) entry.put("historyRecordId", message.historyRecordId());
                 entry.set("payload", payloads.get(index));
             }
             root.set("turns", MAPPER.valueToTree(snapshot.turns()));

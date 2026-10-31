@@ -60,7 +60,9 @@ public final class L0SourceParser {
             } else if (entry.payload() instanceof ToolExecutionResultMessage) {
                 throw new IllegalArgumentException("发现孤立或重复工具结果");
             } else if (entry.payload() instanceof UserMessage || entry.payload() instanceof AiMessage) {
-                units.add(new Unit(Kind.MESSAGE, turn.userHistoryId(), List.of(entry)));
+                Kind kind = entry.payload() instanceof AiMessage && entry.historyRecordId() != null
+                        ? Kind.BACKEND_TERMINAL : Kind.MESSAGE;
+                units.add(new Unit(kind, turn.userHistoryId(), List.of(entry)));
                 index++;
             } else {
                 throw new IllegalArgumentException("L0 回合含不支持的消息类型");
@@ -73,7 +75,7 @@ public final class L0SourceParser {
         if (failure != ToolBatchProtocol.Failure.NONE) throw new IllegalArgumentException("工具配对失败: " + failure);
     }
 
-    public enum Kind { MESSAGE, TOOL_BATCH, PENDING_TOOL_BATCH }
+    public enum Kind { MESSAGE, TOOL_BATCH, PENDING_TOOL_BATCH, BACKEND_TERMINAL }
 
     public record Unit(Kind kind, long userHistoryId, List<L0Snapshot.Message> entries) {
         public Unit { entries = List.copyOf(entries); if (entries.isEmpty()) throw new IllegalArgumentException("来源单元不能为空"); }
