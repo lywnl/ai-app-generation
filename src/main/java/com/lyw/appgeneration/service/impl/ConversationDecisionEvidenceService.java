@@ -68,6 +68,32 @@ public class ConversationDecisionEvidenceService {
         return DecisionEvidenceCodec.decode(row.getDecisionEvidence(), userHistoryId);
     }
 
+    /** 在摘要提交的同一短事务中锁定并核对全部被选历史及证据，锁按持久 ID 排序。 */
+    public void validateSummaryInput(SummaryInput input) {
+        requireOwner(input.appId(), input.userId());
+        var identities = new java.util.TreeSet<>(input.historyFingerprints().keySet());
+        identities.addAll(input.evidenceSnapshots().keySet());
+        for (long id : identities) {
+            ChatHistory row = histories.selectOneByQuery(QueryWrapper.create().eq("id", id)
+                    .eq("appId", input.appId()).eq("userId", input.userId()).eq("isDelete", 0).forUpdate());
+            if (row == null || !Objects.equals(row.getId(), id)
+                    || !Objects.equals(row.getAppId(), input.appId()) || !Objects.equals(row.getUserId(), input.userId())
+                    || (row.getIsDelete() != null && row.getIsDelete() != 0)) {
+                throw new IllegalStateException("摘要提交时历史来源已失效");
+            }
+            String expected = input.historyFingerprints().get(id);
+            if (expected != null && !expected.equals(SummaryMaterialReader.fingerprint(row))) {
+                throw new IllegalStateException("摘要提交时持久原文或可信结果已变化");
+            }
+            if ("user".equals(row.getMessageType())) {
+                DecisionEvidence evidence = DecisionEvidenceCodec.decode(row.getDecisionEvidence(), id);
+                if (!Objects.equals(evidence, input.evidenceSnapshots().get(id))) {
+                    throw new IllegalStateException("摘要提交时决策证据修订已变化");
+                }
+            }
+        }
+    }
+
     /** 完整批次、精确来源采集及可靠保存全部成立后才返回；不修改 L0 或摘要覆盖。 */
     public PreparedDecisionEvidence prepare(VueTurnContext context, L0Snapshot source, long through,
                                              AdmissionDeadline deadline) {

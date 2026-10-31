@@ -90,12 +90,11 @@ class LayeredMemoryIntegrationTest {
             store.set(inv.getArgument(0));
             return 1;
         });
-        when(summaryMapper.update(any(AppMemorySummary.class))).thenAnswer(inv -> {
+        when(summaryMapper.updateFailureMetadata(any(AppMemorySummary.class), anyLong())).thenAnswer(inv -> {
             store.set(inv.getArgument(0));
             return 1;
         });
-        when(summaryMapper.update(
-                any(AppMemorySummary.class), eq(false))).thenAnswer(inv -> {
+        when(summaryMapper.commitSnapshot(any(AppMemorySummary.class), anyLong())).thenAnswer(inv -> {
             store.set(inv.getArgument(0));
             return 1;
         });

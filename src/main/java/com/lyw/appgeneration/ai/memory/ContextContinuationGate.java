@@ -47,6 +47,10 @@ public interface ContextContinuationGate
     default void sourceMessageCommitted(long generation, String epoch, L0Snapshot.Message message) {
     }
 
+    /** 结果提交后立即登记，不能依赖异步展示发布队列已经消费。 */
+    default void toolExecutionCommitted(long generation, dev.langchain4j.service.tool.ToolExecution execution) {
+    }
+
     static ContextContinuationGate from(
             ModelRequestGate.ContinuationGate continuationGate) {
         Objects.requireNonNull(continuationGate, "回合原子提交门不能为空");

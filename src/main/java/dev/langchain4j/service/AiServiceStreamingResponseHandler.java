@@ -1306,6 +1306,10 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             return new ToolResultCommit(committedDecision, null, false);
         }
         try {
+            if (continuationGate instanceof ContextContinuationGate contextGate && requestGeneration > 0) {
+                contextGate.toolExecutionCommitted(requestGeneration,
+                        ToolExecution.builder().request(request).result(committedResult).build());
+            }
             LOG.info("[Vue 工具链] TOOL_EXECUTED 提交发布队列开始,memoryId={},"
                             + "generation={},toolName={},toolId={}",
                     memoryId, requestGeneration, request.name(), request.id());

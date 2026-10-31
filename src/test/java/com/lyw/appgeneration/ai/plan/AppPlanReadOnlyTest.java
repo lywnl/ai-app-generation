@@ -77,6 +77,35 @@ class AppPlanReadOnlyTest {
         assertEquals(30, manager.loadReadOnly(7).orElseThrow().version());
     }
 
+    @Test
+    void 请求边界逐次读取版本及同版本状态并保留动作依赖说明() throws Exception {
+        var paths = new PlanStoragePathResolver(root);
+        var manager = new AppPlanStateManager(mapper, paths);
+        var boundary = com.lyw.appgeneration.ai.memory.TurnRequestBoundary.of("查看当前进度", List.of(), 10, "readonly")
+                .withPlanReader(() -> manager.loadReadOnly(7));
+        assertTrue(boundary.readLatestPlan().isEmpty());
+        assertFalse(Files.exists(paths.projectRoot(7)));
+        manager.save(7, plan(1, PlanFileState.PENDING), 0, "turn");
+        assertEquals(1, boundary.readLatestPlan().orElseThrow().version());
+        manager.recordSuccessfulMutation(7, "turn", "src/App.vue");
+        assertEquals(PlanFileState.TOUCHED, boundary.readLatestPlan().orElseThrow().files().getFirst().state());
+        manager.save(7, new AppPlan("plan", "turn", "turn", 2, 1, PlanMode.FULL, "新目标",
+                List.of(new PlanFile("src/api.ts", "数据访问", PlanFileAction.CREATE, List.of(), PlanFileState.PENDING),
+                        new PlanFile("src/App.vue", "入口", PlanFileAction.MODIFY, List.of("src/api.ts"), PlanFileState.PENDING)),
+                List.of(), PlanStatus.PLANNED), 1, "turn");
+        byte[] saved = Files.readAllBytes(paths.planPath(7));
+        var latest = boundary.readLatestPlan().orElseThrow();
+        assertEquals(2, latest.version());
+        String text = AppPlanStateManager.formatPromptContext(latest);
+        assertTrue(text.contains("依赖=src/api.ts"));
+        assertTrue(text.contains("动作=MODIFY"));
+        assertTrue(text.contains("不等于构建验证或验收成功"));
+        assertEquals("turn", latest.activeTurnId());
+        assertArrayEquals(saved, Files.readAllBytes(paths.planPath(7)));
+        Files.writeString(paths.planPath(7), "损坏计划");
+        assertThrows(IllegalStateException.class, boundary::readLatestPlan, "读取失败不能伪装为没有计划");
+    }
+
     private AppPlan plan(int version, PlanFileState state) {
         return new AppPlan("plan", "turn", "turn", version, 1, PlanMode.FULL,
                 "目标" + version, List.of(new PlanFile("src/App.vue", "用途" + version,

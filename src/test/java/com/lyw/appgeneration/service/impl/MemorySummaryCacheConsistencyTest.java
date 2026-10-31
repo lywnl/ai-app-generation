@@ -29,6 +29,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -38,6 +40,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class MemorySummaryCacheConsistencyTest {
 
@@ -82,13 +86,13 @@ class MemorySummaryCacheConsistencyTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(summaryMapper.selectOneByQuery(any()))
                 .thenAnswer(invocation -> database.get());
-        when(summaryMapper.update(any(AppMemorySummary.class), eq(false)))
+        when(summaryMapper.commitSnapshot(any(AppMemorySummary.class), anyLong()))
                 .thenAnswer(invocation -> {
                     AppMemorySummary updated = invocation.getArgument(0);
                     database.set(updated);
                     return 1;
                 });
-        when(summaryMapper.update(any(AppMemorySummary.class))).thenReturn(1);
+        when(summaryMapper.updateFailureMetadata(any(AppMemorySummary.class), anyLong())).thenReturn(1);
         when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
                 .thenReturn(List.of(
                         history(1L, "user", "问题"),
@@ -159,6 +163,40 @@ class MemorySummaryCacheConsistencyTest {
         assertEquals(NEW_SUMMARY, database.get().getSummary());
         assertEquals(NEW_SUMMARY, recalled);
         assertNull(cache.get());
+    }
+
+    @Test
+    void 完整快照缓存保留零历史游标及部分前沿旧正文键不参与读取() {
+        var coverage = new com.lyw.appgeneration.ai.memory.SummaryCoverage(10, "turn", "epoch", 3,
+                "a".repeat(64), 1, null, null, false);
+        var snapshot = new com.lyw.appgeneration.service.MemorySummarySnapshot(NEW_SUMMARY, 0, 1, 2, coverage);
+        database.set(AppMemorySummary.builder().id(1L).appId(1L).summary(NEW_SUMMARY).lastSummarizedId(0L)
+                .summaryRevision(1L).coverageVersion(2)
+                .coverageState(com.lyw.appgeneration.ai.memory.SummaryCoverageCodec.encode(coverage)).build());
+        when(valueOperations.get("mem:summary:1")).thenReturn("旧正文不得参与覆盖判断");
+        assertEquals(NEW_SUMMARY, service.getCurrentSummary(1L));
+        var payload = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(valueOperations).set(eq("mem:summary:v2:1"), payload.capture(), any(Duration.class));
+        assertEquals(snapshot, com.lyw.appgeneration.ai.memory.MemorySummarySnapshotCodec.decode(1, payload.getValue()));
+        assertEquals(snapshot, service.readSnapshot(1L));
+        verify(valueOperations, never()).get("mem:summary:1");
+        clearInvocations(summaryMapper);
+        when(valueOperations.get("mem:summary:v2:1")).thenReturn(payload.getValue());
+        assertEquals(NEW_SUMMARY, service.getCurrentSummary(1L));
+        verifyNoInteractions(summaryMapper);
+    }
+
+    @Test
+    void 新版缓存失效失败同样阻止数据库提交且清理尝试覆盖两个键() {
+        doThrow(new IllegalStateException("完整快照缓存删除失败"))
+                .when(redisTemplate).delete("mem:summary:v2:1");
+        assertEquals(MemoryCompressionResult.Status.MODEL_FAILED, service.compressNow(1L, 2L, Duration.ofSeconds(5)).status());
+        assertEquals(0L, database.get().getLastSummarizedId());
+        verify(summaryMapper, never()).commitSnapshot(any(), anyLong());
+        clearInvocations(redisTemplate);
+        assertFalse(service.invalidateCache(1L).failedTargets().isEmpty());
+        verify(redisTemplate).delete("mem:summary:1");
+        verify(redisTemplate).delete("mem:summary:v2:1");
     }
 
     private AppMemorySummary summary(long cursor, String text) {

@@ -224,6 +224,24 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
         }
     }
 
+    /** 带原截止的短来源校验区间；锁等待不得延长一次请求的总截止。 */
+    public <T> T withMemoryLock(Object memoryId, AdmissionDeadline deadline, Supplier<T> action) {
+        Object key = requireMemoryId(memoryId);
+        LockEntry entry = register(key);
+        boolean acquired = false;
+        try {
+            acquired = entry.lock.tryLock(deadline.remainingNanos(), TimeUnit.NANOSECONDS);
+            if (!acquired || deadline.remainingNanos() <= 0) throw new java.util.concurrent.CancellationException("L0 来源锁等待截止");
+            return action.get();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new java.util.concurrent.CancellationException("L0 来源锁等待被中断");
+        } finally {
+            if (acquired) entry.lock.unlock();
+            unregister(key, entry);
+        }
+    }
+
     public void withMemoryLock(Object memoryId, Runnable action) {
         Objects.requireNonNull(action, "原子记忆操作不能为空");
         withMemoryLock(memoryId, () -> {

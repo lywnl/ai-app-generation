@@ -254,7 +254,7 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void 后续变更回合把已有计划摘要作为临时系统消息注入() throws Exception {
+    void 后续变更回合绑定最新计划读取而不固定旧计划() throws Exception {
         properties.setEnabled(false);
         stubVueGenerator();
         Path root = Files.createTempDirectory("facade-plan-context-");
@@ -276,11 +276,19 @@ class AiCodeGeneratorFacadeTest {
             var captor = org.mockito.ArgumentCaptor.forClass(List.class);
             verify(tokenStream).turnTransientMessages(captor.capture());
             List<?> messages = captor.getValue();
-            assertEquals(2, messages.size());
-            String planContext = ((dev.langchain4j.data.message.SystemMessage)
-                    messages.get(1)).text();
+            assertEquals(1, messages.size(), "固定资料只保留 Skill 目录，计划由每次请求读取");
+            var boundary = org.mockito.ArgumentCaptor.forClass(com.lyw.appgeneration.ai.memory.TurnRequestBoundary.class);
+            verify(tokenStream).turnRequestBoundary(boundary.capture());
+            var first = boundary.getValue().readLatestPlan().orElseThrow();
+            String planContext = AppPlanStateManager.formatPromptContext(first);
             assertTrue(planContext.contains("创建看板"));
             assertTrue(planContext.contains("src/App.vue"));
+            assertTrue(planContext.contains("动作=MODIFY"));
+            planManager.recordSuccessfulMutation(APP_ID, context.turnId(), "src/App.vue");
+            var refreshed = boundary.getValue().readLatestPlan().orElseThrow();
+            assertEquals(first.version(), refreshed.version());
+            assertEquals(PlanFileState.TOUCHED, refreshed.files().getFirst().state());
+            assertEquals(PlanFileState.PENDING, first.files().getFirst().state(), "已读取快照不可被后续状态更新改写");
         } finally {
             context.closeResources();
             try (var paths = Files.walk(root)) {
@@ -294,6 +302,28 @@ class AiCodeGeneratorFacadeTest {
                         });
             }
         }
+    }
+
+    @Test
+    void 只读问答绑定计划读取但不重新绑定活动回合(@org.junit.jupiter.api.io.TempDir Path root) throws Exception {
+        properties.setEnabled(false);
+        stubVueGenerator();
+        var paths = new PlanStoragePathResolver(root);
+        var manager = new AppPlanStateManager(new ObjectMapper(), paths);
+        manager.save(APP_ID, new AppPlan("read-plan", "original-turn", "original-turn", 1, 1, PlanMode.FULL,
+                "已有目标", List.of(new PlanFile("src/App.vue", "入口", PlanFileAction.MODIFY, List.of(), PlanFileState.PENDING)),
+                List.of(), PlanStatus.PLANNED), 0, "original-turn");
+        ReflectionTestUtils.setField(facade, "appPlanStateManager", manager);
+        VueTurnContext context = newVueTurnContext("read-only-plan", VueTurnMode.READ_ONLY);
+        byte[] persisted = Files.readAllBytes(paths.planPath(APP_ID));
+        try {
+            facade.generateVueProjectStream(RAW_QUERY, APP_ID, false, context, generatorService);
+            var boundary = org.mockito.ArgumentCaptor.forClass(com.lyw.appgeneration.ai.memory.TurnRequestBoundary.class);
+            verify(tokenStream).turnRequestBoundary(boundary.capture());
+            assertEquals("original-turn", boundary.getValue().readLatestPlan().orElseThrow().activeTurnId());
+            org.junit.jupiter.api.Assertions.assertArrayEquals(persisted, Files.readAllBytes(paths.planPath(APP_ID)), "只读问答不得重写计划或绑定活动回合");
+            verify(tokenStream, never()).turnTransientMessages(anyList());
+        } finally { context.closeResources(); }
     }
 
     @Test

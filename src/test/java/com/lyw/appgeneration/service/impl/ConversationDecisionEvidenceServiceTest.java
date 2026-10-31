@@ -133,6 +133,28 @@ class ConversationDecisionEvidenceServiceTest {
         assertNull(row.getDecisionEvidence());
         context.closeResources();
     }
+
+    @Test void 提交复核锁定来源且拒绝新证据修订或原文变化() {
+        try (var fixture = new UnifiedSummaryCoordinationTest.Fixture(java.util.concurrent.Executors.newSingleThreadExecutor())) {
+            var work = fixture.preparedDraft();
+            var input = work.input();
+            var expected = input.evidenceSnapshots().get(10L);
+            row.setMessage("保留中文约束");
+            row.setDecisionEvidence(DecisionEvidenceCodec.encode(expected));
+            assertDoesNotThrow(() -> service.validateSummaryInput(input));
+            var queries = org.mockito.ArgumentCaptor.forClass(QueryWrapper.class);
+            verify(histories).selectOneByQuery(queries.capture());
+            assertTrue(queries.getValue().toSQL().toUpperCase().contains("FOR UPDATE"));
+            row.setMessage("已修改原始要求");
+            assertThrows(IllegalStateException.class, () -> service.validateSummaryInput(input));
+            row.setMessage("保留中文约束");
+            row.setDecisionEvidence(DecisionEvidenceCodec.encode(expected.merge(List.of(), expected.collectedEpoch(),
+                    expected.collectedThroughSequence() + 1, expected.collectionGeneration() + 1, 384000)));
+            assertThrows(IllegalStateException.class, () -> service.validateSummaryInput(input));
+            row.setDecisionEvidence(null);
+            assertThrows(IllegalStateException.class, () -> service.validateSummaryInput(input));
+        }
+    }
     private VueTurnContext realContext() {
         var operations = new com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager();
         var operation = operations.acquire(7L,

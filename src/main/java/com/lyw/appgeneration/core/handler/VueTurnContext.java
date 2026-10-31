@@ -83,6 +83,7 @@ public final class VueTurnContext implements ContextContinuationGate {
     private final Sinks.One<DeleteTakeoverRequest> deleteTakeoverSignal =
             Sinks.one();
     private final ReentrantLock commitGate = new ReentrantLock();
+    private final ReentrantLock summaryCommitGate = new ReentrantLock();
     private UserCommitState userCommitState = UserCommitState.PREPARING;
     private volatile long userHistoryId;
     private final CallbackGate callbackGate = new CallbackGate();
@@ -292,6 +293,11 @@ public final class VueTurnContext implements ContextContinuationGate {
             throw new IllegalStateException("来源提交不属于当前用户回合");
         }
         decisionSources().sourceCommitted(generation, epoch, message);
+    }
+
+    @Override
+    public void toolExecutionCommitted(long generation, dev.langchain4j.service.tool.ToolExecution execution) {
+        decisionSources().toolCommitted(generation, execution);
     }
 
     /** 持久化用户记录标识回合；运行 turnId 仍仅用于租约和回调准入。 */
@@ -530,7 +536,8 @@ public final class VueTurnContext implements ContextContinuationGate {
     /** complete、error、cancel、timeout 与删除接管只允许一个分支决定规范终态。 */
     public boolean tryStartFinalization(TerminalTrigger trigger) {
         Objects.requireNonNull(trigger, "终态触发原因不能为空");
-        while (true) {
+        summaryCommitGate.lock();
+        try {
             TurnState current = turnState.get();
             if (current.stage() != TurnStage.ACTIVE) {
                 return false;
@@ -539,7 +546,31 @@ public final class VueTurnContext implements ContextContinuationGate {
             if (turnState.compareAndSet(current, TurnState.finalizing(trigger))) {
                 return true;
             }
+            return false;
+        } finally {
+            summaryCommitGate.unlock();
         }
+    }
+
+    /** 应用租约在外、终态提交门在内；只包围短存储提交，禁止在此调用或等待模型。 */
+    public <T> T commitSummaryWhileActive(com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline,
+                                          Supplier<T> action) {
+        Objects.requireNonNull(deadline);
+        Objects.requireNonNull(action);
+        return commitPlanState(() -> {
+            boolean acquired = false;
+            try {
+                acquired = summaryCommitGate.tryLock(deadline.remainingNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+                if (!acquired || deadline.remainingNanos() <= 0) throw new java.util.concurrent.CancellationException("摘要提交截止已到");
+                ensureTerminalOpen();
+                return action.get();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new java.util.concurrent.CancellationException("等待摘要提交边界被中断");
+            } finally {
+                if (acquired) summaryCommitGate.unlock();
+            }
+        });
     }
 
     /**

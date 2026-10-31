@@ -43,6 +43,22 @@ public interface MemorySummaryService {
     MemoryCompressionResult compressNow(
             Long appId, long summarizeThroughId, Duration timeout);
 
+    /** 统一入口以来源窗口选择材料，同步等待、草稿和提交共享原绝对截止。 */
+    MemoryCompressionResult compressUnified(UnifiedSummaryRequest request,
+                                             com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
+
+    /** 后台工作同样携带来源回合和截止，不由回合收尾无条件调用。 */
+    void triggerUnifiedAsync(UnifiedSummaryRequest request,
+                              com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
+
+    /** 只根据已提交快照幂等回收 L0；失败保留原文，不触发摘要模型。 */
+    com.lyw.appgeneration.ai.memory.DeadlineAwareReplaceResult reclaimUnified(UnifiedSummaryRequest request,
+                              com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
+
+    /** 每次尝试从新提交的数据库视图取得完整摘要，再读一次 L0；不相容时整对重读。 */
+    CompatibleMemorySnapshot readCompatible(UnifiedSummaryRequest request,
+                              com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
+
     /**
      * 读取当前摘要(供 {@code LayeredChatMemory.messages()} 拼接)。无则返回空串。
      *

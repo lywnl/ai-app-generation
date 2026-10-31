@@ -207,6 +207,11 @@ public final class AppPlanStateManager {
     }
 
     public String toPromptContext(AppPlan plan) {
+        return formatPromptContext(plan);
+    }
+
+    /** 对本次已冻结的快照生成说明；本方法不读取计划文件，也不改变计划状态。 */
+    public static String formatPromptContext(AppPlan plan) {
         Objects.requireNonNull(plan, "计划不能为空");
         List<String> pending = plan.files().stream()
                 .filter(file -> file.state() == PlanFileState.PENDING)
@@ -221,6 +226,10 @@ public final class AppPlanStateManager {
                 .map(change -> "v" + change.version() + ":" + change.reason())
                 .reduce((left, right) -> left + "；" + right)
                 .orElse("无");
+        String actions = plan.files().stream().map(file -> file.path() + " [动作=" + file.action()
+                + "，状态=" + file.state() + "，用途=" + file.purpose()
+                + "，依赖=" + (file.dependsOn().isEmpty() ? "无" : String.join(", ", file.dependsOn())) + "]")
+                .collect(java.util.stream.Collectors.joining("；"));
         return "当前计划 version=" + plan.version()
                 + "，活动回合=" + plan.activeTurnId()
                 + "，状态=" + plan.status()
@@ -228,7 +237,9 @@ public final class AppPlanStateManager {
                 + "；已触达文件：" + (touched.isEmpty() ? "无" : String.join(", ", touched))
                 + "；待处理文件：" + (pending.isEmpty() ? "无" : String.join(", ", pending))
                 + "；最近修订：" + revisions
-                + "。当前项目已有计划，不要再次调用 makePlan。"
+                + "；文件动作与依赖：" + actions
+                + "。已触达仅表示记录过修改，不等于构建验证或验收成功。"
+                + "当前项目已有计划，不要再次调用 makePlan。"
                 + "需要调整文件范围、动作或依赖，或当前状态为 REPLAN_PENDING 时，先调用 updatePlan；"
                 + "仅继续执行现有计划时直接沿用，不要为开始新回合提交无变更的修订。";
     }

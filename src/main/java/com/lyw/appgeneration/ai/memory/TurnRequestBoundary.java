@@ -2,9 +2,11 @@ package com.lyw.appgeneration.ai.memory;
 
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
+import com.lyw.appgeneration.ai.plan.AppPlan;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /** 当前模型回合的不可变原始用户请求边界。 */
 public record TurnRequestBoundary(
@@ -12,14 +14,20 @@ public record TurnRequestBoundary(
         String canonicalUserName,
         List<ChatMessage> transientMessages,
         long userHistoryId,
-        String turnId) {
+        String turnId,
+        PlanSnapshotReader planReader) {
 
     public static final int MAX_RAW_USER_TEXT_LENGTH = 6 * 1024;
 
     /** 非 Vue 及旧调用不具有来源裁剪权限，保留原消息接口。 */
     public TurnRequestBoundary(String rawUserText, String canonicalUserName,
                                List<ChatMessage> transientMessages) {
-        this(rawUserText, canonicalUserName, transientMessages, 0L, null);
+        this(rawUserText, canonicalUserName, transientMessages, 0L, null, null);
+    }
+
+    public TurnRequestBoundary(String rawUserText, String canonicalUserName,
+                               List<ChatMessage> transientMessages, long userHistoryId, String turnId) {
+        this(rawUserText, canonicalUserName, transientMessages, userHistoryId, turnId, null);
     }
 
     public TurnRequestBoundary {
@@ -68,6 +76,25 @@ public record TurnRequestBoundary(
 
     public UserMessage userMessage() {
         return UserMessage.from(canonicalUserName, rawUserText);
+    }
+
+    /** 仅绑定只读读取能力；每次实际请求准备时再读取，不能将一次结果缓存为本轮固定资料。 */
+    public TurnRequestBoundary withPlanReader(PlanSnapshotReader reader) {
+        return new TurnRequestBoundary(rawUserText, canonicalUserName, transientMessages, userHistoryId, turnId,
+                Objects.requireNonNull(reader));
+    }
+
+    public TurnRequestBoundary withTransientMessages(List<ChatMessage> messages) {
+        return new TurnRequestBoundary(rawUserText, canonicalUserName, messages, userHistoryId, turnId, planReader);
+    }
+
+    public Optional<AppPlan> readLatestPlan() {
+        return planReader == null ? Optional.empty() : Objects.requireNonNull(planReader.read(), "只读计划读取未返回明确结果");
+    }
+
+    @FunctionalInterface
+    public interface PlanSnapshotReader {
+        Optional<AppPlan> read();
     }
 
     private static boolean containsUnsafeControl(String value) {

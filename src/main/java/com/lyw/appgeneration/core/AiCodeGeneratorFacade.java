@@ -320,12 +320,7 @@ public class AiCodeGeneratorFacade {
                 == VueTurnMode.MUTATION_REQUIRED;
         List<ChatMessage> transientMessages = new java.util.ArrayList<>();
         if (mutationTurn && appPlanStateManager != null) {
-            AppPlan currentPlan = turnContext.initializePlanContext(appPlanStateManager);
-            if (currentPlan != null) {
-                transientMessages.add(
-                        SystemMessage.from(
-                                appPlanStateManager.toPromptContext(currentPlan)));
-            }
+            turnContext.initializePlanContext(appPlanStateManager);
         }
         boolean retrieveRag = shouldRetrieveVueOnlineRag(isFirstMessage, mutationTurn);
         long preparationStartedAt = System.nanoTime();
@@ -415,6 +410,9 @@ public class AiCodeGeneratorFacade {
         List<ChatMessage> stableTransientMessages = List.copyOf(transientMessages);
         TurnRequestBoundary requestBoundary = TurnRequestBoundary.of(
                 userMessage, stableTransientMessages, turnContext.userHistoryId(), turnContext.turnId());
+        if (appPlanStateManager != null) {
+            requestBoundary = requestBoundary.withPlanReader(() -> appPlanStateManager.loadReadOnly(appId));
+        }
         TokenStream tokenStream = CanonicalUserMessageScope.call(
                 requestBoundary,
                 () -> generatorService.generateVueProjectCodeStream(
@@ -426,8 +424,7 @@ public class AiCodeGeneratorFacade {
             withSkills.add(skillCatalog.metadataMessage());
             withSkills.addAll(stableTransientMessages);
             stableTransientMessages = List.copyOf(withSkills);
-            requestBoundary = TurnRequestBoundary.of(
-                    userMessage, stableTransientMessages, turnContext.userHistoryId(), turnContext.turnId());
+            requestBoundary = requestBoundary.withTransientMessages(stableTransientMessages);
         }
         if (!stableTransientMessages.isEmpty()) {
             tokenStream.turnTransientMessages(stableTransientMessages);

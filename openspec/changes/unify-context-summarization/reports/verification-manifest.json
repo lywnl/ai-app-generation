@@ -302,6 +302,129 @@
         ".codex/unify-context-summarization/runs/020-unified-material-coverage/output.log",
         ".codex/unify-context-summarization/runs/020-unified-material-coverage/code-state.json"
       ]
+    },
+    {
+      "id": "task:5.1",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/service/UnifiedSummaryRequest.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryCoordinationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImplTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/023-summary-coordination-delta/command.json",
+        ".codex/unify-context-summarization/runs/023-summary-coordination-delta/output.log",
+        ".codex/unify-context-summarization/runs/023-summary-coordination-delta/code-state.json"
+      ]
+    },
+    {
+      "id": "task:5.2",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/mapper/AppMemorySummaryMapper.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceService.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryPersistenceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImplTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/025-unified-persistence/command.json",
+        ".codex/unify-context-summarization/runs/025-unified-persistence/output.log",
+        ".codex/unify-context-summarization/runs/025-unified-persistence/code-state.json"
+      ]
+    },
+    {
+      "id": "task:5.3",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/service/MemorySummaryService.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryReclamationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryPersistenceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/DeadlineAwareAtomicChatMemoryStoreTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStoreTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/026-unified-reclamation/command.json",
+        ".codex/unify-context-summarization/runs/026-unified-reclamation/output.log",
+        ".codex/unify-context-summarization/runs/026-unified-reclamation/code-state.json"
+      ]
+    },
+    {
+      "id": "task:5.4",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/CompatibleMemorySnapshot.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/service/MemorySummaryService.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/MemorySummarySnapshotCodec.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/CompatibleMemorySnapshotTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryCacheConsistencyTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummarySnapshotIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImplTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/028-compatible-snapshots/command.json",
+        ".codex/unify-context-summarization/runs/028-compatible-snapshots/output.log",
+        ".codex/unify-context-summarization/runs/028-compatible-snapshots/code-state.json"
+      ]
+    },
+    {
+      "id": "task:7.1",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/033-latest-plan/command.json",
+        ".codex/unify-context-summarization/runs/033-latest-plan/output.log",
+        ".codex/unify-context-summarization/runs/033-latest-plan/code-state.json"
+      ]
+    },
+    {
+      "id": "task:5.5",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/mapper/AppMemorySummaryMapper.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceService.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedMemoryStorageFixture.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/035-real-storage/command.json",
+        ".codex/unify-context-summarization/runs/035-real-storage/output.log",
+        ".codex/unify-context-summarization/runs/035-real-storage/code-state.json"
+      ]
     }
   ],
   "commands": [
@@ -458,6 +581,60 @@
       "finished_at": "2026-10-31T14:34:35.620120+00:00",
       "evidence": ".codex/unify-context-summarization/runs/020-unified-material-coverage/output.log",
       "code_state": ".codex/unify-context-summarization/runs/020-unified-material-coverage/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=UnifiedSummaryCoordinationTest,MemorySummaryServiceImplTest,AiServiceStreamingResponseHandlerTest,JsonMessageStreamHandlerTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:48:14.224063+00:00",
+      "finished_at": "2026-10-31T14:48:29.060038+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/023-summary-coordination-delta/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/023-summary-coordination-delta/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=UnifiedSummaryPersistenceTest,UnifiedSummaryCoordinationTest,MemorySummaryServiceImplTest,MemorySummaryCacheConsistencyTest,ConversationDecisionEvidenceServiceTest,VueTurnContextTest,AtomicChatMemoryStoreConcurrencyTest,LayeredMemoryIntegrationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:54:56.962668+00:00",
+      "finished_at": "2026-10-31T14:55:14.254244+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/025-unified-persistence/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/025-unified-persistence/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=UnifiedSummaryReclamationTest,UnifiedSummaryPersistenceTest,UnifiedSummaryCoordinationTest,DeadlineAwareAtomicChatMemoryStoreTest,AtomicChatMemoryStoreConcurrencyTest,L0SourceOperationsTest,SpringRedisChatMemoryStoreTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:57:34.628705+00:00",
+      "finished_at": "2026-10-31T14:57:48.532744+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/026-unified-reclamation/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/026-unified-reclamation/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=CompatibleMemorySnapshotTest,MemorySummarySnapshotIntegrationTest,MemorySummaryCacheConsistencyTest,MemorySummaryServiceImplTest,UnifiedSummaryReclamationTest,UnifiedSummaryPersistenceTest,UnifiedSummaryCoordinationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:02:38.210521+00:00",
+      "finished_at": "2026-10-31T15:02:54.662401+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/028-compatible-snapshots/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/028-compatible-snapshots/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/033-latest-plan/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/033-latest-plan/tmp -Dtest=AppPlanReadOnlyTest,AppPlanStateManagerTest,AiCodeGeneratorFacadeTest,TurnRequestBoundaryTest,VueTurnContextTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:18:28.086335+00:00",
+      "finished_at": "2026-10-31T15:18:40.974073+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/033-latest-plan/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/033-latest-plan/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/035-real-storage/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/035-real-storage/tmp -Dtest=UnifiedSummaryStorageIntegrationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:21:01.873150+00:00",
+      "finished_at": "2026-10-31T15:21:14.149198+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/035-real-storage/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/035-real-storage/code-state.json"
     }
   ]
 }

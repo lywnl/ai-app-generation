@@ -153,6 +153,11 @@ public class TokenAwareChatMemory implements ChatMemory {
         return atomicStore.withMemoryLock(memoryId, () -> action.apply(atomicStore.getSnapshot(memoryId)));
     }
 
+    public <T> T withSourceLock(AdmissionDeadline deadline, java.util.function.Function<L0Snapshot, T> action) {
+        if (!supportsSourceSnapshots()) throw new IllegalStateException("缺少来源存储");
+        return atomicStore.withMemoryLock(memoryId, deadline, () -> action.apply(atomicStore.getSnapshot(memoryId)));
+    }
+
     public void closeSourceTurn(long userHistoryId, String turnId, long historyId,
                                 com.lyw.appgeneration.model.enums.ChatMemoryOutcome outcome) {
         requireReplaced(atomicStore.updateSnapshot(memoryId,
