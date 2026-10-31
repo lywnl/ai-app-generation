@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 /**
  * 为同一 memoryId 的 L0 读写提供进程内共享原子边界。
@@ -25,6 +26,58 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
     public AtomicChatMemoryStore(ChatMemoryStore delegate) {
         this.delegate = Objects.requireNonNull(
                 delegate, "底层 ChatMemoryStore 不能为空");
+    }
+
+    public boolean supportsSourceSnapshots() {
+        return delegate instanceof SourceAwareChatMemoryStore;
+    }
+
+    public L0Snapshot getSnapshot(Object memoryId) {
+        return withMemoryLock(memoryId, () -> sourceStore().getSnapshot(memoryId));
+    }
+
+    /** 来源及正文按同一预期值比较，提交不能拆成两个字段写入。 */
+    public DeadlineAwareReplaceResult replaceSnapshotIfMatches(Object memoryId, L0Snapshot expected,
+                                                               L0Snapshot replacement, AdmissionDeadline deadline) {
+        return withSourceDeadline(memoryId, deadline, () ->
+                sourceStore().replaceSnapshotIfMatches(memoryId, expected, replacement, deadline));
+    }
+
+    public DeadlineAwareReplaceResult updateSnapshot(Object memoryId, UnaryOperator<L0Snapshot> operation,
+                                                     AdmissionDeadline deadline) {
+        Objects.requireNonNull(operation, "L0 来源操作不能为空");
+        return withSourceDeadline(memoryId, deadline, () -> {
+            L0Snapshot current = sourceStore().getSnapshot(memoryId);
+            L0Snapshot next = operation.apply(current);
+            return sourceStore().replaceSnapshotIfMatches(memoryId, current, next, deadline);
+        });
+    }
+
+    private SourceAwareChatMemoryStore sourceStore() {
+        if (delegate instanceof SourceAwareChatMemoryStore source) return source;
+        throw new IllegalStateException("L0 存储不支持来源快照");
+    }
+
+    private DeadlineAwareReplaceResult withSourceDeadline(Object memoryId, AdmissionDeadline deadline,
+                                                          Supplier<DeadlineAwareReplaceResult> action) {
+        Object key = requireMemoryId(memoryId);
+        Objects.requireNonNull(deadline, "绝对截止不能为空");
+        var duration = sourceStore().worstCaseCommitDuration();
+        long wait = deadline.lockWaitNanos(duration);
+        if (wait <= 0) return DeadlineAwareReplaceResult.TIMED_OUT;
+        LockEntry entry = register(key);
+        boolean acquired = false;
+        try {
+            acquired = entry.lock.tryLock(wait, TimeUnit.NANOSECONDS);
+            if (!acquired || !deadline.canStart(duration)) return DeadlineAwareReplaceResult.TIMED_OUT;
+            return action.get();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return DeadlineAwareReplaceResult.INTERRUPTED;
+        } finally {
+            if (acquired) entry.lock.unlock();
+            unregister(key, entry);
+        }
     }
 
     @Override
@@ -59,6 +112,21 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
         List<ChatMessage> expectedSnapshot = snapshot(expected);
         List<ChatMessage> replacementSnapshot = snapshot(replacement);
         return withMemoryLock(memoryId, () -> {
+            if (supportsSourceSnapshots()) {
+                L0Snapshot currentSource = sourceStore().getSnapshot(memoryId);
+                if (currentSource.hasKnownSource()) {
+                    if (!currentSource.messages().equals(expectedSnapshot)) return false;
+                    L0Snapshot next;
+                    try {
+                        next = L0SourceOperations.reconcile(currentSource, replacementSnapshot,
+                                CanonicalUserMessageScope.currentBoundary());
+                    } catch (IllegalStateException exception) {
+                        next = L0SourceOperations.resetActive(currentSource, replacementSnapshot);
+                    }
+                    return sourceStore().replaceSnapshotIfMatches(memoryId, currentSource, next,
+                            AdmissionDeadline.start(java.time.Duration.ofSeconds(60))) == DeadlineAwareReplaceResult.REPLACED;
+                }
+            }
             List<ChatMessage> current = snapshot(
                     delegate.getMessages(memoryId));
             if (!current.equals(expectedSnapshot)) {
@@ -113,6 +181,20 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
             }
             if (!deadline.canStart(worstCaseCommitDuration)) {
                 return DeadlineAwareReplaceResult.TIMED_OUT;
+            }
+            if (supportsSourceSnapshots()) {
+                L0Snapshot currentSource = sourceStore().getSnapshot(memoryId);
+                if (currentSource.hasKnownSource()) {
+                    if (!currentSource.messages().equals(expectedSnapshot)) return DeadlineAwareReplaceResult.PREFIX_CHANGED;
+                    L0Snapshot next;
+                    try {
+                        next = L0SourceOperations.reconcile(currentSource, replacementSnapshot,
+                                CanonicalUserMessageScope.currentBoundary());
+                    } catch (IllegalStateException exception) {
+                        next = L0SourceOperations.resetActive(currentSource, replacementSnapshot);
+                    }
+                    return sourceStore().replaceSnapshotIfMatches(memoryId, currentSource, next, deadline);
+                }
             }
             return deadlineStore.replaceMessagesIfMatches(
                     memoryId, expectedSnapshot, replacementSnapshot, deadline);

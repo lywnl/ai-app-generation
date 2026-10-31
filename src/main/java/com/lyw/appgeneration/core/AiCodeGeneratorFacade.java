@@ -414,9 +414,9 @@ public class AiCodeGeneratorFacade {
             List<ChatMessage> transientMessages) {
         List<ChatMessage> stableTransientMessages = List.copyOf(transientMessages);
         TurnRequestBoundary requestBoundary = TurnRequestBoundary.of(
-                userMessage, stableTransientMessages);
+                userMessage, stableTransientMessages, turnContext.userHistoryId(), turnContext.turnId());
         TokenStream tokenStream = CanonicalUserMessageScope.call(
-                userMessage,
+                requestBoundary,
                 () -> generatorService.generateVueProjectCodeStream(
                         appId, userMessage));
         tokenStream.initialToolChoiceRequired(
@@ -427,7 +427,7 @@ public class AiCodeGeneratorFacade {
             withSkills.addAll(stableTransientMessages);
             stableTransientMessages = List.copyOf(withSkills);
             requestBoundary = TurnRequestBoundary.of(
-                    userMessage, stableTransientMessages);
+                    userMessage, stableTransientMessages, turnContext.userHistoryId(), turnContext.turnId());
         }
         if (!stableTransientMessages.isEmpty()) {
             tokenStream.turnTransientMessages(stableTransientMessages);

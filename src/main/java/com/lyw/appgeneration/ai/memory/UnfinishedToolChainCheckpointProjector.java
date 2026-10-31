@@ -156,25 +156,8 @@ public final class UnfinishedToolChainCheckpointProjector {
             Set<String> registeredTools,
             Map<String, ToolExecutionRequest> calls,
             Set<String> completedIds) {
-        if (!message.hasToolExecutionRequests()) {
-            return ToolChainCheckpointResult.FailureReason.UNSUPPORTED_MESSAGE;
-        }
-        if (completedIds.size() != calls.size()) {
-            return ToolChainCheckpointResult.FailureReason.ORPHAN_TOOL_CALL;
-        }
-        for (ToolExecutionRequest request : message.toolExecutionRequests()) {
-            if (request == null || request.id() == null || request.id().isBlank()
-                    || request.name() == null || request.name().isBlank()) {
-                return ToolChainCheckpointResult.FailureReason.INVALID_TOOL_FACT;
-            }
-            if (!registeredTools.contains(request.name())) {
-                return ToolChainCheckpointResult.FailureReason.UNREGISTERED_TOOL;
-            }
-            if (calls.putIfAbsent(request.id(), request) != null) {
-                return ToolChainCheckpointResult.FailureReason.DUPLICATE_TOOL_CALL;
-            }
-        }
-        return ToolChainCheckpointResult.FailureReason.NONE;
+        return ToolChainCheckpointResult.FailureReason.valueOf(
+                ToolBatchProtocol.observeCalls(message, registeredTools, calls, completedIds).name());
     }
 
     private ToolChainCheckpointResult.FailureReason observeResult(
@@ -182,16 +165,11 @@ public final class UnfinishedToolChainCheckpointProjector {
             Map<String, ToolExecutionRequest> calls,
             Set<String> completedIds,
             List<VueToolExecutionFact> facts) {
+        ToolBatchProtocol.Failure failure = ToolBatchProtocol.observeResult(result, calls, completedIds);
+        if (failure != ToolBatchProtocol.Failure.NONE) {
+            return ToolChainCheckpointResult.FailureReason.valueOf(failure.name());
+        }
         ToolExecutionRequest request = calls.get(result.id());
-        if (request == null) {
-            return ToolChainCheckpointResult.FailureReason.ORPHAN_TOOL_RESULT;
-        }
-        if (!completedIds.add(result.id())) {
-            return ToolChainCheckpointResult.FailureReason.DUPLICATE_TOOL_RESULT;
-        }
-        if (!request.name().equals(result.toolName())) {
-            return ToolChainCheckpointResult.FailureReason.TOOL_NAME_MISMATCH;
-        }
         return VueToolExecutionFact.parse(request.name(), result.text())
                 .map(fact -> {
                     facts.add(fact);

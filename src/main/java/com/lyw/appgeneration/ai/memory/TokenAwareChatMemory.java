@@ -55,6 +55,12 @@ public class TokenAwareChatMemory implements ChatMemory {
         ChatMessage requiredMessage = canonicalizeUserMessageIfScoped(
                 Objects.requireNonNull(
                         message, "待追加消息不能为空"));
+        if (hasSourceSnapshot()) {
+            requireReplaced(atomicStore.updateSnapshot(memoryId,
+                    snapshot -> L0SourceOperations.append(snapshot, requiredMessage, CanonicalUserMessageScope.currentBoundary()),
+                    AdmissionDeadline.start(java.time.Duration.ofSeconds(60))));
+            return;
+        }
         if (requiredMessage instanceof SystemMessage systemMessage) {
             addSystemMessage(systemMessage);
             return;
@@ -108,7 +114,48 @@ public class TokenAwareChatMemory implements ChatMemory {
 
     @Override
     public void clear() {
+        if (hasSourceSnapshot()) {
+            throw new IllegalStateException("已对齐 L0 不能通过 clear 丢失摘要依赖；请使用显式恢复或应用删除入口");
+        }
         withMemoryLock(delegate::clear);
+    }
+
+    public boolean supportsSourceSnapshots() {
+        return atomicStore != null && atomicStore.supportsSourceSnapshots();
+    }
+
+    private boolean hasSourceSnapshot() {
+        return supportsSourceSnapshots() && atomicStore.getSnapshot(memoryId).hasKnownSource();
+    }
+
+    public L0Snapshot sourceSnapshot() {
+        return supportsSourceSnapshots() ? atomicStore.getSnapshot(memoryId)
+                : L0Snapshot.legacy(memoryId.toString(), messages());
+    }
+
+    public DeadlineAwareReplaceResult replaceSourceSnapshot(L0Snapshot expected, L0Snapshot replacement,
+                                                           AdmissionDeadline deadline) {
+        if (!supportsSourceSnapshots()) return DeadlineAwareReplaceResult.DEPENDENCY_FAILED;
+        return atomicStore.replaceSnapshotIfMatches(memoryId, expected, replacement, deadline);
+    }
+
+    /** 来源复核与短数据库提交共享此边界；不得在动作中调用模型或持锁等待模型。 */
+    public <T> T withSourceLock(java.util.function.Function<L0Snapshot, T> action) {
+        if (!supportsSourceSnapshots()) throw new IllegalStateException("缺少来源存储");
+        return atomicStore.withMemoryLock(memoryId, () -> action.apply(atomicStore.getSnapshot(memoryId)));
+    }
+
+    public void closeSourceTurn(long userHistoryId, String turnId, long historyId,
+                                com.lyw.appgeneration.model.enums.ChatMemoryOutcome outcome) {
+        requireReplaced(atomicStore.updateSnapshot(memoryId,
+                source -> L0SourceOperations.closeTurn(source, userHistoryId, turnId, historyId, outcome),
+                AdmissionDeadline.start(java.time.Duration.ofSeconds(60))));
+    }
+
+    private void requireReplaced(DeadlineAwareReplaceResult result) {
+        if (result != DeadlineAwareReplaceResult.REPLACED) {
+            throw new IllegalStateException("L0 来源操作未提交: " + result);
+        }
     }
 
     /**

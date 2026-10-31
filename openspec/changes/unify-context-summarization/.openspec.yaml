@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-31
+x-workflow_profile: strict
+x-risk_reason: "涉及 L1 摘要覆盖边界与决策证据的持久化迁移、原子提交，以及可信工程结果和模型文本的隔离。"

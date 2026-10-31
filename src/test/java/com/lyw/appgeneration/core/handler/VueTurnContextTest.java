@@ -40,6 +40,48 @@ import static org.junit.jupiter.api.Assertions.fail;
 class VueTurnContextTest {
 
     @Test
+    void 持久用户身份与提交状态一起发布且相同原文的回合不混用() {
+        VueTurnContext first = context("identity-first");
+        VueTurnContext second = context("identity-second");
+        assertThrows(IllegalStateException.class, first::userHistoryId);
+        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
+                first.commitUserAndBindHistory(() -> savedUser(101L)));
+        assertEquals(VueTurnContext.UserCommitResult.COMMITTED,
+                second.commitUserAndBindHistory(() -> savedUser(102L)));
+        var a = com.lyw.appgeneration.ai.memory.TurnRequestBoundary.of(
+                "同一个要求", List.of(), first.userHistoryId(), first.turnId());
+        var b = com.lyw.appgeneration.ai.memory.TurnRequestBoundary.of(
+                "同一个要求", List.of(), second.userHistoryId(), second.turnId());
+        assertEquals(a.canonicalUserName(), b.canonicalUserName());
+        assertEquals(101L, a.userHistoryId());
+        assertEquals(102L, b.userHistoryId());
+        assertEquals(VueTurnContext.PreCommitTerminationDecision.POST_COMMIT_REQUIRED,
+                first.claimPreCommitTermination());
+        assertEquals(101L, first.userHistoryId());
+    }
+
+    @Test
+    void 保存失败提交前取消或错误归属都不绑定用户身份() {
+        var failed = context("identity-failed");
+        assertEquals(VueTurnContext.UserCommitResult.STORE_FAILED,
+                failed.commitUserAndBindHistory(() -> null));
+        assertThrows(IllegalStateException.class, failed::userHistoryId);
+        var wrong = savedUser(103L);
+        wrong.setUserId(88L);
+        assertThrows(IllegalStateException.class, () -> failed.commitUserAndBindHistory(() -> wrong));
+        assertThrows(IllegalStateException.class, failed::userHistoryId);
+        failed.claimPreCommitTermination();
+        assertEquals(VueTurnContext.UserCommitResult.TERMINATED_BEFORE_COMMIT,
+                failed.commitUserAndBindHistory(() -> { throw new AssertionError("不能在取消后保存"); }));
+        assertThrows(IllegalStateException.class, failed::userHistoryId);
+    }
+
+    private com.lyw.appgeneration.model.entity.ChatHistory savedUser(long id) {
+        return com.lyw.appgeneration.model.entity.ChatHistory.builder().id(id).appId(7L).userId(9L)
+                .messageType("user").message("同一个要求").build();
+    }
+
+    @Test
     void 构建停滞与其他终态竞争后关闭保护器且新回合重新计数() throws Exception {
         for (var competing : List.of(VueTurnContext.TerminalTrigger.CANCELLED,
                 VueTurnContext.TerminalTrigger.TIMED_OUT, VueTurnContext.TerminalTrigger.DELETE_TAKEOVER)) {

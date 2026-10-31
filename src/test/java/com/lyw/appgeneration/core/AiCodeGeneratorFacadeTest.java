@@ -206,6 +206,7 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, 9L, "turn-gate-install", operation, lease,
                 admissionPermit(),
                 new FileToolBudgetGuard().newSession());
+        bindUser(context);
 
         facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, false, context, generatorService);
@@ -784,6 +785,7 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, 9L, "turn-complete-tool-request", operation, lease,
                 admissionPermit(),
                 new FileToolBudgetGuard().newSession());
+        bindUser(context);
 
         List<String> output = facade.generateVueProjectStream(
                         RAW_QUERY, APP_ID, false, context)
@@ -817,6 +819,7 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, 9L, "turn-online", operation, lease,
                 admissionPermit(),
                 new FileToolBudgetGuard().newSession());
+        bindUser(context);
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
                 RAW_QUERY, APP_ID, false, context).then().block());
@@ -861,6 +864,7 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, 9L, "turn-resource-limit", operation, lease,
                 admissionPermit(),
                 guard.newSession());
+        bindUser(context);
 
         List<String> output = new CopyOnWriteArrayList<>();
         RuntimeException error = assertThrows(RuntimeException.class, () ->
@@ -914,6 +918,7 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, 9L, "turn-old-content-limit", operation, lease,
                 admissionPermit(),
                 guard.newSession());
+        bindUser(context);
 
         List<String> output = new CopyOnWriteArrayList<>();
         RuntimeException error = assertThrows(RuntimeException.class, () ->
@@ -955,6 +960,7 @@ class AiCodeGeneratorFacadeTest {
                 APP_ID, 9L, "turn-executed-resource-limit", operation, lease,
                 admissionPermit(),
                 new FileToolBudgetGuard().newSession());
+        bindUser(context);
 
         List<String> output = new CopyOnWriteArrayList<>();
         assertThrows(RuntimeException.class, () -> facade.generateVueProjectStream(
@@ -1410,7 +1416,14 @@ class AiCodeGeneratorFacadeTest {
                 admissionPermit(),
                 new FileToolBudgetGuard().newSession(), true);
         context.initializeMode(mode);
+        bindUser(context);
         return context;
+    }
+
+    private void bindUser(VueTurnContext context) {
+        context.commitUserAndBindHistory(() -> com.lyw.appgeneration.model.entity.ChatHistory.builder()
+                .id(101L).appId(context.appId()).userId(context.userId())
+                .messageType("user").message(RAW_QUERY).build());
     }
 
     private void stubVueGenerator() {

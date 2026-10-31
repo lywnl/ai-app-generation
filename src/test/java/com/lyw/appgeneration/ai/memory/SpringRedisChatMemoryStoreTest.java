@@ -28,6 +28,27 @@ import static org.mockito.Mockito.verify;
 
 class SpringRedisChatMemoryStoreTest {
 
+    @Test
+    void 来源封装与读取下界通过同一次CAS写入且空窗口不删除依赖() {
+        AtomicReference<String> value = new AtomicReference<>();
+        var template = semanticTemplate(value, new AtomicLong(1000), new AtomicLong(-1));
+        var store = store(template);
+        var initial = L0Snapshot.legacy("7", List.of());
+        var next = L0Snapshot.empty("7", 8);
+        assertEquals(DeadlineAwareReplaceResult.REPLACED,
+                store.replaceSnapshotIfMatches(7L, initial, next, deadlineAt(2000)));
+        assertEquals(next, L0SnapshotCodec.decode("7", value.get()));
+        assertEquals(DeadlineAwareReplaceResult.PREFIX_CHANGED,
+                store.replaceSnapshotIfMatches(7L, initial, L0Snapshot.empty("7", 0), deadlineAt(2000)));
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(template.opsForValue()).thenReturn(values);
+        when(values.get("chat-memory:l0:v2:7")).thenAnswer(ignored -> value.get());
+        assertEquals(next, store.getSnapshot(7L));
+        assertEquals(List.of(), store.getMessages(7L));
+        assertEquals(8L, store.getSnapshot(7L).appliedSummaryRevision());
+    }
+
     private static final List<ChatMessage> EXPECTED = List.of(
             UserMessage.from("旧问题"), AiMessage.from("旧回答"));
     private static final List<ChatMessage> REPLACEMENT = List.of(
@@ -198,7 +219,7 @@ class SpringRedisChatMemoryStoreTest {
         store.replaceMessagesIfMatches(
                 7L, EXPECTED, REPLACEMENT, deadlineAt(2_000L));
 
-        verify(values).get("chat-memory:l0:v2:7");
+        verify(values, org.mockito.Mockito.times(2)).get("chat-memory:l0:v2:7");
         verify(values).set("chat-memory:l0:v2:7",
                 ChatMessageSerializer.messagesToJson(EXPECTED),
                 Duration.ofSeconds(3_600L));

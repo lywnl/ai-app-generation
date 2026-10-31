@@ -626,8 +626,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         var mode = context.callPreparation(
                 () -> vueTurnModeRouter.route(message, hasHistory));
         context.initializeMode(mode);
-        VueTurnContext.UserCommitResult commitResult = context.commitUser(() ->
-                chatHistoryService.addChatMessage(
+        VueTurnContext.UserCommitResult commitResult = context.commitUserAndBindHistory(() ->
+                chatHistoryService.addChatMessageAndReturn(
                         appId, message,
                         ChatHistoryMessageTypeEnum.USER.getValue(),
                         loginUser.getId()));

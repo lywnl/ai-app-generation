@@ -17,7 +17,7 @@ import java.util.Objects;
 
 /** 保持 LangChain4j JSON 协议并提供服务端截止检查的 Redis L0 store。 */
 public final class SpringRedisChatMemoryStore
-        implements ChatMemoryStore, DeadlineAwareChatMemoryStore {
+        implements ChatMemoryStore, SourceAwareChatMemoryStore {
 
     private static final String REDIS_KEY_PREFIX = "chat-memory:l0:v2:";
 
@@ -76,9 +76,27 @@ public final class SpringRedisChatMemoryStore
 
     @Override
     public List<ChatMessage> getMessages(Object memoryId) {
-        String json = redisTemplate.opsForValue().get(redisKey(memoryId));
-        return json == null ? List.of()
-                : List.copyOf(ChatMessageDeserializer.messagesFromJson(json));
+        return getSnapshot(memoryId).messages();
+    }
+
+    @Override
+    public L0Snapshot getSnapshot(Object memoryId) {
+        String key = redisKey(memoryId);
+        return L0SnapshotCodec.decode(memoryId.toString(), redisTemplate.opsForValue().get(key));
+    }
+
+    @Override
+    public DeadlineAwareReplaceResult replaceSnapshotIfMatches(Object memoryId, L0Snapshot expected,
+                                                               L0Snapshot replacement, AdmissionDeadline deadline) {
+        String key = redisKey(memoryId);
+        Objects.requireNonNull(deadline, "绝对截止不能为空");
+        if (!memoryId.toString().equals(expected.memoryId())
+                || !expected.memoryId().equals(replacement.memoryId()) || !replacement.hasKnownSource()) {
+            throw new IllegalArgumentException("来源快照与 L0 应用身份不符");
+        }
+        L0SourceOperations.validateTransition(expected, replacement);
+        return replaceEncoded(key, L0SnapshotCodec.encode(expected), L0SnapshotCodec.encode(replacement),
+                false, deadline);
     }
 
     @Override
@@ -90,6 +108,16 @@ public final class SpringRedisChatMemoryStore
             throw new IllegalArgumentException("空 L0 必须通过删除表达");
         }
         String key = redisKey(memoryId);
+        String currentJson = redisTemplate.opsForValue().get(key);
+        L0Snapshot current = L0SnapshotCodec.decode(memoryId.toString(), currentJson);
+        if (current.hasKnownSource()) {
+            L0Snapshot replacement = L0SourceOperations.reconcile(current, snapshot, CanonicalUserMessageScope.currentBoundary());
+            if (replaceEncoded(key, currentJson, L0SnapshotCodec.encode(replacement), false,
+                    AdmissionDeadline.start(Duration.ofSeconds(60))) != DeadlineAwareReplaceResult.REPLACED) {
+                throw new IllegalStateException("L0 来源窗口在整列表更新时已变化");
+            }
+            return;
+        }
         String json = ChatMessageSerializer.messagesToJson(snapshot);
         if (ttlSeconds > 0L) {
             redisTemplate.opsForValue().set(
@@ -125,14 +153,20 @@ public final class SpringRedisChatMemoryStore
                 Objects.requireNonNull(expected, "旧快照不能为空"));
         List<ChatMessage> replacementSnapshot = List.copyOf(
                 Objects.requireNonNull(replacement, "新快照不能为空"));
+        return replaceEncoded(key, ChatMessageSerializer.messagesToJson(expectedSnapshot),
+                ChatMessageSerializer.messagesToJson(replacementSnapshot), replacementSnapshot.isEmpty(), deadline);
+    }
+
+    private DeadlineAwareReplaceResult replaceEncoded(String key, String expected, String replacement,
+                                                      boolean delete, AdmissionDeadline deadline) {
         try {
             Long result = redisTemplate.execute((RedisCallback<Long>)
                     connection -> connection.eval(
                     COMPARE_AND_REPLACE, ReturnType.INTEGER, 1,
                     utf8(key),
-                    utf8(ChatMessageSerializer.messagesToJson(expectedSnapshot)),
-                    utf8(ChatMessageSerializer.messagesToJson(replacementSnapshot)),
-                    utf8(replacementSnapshot.isEmpty() ? "1" : "0"),
+                    utf8(expected),
+                    utf8(replacement),
+                    utf8(delete ? "1" : "0"),
                     utf8(Long.toString(ttlSeconds)),
                     utf8(Long.toString(deadline.serverDeadlineEpochMillis()))));
             if (Long.valueOf(1L).equals(result)) {

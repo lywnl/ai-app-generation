@@ -13,6 +13,7 @@ public final class CanonicalUserMessageScope {
 
     private static final ThreadLocal<String> CANONICAL_TEXT =
             new ThreadLocal<>();
+    private static final ThreadLocal<TurnRequestBoundary> SOURCE_BOUNDARY = new ThreadLocal<>();
 
     private CanonicalUserMessageScope() {
     }
@@ -36,5 +37,21 @@ public final class CanonicalUserMessageScope {
 
     static String currentCanonicalText() {
         return CANONICAL_TEXT.get();
+    }
+
+    public static <T> T call(TurnRequestBoundary boundary, Supplier<T> action) {
+        Objects.requireNonNull(boundary, "持久用户来源不能为空");
+        TurnRequestBoundary previous = SOURCE_BOUNDARY.get();
+        SOURCE_BOUNDARY.set(boundary);
+        try {
+            return call(boundary.rawUserText(), action);
+        } finally {
+            if (previous == null) SOURCE_BOUNDARY.remove();
+            else SOURCE_BOUNDARY.set(previous);
+        }
+    }
+
+    static TurnRequestBoundary currentBoundary() {
+        return SOURCE_BOUNDARY.get();
     }
 }

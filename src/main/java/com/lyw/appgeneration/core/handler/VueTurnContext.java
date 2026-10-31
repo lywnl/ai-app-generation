@@ -21,6 +21,7 @@ import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager.DeleteTak
 import com.lyw.appgeneration.core.concurrency.VueTurnAdmissionController.AdmissionPermit;
 import dev.langchain4j.service.ReplanContext;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTermination;
+import com.lyw.appgeneration.model.entity.ChatHistory;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Objects;
@@ -83,6 +84,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             Sinks.one();
     private final ReentrantLock commitGate = new ReentrantLock();
     private UserCommitState userCommitState = UserCommitState.PREPARING;
+    private volatile long userHistoryId;
     private final CallbackGate callbackGate = new CallbackGate();
     private final TurnProgressChannel progressChannel =
             new TurnProgressChannel();
@@ -275,6 +277,19 @@ public final class VueTurnContext implements ContextContinuationGate {
         return turnId;
     }
 
+    /** 持久化用户记录标识回合；运行 turnId 仍仅用于租约和回调准入。 */
+    public long userHistoryId() {
+        commitGate.lock();
+        try {
+            if (userCommitState != UserCommitState.COMMITTED || userHistoryId <= 0L) {
+                throw new IllegalStateException("用户记录尚未持久化并绑定");
+            }
+            return userHistoryId;
+        } finally {
+            commitGate.unlock();
+        }
+    }
+
     public long startedAtNanos() {
         return startedAtNanos;
     }
@@ -352,6 +367,27 @@ public final class VueTurnContext implements ContextContinuationGate {
         return turnMode() == VueTurnMode.MUTATION_REQUIRED;
     }
 
+    /**
+     * 在已有提交门内保存并绑定实际返回的记录，不查询最后一条消息推断身份。
+     * 保存失败或预提交取消时不发布身份；提交后终止仍能读取同一用户记录 ID。
+     */
+    public UserCommitResult commitUserAndBindHistory(Supplier<ChatHistory> persistUser) {
+        Objects.requireNonNull(persistUser, "用户消息持久化动作不能为空");
+        return commitUser(() -> {
+            ChatHistory saved = persistUser.get();
+            if (saved == null) return false;
+            if (saved.getId() == null || saved.getId() <= 0
+                    || !Objects.equals(saved.getAppId(), appId)
+                    || !Objects.equals(saved.getUserId(), userId)
+                    || !"user".equals(saved.getMessageType())) {
+                throw new IllegalStateException("持久化用户记录与当前回合归属不符");
+            }
+            userHistoryId = saved.getId();
+            return true;
+        });
+    }
+
+    /** 兼容旧生命周期调用；生产请求必须使用带实际记录 ID 的提交入口。 */
     public UserCommitResult commitUser(BooleanSupplier persistUser) {
         Objects.requireNonNull(persistUser, "用户消息持久化动作不能为空");
         turnMode();

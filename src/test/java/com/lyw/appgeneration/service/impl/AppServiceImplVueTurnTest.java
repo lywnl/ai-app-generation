@@ -86,6 +86,31 @@ import static org.mockito.Mockito.times;
 class AppServiceImplVueTurnTest {
 
     @Test
+    void 相同原文的两次提交向生成入口传递各自持久记录而不猜最后记录() {
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(301L, "需求"), savedUser(302L, "需求"));
+        List<Long> identities = new ArrayList<>();
+        when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), anyBoolean(), any(), eq(generator)))
+                .thenAnswer(invocation -> {
+                    VueTurnContext context = invocation.getArgument(3);
+                    identities.add(context.userHistoryId());
+                    return Flux.just("正文");
+                });
+        when(executor.doExecuteVue(any(), any())).thenAnswer(invocation -> {
+            VueTurnContext context = invocation.getArgument(1);
+            return invocation.<Flux<String>>getArgument(0).map(GenerationStreamEvent::content)
+                    .doFinally(ignored -> context.closeResources());
+        });
+        for (int index = 0; index < 2; index++) {
+            service.chatToGenCode(APP_ID, "需求", User.builder().id(USER_ID).build()).blockLast();
+        }
+        assertEquals(List.of(301L, 302L), identities);
+        verify(history, never()).addChatMessage(anyLong(), anyString(), anyString(), anyLong());
+        verify(history, times(2)).getLastMessage(APP_ID);
+    }
+
+    @Test
     void Vue原始需求超过请求边界时不得写入用户消息或启动模型() {
         String oversizedMessage = "a".repeat(
                 TurnRequestBoundary.MAX_RAW_USER_TEXT_LENGTH + 1);
@@ -103,8 +128,8 @@ class AppServiceImplVueTurnTest {
     void Vue服务真实回合在模型正文前合并压缩进度且只订阅业务一次() {
         AtomicInteger businessSubscriptions = new AtomicInteger();
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
                 .thenAnswer(invocation -> {
@@ -141,6 +166,11 @@ class AppServiceImplVueTurnTest {
                 .verifyComplete();
 
         assertEquals(1, businessSubscriptions.get());
+    }
+
+    private ChatHistory savedUser(long id, String message) {
+        return ChatHistory.builder().id(id).appId(APP_ID).userId(USER_ID)
+                .messageType("user").message(message).build();
     }
 
     private static final long APP_ID = 7L;
@@ -271,8 +301,8 @@ class AppServiceImplVueTurnTest {
                 new AppDataLifecycleFence(), repairMetrics,
                 new FileToolBudgetGuard());
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(history.addAiMessageAndReturn(
                 eq(APP_ID), eq(VueTurnFinalizer.CANCELLED_MESSAGE),
                 eq(cancelledMemoryProjection()),
@@ -373,8 +403,8 @@ class AppServiceImplVueTurnTest {
                     starts.incrementAndGet();
                     return Flux.just("raw");
                 }));
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(executor.doExecuteVue(any(), any())).thenAnswer(invocation ->
                 invocation.<Flux<String>>getArgument(0)
                         .map(GenerationStreamEvent::content));
@@ -391,7 +421,7 @@ class AppServiceImplVueTurnTest {
                         "conflict_with", "none").counter().count());
         InOrder order = inOrder(history, facade, executor);
         order.verify(facade).prepareVueGenerator(APP_ID);
-        order.verify(history).addChatMessage(APP_ID, "需求", "user", USER_ID);
+        order.verify(history).addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID);
         order.verify(executor).doExecuteVue(any(), any());
         order.verify(facade).generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
@@ -401,8 +431,8 @@ class AppServiceImplVueTurnTest {
     void 成功终态后的协议内部取消不得重新请求用户取消() {
         AtomicReference<VueTurnContext> capturedContext = new AtomicReference<>();
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
                 .thenReturn(Flux.just("raw"));
@@ -446,8 +476,8 @@ class AppServiceImplVueTurnTest {
                 new AppLifecycleMetricsCollector(registry));
         AtomicInteger modelStarts = new AtomicInteger();
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
                 .thenReturn(Flux.defer(() -> {
@@ -469,7 +499,7 @@ class AppServiceImplVueTurnTest {
         assertEquals("raw", ((GenerationStreamEvent.SimpleText)
                 events.getFirst()).text());
         assertEquals(1, modelStarts.get());
-        verify(history, times(1)).addChatMessage(
+        verify(history, times(1)).addChatMessageAndReturn(
                 APP_ID, "需求", "user", USER_ID);
         verify(facade, times(1)).generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
@@ -502,8 +532,8 @@ class AppServiceImplVueTurnTest {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(vueTurnModeRoutingService.route("页面都有什么"))
                 .thenThrow(new IllegalStateException("分类模型不可用"));
-        when(history.addChatMessage(APP_ID, "页面都有什么", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "页面都有什么", "user", USER_ID))
+                .thenReturn(savedUser(101L, "页面都有什么"));
 
         GenerationPreflightException exception = assertThrows(
                 GenerationPreflightException.class,
@@ -514,7 +544,7 @@ class AppServiceImplVueTurnTest {
         assertEquals(GenerationPreflightException.Kind.SYSTEM,
                 exception.kind());
         assertEquals("系统内部错误，请稍后尝试。", exception.safeMessage());
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "页面都有什么", "user", USER_ID);
         verify(facade, never()).generateVueProjectStream(
                 anyString(), anyLong(), anyBoolean(), any(), any());
@@ -535,8 +565,8 @@ class AppServiceImplVueTurnTest {
         ReflectionTestUtils.setField(realFacade, "ragProperties", ragProperties);
         ReflectionTestUtils.setField(service, "aiCodeGeneratorFacade", realFacade);
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(false);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(null);
         when(executor.doExecuteVue(any(), any())).thenAnswer(invocation -> {
             VueTurnContext context = invocation.getArgument(1);
             return invocation.<Flux<String>>getArgument(0)
@@ -564,8 +594,8 @@ class AppServiceImplVueTurnTest {
                 .messageType("user").build());
         when(facade.generateVueProjectStream(anyString(), anyLong(),
                 anyBoolean(), any(), any())).thenReturn(Flux.empty());
-        when(history.addChatMessage(APP_ID, "新需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "新需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "新需求"));
         when(history.repairOrphanUserTurn(APP_ID, USER_ID,
                 "生成过程中遇到系统异常，请稍后重试。"))
                 .thenReturn(true);
@@ -580,7 +610,7 @@ class AppServiceImplVueTurnTest {
         order.verify(history).repairOrphanUserTurn(APP_ID, USER_ID,
                 "生成过程中遇到系统异常，请稍后重试。");
         order.verify(factory).prepareVueColdRebuild(APP_ID);
-        order.verify(history).addChatMessage(APP_ID, "新需求", "user", USER_ID);
+        order.verify(history).addChatMessageAndReturn(APP_ID, "新需求", "user", USER_ID);
         order.verify(facade).generateVueProjectStream(
                 eq("新需求"), eq(APP_ID), eq(false), any(), eq(generator));
     }
@@ -600,7 +630,7 @@ class AppServiceImplVueTurnTest {
         verify(factory, never()).prepareVueColdRebuild(APP_ID);
         verify(facade, never()).generateVueProjectStream(
                 anyString(), anyLong(), anyBoolean(), any(), any());
-        verify(history, never()).addChatMessage(
+        verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "新需求", "user", USER_ID);
         verify(history, never()).addAiMessageAndReturn(
                 eq(APP_ID), anyString(), anyString(), any(), eq(USER_ID));
@@ -653,7 +683,7 @@ class AppServiceImplVueTurnTest {
                     anyLong(), anyLong(), anyString());
             verify(factory, never()).prepareVueColdRebuild(APP_ID);
             verify(facade, never()).prepareVueGenerator(APP_ID);
-            verify(history, never()).addChatMessage(
+            verify(history, never()).addChatMessageAndReturn(
                     eq(APP_ID), anyString(), anyString(), eq(USER_ID));
             verify(finalizer, never()).finalizeOnce(any(), any());
             verifyNoInteractions(executor);
@@ -669,8 +699,8 @@ class AppServiceImplVueTurnTest {
                 new IllegalStateException("图片增强失败");
         ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(history.addAiMessageAndReturn(
                 eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
                 eq(systemErrorMemoryProjection()),
@@ -927,8 +957,8 @@ class AppServiceImplVueTurnTest {
     @Test
     void vueHandlerIsInstalledAfterUserCommitAndBeforeModelSubscription() {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
-        when(history.addChatMessage(APP_ID, "需求", "user", USER_ID))
-                .thenReturn(true);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
                 .thenReturn(Flux.empty());
@@ -942,7 +972,7 @@ class AppServiceImplVueTurnTest {
         InOrder order = inOrder(history, facade, executor);
         order.verify(history).getLastMessage(APP_ID);
         order.verify(facade).prepareVueGenerator(APP_ID);
-        order.verify(history).addChatMessage(APP_ID, "需求", "user", USER_ID);
+        order.verify(history).addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID);
         order.verify(executor).doExecuteVue(any(), any());
         order.verify(facade).generateVueProjectStream(
                 eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
