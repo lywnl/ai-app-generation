@@ -58,6 +58,10 @@ class MemoryCompressionMetricsCollectorTest {
             assertEquals(Set.of(
                     "recordContextGate",
                     "recordEstimatedTokens",
+                    "recordRequestSnapshot",
+                    "recordSummaryReuse",
+                    "recordCompatibleRead",
+                    "recordSummaryModelCall",
                     "startCompression",
                     "recordCompressionExecutorRejected",
                     "recordSummaryDraftSuccess",
@@ -103,6 +107,10 @@ class MemoryCompressionMetricsCollectorTest {
         collector.recordL2Candidate(
                 MemoryCompressionMetricsCollector.CandidateStatus.ACTIVE);
         collector.recordL2RecallTokens(800);
+        collector.recordRequestSnapshot(12, 12_000, 3);
+        collector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.COMMITTED_SNAPSHOT);
+        collector.recordCompatibleRead(MemoryCompressionMetricsCollector.CompatibleRead.RETRY_NEW_PAIR);
+        collector.recordSummaryModelCall();
 
         assertMetricTags(registry, "memory_context_gate_total",
                 Set.of("mode", "outcome"));
@@ -123,6 +131,13 @@ class MemoryCompressionMetricsCollectorTest {
         assertMetricTags(registry, "memory_l2_candidate_total",
                 Set.of("status"));
         assertMetricTags(registry, "memory_l2_recall_tokens", Set.of());
+        for (String name : List.of("memory_context_retained_messages", "memory_context_retained_tokens",
+                "memory_context_deduplicated_results", "memory_summary_model_calls_total")) {
+            assertMetricTags(registry, name, Set.of());
+        }
+        assertMetricTags(registry, "memory_summary_reuse_total", Set.of("kind"));
+        assertMetricTags(registry, "memory_compatible_read_total", Set.of("outcome"));
+        assertEquals(3D, registry.get("memory_context_deduplicated_results").summary().totalAmount());
         assertEquals(3_000D, registry.get("memory_summary_tokens")
                 .summary().totalAmount());
         assertEquals(2D, registry.get("memory_summary_reduce_rounds")
@@ -224,6 +239,10 @@ class MemoryCompressionMetricsCollectorTest {
                     .complete(MemoryCompressionResult.Status.COMPRESSED);
             collector.recordSummaryDraftSuccess(80, 0);
             collector.recordSummaryDraftFailure(1);
+            collector.recordRequestSnapshot(1, 100, 0);
+            collector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.IN_FLIGHT);
+            collector.recordCompatibleRead(MemoryCompressionMetricsCollector.CompatibleRead.COMPATIBLE);
+            collector.recordSummaryModelCall();
         });
         assertTrue(registry.failureTriggered());
     }

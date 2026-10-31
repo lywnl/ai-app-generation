@@ -22,6 +22,54 @@ import static org.mockito.Mockito.*;
 @EnabledIfEnvironmentVariable(named = "UNIFIED_MEMORY_REDIS_PORT", matches = "[0-9]+")
 class UnifiedSummaryStorageIntegrationTest extends UnifiedMemoryStorageFixture {
     @Test
+    void 重启修复以旧用户记录原子登记终态并用真实摘要依赖冷重建() {
+        service.commitUnifiedDraft(prepared());
+        var before = service.readSnapshot(appId);
+        String evidenceBefore = historiesMapper.selectOneById(10L).getDecisionEvidence();
+        var oldSource = memory.sourceSnapshot();
+        context.closeResources();
+        ReflectionTestUtils.setField(histories, "memorySummaryService", service);
+        assertTrue(histories.repairOrphanUserTurn(appId, 9L, "生成中断，请继续。"));
+        var terminal = histories.getLastMessage(appId);
+        var after = service.readRebuildSnapshot(appId, deadline());
+        assertEquals(before.summaryRevision() + 1, after.summaryRevision());
+        assertEquals(before.summary(), after.summary());
+        assertEquals(before.lastSummarizedId(), after.lastSummarizedId());
+        assertEquals(before.coverageState().coveredSequence(), after.coverageState().coveredSequence());
+        assertEquals(10, after.coverageState().userHistoryId());
+        assertEquals(terminal.getId(), after.coverageState().terminalHistoryId());
+        assertEquals(com.lyw.appgeneration.model.enums.ChatMemoryOutcome.SYSTEM_ERROR, after.coverageState().terminalOutcome());
+        assertFalse(after.coverageState().terminalIncluded());
+        assertEquals(evidenceBefore, historiesMapper.selectOneById(10L).getDecisionEvidence());
+        assertEquals(com.lyw.appgeneration.service.ChatHistoryService.HistoryLoadStatus.LOADED,
+                histories.loadSourceHistoryToMemory(appId, after, memory, 57_344, estimator, deadline()).status());
+        var rebuilt = memory.sourceSnapshot();
+        assertNotEquals(oldSource.memoryEpoch(), rebuilt.memoryEpoch());
+        assertEquals(after.summaryRevision(), rebuilt.appliedSummaryRevision());
+        assertEquals(2, rebuilt.entries().size(), "仅恢复用户和持久后端结果，不补造中断工具轨迹");
+        assertEquals(terminal.getId(), rebuilt.entries().getLast().historyRecordId());
+        assertEquals(rebuilt, L0SourceOperations.prune(rebuilt, after, 99));
+        verifyNoInteractions(model);
+    }
+
+    @Test
+    void 重启补写终态的数据库更新失败时AI与前沿一起回滚() throws Exception {
+        service.commitUnifiedDraft(prepared());
+        var before = service.readSnapshot(appId);
+        var source = memory.sourceSnapshot();
+        var failed = createService(afterMapperCall((name, result) -> {
+            if (name.equals("commitSnapshot")) throw new IllegalStateException("真实更新后注入故障");
+        }), transactions);
+        ReflectionTestUtils.setField(histories, "memorySummaryService", failed);
+        assertThrows(IllegalStateException.class, () -> histories.repairOrphanUserTurn(appId, 9L, "生成中断"));
+        assertEquals(before, service.readSnapshot(appId));
+        assertEquals(10L, histories.getLastMessage(appId).getId());
+        assertEquals(0, count("SELECT COUNT(*) FROM chat_history WHERE messageType='ai'"));
+        assertEquals(source, memory.sourceSnapshot());
+        verifyNoInteractions(model);
+    }
+
+    @Test
     void 读取r1后真实提交r2并回收必须重读无缺口组合() throws Exception {
         service.commitUnifiedDraft(prepared());
         append(11, 20);
@@ -187,10 +235,18 @@ class UnifiedSummaryStorageIntegrationTest extends UnifiedMemoryStorageFixture {
         assertEquals(replacement, memory.sourceSnapshot());
         assertTrue(context.tryStartCancellation(VueTurnContext.TerminalTrigger.CANCELLED));
         assertEquals(MemoryCompressionResult.Status.DELETE_REJECTED, service.commitUnifiedDraft(draft).status());
+        redis.opsForValue().set("mem:summary:" + appId, "旧缓存");
+        redis.opsForValue().set("mem:summary:v2:" + appId, "新缓存");
         try (var deletion = lifecycle.beginDelete(appId, Duration.ofSeconds(1))) {
             assertNotNull(deletion); deletion.commitTombstone();
         }
         assertEquals(DeadlineAwareReplaceResult.PREFIX_CHANGED, service.reclaimUnified(request, deadline()));
+        assertThrows(IllegalStateException.class, () -> service.readRebuildSnapshot(appId, deadline()));
+        assertThrows(IllegalStateException.class, () -> service.persistRecoveredTurnOutcome(appId, 9, 10,
+                () -> { fail("删除后不得补写历史"); return null; }));
+        assertTrue(service.invalidateCache(appId).failedTargets().isEmpty());
+        assertFalse(Boolean.TRUE.equals(redis.hasKey("mem:summary:" + appId)));
+        assertFalse(Boolean.TRUE.equals(redis.hasKey("mem:summary:v2:" + appId)));
         assertEquals(replacement, memory.sourceSnapshot());
     }
 

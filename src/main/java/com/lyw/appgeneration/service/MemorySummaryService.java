@@ -75,6 +75,13 @@ public interface MemorySummaryService {
     /** 一次读取同一持久化版本的正文与游标；没有可用摘要时返回空快照，依赖失败必须传播。 */
     MemorySummarySnapshot readSnapshot(Long appId);
 
+    /** 冷重建从新提交的数据库视图读取整份快照，不能继承调用方旧事务视图。 */
+    MemorySummarySnapshot readRebuildSnapshot(Long appId, com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
+
+    /** 重启后按已确认的旧用户记录登记补写终态；不绑定新回合、不调用摘要模型。 */
+    com.lyw.appgeneration.model.entity.ChatHistory persistRecoveredTurnOutcome(long appId, long userId,
+            long userHistoryId, java.util.function.Supplier<com.lyw.appgeneration.model.entity.ChatHistory> saveAi);
+
     /** 严格读取已覆盖目标边界的快照，调用方必须按返回的实际游标裁剪。 */
     default MemorySummarySnapshot readRequiredSnapshot(Long appId, long summarizedThroughId) {
         if (summarizedThroughId <= 0L) {

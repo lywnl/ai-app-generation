@@ -13,6 +13,7 @@ import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.*;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -37,6 +38,23 @@ import static org.mockito.Mockito.*;
 
 /** 使用真实请求门禁和流式编排，存储及摘要模型为本地替身。 */
 class UnifiedContextRequestGateTest {
+    @Test
+    void 观测保留原文与去重旧结果但不记录正文或新增模型调用() {
+        try (var fixture = new Fixture(true)) {
+            var source = L0SourceOperations.importClosedHistory(L0Snapshot.empty("7", 0),
+                    new ConversationTurn(1, 2, List.of(UserMessage.from("旧私密要求"), AiMessage.from("旧私密结果")), 100),
+                    "old", com.lyw.appgeneration.model.enums.ChatMemoryOutcome.FAILED);
+            source = L0SourceOperations.append(source, fixture.boundary.userMessage(), fixture.boundary);
+            fixture.store.value.set(source);
+            fixture.summary.set(new MemorySummarySnapshot(summaryText(), 2, 1, 2, null));
+            assertTrue(fixture.admit().canProceed());
+            assertEquals(1D, fixture.registry.get("memory_context_retained_messages").summary().totalAmount());
+            assertEquals(1D, fixture.registry.get("memory_context_deduplicated_results").summary().totalAmount());
+            assertTrue(fixture.registry.find("memory_summary_model_calls_total").counters().isEmpty());
+            assertEquals(1D, fixture.registry.get("memory_summary_reuse_total").tag("kind", "committed_snapshot").counter().count());
+            assertFalse(fixture.registry.getMeters().toString().contains("私密"));
+        }
+    }
     @ParameterizedTest
     @CsvSource({"49151,NORMAL,false,false", "49152,ASYNC_SCHEDULED,true,false",
             "57343,ASYNC_SCHEDULED,true,false", "57344,BLOCKING_COMPLETED,false,true",
@@ -479,7 +497,8 @@ class UnifiedContextRequestGateTest {
         final ExecutorService compression = Executors.newSingleThreadExecutor();
         final ExecutorService gateExecutor = Executors.newSingleThreadExecutor();
         final AppDataLifecycleFence lifecycle = new AppDataLifecycleFence();
-        final MemoryCompressionMetricsCollector metrics = new MemoryCompressionMetricsCollector(new SimpleMeterRegistry());
+        final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        final MemoryCompressionMetricsCollector metrics = new MemoryCompressionMetricsCollector(registry);
         final VueTurnContext context;
         final CompressionAwareChatMemory memory;
         final ContextCompressionCoordinator coordinator;
@@ -505,6 +524,7 @@ class UnifiedContextRequestGateTest {
                 lastEstimated.set(List.copyOf(messages)); lastTools.set(List.copyOf(specifications));
                 return realEstimator.estimateRequest(messages, specifications);
             });
+            when(estimator.estimateMessages(anyList())).thenAnswer(invocation -> realEstimator.estimateMessages(invocation.getArgument(0)));
             when(summaries.readCompatible(any(), any())).thenAnswer(invocation ->
                     new CompatibleMemorySnapshot(7, 10, "turn", summary.get(), store.value.get()));
             when(summaries.reclaimUnified(any(), any())).thenAnswer(invocation -> {

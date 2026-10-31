@@ -194,10 +194,13 @@ public class AiGeneratorServiceFactory {
                 .build();
         TokenAwareChatMemory tokenAwareMemory =
                 new TokenAwareChatMemory(delegate, store);
-        // 冷启动按完整回合回填到 30K；L1/L2 由最外层装饰器注入。
-        long lastSummarizedId;
+        // 冷启动按完整回合回填；Vue 在同次写入中建立来源和实际摘要依赖。
+        com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline =
+                com.lyw.appgeneration.ai.memory.AdmissionDeadline.start(memoryTokenProperties.getBlockingTimeout());
+        com.lyw.appgeneration.service.MemorySummarySnapshot summary;
         try {
-            lastSummarizedId = memorySummaryService.readSnapshot(appId).lastSummarizedId();
+            summary = java.util.Objects.requireNonNull(codeGenType == CodeGenTypeEnum.VUE_PROJECT
+                    ? memorySummaryService.readRebuildSnapshot(appId, deadline) : memorySummaryService.readSnapshot(appId));
         } catch (RuntimeException exception) {
             recordVueColdRebuild(
                     VueBuildRepairMetricsCollector.MemoryResult.FAILED,
@@ -207,9 +210,12 @@ public class AiGeneratorServiceFactory {
                     exception);
         }
         ChatHistoryService.HistoryLoadResult historyLoad =
-                chatHistoryService.loadRecentCompleteTurnsToMemory(
+                codeGenType == CodeGenTypeEnum.VUE_PROJECT
+                ? chatHistoryService.loadSourceHistoryToMemory(appId, summary, tokenAwareMemory,
+                        memoryTokenProperties.getBlockingCompressionThreshold(), chatTokenEstimator, deadline)
+                : chatHistoryService.loadRecentCompleteTurnsToMemory(
                         appId,
-                        lastSummarizedId,
+                        summary.lastSummarizedId(),
                         tokenAwareMemory,
                         memoryTokenProperties.getBlockingCompressionThreshold(),
                         chatTokenEstimator);

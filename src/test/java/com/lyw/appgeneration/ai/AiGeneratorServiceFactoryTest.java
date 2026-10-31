@@ -226,9 +226,11 @@ class AiGeneratorServiceFactoryTest {
     @Test
     void Redis缺失时正式冷启动只回填完整可信投影() {
         AiGeneratorServiceFactory factory = new AiGeneratorServiceFactory();
-        AtomicChatMemoryStore redisStore = statefulRedisStore();
+        AtomicChatMemoryStore redisStore = new AtomicChatMemoryStore(new com.lyw.appgeneration.ai.memory.SourceMemoryTestStore(
+                com.lyw.appgeneration.ai.memory.L0Snapshot.legacy("7", List.of())));
         ChatHistoryServiceImpl historyService = spy(
                 new ChatHistoryServiceImpl());
+        ReflectionTestUtils.setField(historyService, "lifecycleFence", new com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence());
         MemorySummaryService summaryService = mock(MemorySummaryService.class);
         ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
         MemoryTokenProperties properties = new MemoryTokenProperties();
@@ -243,7 +245,7 @@ class AiGeneratorServiceFactoryTest {
                         ChatMemoryOutcome.SUCCEEDED),
                 history(1L, "user", "不得配对的历史需求", null, null));
         doReturn(mysqlRows).when(historyService).list(any(QueryWrapper.class));
-        when(summaryService.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
+        when(summaryService.readRebuildSnapshot(eq(7L), any())).thenReturn(MemorySummarySnapshot.empty());
         when(summaryService.getCurrentSummary(7L)).thenReturn("");
         when(estimator.estimateMessages(anyList())).thenReturn(100);
         ReflectionTestUtils.setField(factory, "atomicChatMemoryStore", redisStore);
@@ -257,8 +259,17 @@ class AiGeneratorServiceFactoryTest {
         CompressionAwareChatMemory memory = factory.createOnlineChatMemory(
                 7L, CodeGenTypeEnum.VUE_PROJECT);
 
-        List<ChatMessage> requestView = memory.messages();
-        assertEquals(3, requestView.size());
+        var rebuilt = memory.l0Memory().sourceSnapshot();
+        assertTrue(rebuilt.hasKnownSource());
+        assertEquals(3L, rebuilt.turns().getFirst().userHistoryId());
+        assertEquals(4L, rebuilt.turns().getFirst().terminalHistoryId());
+        assertEquals(0L, rebuilt.appliedSummaryRevision());
+        assertEquals(2, memory.messages().size(), "原文入口不提前投影，实际发送由相容快照组装");
+        var boundary = com.lyw.appgeneration.ai.memory.TurnRequestBoundary.of("继续", List.of(), 5L, "new-turn");
+        com.lyw.appgeneration.ai.memory.CanonicalUserMessageScope.call(boundary, () -> { memory.add(boundary.userMessage()); return null; });
+        List<ChatMessage> requestView = memory.prepareCompatible(new com.lyw.appgeneration.service.CompatibleMemorySnapshot(
+                7L, 5L, "new-turn", MemorySummarySnapshot.empty(), memory.l0Memory().sourceSnapshot()));
+        assertEquals(4, requestView.size());
         SystemMessage trustedState = assertInstanceOf(
                 SystemMessage.class, requestView.getFirst());
         assertTrue(trustedState.text().contains(
@@ -302,9 +313,9 @@ class AiGeneratorServiceFactoryTest {
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
-        when(summary.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
-        when(history.loadRecentCompleteTurnsToMemory(
-                any(), any(Long.class), any(), any(Integer.class), any()))
+        when(summary.readRebuildSnapshot(eq(7L), any())).thenReturn(MemorySummarySnapshot.empty());
+        when(history.loadSourceHistoryToMemory(
+                any(), any(), any(), any(Integer.class), any(), any()))
                 .thenReturn(ChatHistoryService.HistoryLoadResult.failed());
 
         assertThrows(IllegalStateException.class, () -> factory
@@ -312,8 +323,8 @@ class AiGeneratorServiceFactoryTest {
         assertThrows(IllegalStateException.class, () -> factory
                 .getAiCodeGeneratorService(7L, CodeGenTypeEnum.VUE_PROJECT));
 
-        verify(history, times(2)).loadRecentCompleteTurnsToMemory(
-                any(), any(Long.class), any(), any(Integer.class), any());
+        verify(history, times(2)).loadSourceHistoryToMemory(
+                any(), any(), any(), any(Integer.class), any(), any());
         assertEquals(2.0, registry.get("vue_memory_l0_sync_total")
                 .tags("action", "rebuild", "result", "failed")
                 .counter().count());
@@ -335,7 +346,7 @@ class AiGeneratorServiceFactoryTest {
                 mock(ChatTokenEstimator.class));
         ReflectionTestUtils.setField(factory, "memoryTokenProperties",
                 new MemoryTokenProperties());
-        when(summary.readSnapshot(7L))
+        when(summary.readRebuildSnapshot(eq(7L), any()))
                 .thenThrow(new IllegalStateException("cursor read failed"));
 
         assertThrows(IllegalStateException.class, () ->

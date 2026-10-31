@@ -49,6 +49,12 @@ public class MemorySummaryDraftEngine {
     private final MemoryTokenProperties properties;
     private final ChatHistoryMemoryResolver memoryResolver;
     private final LongSupplier nanoTime;
+    private com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector metrics;
+
+    @Autowired
+    void configureMetrics(com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollector metrics) {
+        this.metrics = Objects.requireNonNull(metrics);
+    }
 
     @Autowired
     public MemorySummaryDraftEngine(
@@ -335,6 +341,7 @@ public class MemorySummaryDraftEngine {
                     throw new ModelStartRejectedException();
                 }
                 started.set(true);
+                if (metrics != null) metrics.recordSummaryModelCall();
                 return summarizationModel.chat(prompt);
             });
         } catch (RejectedExecutionException exception) {

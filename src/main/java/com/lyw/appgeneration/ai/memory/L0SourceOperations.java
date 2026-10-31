@@ -22,6 +22,25 @@ public final class L0SourceOperations {
     private L0SourceOperations() {
     }
 
+    /** 冷重建只导入持久化完整历史表示；旧用户原话不重新套用新请求长度限制。 */
+    public static L0Snapshot importClosedHistory(L0Snapshot source, ConversationTurn history,
+            String turnId, ChatMemoryOutcome outcome) {
+        requireSource(source);
+        if (history.messages().size() != 2 || !(history.messages().getFirst() instanceof UserMessage user)
+                || !(history.messages().getLast() instanceof dev.langchain4j.data.message.AiMessage ai)
+                || ai.hasToolExecutionRequests() || outcome == null || outcome == ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN
+                || (!source.turns().isEmpty() && !source.turns().getLast().closed())) {
+            throw new IllegalArgumentException("冷重建只能导入完整用户原话与持久后端结果");
+        }
+        long sequence = source.nextSequence();
+        var entries = new ArrayList<>(source.entries());
+        entries.add(new L0Snapshot.Message(sequence, history.turnId(), user, history.turnId()));
+        entries.add(new L0Snapshot.Message(sequence + 1, history.turnId(), ai, history.completedThroughId()));
+        var turns = new ArrayList<>(source.turns());
+        turns.add(new L0Snapshot.Turn(history.turnId(), turnId, sequence, history.completedThroughId(), outcome, sequence + 1));
+        return copy(source, source.memoryEpoch(), Math.addExact(sequence, 2), source.appliedSummaryRevision(), entries, turns);
+    }
+
     public static L0Snapshot append(L0Snapshot source, ChatMessage message, TurnRequestBoundary boundary) {
         requireSource(source);
         if (message instanceof SystemMessage system) return replaceSystem(source, system);

@@ -6,6 +6,12 @@ import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.ChatHistoryMemoryResolver;
 import com.lyw.appgeneration.ai.memory.ConversationTurn;
 import com.lyw.appgeneration.ai.memory.TokenAwareChatMemory;
+import com.lyw.appgeneration.ai.memory.AdmissionDeadline;
+import com.lyw.appgeneration.ai.memory.DecisionEvidence;
+import com.lyw.appgeneration.ai.memory.DecisionEvidenceCodec;
+import com.lyw.appgeneration.ai.memory.L0Snapshot;
+import com.lyw.appgeneration.ai.memory.L0SourceOperations;
+import com.lyw.appgeneration.ai.memory.DeadlineAwareReplaceResult;
 import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -18,6 +24,8 @@ import com.lyw.appgeneration.model.enums.ChatHistoryMessageTypeEnum;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.service.AppService;
 import com.lyw.appgeneration.service.ChatHistoryService;
+import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
@@ -48,7 +56,7 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
 
     private static final int COMPLETE_TURN_LOAD_BATCH_SIZE = 100;
     private static final String ORPHAN_TURN_MEMORY_MESSAGE =
-            "上一轮因系统异常未完成，未改变项目文件或构建状态。";
+            "上一轮因系统中断未完成，最终构建结果未确认。已经落盘的修改保留，后续操作以当前工程文件为准。";
 
     private final ChatHistoryMemoryResolver memoryResolver;
 
@@ -65,6 +73,13 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     @Resource
     @Lazy
     private AppService appService;
+
+    @Resource
+    @Lazy
+    private MemorySummaryService memorySummaryService;
+
+    @Resource
+    private com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence lifecycleFence;
 
     @Override
     public boolean addChatMessage(Long appId, String message, String messageType, Long userId) {
@@ -215,12 +230,20 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 .equals(lastMessage.getMessageType())) {
             return false;
         }
-        return addAiMessageAndReturn(
-                appId,
-                aiMessage,
-                ORPHAN_TURN_MEMORY_MESSAGE,
-                ChatMemoryOutcome.SYSTEM_ERROR,
-                userId) != null;
+        if (lastMessage.getId() == null || !Objects.equals(lastMessage.getAppId(), appId)
+                || !Objects.equals(lastMessage.getUserId(), userId)) {
+            throw new IllegalStateException("孤立用户记录归属不一致");
+        }
+        return Objects.requireNonNull(memorySummaryService, "孤立回合终态接口未装配")
+                .persistRecoveredTurnOutcome(appId, userId, lastMessage.getId(), () -> {
+                    ChatHistory locked = getOne(QueryWrapper.create().eq("id", lastMessage.getId())
+                            .eq("appId", appId).eq("userId", userId).forUpdate());
+                    ChatHistory latest = getLastMessage(appId);
+                    if (locked == null || latest == null || !Objects.equals(latest.getId(), locked.getId())
+                            || !isUserMessage(locked)) throw new IllegalStateException("待修复用户回合已变化");
+                    return addAiMessageAndReturn(appId, aiMessage, ORPHAN_TURN_MEMORY_MESSAGE,
+                            ChatMemoryOutcome.SYSTEM_ERROR, userId);
+                }) != null;
     }
 
     @Override
@@ -348,11 +371,69 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
             long afterCursorId,
             int tokenThreshold,
             ChatTokenEstimator estimator) {
-        List<ConversationTurn> newestFirst = new ArrayList<>();
+        return readRecentCompleteTurns(appId, afterCursorId, tokenThreshold, estimator, false, null);
+    }
+
+    @Override
+    public HistoryLoadResult loadSourceHistoryToMemory(Long appId, MemorySummarySnapshot summary,
+            TokenAwareChatMemory memory, int tokenThreshold, ChatTokenEstimator estimator, AdmissionDeadline deadline) {
+        Objects.requireNonNull(summary);
+        Objects.requireNonNull(memory);
+        Objects.requireNonNull(deadline);
+        if (appId == null || appId <= 0 || !Objects.equals(memory.id(), appId) || tokenThreshold <= 0) {
+            throw new IllegalArgumentException("来源冷重建的应用或预算无效");
+        }
+        try (var writer = Objects.requireNonNull(lifecycleFence, "来源重建生命周期栅栏未装配").tryAcquireWriter(appId)) {
+            if (writer == null) throw new IllegalStateException("应用删除流程已接管来源冷重建");
+            requireLoadTime(deadline);
+            L0Snapshot old = memory.sourceSnapshot();
+            if (old.hasKnownSource() && old.appliedSummaryRevision() > summary.summaryRevision()) {
+                throw new IllegalStateException("冷重建所读摘要落后于原窗口依赖");
+            }
+            CompleteTurnLoad load = readRecentCompleteTurns(appId, summary.lastSummarizedId(), tokenThreshold,
+                    estimator, true, deadline);
+            if (!old.hasKnownSource() && !old.entries().isEmpty() && load.sources().isEmpty() && summary.summary().isEmpty()) {
+                throw new IllegalStateException("旧数组缺少可对齐的持久历史或有效摘要");
+            }
+            L0Snapshot rebuilt = L0Snapshot.empty(Long.toString(appId), summary.summaryRevision());
+            for (var persisted : load.sources()) {
+                var turn = persisted.turn();
+                var frontier = summary.coverageState();
+                String turnId = persisted.evidence() == null ? "history-" + turn.turnId() : persisted.evidence().turnId();
+                if (frontier != null && frontier.userHistoryId() == turn.turnId()) {
+                    if (persisted.evidence() != null && !frontier.turnId().equals(turnId)) {
+                        throw new IllegalStateException("旧部分前沿与持久证据归属不一致");
+                    }
+                    turnId = frontier.turnId();
+                }
+                rebuilt = L0SourceOperations.importClosedHistory(rebuilt, turn, turnId, persisted.outcome());
+            }
+            requireLoadTime(deadline);
+            if (memory.replaceSourceSnapshot(old, rebuilt, deadline) != DeadlineAwareReplaceResult.REPLACED) {
+                throw new IllegalStateException("来源冷重建提交未确认");
+            }
+            int count = rebuilt.entries().size();
+            return count == 0 ? HistoryLoadResult.empty() : HistoryLoadResult.loaded(count);
+        } catch (RuntimeException failure) {
+            log.warn("来源冷重建失败 appId={} type={}", appId, failure.getClass().getSimpleName());
+            return HistoryLoadResult.failed();
+        }
+    }
+
+    private void requireLoadTime(AdmissionDeadline deadline) {
+        if (deadline != null && (deadline.remainingNanos() <= 0 || Thread.currentThread().isInterrupted())) {
+            throw new java.util.concurrent.CancellationException("冷重建超过截止或已中断");
+        }
+    }
+
+    private CompleteTurnLoad readRecentCompleteTurns(Long appId, long afterCursorId, int tokenThreshold,
+            ChatTokenEstimator estimator, boolean sourceRequired, AdmissionDeadline deadline) {
+        List<PersistedTurn> newestFirst = new ArrayList<>();
         ChatHistory pendingAi = null;
         Long beforeId = null;
         long totalTokens = 0L;
         while (totalTokens < tokenThreshold) {
+            requireLoadTime(deadline);
             List<ChatHistory> batch = listRecentHistoryBatch(
                     appId, afterCursorId, beforeId);
             if (batch == null) {
@@ -369,7 +450,16 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 } else if (isUserMessage(history) && pendingAi != null) {
                     ConversationTurn turn = toConversationTurn(
                             history, pendingAi, estimator);
-                    newestFirst.add(turn);
+                    DecisionEvidence evidence = null;
+                    if (sourceRequired) {
+                        if (!Objects.equals(history.getAppId(), appId) || !Objects.equals(pendingAi.getAppId(), appId)
+                                || history.getUserId() == null || history.getUserId() <= 0
+                                || !Objects.equals(history.getUserId(), pendingAi.getUserId())) {
+                            throw new IllegalStateException("冷重建的持久回合归属无效");
+                        }
+                        evidence = DecisionEvidenceCodec.decode(history.getDecisionEvidence(), history.getId());
+                    }
+                    newestFirst.add(new PersistedTurn(turn, pendingAi.getMemoryOutcome(), evidence));
                     totalTokens = Math.min(Integer.MAX_VALUE,
                             totalTokens + turn.tokens());
                     pendingAi = null;
@@ -529,12 +619,15 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     private record CompleteTurnLoad(
-            List<ConversationTurn> turns, int tokens) {
+            List<PersistedTurn> sources, int tokens) {
 
         private CompleteTurnLoad {
-            turns = List.copyOf(turns);
+            sources = List.copyOf(sources);
         }
+        private List<ConversationTurn> turns() { return sources.stream().map(PersistedTurn::turn).toList(); }
     }
+
+    private record PersistedTurn(ConversationTurn turn, ChatMemoryOutcome outcome, DecisionEvidence evidence) { }
 
     @Override
     public List<ChatHistory> listMessagesAfterCursor(Long appId, Long cursorId, int limit) {

@@ -149,6 +149,7 @@ class UnifiedSummaryCoordinationTest {
         final ConversationDecisionEvidenceService evidence = mock(ConversationDecisionEvidenceService.class);
         final SourceMemoryTestStore store = new SourceMemoryTestStore(L0Snapshot.empty("7", 0));
         final ChatTokenEstimator estimator = new ConservativeChatTokenEstimator(new MemoryTokenProperties());
+        final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         final MemorySummaryServiceImpl service;
         final UnifiedSummaryRequest request;
 
@@ -163,8 +164,8 @@ class UnifiedSummaryCoordinationTest {
             var row = ChatHistory.builder().id(10L).appId(7L).userId(9L).message("保留中文约束").messageType("user").isDelete(0).build();
             when(histories.listMessagesAfterCursor(7L, 0L, 100)).thenAnswer(ignored -> List.of(row));
             when(mapper.selectOneByQuery(any())).thenAnswer(ignored -> summary.get());
-            var metrics = new SimpleMeterRegistry();
             var engine = new MemorySummaryDraftEngine(histories, model, modelExecutor, estimator, properties);
+            engine.configureMetrics(new MemoryCompressionMetricsCollector(metrics));
             service = new MemorySummaryServiceImpl(mapper, engine, worker, mock(StringRedisTemplate.class), lifecycle,
                     estimator, properties, new MemoryCompressionMetricsCollector(metrics), transactions, Clock.systemUTC());
             var operation = new AppOperationLeaseManager().acquire(7L, AppOperationLeaseManager.AppOperationType.GENERATE, "turn");

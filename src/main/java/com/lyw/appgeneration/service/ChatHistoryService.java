@@ -116,6 +116,11 @@ public interface ChatHistoryService extends IService<ChatHistory> {
             int blockingCompressionThreshold,
             ChatTokenEstimator estimator);
 
+    /** Vue 冷重建同时提交新 epoch、持久回合来源及实际所用摘要修订；旧数组只在此入口重新对齐。 */
+    HistoryLoadResult loadSourceHistoryToMemory(Long appId, MemorySummarySnapshot summary,
+            com.lyw.appgeneration.ai.memory.TokenAwareChatMemory memory, int tokenThreshold,
+            ChatTokenEstimator estimator, com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline);
+
     /** 查询最近稳定完整回合边界，结果按时间正序返回。 */
     List<StableTurnBoundary> listRecentCompleteTurnBoundaries(
             Long appId, int maxTurns);

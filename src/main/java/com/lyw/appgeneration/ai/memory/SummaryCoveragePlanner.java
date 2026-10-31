@@ -49,6 +49,14 @@ public final class SummaryCoveragePlanner {
             var all = remaining.stream().filter(unit -> unit.userHistoryId() == turn.userHistoryId()).toList();
             var chosen = all.stream().filter(unit -> selectedIds.contains(unit.sourceId())).toList();
             if (stopped && !chosen.isEmpty()) throw new IllegalArgumentException("不能越过未覆盖回合推进摘要");
+            // 冷重建后旧工具轨迹已不可用；实际持久表示已经全部覆盖的旧前沿可随下一份草稿归并。
+            if (!stopped && turn.closed() && all.isEmpty() && frontier != null && frontier.userHistoryId() == turn.userHistoryId()) {
+                cursor = turn.terminalHistoryId();
+                frontier = null;
+                if (turn.evidence() != null) evidence.put(turn.userHistoryId(), turn.evidence());
+                addHistory(history, materials, turn.userHistoryId());
+                addHistory(history, materials, turn.terminalHistoryId());
+            }
             if (chosen.isEmpty()) {
                 if (!all.isEmpty()) stopped = true;
                 continue;

@@ -110,6 +110,41 @@ class SummaryCoveragePlannerTest {
         return source;
     }
 
+    @Test
+    void 冷重建后的已覆盖旧前沿可随下一份增量归并而不重复摘要() {
+        var oldEvidence = DecisionEvidence.empty(10, "old").merge(List.of(new DecisionEvidence.Entry("user:10",
+                DecisionEvidence.SourceKind.USER, "", 0, List.of(), List.of(), List.of(), List.of(), 0)),
+                "old-epoch", 99, 1, 100);
+        var previous = new MemorySummarySnapshot(L0SourceOperationsTest.SUMMARY, 0, 5, 2,
+                new SummaryCoverage(10, "old", "old-epoch", 99, "a".repeat(64), 1, 20L, ChatMemoryOutcome.FAILED, true));
+        var source = L0SourceOperations.importClosedHistory(L0Snapshot.empty("7", 5),
+                new ConversationTurn(10, 20, List.of(UserMessage.from("旧要求"), AiMessage.from("真实失败")), 100), "old", ChatMemoryOutcome.FAILED);
+        var boundary = TurnRequestBoundary.of("当前要求", List.of(), 30, "current");
+        source = L0SourceOperations.append(source, boundary.userMessage(), boundary);
+        source = L0SourceOperations.append(source, AiMessage.from("当前增量说明"), null);
+        var oldUser = new SummaryUnit("user:10", 10, SummaryUnit.Kind.USER, source.memoryEpoch(), 1, 1,
+                List.of(source.messages().getFirst()), null, null, null);
+        var terminal = new SummaryUnit("terminal:20", 10, SummaryUnit.Kind.TERMINAL, null, 0, 0,
+                List.of(AiMessage.from("真实失败")), 20L, ChatMemoryOutcome.FAILED, null);
+        var oldDecision = new SummaryUnit("decision:10:user:10:1", 10, SummaryUnit.Kind.DECISION, null, 0, 0,
+                List.of(), null, null, oldEvidence.entries().getFirst());
+        var currentUnits = List.of(new SummaryUnit("user:30", 30, SummaryUnit.Kind.USER, source.memoryEpoch(), 3, 3,
+                        List.of(boundary.userMessage()), null, null, null),
+                new SummaryUnit("l0:new:4", 30, SummaryUnit.Kind.MODEL_TEXT, source.memoryEpoch(), 4, 4,
+                        List.of(source.messages().getLast()), null, null, null));
+        var materials = new SummaryMaterials(7, 9, 30, previous, source, List.of(
+                new SummaryMaterials.Turn(10, "old", source.memoryEpoch(), 2, 20L, ChatMemoryOutcome.FAILED,
+                        oldEvidence, List.of(oldUser, terminal, oldDecision)),
+                new SummaryMaterials.Turn(30, "current", source.memoryEpoch(), 4, null, null,
+                        DecisionEvidence.empty(30, "current"), currentUnits)), Map.of(10L, "old-user", 20L, "old-ai", 30L, "user"));
+        assertEquals(currentUnits, planner.uncovered(materials));
+        var input = planner.input(materials, new SummaryWindowSelector.Selection(currentUnits, Set.of(), 0));
+        assertEquals(20, input.targetHistoryCursor());
+        assertEquals(30, input.targetCoverage().userHistoryId());
+        assertEquals(currentUnits, input.selected());
+        assertEquals(oldEvidence, input.evidenceSnapshots().get(10L), "归并前仍须核对旧证据修订没有新增");
+    }
+
     private SummaryMaterials materials(L0Snapshot source, MemorySummarySnapshot previous, boolean closed, long current, long evidenceThrough) {
         var evidence = DecisionEvidence.empty(10, "turn").merge(List.of(new DecisionEvidence.Entry("user:10",
                 DecisionEvidence.SourceKind.USER, "", 0, List.of(), List.of(), List.of(), List.of(), 0)),

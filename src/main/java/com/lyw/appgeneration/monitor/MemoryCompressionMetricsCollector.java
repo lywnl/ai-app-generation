@@ -53,6 +53,27 @@ public final class MemoryCompressionMetricsCollector {
                 "stage", tag(stage)).record(tokens));
     }
 
+    /** 只记录数量，不接收应用 ID、用户原文、工具正文或自由标签。 */
+    public void recordRequestSnapshot(int retainedMessages, int retainedTokens, int deduplicatedResults) {
+        if (retainedMessages < 0 || retainedTokens < 0 || deduplicatedResults < 0) return;
+        safely(() -> summary("memory_context_retained_messages").record(retainedMessages));
+        safely(() -> summary("memory_context_retained_tokens").record(retainedTokens));
+        safely(() -> summary("memory_context_deduplicated_results").record(deduplicatedResults));
+    }
+
+    public void recordSummaryReuse(SummaryReuse kind) {
+        safely(() -> counter("memory_summary_reuse_total", "kind", tag(kind)).increment());
+    }
+
+    public void recordCompatibleRead(CompatibleRead outcome) {
+        safely(() -> counter("memory_compatible_read_total", "outcome", tag(outcome)).increment());
+    }
+
+    /** 每次真正进入摘要模型调用时计数；等待已有任务和复用快照不计入。 */
+    public void recordSummaryModelCall() {
+        safely(() -> counter("memory_summary_model_calls_total").increment());
+    }
+
     public CompressionObservation startCompression(CompressionMode mode) {
         return new CompressionObservation(
                 this, mode, currentNanosOrUnavailable());
@@ -190,6 +211,9 @@ public final class MemoryCompressionMetricsCollector {
     public enum CompressionMode {
         ASYNC, BLOCKING
     }
+
+    public enum SummaryReuse { IN_FLIGHT, NO_NEW_SOURCE, COMMITTED_SNAPSHOT }
+    public enum CompatibleRead { COMPATIBLE, RETRY_NEW_PAIR }
 
     public enum DebounceOutcome {
         REGISTERED,

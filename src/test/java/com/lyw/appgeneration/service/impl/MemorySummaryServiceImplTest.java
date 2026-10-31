@@ -1977,7 +1977,8 @@ class MemorySummaryServiceImplTest {
         try {
             when(summaryMapper.selectOneByQuery(any())).thenReturn(null);
             when(chatHistoryService.listMessagesAfterCursor(1L, 0L, 100))
-                    .thenReturn(List.of());
+                    .thenReturn(List.of(message(1L, "user", "新增需求"), message(2L, "ai", "实际结果")));
+            when(summarizationModel.chat(anyString())).thenReturn(textWithTokens("可提交的摘要", 800));
             MemorySummaryServiceImpl observed = newService(
                     mock(ExecutorService.class),
                     modelExecutor,
@@ -1988,7 +1989,7 @@ class MemorySummaryServiceImplTest {
             MemoryCompressionResult result = observed.compressNow(
                     1L, 2L, Duration.ofSeconds(1));
 
-            assertEquals(MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
+            assertEquals(MemoryCompressionResult.Status.COMPRESSED,
                     result.status());
             assertTrue(registry.failureTriggered());
         } finally {

@@ -240,6 +240,10 @@ Vue 回合结束时，最终决策证据、展示文本、可信结果及必要�
 
 核心代码：[ai/memory](src/main/java/com/lyw/appgeneration/ai/memory)。当前按单后端实例设计，不能仅增加容器副本就假定记忆和回合状态已支持分布式协调。
 
+冷重建只恢复持久历史、可信结果和有效摘要，不自动续跑旧工具链。旧数组需先对齐持久来源，新 epoch 与实际摘要修订一起保存；无法证明来源或摘要下界时受控失败。数据库加列、旧格式适配及新格式写入后的回退限制见 [统一摘要迁移说明](sql/migrations/README.md#2026-10-31统一摘要与决策证据)。
+
+观测使用 `memory_context_estimated_tokens` 查看完整请求前后预算，`memory_context_retained_messages`／`memory_context_retained_tokens` 查看保留原文量，`memory_context_deduplicated_results` 查看去除的已覆盖结果数。`memory_summary_model_calls_total` 只在实际摘要调用时增加，`memory_summary_reuse_total` 区分等待已有任务、无新增材料和复用已提交快照；`memory_compatible_read_total` 记录配对重读。摘要耗时与失败仍通过原压缩指标和进度通道提供，`memory_summary_tokens` 只记录已确认提交的摘要。指标不包含原始用户内容、源码或工具正文。
+
 ### 前端如何看到执行过程
 
 SSE 传输 AI 正文、工具参数增量、工具请求完成、工具执行结果和 `turn-outcome` 等控制事件。前端展示可信结果，不把模型说“完成了”当作构建成功。

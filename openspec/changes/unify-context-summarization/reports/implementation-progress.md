@@ -32,6 +32,10 @@
 | 7.3 | 249 项回归通过；生产三个阈值与共享截止、已覆盖大 L0 不重复摘要、最新大批次及固定资料超限、真实失败受控停止均已验证。删除旧检查点投影、结果类型、专用状态和专用重建；原检查点专项测试由统一摘要来源／门禁场景替换，保留非 Vue 完整历史兼容路径。 | `.codex/unify-context-summarization/runs/050-unified-admission/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 7.4 | 118 项测试通过；完整请求捕获验证 RAG、图片 URL／路径和 Skill 目录各一份，同步等待后不叠加、不再检索；下一用户回合保留正常历史而不继承临时资料。构建及升级反馈仍由有效模型响应确认，准备、失败和取消均不提前送达；资料与反馈不写入 L0。 | `.codex/unify-context-summarization/runs/051-transient-lifecycle/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 7.5 | 142 项计划／构建／只读升级／恢复组合测试通过；实际模型请求链验证同版本 REPLAN_PENDING、单份偏差反馈及修订后的刷新，既有权限、绑定次数、真实构建判定、恢复代次和取消规则保持。此项为本地可控输出回归，不替代真实模型长任务验收。 | `.codex/unify-context-summarization/runs/052-plan-guard-recovery/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 8.1 | 冷重建与隔离 87 项本地回归、12 项真实存储组合通过；新 epoch 与实际摘要修订一次写入，旧数组必须可靠对齐，旧序号不裁新原文；孤立用户按旧记录补写终态且与前沿登记同事务，保留已有证据和磁盘修改事实，不自动续跑工具。 | `.codex/unify-context-summarization/runs/058-cold-isolation-real-storage/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 8.2 | 删除及访问边界回归通过；新增冷重建读取、历史来源回填与孤立终态登记受同一删除栅栏保护，删除后不回填，其他应用保持可写。真实 Redis 验证新旧摘要缓存键均清理，独立证据和 L2 的原有归属及隔离测试保持通过。 | `.codex/unify-context-summarization/runs/057-cold-isolation/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 8.3 | 158 项回归通过；观测增加原文保留量、旧结果去重、配对重读和摘要复用类型，真实模型调用单独计数。统一及兼容路径都仅在确认持久提交后计摘要成功；复用、失败和旁路指标异常不虚增模型成功，也不影响门禁结果。 | `.codex/unify-context-summarization/runs/061-summary-observability/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 8.4 | 已对照新旧数据夹具及真实存储结果补齐旧数组对齐、读取下界、缓存键、孤立回合修复、单实例发布和分阶段回退说明，git diff --check 通过。不重跑已经完成的迁移，不把未知来源填零或清空新摘要／证据作为回退办法。 | `.codex/unify-context-summarization/runs/062-runtime-docs/command.json`、原始日志、JUnit 与代码内容哈希 |
 
 ## 环境边界
 

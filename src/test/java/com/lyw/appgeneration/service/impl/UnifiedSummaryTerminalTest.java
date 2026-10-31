@@ -64,4 +64,19 @@ class UnifiedSummaryTerminalTest {
                 .message("模型声称已成功完成").memoryMessage("真实构建失败，保留已修改文件")
                 .memoryOutcome(ChatMemoryOutcome.FAILED).isDelete(0).build();
     }
+
+    @Test
+    void 删除后不读取冷重建摘要也不补写旧回合终态() {
+        try (var f = new UnifiedSummaryCoordinationTest.Fixture(Executors.newSingleThreadExecutor())) {
+            try (var deletion = f.lifecycle.beginDelete(7, java.time.Duration.ofSeconds(1))) {
+                assertNotNull(deletion); deletion.commitTombstone();
+            }
+            clearInvocations(f.mapper);
+            assertThrows(IllegalStateException.class, () -> f.service.readRebuildSnapshot(7L,
+                    AdmissionDeadline.start(java.time.Duration.ofSeconds(1))));
+            assertThrows(IllegalStateException.class, () -> f.service.persistRecoveredTurnOutcome(7, 9, 10,
+                    () -> { fail("删除后不能保存旧回合"); return null; }));
+            verifyNoInteractions(f.mapper, f.model);
+        }
+    }
 }

@@ -160,7 +160,30 @@ final class UnifiedContextRequestPreparer {
         List<ChatMessage> frozen = List.copyOf(messages);
         int tokens = estimator.estimateRequest(frozen, tools);
         requireActive(work.context(), deadline);
+        observeSnapshot(compatible, boundary.userHistoryId());
         return new RequestContextSnapshot(compatible, plan, frozen, tools, tokens);
+    }
+
+    private void observeSnapshot(CompatibleMemorySnapshot compatible, long userHistoryId) {
+        try {
+            var summary = compatible.summary();
+            var source = summary.summaryRevision() > 0
+                    ? L0SourceOperations.prune(compatible.source(), summary, userHistoryId) : compatible.source();
+            var originals = source.entries().stream().filter(entry -> entry.userHistoryId() > 0
+                    && !(entry.payload() instanceof AiMessage && entry.historyRecordId() != null))
+                    .map(L0Snapshot.Message::payload).toList();
+            int deduplicated = (int) compatible.source().entries().stream().filter(entry -> {
+                if (!(entry.payload() instanceof AiMessage) || entry.historyRecordId() == null) return false;
+                if (entry.historyRecordId() <= summary.lastSummarizedId()) return true;
+                var frontier = summary.coverageState();
+                return frontier != null && frontier.terminalIncluded()
+                        && Objects.equals(frontier.terminalHistoryId(), entry.historyRecordId());
+            }).count();
+            metrics.recordRequestSnapshot(originals.size(), estimator.estimateMessages(originals), deduplicated);
+            if (!summary.summary().isEmpty()) metrics.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.COMMITTED_SNAPSHOT);
+        } catch (RuntimeException ignored) {
+            // 原文量的旁路计量失败不能改变已经审核的完整请求及其预算。
+        }
     }
 
     private void requireActive(VueTurnContext context, AdmissionDeadline deadline) {

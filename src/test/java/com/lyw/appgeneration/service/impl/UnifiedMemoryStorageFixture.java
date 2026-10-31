@@ -113,6 +113,7 @@ abstract class UnifiedMemoryStorageFixture {
         transactions = new DataSourceTransactionManager(dataSource);
         histories = new ChatHistoryServiceImpl();
         ReflectionTestUtils.setField(histories, "mapper", historiesMapper);
+        ReflectionTestUtils.setField(histories, "lifecycleFence", lifecycle);
         evidence = new ConversationDecisionEvidenceService(historiesMapper, apps, lifecycle, transactions);
 
         var standalone = new RedisStandaloneConfiguration("127.0.0.1", Integer.parseInt(System.getenv("UNIFIED_MEMORY_REDIS_PORT")));
@@ -160,6 +161,7 @@ abstract class UnifiedMemoryStorageFixture {
         @SuppressWarnings("unchecked") ObjectProvider<PlatformTransactionManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(manager);
         var engine = new MemorySummaryDraftEngine(histories, model, models, estimator, properties);
+        engine.configureMetrics(new MemoryCompressionMetricsCollector(registry));
         var result = new MemorySummaryServiceImpl(mapper, engine, workers, redis, lifecycle, estimator, properties,
                 new MemoryCompressionMetricsCollector(registry), provider);
         result.configureUnifiedInputs(new SummaryMaterialReader(histories), new SummaryWindowSelector(estimator, properties), new SummaryCoveragePlanner(), evidence);

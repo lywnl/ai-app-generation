@@ -242,25 +242,8 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                             throw new IllegalStateException("终态证据的持久身份或修订无效");
                         }
                         ChatHistory ai = Objects.requireNonNull(saveAi.get(), "AI 终态没有成功保存");
-                        if (ai.getId() == null || ai.getId() <= userHistoryId || !Objects.equals(ai.getAppId(), context.appId())
-                                || !Objects.equals(ai.getUserId(), context.userId()) || !"ai".equals(ai.getMessageType())
-                                || ai.getMemoryOutcome() == null || StrUtil.isBlank(ai.getMemoryMessage())) {
-                            throw new IllegalStateException("AI 终态的持久身份或可信结果无效");
-                        }
-                        AppMemorySummary current = summaryMapper.selectOneByQuery(QueryWrapper.create()
-                                .eq("appId", context.appId()).eq("isDelete", 0).forUpdate());
-                        MemorySummarySnapshot previous = snapshotOf(current);
-                        var frontier = previous.coverageState();
-                        if (frontier != null && frontier.userHistoryId() == userHistoryId) {
-                            if (!frontier.turnId().equals(context.turnId())) throw new IllegalStateException("部分前沿不属于终态回合");
-                            var ended = frontier.withTerminal(ai.getId(), ai.getMemoryOutcome());
-                            if (!ended.equals(frontier)) {
-                                deleteCacheStrict(CACHE_KEY_PREFIX + context.appId(), context.appId());
-                                var next = new MemorySummarySnapshot(previous.summary(), previous.lastSummarizedId(),
-                                        Math.addExact(previous.summaryRevision(), 1), previous.coverageVersion(), ended);
-                                persistSnapshot(context.appId(), current, next, tokenEstimator.estimateText(next.summary()));
-                            }
-                        }
+                        validateTerminalIdentity(context.appId(), context.userId(), userHistoryId, ai);
+                        registerTerminalAtCommit(context.appId(), userHistoryId, context.turnId(), ai);
                         if (deadline.remainingNanos() <= 0) {
                             status.setRollbackOnly();
                             return PersistenceOutcome.TIMED_OUT;
@@ -273,6 +256,71 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 }
             });
         }
+    }
+
+    @Override
+    public MemorySummarySnapshot readRebuildSnapshot(Long appId, AdmissionDeadline deadline) {
+        if (appId == null || appId <= 0) throw new IllegalArgumentException("冷重建应用身份无效");
+        try (var writer = lifecycleFence.tryAcquireWriter(appId)) {
+            if (writer == null) throw new IllegalStateException("应用删除流程已接管摘要重建读取");
+            return readFreshSnapshot(appId, Objects.requireNonNull(deadline));
+        }
+    }
+
+    @Override
+    public ChatHistory persistRecoveredTurnOutcome(long appId, long userId, long userHistoryId,
+            java.util.function.Supplier<ChatHistory> saveAi) {
+        if (appId <= 0 || userId <= 0 || userHistoryId <= 0) throw new IllegalArgumentException("孤立回合身份无效");
+        Objects.requireNonNull(saveAi);
+        AdmissionDeadline deadline = AdmissionDeadline.start(properties.getBlockingTimeout());
+        try (var writer = lifecycleFence.tryAcquireWriter(appId)) {
+            if (writer == null) throw new IllegalStateException("应用删除流程已接管孤立回合修复");
+            long end = monotonicDeadline(deadline);
+            try (var consistency = consistencyCoordinator.tryAcquireUntil(appId, end)) {
+                if (consistency == null) throw new java.util.concurrent.CancellationException("孤立回合登记等待截止");
+                var saved = new java.util.concurrent.atomic.AtomicReference<ChatHistory>();
+                PersistenceOutcome outcome = executePersistenceTransaction(end, status -> {
+                    // 保存回调在本事务内锁定并复核已确认的旧用户记录，决策证据保留原始来源。
+                    ChatHistory ai = Objects.requireNonNull(saveAi.get(), "孤立回合终态没有保存");
+                    validateTerminalIdentity(appId, userId, userHistoryId, ai);
+                    registerTerminalAtCommit(appId, userHistoryId, null, ai);
+                    if (deadline.remainingNanos() <= 0) {
+                        status.setRollbackOnly();
+                        return PersistenceOutcome.TIMED_OUT;
+                    }
+                    saved.set(ai);
+                    return PersistenceOutcome.PERSISTED;
+                });
+                if (outcome != PersistenceOutcome.PERSISTED) throw new java.util.concurrent.CancellationException("孤立回合保存截止");
+                return saved.get();
+            }
+        }
+    }
+
+    private void validateTerminalIdentity(long appId, long userId, long userHistoryId, ChatHistory ai) {
+        if (ai.getId() == null || ai.getId() <= userHistoryId || !Objects.equals(ai.getAppId(), appId)
+                || !Objects.equals(ai.getUserId(), userId) || !"ai".equals(ai.getMessageType())
+                || ai.getMemoryOutcome() == null || StrUtil.isBlank(ai.getMemoryMessage())) {
+            throw new IllegalStateException("AI 终态的持久身份或可信结果无效");
+        }
+    }
+
+    /** 普通收尾与重启修复共用此登记；只更新结束身份与修订，不提前推进语义覆盖。 */
+    private void registerTerminalAtCommit(long appId, long userHistoryId, String expectedTurnId, ChatHistory ai) {
+        AppMemorySummary current = summaryMapper.selectOneByQuery(QueryWrapper.create()
+                .eq("appId", appId).eq("isDelete", 0).forUpdate());
+        MemorySummarySnapshot previous = snapshotOf(current);
+        var frontier = previous.coverageState();
+        if (frontier == null || frontier.userHistoryId() != userHistoryId) return;
+        if (expectedTurnId != null && !frontier.turnId().equals(expectedTurnId)) {
+            throw new IllegalStateException("部分前沿不属于终态回合");
+        }
+        var ended = frontier.withTerminal(ai.getId(), ai.getMemoryOutcome());
+        if (ended.equals(frontier)) return;
+        deleteCacheStrict(CACHE_KEY_PREFIX + appId, appId);
+        var next = new MemorySummarySnapshot(previous.summary(), previous.lastSummarizedId(),
+                Math.addExact(previous.summaryRevision(), 1), previous.coverageVersion(), ended);
+        persistSnapshot(appId, current, next, tokenEstimator.estimateText(next.summary()));
     }
 
     @Override
@@ -349,6 +397,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             var flight = new CompletableFuture<MemoryCompressionResult>();
             var existing = inFlight.putIfAbsent(request.appId(), flight);
             if (existing != null) {
+                metricsCollector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.IN_FLIGHT);
                 var joined = awaitExistingFlight(existing, monotonicDeadline(deadline));
                 if (joined.status() != MemoryCompressionResult.Status.COMPRESSED
                         && joined.status() != MemoryCompressionResult.Status.NOTHING_TO_COMPRESS) return joined;
@@ -369,7 +418,10 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                             Function<UnifiedDraft, MemoryCompressionResult> commit) {
         if (!unifiedAllowed(request) || deadline.remainingNanos() <= 0 || !isFallbackRetryReady(request.appId())) return false;
         var flight = new CompletableFuture<MemoryCompressionResult>();
-        if (inFlight.putIfAbsent(request.appId(), flight) != null) return false;
+        if (inFlight.putIfAbsent(request.appId(), flight) != null) {
+            metricsCollector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.IN_FLIGHT);
+            return false;
+        }
         try {
             executor.submit(() -> {
                 MemoryCompressionResult outcome = null;
@@ -402,6 +454,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
         try {
             SummaryInput input = prepareUnifiedInput(request, deadline);
             if (input == null) {
+                metricsCollector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.NO_NEW_SOURCE);
                 var current = readFreshSnapshot(request.appId(), deadline);
                 outcome = result(MemoryCompressionResult.Status.NOTHING_TO_COMPRESS, current.lastSummarizedId(),
                         tokenEstimator.estimateText(current.summary()), "没有新增可压缩来源");
@@ -491,8 +544,13 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
             L0Snapshot source = request.memory().withSourceLock(deadline, Function.identity());
             requireReadable(request, deadline);
             if (!source.hasKnownSource()) throw new IllegalStateException("旧原文窗口的来源和摘要依赖尚未对齐");
-            if (summary.summaryRevision() < source.appliedSummaryRevision()) continue;
-            return new CompatibleMemorySnapshot(request.appId(), request.userHistoryId(), request.context().turnId(), summary, source);
+            if (summary.summaryRevision() < source.appliedSummaryRevision()) {
+                metricsCollector.recordCompatibleRead(MemoryCompressionMetricsCollector.CompatibleRead.RETRY_NEW_PAIR);
+                continue;
+            }
+            var compatible = new CompatibleMemorySnapshot(request.appId(), request.userHistoryId(), request.context().turnId(), summary, source);
+            metricsCollector.recordCompatibleRead(MemoryCompressionMetricsCollector.CompatibleRead.COMPATIBLE);
+            return compatible;
         }
     }
 
@@ -907,8 +965,6 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                         appId, current, draft.failureStatus(),
                         draft.detail(), deadlineNanos);
             }
-            metricsCollector.recordSummaryDraftSuccess(
-                    draft.summaryTokens(), draft.reducerRounds());
             if (!draft.changed()) {
                 PersistenceOutcome cleared =
                         clearPersistentFailureMetadataWithinDeadline(
@@ -918,6 +974,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                             "清除摘要失败元数据时截止时间已到");
                 }
                 clearFallbackRetryDelay(appId);
+                metricsCollector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.NO_NEW_SOURCE);
                 return result(
                         MemoryCompressionResult.Status.NOTHING_TO_COMPRESS,
                         draft.summarizedThroughId(), draft.summaryTokens(),
@@ -934,6 +991,7 @@ public class MemorySummaryServiceImpl implements MemorySummaryService {
                 return timedOut(current, "等待摘要一致性提交时截止时间已到");
             }
             clearFallbackRetryDelay(appId);
+            metricsCollector.recordSummaryDraftSuccess(draft.summaryTokens(), draft.reducerRounds());
             return result(MemoryCompressionResult.Status.COMPRESSED,
                     draft.summarizedThroughId(), draft.summaryTokens(),
                     "摘要压缩完成");

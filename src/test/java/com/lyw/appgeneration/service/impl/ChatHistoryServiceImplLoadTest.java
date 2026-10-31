@@ -123,6 +123,12 @@ class ChatHistoryServiceImplLoadTest {
         ChatHistoryServiceImpl service = spy(new ChatHistoryServiceImpl());
         doReturn(message(11L, "上一轮需求", "user"))
                 .when(service).getLastMessage(7L);
+        doReturn(message(11L, "上一轮需求", "user")).when(service).getOne(any(QueryWrapper.class));
+        var summaries = mock(com.lyw.appgeneration.service.MemorySummaryService.class);
+        doAnswer(invocation -> invocation.<java.util.function.Supplier<ChatHistory>>getArgument(3).get())
+                .when(summaries).persistRecoveredTurnOutcome(org.mockito.ArgumentMatchers.eq(7L),
+                        org.mockito.ArgumentMatchers.eq(9L), org.mockito.ArgumentMatchers.eq(11L), any());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "memorySummaryService", summaries);
         doReturn(true).when(service).save(any(ChatHistory.class));
 
         assertTrue(service.repairOrphanUserTurn(
@@ -131,7 +137,7 @@ class ChatHistoryServiceImplLoadTest {
         verify(service).addAiMessageAndReturn(
                 7L,
                 "系统异常，请重试。",
-                "上一轮因系统异常未完成，未改变项目文件或构建状态。",
+                "上一轮因系统中断未完成，最终构建结果未确认。已经落盘的修改保留，后续操作以当前工程文件为准。",
                 ChatMemoryOutcome.SYSTEM_ERROR,
                 9L);
         verify(service, never()).addChatMessage(

@@ -135,6 +135,8 @@ class MemorySummaryCacheConsistencyTest {
                 result.status());
         assertEquals(0L, database.get().getLastSummarizedId());
         assertEquals("旧摘要", database.get().getSummary());
+        org.junit.jupiter.api.Assertions.assertTrue(meterRegistry.find("memory_summary_tokens").summaries().isEmpty(),
+                "持久化前缓存失效失败，草稿不得计为摘要提交成功");
         verify(redisTemplate).delete("mem:summary:1");
         verify(valueOperations, never()).set(
                 anyString(), anyString(), any(Duration.class));
