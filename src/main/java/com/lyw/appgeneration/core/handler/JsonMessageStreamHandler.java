@@ -28,7 +28,6 @@ import reactor.core.scheduler.Schedulers;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
@@ -50,8 +49,6 @@ public final class JsonMessageStreamHandler {
     static final String TIMEOUT_MESSAGE = VueTurnFinalizer.TIMEOUT_MESSAGE;
     static final String RESOURCE_LIMIT_MESSAGE = VueTurnFinalizer.RESOURCE_LIMIT_MESSAGE;
     static final String CANCELLED_MESSAGE = VueTurnFinalizer.CANCELLED_MESSAGE;
-    private static final int TERMINAL_RESERVE_CODE_POINTS =
-            VueTurnFinalizer.terminalReserveCodePoints();
 
     private final ToolManager toolManager;
     private final VueTurnFinalizer finalizer;
@@ -84,11 +81,9 @@ public final class JsonMessageStreamHandler {
             Flux<String> originFlux, VueTurnContext context) {
         return Flux.defer(() -> {
             VueTurnTranscriptAccumulator transcript =
-                    new VueTurnTranscriptAccumulator(
-                            context.budgetSession(),
-                            TERMINAL_RESERVE_CODE_POINTS);
+                    context.decisionSources().transcript();
             Set<String> seenToolIds = new HashSet<>();
-            List<VueToolExecutionFact> facts = new CopyOnWriteArrayList<>();
+            List<VueToolExecutionFact> facts = context.decisionSources().facts();
             AtomicBoolean terminalDelivered = new AtomicBoolean();
             Flux<GenerationStreamEvent> body = originFlux.concatMap(chunk ->
                             handleJsonMessageChunk(
@@ -309,7 +304,8 @@ public final class JsonMessageStreamHandler {
             VueTurnContext context, Throwable error) {
         if (context.controlledTermination().isPresent()
                 || error instanceof VueStreamProtocolException
-                || error instanceof ResourceLimitExceededException) {
+                || error instanceof ResourceLimitExceededException
+                || error instanceof VueDecisionSourceCollector.SourceLimitExceededException) {
             return;
         }
         log.error("Vue 回合流处理异常,appId={},turnId={},phase={},errorType={}",
@@ -447,7 +443,9 @@ public final class JsonMessageStreamHandler {
                         context.appId(), context.turnId(),
                         executed.getGeneration(), executed.getName(),
                         executed.getId());
-                observeTrustedFact(executed, facts);
+                context.decisionSources().toolCommitted(executed.getGeneration(), ToolExecution.builder()
+                        .request(ToolExecutionRequest.builder().id(executed.getId()).name(executed.getName())
+                                .arguments(executed.getArguments()).build()).result(executed.getResult()).build());
                 JSONObject arguments = JSONUtil.parseObj(executed.getArguments());
                 BaseTool tool = toolManager.getTool(executed.getName());
                 String markdown = tool.generateToolExecutedResult(
@@ -541,12 +539,6 @@ public final class JsonMessageStreamHandler {
                 .result(parsed.getResult())
                 .build();
         return new ToolExecutedMessage(parsed.getGeneration(), execution);
-    }
-
-    private void observeTrustedFact(
-            ToolExecutedMessage executed, List<VueToolExecutionFact> facts) {
-        VueToolExecutionFact.parse(executed.getName(), executed.getResult())
-                .ifPresent(facts::add);
     }
 
     private Flux<GenerationStreamEvent> resourceLimitAfter(

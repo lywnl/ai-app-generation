@@ -829,7 +829,9 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             return;
         }
         try {
-            memory.add(aiMessage);
+            AiMessage committedMessage = aiMessage;
+            com.lyw.appgeneration.ai.memory.SourceCommitScope.run(requestGeneration, continuationGate,
+                    () -> memory.add(committedMessage));
         } catch (RuntimeException exception) {
             if (requestController.failPreparedToolBatch(batchTicket)) {
                 notifyError(exception);
@@ -1764,7 +1766,8 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
     }
 
     private void addToMemory(ChatMessage chatMessage) {
-        getMemory().add(chatMessage);
+        com.lyw.appgeneration.ai.memory.SourceCommitScope.run(requestGeneration, continuationGate,
+                () -> getMemory().add(chatMessage));
     }
 
     private List<ChatMessage> messagesToSend(Object memoryId) {

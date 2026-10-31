@@ -141,6 +141,89 @@
         ".codex/unify-context-summarization/runs/008-source-parser/output.log",
         ".codex/unify-context-summarization/runs/008-source-parser/code-state.json"
       ]
+    },
+    {
+      "id": "task:3.1",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SourceCommitScope.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollectorTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnTranscriptAccumulatorTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/009-decision-sources/command.json",
+        ".codex/unify-context-summarization/runs/009-decision-sources/output.log",
+        ".codex/unify-context-summarization/runs/009-decision-sources/code-state.json"
+      ]
+    },
+    {
+      "id": "task:3.2",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidence.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceService.java",
+        "README.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/MemoryEntityContractTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/010-decision-evidence/command.json",
+        ".codex/unify-context-summarization/runs/010-decision-evidence/output.log",
+        ".codex/unify-context-summarization/runs/010-decision-evidence/code-state.json"
+      ]
+    },
+    {
+      "id": "task:3.3",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/PreparedDecisionEvidence.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollectorTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/012-evidence-preparation/command.json",
+        ".codex/unify-context-summarization/runs/012-evidence-preparation/output.log",
+        ".codex/unify-context-summarization/runs/012-evidence-preparation/code-state.json"
+      ]
+    },
+    {
+      "id": "task:3.4",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceService.java",
+        "src/main/java/com/lyw/appgeneration/model/entity/ChatHistory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ChatHistoryMemoryResolver.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/MemoryEntityContractTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ChatHistoryMemoryResolverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UserMemoryServiceImplTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/013-evidence-isolation/command.json",
+        ".codex/unify-context-summarization/runs/013-evidence-isolation/output.log",
+        ".codex/unify-context-summarization/runs/013-evidence-isolation/code-state.json"
+      ]
     }
   ],
   "commands": [
@@ -207,6 +290,60 @@
       "finished_at": "2026-10-31T14:01:24.708282+00:00",
       "evidence": ".codex/unify-context-summarization/runs/008-source-parser/output.log",
       "code_state": ".codex/unify-context-summarization/runs/008-source-parser/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=VueDecisionSourceCollectorTest,VueTurnTranscriptAccumulatorTest,JsonMessageStreamHandlerTest,AiCodeGeneratorFacadeTest,AiServiceStreamingResponseHandlerTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:07:31.930292+00:00",
+      "finished_at": "2026-10-31T14:07:46.147612+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/009-decision-sources/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/009-decision-sources/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=DecisionEvidenceTest,ConversationDecisionEvidenceServiceTest,MemoryEntityContractTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:12:37.938293+00:00",
+      "finished_at": "2026-10-31T14:12:51.640847+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/010-decision-evidence/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/010-decision-evidence/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=ConversationDecisionEvidenceServiceTest,DecisionEvidenceTest,VueDecisionSourceCollectorTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:15:43.486180+00:00",
+      "finished_at": "2026-10-31T14:15:54.259757+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/012-evidence-preparation/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/012-evidence-preparation/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=MemoryEntityContractTest,ChatHistoryMemoryResolverTest,ConversationDecisionEvidenceServiceTest,UserMemoryServiceImplTest,AppMemoryExtractionCoordinatorTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T14:16:45.452616+00:00",
+      "finished_at": "2026-10-31T14:16:57.501693+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/013-evidence-isolation/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/013-evidence-isolation/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=L0SourceOperationsTest,L0SnapshotCodecTest,AtomicChatMemoryStoreConcurrencyTest,DeadlineAwareAtomicChatMemoryStoreTest,TokenAwareChatMemoryTest,SpringRedisChatMemoryStoreTest,AiCodeGeneratorFacadeTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 1,
+      "started_at": "2026-10-31T13:58:55.516102+00:00",
+      "finished_at": "2026-10-31T13:59:07.989780+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/006-source-operations/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/006-source-operations/code-state.json"
+    },
+    {
+      "command": "mvn -Dtest=ConversationDecisionEvidenceServiceTest,DecisionEvidenceTest,VueDecisionSourceCollectorTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 1,
+      "started_at": "2026-10-31T14:14:40.125390+00:00",
+      "finished_at": "2026-10-31T14:14:52.322385+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/011-evidence-preparation/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/011-evidence-preparation/code-state.json"
     }
   ]
 }

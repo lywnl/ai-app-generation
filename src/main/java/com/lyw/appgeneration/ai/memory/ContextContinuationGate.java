@@ -43,6 +43,10 @@ public interface ContextContinuationGate
         return null;
     }
 
+    /** 在线 Vue 在原文 CAS 成功后登记精确来源；其他模式不建立决策采集。 */
+    default void sourceMessageCommitted(long generation, String epoch, L0Snapshot.Message message) {
+    }
+
     static ContextContinuationGate from(
             ModelRequestGate.ContinuationGate continuationGate) {
         Objects.requireNonNull(continuationGate, "回合原子提交门不能为空");

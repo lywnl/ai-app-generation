@@ -191,6 +191,11 @@ public final class FileToolBudgetGuard implements InitializingBean {
             return new CanonicalAccumulator(maxCanonicalAiTextCodePoints);
         }
 
+        /** 来源引用使用相同资源上限计数，不另建保存整份文本的预算缓冲区。 */
+        public int canonicalLimitCodePoints() {
+            return maxCanonicalAiTextCodePoints;
+        }
+
         public CanonicalAccumulator newCanonicalAccumulator(int reservedCodePoints) {
             validateCanonicalReserve(reservedCodePoints);
             return new CanonicalAccumulator(

@@ -92,6 +92,7 @@ public final class VueTurnContext implements ContextContinuationGate {
     private final ReplanContext replanContext = new ReplanContext();
     private boolean planContextReady;
     private final BuildProgressGuard buildProgressGuard;
+    private VueDecisionSourceCollector decisionSources;
 
     VueTurnContext(long appId, long userId, String turnId,
             AppOperationLease operationLease, VueBuildLease lease,
@@ -275,6 +276,22 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     public String turnId() {
         return turnId;
+    }
+
+    public synchronized VueDecisionSourceCollector decisionSources() {
+        if (decisionSources == null) {
+            decisionSources = new VueDecisionSourceCollector(budgetSession, null);
+        }
+        return decisionSources;
+    }
+
+    @Override
+    public void sourceMessageCommitted(long generation, String epoch,
+                                       com.lyw.appgeneration.ai.memory.L0Snapshot.Message message) {
+        if (userHistoryId > 0 && message.userHistoryId() != userHistoryId) {
+            throw new IllegalStateException("来源提交不属于当前用户回合");
+        }
+        decisionSources().sourceCommitted(generation, epoch, message);
     }
 
     /** 持久化用户记录标识回合；运行 turnId 仍仅用于租约和回调准入。 */

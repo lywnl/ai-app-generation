@@ -703,6 +703,9 @@ public class AiCodeGeneratorFacade {
             try {
                 tokenStream.onGenerationStreamSignal(signal ->
                                 context.tryRunCallback(() -> {
+                                    if (signal instanceof GenerationStreamSignal.ToolExecuted executed) {
+                                        context.decisionSources().toolCommitted(executed.generation(), executed.execution());
+                                    }
                                     emitter.execute(target ->
                                             handleGenerationSignal(
                                                     signal, target::next,

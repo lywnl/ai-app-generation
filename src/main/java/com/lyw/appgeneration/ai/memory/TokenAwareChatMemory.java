@@ -56,9 +56,17 @@ public class TokenAwareChatMemory implements ChatMemory {
                 Objects.requireNonNull(
                         message, "待追加消息不能为空"));
         if (hasSourceSnapshot()) {
+            var committed = new java.util.concurrent.atomic.AtomicReference<L0Snapshot>();
             requireReplaced(atomicStore.updateSnapshot(memoryId,
-                    snapshot -> L0SourceOperations.append(snapshot, requiredMessage, CanonicalUserMessageScope.currentBoundary()),
+                    snapshot -> {
+                        var next = L0SourceOperations.append(snapshot, requiredMessage, CanonicalUserMessageScope.currentBoundary());
+                        committed.set(next);
+                        return next;
+                    },
                     AdmissionDeadline.start(java.time.Duration.ofSeconds(60))));
+            if (!(requiredMessage instanceof SystemMessage)) {
+                SourceCommitScope.committed(committed.get().memoryEpoch(), committed.get().entries().getLast());
+            }
             return;
         }
         if (requiredMessage instanceof SystemMessage systemMessage) {
