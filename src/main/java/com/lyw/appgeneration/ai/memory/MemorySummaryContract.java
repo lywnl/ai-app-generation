@@ -2,6 +2,7 @@ package com.lyw.appgeneration.ai.memory;
 
 import cn.hutool.core.util.StrUtil;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 
 import java.util.Objects;
 
@@ -32,5 +33,11 @@ public final class MemorySummaryContract {
         return lastSummarizedId > 0L
                 && StrUtil.isNotBlank(text)
                 && isRecallable(text, tokenEstimator);
+    }
+
+    /** 新快照已校验组合覆盖；零完整历史游标不再意味着摘要不存在。 */
+    public static boolean isUsablePersistedState(
+            MemorySummarySnapshot snapshot, ChatTokenEstimator tokenEstimator) {
+        return snapshot != null && isRecallable(snapshot.summary(), tokenEstimator);
     }
 }

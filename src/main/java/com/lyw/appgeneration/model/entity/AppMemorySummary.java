@@ -53,6 +53,18 @@ public class AppMemorySummary implements Serializable {
     @Column("lastSummarizedId")
     private Long lastSummarizedId;
 
+    /** 摘要正文及覆盖快照的单调修订；旧记录默认 0。 */
+    @Column("summaryRevision")
+    private Long summaryRevision;
+
+    /** 1 为旧完整历史游标，2 为完整历史游标加部分回合覆盖。 */
+    @Column("coverageVersion")
+    private Integer coverageVersion;
+
+    /** 部分覆盖前沿的版本化 JSON；必须由内部覆盖契约校验后使用。 */
+    @Column("coverageState")
+    private String coverageState;
+
     /**
      * 摘要估算token
      */

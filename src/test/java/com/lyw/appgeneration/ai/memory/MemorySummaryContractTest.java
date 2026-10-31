@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.config.MemoryTokenProperties;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,19 @@ class MemorySummaryContractTest {
                 "损坏摘要", 1L, estimator));
         assertFalse(MemorySummaryContract.isUsablePersistedState(
                 validSummary(), -1L, estimator));
+    }
+
+    @Test
+    void partialSummaryStillRequiresValidFormatAndTokenBudget() {
+        var coverage = new SummaryCoverage(10L, "turn-1", "epoch-1", 40L,
+                "a".repeat(64), 2L, null, null, false);
+        assertTrue(MemorySummaryContract.isUsablePersistedState(
+                new MemorySummarySnapshot(validSummary(), 0L, 1L, 2, coverage), estimator));
+        assertFalse(MemorySummaryContract.isUsablePersistedState(
+                new MemorySummarySnapshot("损坏摘要", 0L, 1L, 2, coverage), estimator));
+        assertFalse(MemorySummaryContract.isUsablePersistedState(
+                new MemorySummarySnapshot(validSummary() + "长内容".repeat(5000),
+                        0L, 1L, 2, coverage), estimator));
     }
 
     private String validSummary() {

@@ -67,3 +67,20 @@ mysql --default-character-set=utf8mb4 --database=ai_app_generation \
 ```
 
 管理页与新后端同时发布。旧后端不能正确处理手动证据来源及须确认候选；启用手动管理后不要只回退后端程序。DDL 仍会隐式提交，失败时保留备份与错误记录，定位后重入；若需回退，先停写并导出迁移后的新增数据，再按兼容方案恢复，不能清空操作表或候选表。
+
+## 2026-10-31：统一摘要与决策证据
+
+`2026-10-31-unify-context-summarization.sql` 在已有摘要表和聊天记忆投影列之上执行，只增加四列，不回填旧正文、可信结果或 L2。两份初始化 schema 已包含这些列，增量 SQL 以本目录为唯一来源。
+
+| 表／字段 | 类型、默认值及含义 |
+| --- | --- |
+| `app_memory_summary.summaryRevision` | `BIGINT NOT NULL DEFAULT 0`，摘要与覆盖快照的单调修订 |
+| `app_memory_summary.coverageVersion` | `INT NOT NULL DEFAULT 1`，1 为旧完整历史游标，2 为组合覆盖 |
+| `app_memory_summary.coverageState` | `MEDIUMTEXT NULL`，应用层校验的部分回合覆盖 JSON |
+| `chat_history.decisionEvidence` | `MEDIUMTEXT NULL`，用户记录上内部使用的版本化证据，不进入历史 API 或 L2 |
+
+执行前停止新生成进入，按现有生命周期等待或结束在途回合，并备份 `app_memory_summary`、`chat_history` 的结构、行数及旧列内容。使用已授权的 MySQL 8.0.40 目标执行脚本，不使用 `--force`；完成后核验四列元数据、旧内容和行数。旧行得到修订 0、覆盖版本 1、空覆盖和空证据，不被改写为新摘要。
+
+脚本可重复执行；已有列只验收类型、默认值及可空性，已经写入的新数据保持不变。DDL 会隐式提交，不是能够整体回滚的 DML 事务；中途失败应保留已完成的列并诊断后重入。应用后续的摘要／证据 DML 由各自短事务和修订条件保护，不能用其回滚语义解释本脚本。
+
+仅加列、尚未写入新覆盖或 L0 封装时，可保留新增列并回退程序。新格式写入后，旧完整游标逻辑不能接管，必须使用支持新摘要、覆盖和 L0 格式的修复版本；新旧写入器不得混用。不得清空新摘要或决策证据来实现降级。Redis 旧数组与冷重建的读取下界适配及恢复步骤由本变更任务 8.4 随实现补齐，不能把换 epoch 当成摘要依赖归零。

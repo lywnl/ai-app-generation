@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.mybatisflex.annotation.Column;
 import com.mybatisflex.annotation.Id;
 import com.mybatisflex.annotation.KeyType;
@@ -53,6 +54,14 @@ public class ChatHistory implements Serializable {
      */
     @Column("memoryOutcome")
     private ChatMemoryOutcome memoryOutcome;
+
+    /**
+     * 用户记录上的版本化决策证据，仅供内部摘要使用。
+     * 不属于可信工程结果，也不通过直接返回实体的历史 API 暴露。
+     */
+    @JsonIgnore
+    @Column("decisionEvidence")
+    private String decisionEvidence;
 
     /**
      * user/ai

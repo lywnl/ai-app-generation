@@ -24,6 +24,41 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MemorySchemaMigrationContractTest {
 
     @Test
+    void unifiedSummarySchemasAndEntitiesPreserveLegacyDefaults() throws Exception {
+        assertColumn(AppMemorySummary.class, "summaryRevision", Long.class);
+        assertColumn(AppMemorySummary.class, "coverageVersion", Integer.class);
+        assertColumn(AppMemorySummary.class, "coverageState", String.class);
+        assertColumn(ChatHistory.class, "decisionEvidence", String.class);
+        for (String path : SCHEMA_FILES) {
+            String schema = read(path);
+            String summary = tableDefinition(schema, "app_memory_summary");
+            assertContainsColumn(summary, "summaryRevision BIGINT NOT NULL DEFAULT 0", path);
+            assertContainsColumn(summary, "coverageVersion INT NOT NULL DEFAULT 1", path);
+            assertContainsColumn(summary, "coverageState MEDIUMTEXT NULL", path);
+            assertContainsColumn(tableDefinition(schema, "chat_history"),
+                    "decisionEvidence MEDIUMTEXT NULL", path);
+        }
+    }
+
+    @Test
+    void unifiedMigrationOnlyAddsAndVerifiesColumnsWithoutRewritingData() throws Exception {
+        String sql = normalize(read("sql/migrations/2026-10-31-unify-context-summarization.sql"));
+        assertTrue(sql.contains("mysql 8.0.40"));
+        assertTrue(sql.contains("alter table 会隐式提交"));
+        assertEquals(4, occurrences(sql, "if not exists ("));
+        assertTrue(occurrences(sql, "information_schema.columns") >= 6);
+        assertTrue(sql.contains("v_column_count <> 4"));
+        assertTrue(sql.contains("column_default = '0'"));
+        assertTrue(sql.contains("column_default = '1'"));
+        assertTrue(sql.contains("signal sqlstate '45000'"));
+        assertTrue(sql.contains("drop procedure if exists migrate_unify_context_summarization;"));
+        assertFalse(Pattern.compile("\\b(update|insert|delete|truncate|replace)\\s+(into\\s+|from\\s+|table\\s+)?(app_memory|chat_history)\\b")
+                .matcher(sql).find());
+        assertFalse(sql.contains("drop column"));
+        assertFalse(sql.contains("modify column"));
+    }
+
+    @Test
     void l2VersionedSchemasPhysicallyIsolateCandidatesAndConstrainActiveSlot() throws Exception {
         for (String path : SCHEMA_FILES) {
             String schema = read(path);
