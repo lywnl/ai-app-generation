@@ -237,6 +237,7 @@ class AppControllerGoodAppCacheTest {
         @Bean AppMemoryMapper memoryMapper() { return mock(AppMemoryMapper.class); }
         @Bean AppMemoryCandidateMapper candidateMapper() { return mock(AppMemoryCandidateMapper.class); }
         @Bean AppMemoryEvidenceMapper evidenceMapper() { return mock(AppMemoryEvidenceMapper.class); }
+        @Bean AppMemoryEventMapper eventMapper() { return mock(AppMemoryEventMapper.class); }
         @Bean AppMapper appMapper() { return mock(AppMapper.class); }
         @Bean AbstractPlatformTransactionManager transactionManager() {
             return new AbstractPlatformTransactionManager() {

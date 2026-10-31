@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS app_memory_candidate (
     content TEXT NOT NULL COMMENT '自由内容，每条表达独立偏好',
     contentHash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范化内容SHA256',
     status VARCHAR(16) NOT NULL DEFAULT 'CANDIDATE' COMMENT 'CANDIDATE/PROMOTED/REVOKED',
+    requiresConfirmation TINYINT NOT NULL DEFAULT 0 COMMENT '手动候选须明确采用，不随弱证据自动晋升',
     promotedMemoryId BIGINT NULL COMMENT '晋升后的正式版本ID',
     evidenceType VARCHAR(16) NOT NULL DEFAULT 'EXPLICIT' COMMENT 'EXPLICIT/IMPLICIT',
     evidenceCount INT NOT NULL DEFAULT 1 COMMENT '旧证据基线加去重后的新证据数',
@@ -146,6 +147,7 @@ CREATE TABLE IF NOT EXISTS app_memory_candidate (
     KEY idx_candidate_user (userId, type, status, isDelete, id),
     KEY idx_candidate_source (appId),
     CONSTRAINT ck_candidate_status CHECK (status IN ('CANDIDATE', 'PROMOTED', 'REVOKED')),
+    CONSTRAINT ck_candidate_confirmation CHECK (requiresConfirmation IN (0, 1)),
     CONSTRAINT ck_candidate_category CHECK (name IN ('语言偏好', '视觉风格', '技术栈倾向', '体验偏好')),
     CONSTRAINT ck_candidate_evidence CHECK (evidenceType IN ('EXPLICIT', 'IMPLICIT') AND evidenceCount >= 0
         AND legacyEvidenceCount >= 0 AND evidenceCount >= legacyEvidenceCount AND revision >= 1)
@@ -157,14 +159,41 @@ CREATE TABLE IF NOT EXISTS app_memory_evidence (
     appId BIGINT NULL COMMENT '证据来源应用，删除只解绑',
     targetKind VARCHAR(16) NOT NULL COMMENT 'FORMAL/CANDIDATE',
     targetId BIGINT NOT NULL COMMENT '对应区域内的目标ID',
-    turnId BIGINT NOT NULL COMMENT '完整回合中的用户消息ID',
+    sourceType VARCHAR(16) NOT NULL DEFAULT 'CHAT' COMMENT 'CHAT为真实用户回合，MANUAL为手动操作记录',
+    turnId BIGINT NOT NULL COMMENT '有序证据事件ID，结合sourceType确定来源',
     evidenceType VARCHAR(16) NOT NULL COMMENT 'EXPLICIT/IMPLICIT',
     createTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_memory_evidence (userId, targetKind, targetId, turnId),
     KEY idx_evidence_source (appId),
     CONSTRAINT ck_evidence_kind CHECK (targetKind IN ('FORMAL', 'CANDIDATE')),
+    CONSTRAINT ck_evidence_source CHECK (sourceType IN ('CHAT', 'MANUAL')),
     CONSTRAINT ck_evidence_type CHECK (evidenceType IN ('EXPLICIT', 'IMPLICIT'))
 ) COMMENT 'L2 回合证据去重账本' COLLATE = utf8mb4_unicode_ci;
+
+-- 记忆操作历史与手动请求去重；与记忆、证据在同一事务提交
+CREATE TABLE IF NOT EXISTS app_memory_event (
+    id BIGINT NOT NULL PRIMARY KEY,
+    userId BIGINT NOT NULL,
+    appId BIGINT NULL COMMENT '聊天来源应用，删除应用时只解绑',
+    sourceType VARCHAR(16) NOT NULL COMMENT 'CHAT/MANUAL，手动证据引用此记录ID',
+    requestId CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '手动请求去重标识',
+    requestHash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '规范操作参数摘要',
+    changesJson JSON NOT NULL COMMENT '可展示的状态变更，不记录无关聊天正文',
+    resultJson JSON NULL COMMENT '手动操作的原始返回结果，重试时复用',
+    hasChanges TINYINT NOT NULL DEFAULT 0,
+    createTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_memory_request (userId, requestId),
+    KEY idx_memory_event_history (userId, hasChanges, createTime, id),
+    KEY idx_memory_event_user_id (userId, id),
+    KEY idx_memory_event_source (appId),
+    CONSTRAINT ck_memory_event_source CHECK (sourceType IN ('CHAT', 'MANUAL')),
+    CONSTRAINT ck_memory_event_payload CHECK (JSON_TYPE(changesJson) = 'ARRAY' AND hasChanges IN (0, 1)),
+    CONSTRAINT ck_memory_event_request CHECK (
+        (sourceType = 'CHAT' AND requestId IS NULL AND requestHash IS NULL AND resultJson IS NULL)
+        OR (sourceType = 'MANUAL' AND requestId IS NOT NULL AND requestHash IS NOT NULL AND resultJson IS NOT NULL)
+    )
+) COMMENT '长期记忆变更历史和手动操作去重记录' COLLATE = utf8mb4_unicode_ci;
+
 
 -- L2 抽取游标:per-app 一行
 CREATE TABLE IF NOT EXISTS app_memory_extract_cursor (

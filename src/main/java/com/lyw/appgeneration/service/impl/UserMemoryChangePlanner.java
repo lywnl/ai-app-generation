@@ -28,15 +28,25 @@ final class UserMemoryChangePlanner {
     private final Map<Long, Map<Long, Evidence>> addedEvidence = new LinkedHashMap<>();
     private final Set<Long> touchedCandidates = new HashSet<>();
     private final LocalDateTime now;
+    private final String evidenceSource;
+    private final boolean requireConfirmation;
 
     UserMemoryChangePlanner(VersionedUserMemoryRepository repository, long userId,
                            Long appId, Snapshot before, LocalDateTime now) {
+        this(repository, userId, appId, before, now, "CHAT", false);
+    }
+
+    UserMemoryChangePlanner(VersionedUserMemoryRepository repository, long userId,
+                           Long appId, Snapshot before, LocalDateTime now,
+                           String evidenceSource, boolean requireConfirmation) {
         this.repository = repository;
         this.userId = userId;
         this.appId = appId;
         this.before = before;
         this.state = new LinkedHashMap<>(before.items());
         this.now = now;
+        this.evidenceSource = evidenceSource;
+        this.requireConfirmation = requireConfirmation;
     }
 
     Plan plan(List<UserMemoryOperation> operations, Snapshot shown) {
@@ -169,7 +179,10 @@ final class UserMemoryChangePlanner {
             } else if (target == null || target.kind() == Kind.FORMAL) {
                 reinforce(active, op);
             } else {
-                reinforce(target, op);
+                Item strengthened = reinforce(target, op);
+                if (explicit && target.pending()) {
+                    activate(active, strengthened, key, attribute, category, content, op, barrier);
+                }
             }
             return;
         }
@@ -207,13 +220,14 @@ final class UserMemoryChangePlanner {
                 .filter(turn -> !ledger.containsKey(turn)).toList();
         if (newTurns.isEmpty()) return item;
         for (long turn : newTurns) {
-            addEvidence(item, new Evidence(turn, appId, op.evidenceType()));
+            addEvidence(item, new Evidence(turn, appId, op.evidenceType(), evidenceSource));
         }
         int count = Math.addExact(item.legacyEvidenceCount(), ledger.size());
         String type = "EXPLICIT".equals(item.evidenceType()) || "EXPLICIT".equals(op.evidenceType())
                 ? "EXPLICIT" : "IMPLICIT";
         Item next = item.toBuilder().evidenceType(type).evidenceCount(count)
-                .lastEvidenceTurnId(Math.max(item.lastEvidenceTurnId(), latest(op))).build();
+                .lastEvidenceTurnId(Math.max(item.lastEvidenceTurnId(), latest(op)))
+                .requiresConfirmation(item.requiresConfirmation() || (item.pending() && requireConfirmation)).build();
         putChanged(next);
         if (next.pending()) touchedCandidates.add(next.id());
         return state.get(next.id());
@@ -239,7 +253,7 @@ final class UserMemoryChangePlanner {
         if (explicit != null) {
             for (long turn : explicit.turnIds()) {
                 if (turn > barrier && !Objects.equals(turn, next.legacyEvidenceTurnId())) {
-                    addEvidence(next, new Evidence(turn, appId, explicit.evidenceType()));
+                    addEvidence(next, new Evidence(turn, appId, explicit.evidenceType(), evidenceSource));
                 }
             }
         }
@@ -258,7 +272,7 @@ final class UserMemoryChangePlanner {
         Map<String, List<Item>> byKey = new LinkedHashMap<>();
         for (long id : touchedCandidates) {
             Item item = state.get(id);
-            if (item.pending() && item.evidenceCount() >= 2 && active(item.memoryKey()) == null
+            if (item.pending() && !item.requiresConfirmation() && item.evidenceCount() >= 2 && active(item.memoryKey()) == null
                     && revocationBarrier(item.memoryKey(), item.content()) == 0L) {
                 byKey.computeIfAbsent(item.memoryKey(), ignored -> new ArrayList<>()).add(item);
             }
@@ -279,7 +293,8 @@ final class UserMemoryChangePlanner {
         if (id <= 0L || state.containsKey(id)) throw new IllegalStateException("新记忆 ID 无效或重复");
         return Item.builder().id(id).userId(userId).appId(appId).kind(kind)
                 .memoryKey(key).attributeName(attribute).category(category).content(content)
-                .status(status).evidenceType("IMPLICIT").revision(1L).createTime(now).updateTime(now).build();
+                .status(status).evidenceType("IMPLICIT").revision(1L).createTime(now).updateTime(now)
+                .requiresConfirmation(kind == Kind.CANDIDATE && requireConfirmation).build();
     }
 
     private void putChanged(Item item) {
@@ -333,7 +348,7 @@ final class UserMemoryChangePlanner {
             changes.stream().filter(change -> change.before() == null)
                     .forEach(change -> repository.insert(change.after()));
             evidence.forEach(write -> repository.addEvidence(write.target(), write.evidence().appId(),
-                    write.evidence().turnId(), write.evidence().type(), now));
+                    write.evidence().turnId(), write.evidence().type(), write.evidence().sourceType(), now));
         }
     }
 }

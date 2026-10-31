@@ -36,6 +36,9 @@ public class AppMemoryCandidate {
     private String contentHash;
     /** CANDIDATE / PROMOTED / REVOKED。 */
     private String status;
+    /** 手动保存为待确认时，后续弱证据不能使其自动晋升。 */
+    @Column("requiresConfirmation")
+    private Boolean requiresConfirmation;
     @Column("evidenceType")
     private String evidenceType;
     @Column("evidenceCount")

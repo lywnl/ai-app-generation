@@ -5,6 +5,7 @@ import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
 import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEventMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
@@ -24,6 +25,7 @@ public class AppDeletionPersistenceServiceImpl
     private final AppMemoryMapper memoryMapper;
     private final AppMemoryCandidateMapper candidateMapper;
     private final AppMemoryEvidenceMapper evidenceMapper;
+    private final AppMemoryEventMapper eventMapper;
     private final AppMapper appMapper;
     private final GoodAppCacheService goodAppCacheService;
 
@@ -34,6 +36,7 @@ public class AppDeletionPersistenceServiceImpl
             AppMemoryMapper memoryMapper,
             AppMemoryCandidateMapper candidateMapper,
             AppMemoryEvidenceMapper evidenceMapper,
+            AppMemoryEventMapper eventMapper,
             AppMapper appMapper,
             GoodAppCacheService goodAppCacheService) {
         this.chatHistoryMapper = chatHistoryMapper;
@@ -42,6 +45,7 @@ public class AppDeletionPersistenceServiceImpl
         this.memoryMapper = memoryMapper;
         this.candidateMapper = candidateMapper;
         this.evidenceMapper = evidenceMapper;
+        this.eventMapper = eventMapper;
         this.appMapper = appMapper;
         this.goodAppCacheService = goodAppCacheService;
     }
@@ -57,6 +61,7 @@ public class AppDeletionPersistenceServiceImpl
         memoryMapper.unlinkAppId(appId);
         candidateMapper.unlinkAppId(appId);
         evidenceMapper.unlinkAppId(appId);
+        eventMapper.unlinkAppId(appId);
         appMapper.deleteById(appId);
         goodAppCacheService.evictAfterCommit(appId, "删除应用");
     }

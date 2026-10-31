@@ -16,7 +16,7 @@ public interface UserMemoryService {
     void triggerPreferenceExtractionAsync(
             Long userId, Long appId, Long stableAiMessageId);
 
-    /** 召回:messages() 调用，按证据优先级拼接不超过 1K Token 的激活偏好。 */
+    /** 召回:messages() 调用，实际注入片段不超过 512 Token。 */
     String recallByApp(Long appId);
 
     MemoryCacheInvalidationResult invalidateCaches(Long appId, Long userId);

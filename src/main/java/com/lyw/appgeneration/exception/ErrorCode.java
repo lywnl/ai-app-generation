@@ -15,6 +15,7 @@ public enum ErrorCode {
     NOT_LOGIN_ERROR(40100, "未登录"),
     NO_AUTH_ERROR(40101, "无权限"),
     NOT_FOUND_ERROR(40400, "请求数据不存在"),
+    CONFLICT_ERROR(40900, "记忆已发生变化，请刷新后重新确认"),
     FORBIDDEN_ERROR(40300, "禁止访问"),
     TOO_MANY_REQUEST(42900, "请求过于频繁"),
     SYSTEM_ERROR(50000, "系统内部异常"),

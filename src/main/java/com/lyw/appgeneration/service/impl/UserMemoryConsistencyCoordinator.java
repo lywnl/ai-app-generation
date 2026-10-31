@@ -2,10 +2,12 @@ package com.lyw.appgeneration.service.impl;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import org.springframework.stereotype.Component;
 
 /**
  * 为用户级共享记忆缓存提供进程内一致性边界。
  */
+@Component
 final class UserMemoryConsistencyCoordinator {
 
     private final ConcurrentHashMap<Long, LockEntry> locks =

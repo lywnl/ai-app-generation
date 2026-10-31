@@ -57,7 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>抽取由稳定回合钩子触发，按 userId 防抖且同一用户单轮执行；每个 app 独立维护游标，
  * 模型只接收完整回合的用户文本，正式版本和候选在独立表内维护。召回只拼接 ACTIVE 偏好，
- * EXPLICIT 优先且严格控制在 1K Token 内，结果使用版本化 Redis 键缓存。失败时游标不推进并记录
+ * EXPLICIT 优先且严格控制在 512 Token 内，结果使用版本化 Redis 键缓存。失败时游标不推进并记录
  * failCount，调度按 5 秒至 5 分钟指数退避恢复，不会因连续失败永久停更。
  *
  * @author <a href="https://gitee.com/lywynl">lyw</a>
@@ -68,9 +68,9 @@ public class UserMemoryServiceImpl implements UserMemoryService {
 
     private static final int HISTORY_SCAN_PAGE_SIZE = 100;
     private static final String STATUS_ACTIVE = "ACTIVE";
-    private static final String LEGACY_PREF_CACHE_PREFIX = "mem:pref:";
-    private static final String PREVIOUS_PREF_CACHE_PREFIX = "mem:pref:v2:";
-    private static final String PREF_CACHE_PREFIX = "mem:pref:v3:";
+    private static final String LEGACY_PREF_CACHE_PREFIX = UserMemoryCacheKeys.LEGACY;
+    private static final String PREVIOUS_PREF_CACHE_PREFIX = UserMemoryCacheKeys.PREVIOUS;
+    private static final String PREF_CACHE_PREFIX = UserMemoryCacheKeys.CURRENT;
     private static final Duration CACHE_TTL = Duration.ofHours(1);
     private static final Duration RETRY_BASE_DELAY = Duration.ofSeconds(5);
     private static final Duration RETRY_MAX_DELAY = Duration.ofMinutes(5);
@@ -120,13 +120,14 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                                  ObjectProvider<PlatformTransactionManager>
                                          transactionManagerProvider,
                                  MemoryCompressionMetricsCollector
-                                         metricsCollector) {
+                                         metricsCollector,
+                                 UserMemoryConsistencyCoordinator consistencyCoordinator) {
         this(chatHistoryService, memoryRepository, cursorMapper, appMapper,
                 extractionModel, executor, debounceScheduler, redisTemplate,
                 lifecycleFence, tokenEstimator, tokenProperties,
                 resolveTransactionOperations(transactionManagerProvider),
                 metricsCollector, memoryResolver,
-                Clock.systemDefaultZone());
+                Clock.systemDefaultZone(), consistencyCoordinator);
     }
 
     public UserMemoryServiceImpl(ChatHistoryService chatHistoryService,
@@ -195,6 +196,20 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                           MemoryCompressionMetricsCollector metricsCollector,
                           ChatHistoryMemoryResolver memoryResolver,
                           Clock clock) {
+        this(chatHistoryService, memoryRepository, cursorMapper, appMapper, extractionModel,
+                executor, debounceScheduler, redisTemplate, lifecycleFence, tokenEstimator, tokenProperties,
+                transactionOperations, metricsCollector, memoryResolver, clock, new UserMemoryConsistencyCoordinator());
+    }
+
+    UserMemoryServiceImpl(ChatHistoryService chatHistoryService,
+                          VersionedUserMemoryRepository memoryRepository,
+                          AppMemoryExtractCursorMapper cursorMapper, AppMapper appMapper,
+                          ChatModel extractionModel, ExecutorService executor, TaskScheduler debounceScheduler,
+                          StringRedisTemplate redisTemplate, AppDataLifecycleFence lifecycleFence,
+                          ChatTokenEstimator tokenEstimator, MemoryTokenProperties tokenProperties,
+                          TransactionOperations transactionOperations, MemoryCompressionMetricsCollector metricsCollector,
+                          ChatHistoryMemoryResolver memoryResolver, Clock clock,
+                          UserMemoryConsistencyCoordinator consistencyCoordinator) {
         this.chatHistoryService = Objects.requireNonNull(
                 chatHistoryService, "对话历史服务不能为空");
         this.memoryRepository = Objects.requireNonNull(
@@ -228,8 +243,7 @@ public class UserMemoryServiceImpl implements UserMemoryService {
         this.metricsCollector = Objects.requireNonNull(
                 metricsCollector, "记忆压缩指标收集器不能为空");
         this.clock = Objects.requireNonNull(clock, "时钟不能为空");
-        this.consistencyCoordinator =
-                new UserMemoryConsistencyCoordinator();
+        this.consistencyCoordinator = Objects.requireNonNull(consistencyCoordinator, "用户记忆一致性协调器不能为空");
         this.extractionCoordinator =
                 new AppMemoryExtractionCoordinator();
     }
@@ -829,11 +843,19 @@ public class UserMemoryServiceImpl implements UserMemoryService {
                 }
                 if (currentId != prepared.lastId()) throw new IllegalStateException("抽取游标已变化，需重新处理");
                 Snapshot current = memoryRepository.loadCurrent(userId);
+                long historyId = memoryRepository.nextId();
                 UserMemoryChangePlanner.Plan plan = new UserMemoryChangePlanner(
                         memoryRepository, userId, appId, current, LocalDateTime.now(clock))
                         .plan(operations, prepared.snapshot());
                 if (plan.formalChanged()) invalidateCurrentRecallCacheStrict(userId);
                 plan.apply(memoryRepository);
+                var history = UserMemoryEventCodec.changes(plan);
+                if (!history.isEmpty()) {
+                    memoryRepository.insertEvent(com.lyw.appgeneration.model.entity.AppMemoryEvent.builder()
+                            .id(historyId).userId(userId).appId(appId).sourceType("CHAT")
+                            .changesJson(UserMemoryEventCodec.write(history)).hasChanges(true)
+                            .createTime(plan.now()).build());
+                }
                 advanceCursor(userId, appId, currentCursor, prepared.batch().completedThroughId());
                 callbackCompleted.set(true);
                 return plan;

@@ -20,6 +20,8 @@ public final class UserPreferencePromptBuilder {
             - 模型必须区分用户明确表述 EXPLICIT 与仅有弱倾向 IMPLICIT。不能把不确定范围猜成 USER。
             - EXPLICIT 必须表示已确定的全局选择。“先记候选、还没决定、暂不生效”属于 IMPLICIT，
               即使用户明确要求保存候选，也不等于确认它为默认偏好。
+            - requiresConfirmation=true 的候选由用户保留为待确认，只能在新增证据明确采用时填写 EXPLICIT。
+              仅继续感兴趣、补充弱证据或页面中已有的内容，都不能当作用户已经确认。
 
             类别固定为：语言偏好 / 视觉风格 / 技术栈倾向 / 体验偏好。
             内容是自由文本，允许任意语言、颜色、框架、字号、行为要求，不使用 valueCodes。

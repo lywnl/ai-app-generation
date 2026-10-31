@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
-/** 正式与候选分别计数的证据账本；同一目标、同一回合只记一次。 */
+/** 正式与候选分别计数的证据账本；同一目标、同一有序证据事件只记一次。 */
 @Data
 @Builder
 @NoArgsConstructor
@@ -29,6 +29,10 @@ public class AppMemoryEvidence {
     private String targetKind;
     @Column("targetId")
     private Long targetId;
+    /** CHAT 对应真实用户回合，MANUAL 对应 app_memory_event 中的手动操作。 */
+    @Column("sourceType")
+    private String sourceType;
+    /** 保留旧列名以兼容迁移；与 sourceType 一起确定证据来源。 */
     @Column("turnId")
     private Long turnId;
     @Column("evidenceType")

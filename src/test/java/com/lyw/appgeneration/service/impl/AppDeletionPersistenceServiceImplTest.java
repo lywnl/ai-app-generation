@@ -5,6 +5,7 @@ import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
 import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEventMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.service.AppDeletionPersistenceService;
@@ -40,19 +41,20 @@ class AppDeletionPersistenceServiceImplTest {
         service.deleteAppData(7L);
 
         InOrder order = inOrder(fixtures.chatHistory, fixtures.summary,
-                fixtures.cursor, fixtures.memory, fixtures.candidate, fixtures.evidence, fixtures.app);
+                fixtures.cursor, fixtures.memory, fixtures.candidate, fixtures.evidence, fixtures.events, fixtures.app);
         order.verify(fixtures.chatHistory).deleteByQuery(any());
         order.verify(fixtures.summary).deleteByQuery(any());
         order.verify(fixtures.cursor).deleteByQuery(any());
         order.verify(fixtures.memory).unlinkAppId(7L);
         order.verify(fixtures.candidate).unlinkAppId(7L);
         order.verify(fixtures.evidence).unlinkAppId(7L);
+        order.verify(fixtures.events).unlinkAppId(7L);
         order.verify(fixtures.app).deleteById(7L);
         verify(fixtures.memory, never()).deleteByQuery(any());
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7})
+    @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8})
     void failureAtAnyDatabaseStepStopsAllLaterWrites(int failedStep) {
         Fixtures fixtures = new Fixtures();
         fixtures.failAt(failedStep);
@@ -120,7 +122,7 @@ class AppDeletionPersistenceServiceImplTest {
         assertThrows(IllegalArgumentException.class,
                 () -> fixtures.service().deleteAppData(0L));
         verifyNoInteractions(fixtures.chatHistory, fixtures.summary,
-                fixtures.cursor, fixtures.memory, fixtures.candidate, fixtures.evidence, fixtures.app);
+                fixtures.cursor, fixtures.memory, fixtures.candidate, fixtures.evidence, fixtures.events, fixtures.app);
     }
 
     private static final class Fixtures {
@@ -131,11 +133,12 @@ class AppDeletionPersistenceServiceImplTest {
         private final AppMemoryMapper memory = mock(AppMemoryMapper.class);
         private final AppMemoryCandidateMapper candidate = mock(AppMemoryCandidateMapper.class);
         private final AppMemoryEvidenceMapper evidence = mock(AppMemoryEvidenceMapper.class);
+        private final AppMemoryEventMapper events = mock(AppMemoryEventMapper.class);
         private final AppMapper app = mock(AppMapper.class);
 
         private AppDeletionPersistenceService service() {
             return new AppDeletionPersistenceServiceImpl(
-                    chatHistory, summary, cursor, memory, candidate, evidence, app, mock(GoodAppCacheService.class));
+                    chatHistory, summary, cursor, memory, candidate, evidence, events, app, mock(GoodAppCacheService.class));
         }
 
         private void failAt(int step) {
@@ -152,7 +155,9 @@ class AppDeletionPersistenceServiceImplTest {
                         .when(candidate).unlinkAppId(7L);
                 case 6 -> doThrow(new IllegalStateException("证据来源解绑失败"))
                         .when(evidence).unlinkAppId(7L);
-                case 7 -> doThrow(new IllegalStateException("app down"))
+                case 7 -> doThrow(new IllegalStateException("操作历史来源解绑失败"))
+                        .when(events).unlinkAppId(7L);
+                case 8 -> doThrow(new IllegalStateException("app down"))
                         .when(app).deleteById(7L);
                 default -> throw new IllegalArgumentException("未知步骤");
             }
@@ -164,7 +169,8 @@ class AppDeletionPersistenceServiceImplTest {
             if (failedStep < 4) verifyNoInteractions(memory);
             if (failedStep < 5) verifyNoInteractions(candidate);
             if (failedStep < 6) verifyNoInteractions(evidence);
-            if (failedStep < 7) verifyNoInteractions(app);
+            if (failedStep < 7) verifyNoInteractions(events);
+            if (failedStep < 8) verifyNoInteractions(app);
         }
     }
 
@@ -194,7 +200,7 @@ class AppDeletionPersistenceServiceImplTest {
                 AppMapper appMapper,
                 GoodAppCacheService goodAppCacheService) {
             return new AppDeletionPersistenceServiceImpl(chatHistoryMapper,
-                    summaryMapper, cursorMapper, memoryMapper, mock(AppMemoryCandidateMapper.class), mock(AppMemoryEvidenceMapper.class), appMapper,
+                    summaryMapper, cursorMapper, memoryMapper, mock(AppMemoryCandidateMapper.class), mock(AppMemoryEvidenceMapper.class), mock(AppMemoryEventMapper.class), appMapper,
                     goodAppCacheService);
         }
     }

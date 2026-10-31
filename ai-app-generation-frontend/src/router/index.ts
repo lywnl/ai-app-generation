@@ -31,6 +31,12 @@ const router = createRouter({
       component: UserRegisterPage,
     },
     {
+      path: '/user/memory',
+      name: '长期记忆',
+      component: () => import('@/pages/user/UserMemoryPage.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/admin/userManage',
       name: '用户管理',
       component: UserManagePage,

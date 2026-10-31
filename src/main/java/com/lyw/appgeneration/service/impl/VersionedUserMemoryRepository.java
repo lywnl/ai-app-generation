@@ -4,9 +4,12 @@ import com.lyw.appgeneration.ai.memory.UserPreferenceAttributes;
 import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
 import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEventMapper;
 import com.lyw.appgeneration.model.entity.AppMemory;
 import com.lyw.appgeneration.model.entity.AppMemoryCandidate;
 import com.lyw.appgeneration.model.entity.AppMemoryEvidence;
+import com.lyw.appgeneration.model.entity.AppMemoryEvent;
+import com.mybatisflex.core.query.QueryColumn;
 import com.mybatisflex.core.keygen.KeyGeneratorFactory;
 import com.mybatisflex.core.keygen.KeyGenerators;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -29,13 +32,16 @@ public class VersionedUserMemoryRepository {
     private final AppMemoryMapper formal;
     private final AppMemoryCandidateMapper candidates;
     private final AppMemoryEvidenceMapper evidence;
+    private final AppMemoryEventMapper events;
 
     public VersionedUserMemoryRepository(AppMemoryMapper formal,
                                         AppMemoryCandidateMapper candidates,
-                                        AppMemoryEvidenceMapper evidence) {
+                                        AppMemoryEvidenceMapper evidence,
+                                        AppMemoryEventMapper events) {
         this.formal = Objects.requireNonNull(formal);
         this.candidates = Objects.requireNonNull(candidates);
         this.evidence = Objects.requireNonNull(evidence);
+        this.events = Objects.requireNonNull(events);
     }
 
     long nextId() {
@@ -59,11 +65,20 @@ public class VersionedUserMemoryRepository {
     }
 
     private Snapshot load(long userId, boolean currentRead) {
+        return load(userId, currentRead, null);
+    }
+
+    Snapshot loadKeyCurrent(long userId, String memoryKey) {
+        return load(userId, true, memoryKey);
+    }
+
+    private Snapshot load(long userId, boolean currentRead, String memoryKey) {
         List<Item> entries = new ArrayList<>();
         long cursor = 0L;
         while (true) {
             List<AppMemory> page = Objects.requireNonNull(formal.selectListByQuery(
-                    stateQuery(userId, cursor, currentRead).in("status", List.of("ACTIVE", "REVOKED"))));
+                    stateQuery(userId, cursor, currentRead).eq("memoryKey", memoryKey, memoryKey != null)
+                            .in("status", List.of("ACTIVE", "REVOKED"))));
             for (AppMemory item : page) {
                 cursor = nextCursor(cursor, item.getId());
                 entries.add(from(item));
@@ -73,7 +88,8 @@ public class VersionedUserMemoryRepository {
         cursor = 0L;
         while (true) {
             List<AppMemoryCandidate> page = Objects.requireNonNull(candidates.selectListByQuery(
-                    stateQuery(userId, cursor, currentRead).in("status", List.of("CANDIDATE", "REVOKED"))));
+                    stateQuery(userId, cursor, currentRead).eq("memoryKey", memoryKey, memoryKey != null)
+                            .in("status", List.of("CANDIDATE", "REVOKED"))));
             for (AppMemoryCandidate item : page) {
                 cursor = nextCursor(cursor, item.getId());
                 entries.add(from(item));
@@ -103,7 +119,8 @@ public class VersionedUserMemoryRepository {
                             .gt("id", cursor).orderBy("id", true).limit(PAGE_SIZE).forUpdate()));
             for (AppMemoryEvidence row : page) {
                 cursor = nextCursor(cursor, row.getId());
-                ids.put(row.getTurnId(), new Evidence(row.getTurnId(), row.getAppId(), row.getEvidenceType()));
+                ids.put(row.getTurnId(), new Evidence(row.getTurnId(), row.getAppId(), row.getEvidenceType(),
+                        row.getSourceType() == null ? "CHAT" : row.getSourceType()));
             }
             if (page.size() < PAGE_SIZE) break;
         }
@@ -125,11 +142,64 @@ public class VersionedUserMemoryRepository {
     }
 
     void addEvidence(Item target, Long appId, long turnId, String evidenceType, LocalDateTime now) {
+        addEvidence(target, appId, turnId, evidenceType, "CHAT", now);
+    }
+
+    void addEvidence(Item target, Long appId, long turnId, String evidenceType, String sourceType, LocalDateTime now) {
         requireOne(evidence.insert(AppMemoryEvidence.builder().id(nextId())
                 .userId(target.userId()).appId(appId).targetKind(target.kind().name())
-                .targetId(target.id()).turnId(turnId).evidenceType(evidenceType)
+                .targetId(target.id()).turnId(turnId).evidenceType(evidenceType).sourceType(sourceType)
                 .createTime(now).build()));
     }
+
+    List<Item> managedPage(long userId, Kind kind, String category, String keyword, long offset, int size) {
+        QueryWrapper query = managementQuery(userId, kind, category, keyword)
+                .orderBy("updateTime", false).orderBy("id", false).limit(offset, size);
+        return kind == Kind.FORMAL ? formal.selectListByQuery(query).stream().map(VersionedUserMemoryRepository::from).toList()
+                : candidates.selectListByQuery(query).stream().map(VersionedUserMemoryRepository::from).toList();
+    }
+
+    long managedCount(long userId, Kind kind, String category, String keyword) {
+        QueryWrapper query = managementQuery(userId, kind, category, keyword);
+        return kind == Kind.FORMAL ? formal.selectCountByQuery(query) : candidates.selectCountByQuery(query);
+    }
+
+    private QueryWrapper managementQuery(long userId, Kind kind, String category, String keyword) {
+        QueryWrapper query = QueryWrapper.create().eq("userId", userId).eq("type", "USER_PREFERENCE")
+                .eq("isDelete", 0).eq("status", kind == Kind.FORMAL ? "ACTIVE" : "CANDIDATE")
+                .eq("name", category, category != null);
+        if (keyword != null) {
+            query.and(new QueryColumn("attributeName").like(keyword).or(new QueryColumn("content").like(keyword)));
+        }
+        return query;
+    }
+
+    Item findActive(long userId, String key) {
+        AppMemory row = formal.selectOneByQuery(managementQuery(userId, Kind.FORMAL, null, null).eq("memoryKey", key));
+        return row == null ? null : from(row);
+    }
+
+    List<Item> activeForKeys(long userId, Set<String> keys) {
+        if (keys.isEmpty()) return List.of();
+        return formal.selectListByQuery(managementQuery(userId, Kind.FORMAL, null, null)
+                .in("memoryKey", keys)).stream().map(VersionedUserMemoryRepository::from).toList();
+    }
+
+    Item findCurrentTarget(long userId, Kind kind, long id) {
+        QueryWrapper query = QueryWrapper.create().eq("userId", userId).eq("type", "USER_PREFERENCE")
+                .eq("isDelete", 0).eq("id", id).forUpdate();
+        if (kind == Kind.FORMAL) {
+            AppMemory row = formal.selectOneByQuery(query);
+            return row == null ? null : from(row);
+        }
+        AppMemoryCandidate row = candidates.selectOneByQuery(query);
+        return row == null ? null : from(row);
+    }
+
+    AppMemoryEvent findRequest(long userId, String requestId) { return events.findRequest(userId, requestId); }
+    void insertEvent(AppMemoryEvent event) { requireOne(events.insert(event)); }
+    long historyCount(long userId) { return events.countHistory(userId); }
+    List<AppMemoryEvent> historyPage(long userId, long offset, int size) { return events.historyPage(userId, offset, size); }
 
     private QueryWrapper pageQuery(long userId, long cursor) {
         return QueryWrapper.create().eq("userId", userId).eq("type", "USER_PREFERENCE")
@@ -178,7 +248,8 @@ public class VersionedUserMemoryRepository {
                 .legacyEvidenceCount(number(row.getLegacyEvidenceCount()))
                 .legacyEvidenceTurnId(row.getLegacyEvidenceTurnId()).revision(number(row.getRevision()))
                 .promotedMemoryId(row.getPromotedMemoryId()).revokedByTurnId(row.getRevokedByTurnId())
-                .createTime(row.getCreateTime()).updateTime(row.getUpdateTime()).build();
+                .createTime(row.getCreateTime()).updateTime(row.getUpdateTime())
+                .requiresConfirmation(Boolean.TRUE.equals(row.getRequiresConfirmation())).build();
     }
 
     static AppMemory toFormal(Item item) {
@@ -204,6 +275,7 @@ public class VersionedUserMemoryRepository {
                 .type("USER_PREFERENCE").name(item.category()).memoryKey(item.memoryKey())
                 .attributeName(item.attributeName()).content(item.content())
                 .contentHash(UserPreferenceAttributes.contentHash(item.content())).status(item.status())
+                .requiresConfirmation(item.requiresConfirmation())
                 .evidenceType(item.evidenceType()).evidenceCount(item.evidenceCount())
                 .lastEvidenceTurnId(item.lastEvidenceTurnId()).legacyEvidenceCount(item.legacyEvidenceCount())
                 .legacyEvidenceTurnId(item.legacyEvidenceTurnId()).revision(item.revision())

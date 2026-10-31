@@ -68,7 +68,7 @@ public class AppMemory implements Serializable {
     @Column("originCandidateId")
     private Long originCandidateId;
 
-    /** 用户明确撤销时的证据回合。 */
+    /** 撤销证据的有序 ID；可能是聊天回合或可追溯的手动操作，保留旧列名。 */
     @Column("revokedByTurnId")
     private Long revokedByTurnId;
 
@@ -86,11 +86,11 @@ public class AppMemory implements Serializable {
     /** 正式状态：ACTIVE / SUPERSEDED / REVOKED；候选存放在独立表。 */
     private String status;
 
-    /** 已累计的不同完整回合证据数 */
+    /** 旧基线加去重后的证据事件数；手动操作与聊天回合明确区分来源。 */
     @Column("evidenceCount")
     private Integer evidenceCount;
 
-    /** 已累计证据中的最大 User 回合 ID */
+    /** 已累计证据中的最大有序事件 ID，保留旧列名以兼容历史数据。 */
     @Column("lastEvidenceTurnId")
     private Long lastEvidenceTurnId;
 

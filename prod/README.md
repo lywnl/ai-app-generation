@@ -328,6 +328,8 @@ mysql --default-character-set=utf8mb4 < sql/migrations/2026-08-15-token-layered-
 
 ### 6.3 配置和兼容性门禁
 
+启用长期记忆管理页前，还须按 [迁移记录](../sql/migrations/README.md) 依次执行 `2026-10-30-l2-user-memory-isolation.sql` 和 `2026-10-30-l2-memory-management.sql`。后者增加手动证据来源、须确认候选与操作历史；管理页依赖新接口，须与新后端一同发布。此要求独立于下面的分层记忆压缩协议兼容说明。
+
 部署前核对后端实际配置：
 
 ```yaml

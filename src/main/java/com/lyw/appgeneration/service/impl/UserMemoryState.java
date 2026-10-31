@@ -20,7 +20,10 @@ final class UserMemoryState {
 
     enum Kind { FORMAL, CANDIDATE }
 
-    record Evidence(long turnId, Long appId, String type) { }
+    /** turnId 保留历史命名；MANUAL 引用操作记录，不指向聊天历史。 */
+    record Evidence(long turnId, Long appId, String type, String sourceType) {
+        Evidence(long turnId, Long appId, String type) { this(turnId, appId, type, "CHAT"); }
+    }
 
     @Builder(toBuilder = true)
     record Item(Kind kind, long id, long userId, Long appId,
@@ -28,7 +31,8 @@ final class UserMemoryState {
                 String status, String evidenceType, int evidenceCount, long lastEvidenceTurnId,
                 int legacyEvidenceCount, Long legacyEvidenceTurnId, long revision,
                 Long supersededBy, Long originCandidateId, Long promotedMemoryId,
-                Long revokedByTurnId, LocalDateTime createTime, LocalDateTime updateTime) {
+                Long revokedByTurnId, LocalDateTime createTime, LocalDateTime updateTime,
+                boolean requiresConfirmation) {
         boolean active() { return kind == Kind.FORMAL && "ACTIVE".equals(status); }
         boolean pending() { return kind == Kind.CANDIDATE && "CANDIDATE".equals(status); }
         boolean revoked() { return "REVOKED".equals(status); }
@@ -119,6 +123,7 @@ final class UserMemoryState {
                 row.put("status", item.status());
                 row.put("evidenceType", item.evidenceType());
                 row.put("evidenceCount", item.evidenceCount());
+                if (item.pending()) row.put("requiresConfirmation", item.requiresConfirmation());
                 if (item.revokedByTurnId() != null) {
                     row.put("revokedByTurnId", Long.toString(item.revokedByTurnId()));
                 }

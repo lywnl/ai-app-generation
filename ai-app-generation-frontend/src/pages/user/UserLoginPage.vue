@@ -51,8 +51,9 @@
 import { reactive } from 'vue'
 import { userLogin } from '@/api/userController.ts'
 import { useLoginUserStore } from '@/stores/loginUser.ts'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
+import { loginRedirect } from '@/utils/loginRedirect'
 
 const formState = reactive<API.UserLoginRequest>({
   userAccount: '',
@@ -60,6 +61,7 @@ const formState = reactive<API.UserLoginRequest>({
 })
 
 const router = useRouter()
+const route = useRoute()
 const loginUserStore = useLoginUserStore()
 
 /**
@@ -73,7 +75,7 @@ const handleSubmit = async (values: any) => {
     await loginUserStore.fetchLoginUser()
     message.success('登录成功')
     router.push({
-      path: '/',
+      path: loginRedirect(route.query.redirect),
       replace: true,
     })
   } else {

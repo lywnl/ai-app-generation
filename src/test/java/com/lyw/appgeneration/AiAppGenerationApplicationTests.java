@@ -9,6 +9,7 @@ import com.lyw.appgeneration.mapper.AppMemoryExtractCursorMapper;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
 import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEventMapper;
 import com.lyw.appgeneration.mapper.AppMemorySummaryMapper;
 import com.lyw.appgeneration.mapper.ChatHistoryMapper;
 import com.lyw.appgeneration.mapper.UserMapper;
@@ -98,6 +99,9 @@ class AiAppGenerationApplicationTests {
 
     @MockitoBean
     private AppMemoryEvidenceMapper appMemoryEvidenceMapper;
+
+    @MockitoBean
+    private AppMemoryEventMapper appMemoryEventMapper;
 
     @MockitoBean
     private AppMemorySummaryMapper appMemorySummaryMapper;

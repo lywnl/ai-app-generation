@@ -6,6 +6,7 @@ import com.lyw.appgeneration.ai.memory.UserMemoryOperation.Scope;
 import com.lyw.appgeneration.mapper.AppMemoryMapper;
 import com.lyw.appgeneration.mapper.AppMemoryCandidateMapper;
 import com.lyw.appgeneration.mapper.AppMemoryEvidenceMapper;
+import com.lyw.appgeneration.mapper.AppMemoryEventMapper;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -281,11 +282,11 @@ class UserMemoryChangePlannerTest {
                 null, content, Scope.USER, evidence, java.util.Arrays.stream(turns).boxed().toList());
     }
 
-    static final class Store extends VersionedUserMemoryRepository {
+    static class Store extends VersionedUserMemoryRepository {
         final Map<Long, Item> rows = new LinkedHashMap<>();
         final Map<Long, Map<Long, Evidence>> ledgers = new LinkedHashMap<>();
         final AtomicLong ids = new AtomicLong(1000);
-        Store() { super(mock(AppMemoryMapper.class), mock(AppMemoryCandidateMapper.class), mock(AppMemoryEvidenceMapper.class)); }
+        Store() { super(mock(AppMemoryMapper.class), mock(AppMemoryCandidateMapper.class), mock(AppMemoryEvidenceMapper.class), mock(AppMemoryEventMapper.class)); }
         @Override long nextId() { return ids.incrementAndGet(); }
         @Override Snapshot load(long userId) { return Snapshot.of(rows.values().stream()
                 .filter(i -> i.userId() == userId && (i.active() || i.pending() || i.revoked())).toList()); }
@@ -293,9 +294,9 @@ class UserMemoryChangePlannerTest {
         @Override Map<Long, Evidence> evidence(Item item) { return Map.copyOf(ledgers.getOrDefault(item.id(), Map.of())); }
         @Override void insert(Item item) { assertNull(rows.putIfAbsent(item.id(), item)); }
         @Override void update(Item before, Item after) { assertEquals(before, rows.get(before.id())); rows.put(after.id(), after); }
-        @Override void addEvidence(Item target, Long appId, long turnId, String type, LocalDateTime now) {
+        @Override void addEvidence(Item target, Long appId, long turnId, String type, String sourceType, LocalDateTime now) {
             assertNull(ledgers.computeIfAbsent(target.id(), ignored -> new LinkedHashMap<>())
-                    .putIfAbsent(turnId, new Evidence(turnId, appId, type)));
+                    .putIfAbsent(turnId, new Evidence(turnId, appId, type, sourceType)));
         }
     }
 }

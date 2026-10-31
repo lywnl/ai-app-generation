@@ -56,19 +56,20 @@ class UserMemoryMysqlIntegrationTest {
             sql.execute("CREATE TABLE `user` (id BIGINT PRIMARY KEY, isDelete TINYINT NOT NULL DEFAULT 0)");
             sql.execute("INSERT INTO `user` VALUES (7,0),(8,0)");
             String schema = Files.readString(Path.of("sql/schema.sql"));
-            for (String table : List.of("app_memory", "app_memory_candidate", "app_memory_evidence", "app_memory_extract_cursor")) {
+            for (String table : List.of("app_memory", "app_memory_candidate", "app_memory_evidence", "app_memory_event", "app_memory_extract_cursor")) {
                 var match = Pattern.compile("(?is)CREATE TABLE IF NOT EXISTS " + table + " \\(.*?;\\s*").matcher(schema);
                 assertTrue(match.find(), table);
                 sql.execute(match.group());
             }
         }
-        String url = base.replace("/l2_memory_test", "/" + database);
+        // 替换完整测试库名，保留连接参数，避免带后缀的隔离库名被拼接到新库名后。
+        String url = base.replaceFirst("/l2_memory_test[^?]*", "/" + database);
         var source = new DriverManagerDataSource(url, user, password);
         var configuration = new FlexConfiguration(new Environment(database, new JdbcTransactionFactory(),
                 new FlexDataSource(database, source)));
         factory = new FlexSqlSessionFactoryBuilder().build(configuration);
         for (Class<?> mapper : List.of(AppMemoryMapper.class, AppMemoryCandidateMapper.class,
-                AppMemoryEvidenceMapper.class, AppMemoryExtractCursorMapper.class)) configuration.addMapper(mapper);
+                AppMemoryEvidenceMapper.class, AppMemoryEventMapper.class, AppMemoryExtractCursorMapper.class)) configuration.addMapper(mapper);
         session = factory.openSession(false);
         repository = repository(session);
     }
@@ -197,7 +198,7 @@ class UserMemoryMysqlIntegrationTest {
 
     private VersionedUserMemoryRepository repository(SqlSession sql) {
         return new VersionedUserMemoryRepository(sql.getMapper(AppMemoryMapper.class),
-                sql.getMapper(AppMemoryCandidateMapper.class), sql.getMapper(AppMemoryEvidenceMapper.class));
+                sql.getMapper(AppMemoryCandidateMapper.class), sql.getMapper(AppMemoryEvidenceMapper.class), sql.getMapper(AppMemoryEventMapper.class));
     }
     private Item active(VersionedUserMemoryRepository repo) { return repo.load(7).items().values().stream().filter(Item::active).findFirst().orElseThrow(); }
     private UserMemoryChangePlanner planner(VersionedUserMemoryRepository repo, Snapshot snapshot) {

@@ -47,4 +47,23 @@ mysql --default-character-set=utf8mb4 --database=ai_app_generation \
 
 MySQL DDL 会隐式提交，因此脚本不能被误认为一个可整体回滚的普通 DML 事务。切换前失败保留原表；切换后若需回退，必须先停写并导出新正式、候选、证据和游标，再按备份及映射人工恢复兼容版本。直接降级旧二进制会误解新状态和同类别多条记录，禁止用删列、清候选或覆盖整库的方式自动回退。
 
-本次实现只在独立测试容器演练迁移，没有连接现有业务库执行该脚本。运行时规则和聊天例子见 [L2 用户长期记忆说明](../../docs/l2-user-memory.md)。
+各环境的执行状态须分别核实，不以其他环境的迁移记录代替本环境检查。运行时规则和聊天例子见 [L2 用户长期记忆说明](../../docs/l2-user-memory.md)。
+
+## 2026-10-30：长期记忆管理页
+
+`2026-10-30-l2-memory-management.sql` 依赖上面的正式与候选分表迁移，供已有数据库启用管理页时执行。全新数据库的两份 schema 已包含最终结构，无需再执行历史迁移。
+
+1. 停止后端写入，备份 `app_memory`、`app_memory_candidate`、`app_memory_evidence`、`app_memory_extract_cursor`；若已有 `app_memory_event`，也一并备份。
+2. 记录上述表的行数和旧列内容，在选定的 MySQL 数据库执行脚本，不使用 `--force`。
+3. 脚本为候选表新增 `requiresConfirmation`（旧候选默认 0），为证据表新增 `sourceType`（旧证据默认 CHAT），并创建 `app_memory_event`、请求唯一索引及字段约束。所有步骤可重入，不删除旧偏好或补造历史证据。
+4. 对比旧列与行数，确认内容、状态、证据计数和抽取游标均未变化；检查新增默认值、约束和 `(userId, requestId)` 唯一索引。
+5. 启动包含新实体和管理接口的后端，再验证登录后的 `/api/user/memory/list`、`preview`、`change`、`history` 与前端 `/user/memory`。
+
+执行示意：
+
+```bash
+mysql --default-character-set=utf8mb4 --database=ai_app_generation \
+  < sql/migrations/2026-10-30-l2-memory-management.sql
+```
+
+管理页与新后端同时发布。旧后端不能正确处理手动证据来源及须确认候选；启用手动管理后不要只回退后端程序。DDL 仍会隐式提交，失败时保留备份与错误记录，定位后重入；若需回退，先停写并导出迁移后的新增数据，再按兼容方案恢复，不能清空操作表或候选表。
