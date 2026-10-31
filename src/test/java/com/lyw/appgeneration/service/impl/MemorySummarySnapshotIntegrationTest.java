@@ -5,7 +5,6 @@ import com.lyw.appgeneration.ai.memory.AtomicChatMemoryStore;
 import com.lyw.appgeneration.ai.memory.ChatTokenEstimator;
 import com.lyw.appgeneration.ai.memory.CompressionAwareChatMemory;
 import com.lyw.appgeneration.ai.memory.ContextAdmissionResult;
-import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import com.lyw.appgeneration.ai.memory.ContextCompressionCoordinator;
 import com.lyw.appgeneration.ai.memory.ContextCompressionMode;
 import com.lyw.appgeneration.ai.memory.DeadlineAwareChatMemoryStore;
@@ -174,15 +173,11 @@ class MemorySummarySnapshotIntegrationTest {
         verify(summaries, never()).getCurrentSummary(7L);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void 阻塞压缩返回更大覆盖边界时按实际快照裁剪(boolean checkpoint) {
+    @Test
+    void 阻塞压缩返回更大覆盖边界时按实际快照裁剪() {
         database.set(summary(0L, ""));
-        if (checkpoint) {
-            appendReadResult();
-        }
         when(estimator.estimateRequest(anyList(), anyList()))
-                .thenReturn(57_344, checkpoint ? 65_536 : 1_000, 1_000);
+                .thenReturn(57_344, 1_000);
         when(estimator.estimateMessages(anyList())).thenAnswer(invocation -> {
             List<ChatMessage> messages = invocation.getArgument(0);
             return messages.toString().contains("第一轮要求") ? 13_000 : 12_000;
@@ -196,8 +191,7 @@ class MemorySummarySnapshotIntegrationTest {
         ContextAdmissionResult result = coordinator.admit(memory,
                 List.of(ToolSpecification.builder().name("readFile").build()));
 
-        assertEquals(checkpoint ? ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED
-                : ContextCompressionMode.BLOCKING_COMPLETED, result.mode());
+        assertEquals(ContextCompressionMode.BLOCKING_COMPLETED, result.mode());
         assertEquals(4L, result.summarizeThroughId());
         String input = result.requestMessages().toString();
         assertTrue(input.contains("新版摘要已覆盖第二轮"));
@@ -206,32 +200,6 @@ class MemorySummarySnapshotIntegrationTest {
         verify(summaries, never()).getCurrentSummary(7L);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void 检查点准备不得再次读取并混入更新的摘要(boolean active) {
-        database.set(summary(2L, "旧版摘要"));
-        appendReadResult();
-        when(estimator.estimateRequest(anyList(), anyList())).thenAnswer(invocation -> {
-            List<ChatMessage> messages = invocation.getArgument(0);
-            database.set(summary(4L, "新版摘要已覆盖第二轮"));
-            return messages.toString().contains("本轮可信执行检查点") ? 1_000 : 65_536;
-        });
-        ContextCompressionAttemptState state = new ContextCompressionAttemptState();
-        if (active) {
-            assertTrue(state.markCheckpointReady(state.tryEnterCheckpointMode()));
-        }
-
-        ContextAdmissionResult result = coordinator.admit(memory,
-                List.of(ToolSpecification.builder().name("readFile").build()), state);
-
-        assertEquals(active ? ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_REBUILT
-                : ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED, result.mode());
-        String input = result.requestMessages().toString();
-        assertTrue(input.contains("旧版摘要"));
-        assertFalse(input.contains("新版摘要已覆盖第二轮"));
-        assertTrue(input.contains("第二轮要求"));
-        verify(summaries, never()).getCurrentSummary(7L);
-    }
 
     private void appendReadResult() {
         ToolExecutionRequest read = ToolExecutionRequest.builder()

@@ -516,6 +516,18 @@ public final class VueTurnContext implements ContextContinuationGate {
         return lease == null ? testingPhase : lease.snapshot().phase();
     }
 
+    /** 只从同一份后端租约快照描述当前回合，不从模型文字推断构建结果。 */
+    public String currentRequestState() {
+        VueBuildSnapshot snapshot = lease == null ? null : lease.snapshot();
+        VueBuildPhase currentPhase = snapshot == null ? testingPhase : snapshot.phase();
+        long revision = snapshot == null ? 0L : snapshot.mutationRevision();
+        int attempts = snapshot == null ? 0 : snapshot.buildAttempt();
+        return "当前用户回合进行中，尚未登记最终结果。执行模式=" + turnMode()
+                + "，后端阶段=" + currentPhase + "，实际变更修订=" + revision
+                + "，真实构建尝试次数=" + attempts + "。"
+                + "文件已修改不等于构建成功；仅服务端 SUCCEEDED 阶段证明本轮构建成功。";
+    }
+
     public boolean timedOut() {
         return lease == null ? testingTimedOut : lease.snapshot().timedOut();
     }

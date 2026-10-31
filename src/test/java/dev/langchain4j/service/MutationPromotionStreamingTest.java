@@ -248,8 +248,7 @@ class MutationPromotionStreamingTest {
                     gate == null ? null : com.lyw.appgeneration.ai.memory.ContextContinuationGate.alwaysOpen(),
                     protocol ? new ToolProtocolRecoveryCoordinator(new ToolProtocolRecoveryPolicy(Set.of("buildProject"), ignored -> { }), Set.of("buildProject")) : null,
                     incomplete ? new IncompleteToolChainRecoveryCoordinator(new IncompleteToolChainRecoveryPolicy(h.context::requiresBuild,
-                            () -> IncompleteToolChainRecoveryPolicy.BuildState.GENERATING, ignored -> { })) : null,
-                    new com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState(), publisher);
+                            () -> IncompleteToolChainRecoveryPolicy.BuildState.GENERATING, ignored -> { })) : null, publisher);
         }
     }
 

@@ -2,7 +2,6 @@ package dev.langchain4j.service;
 
 import cn.hutool.json.JSONUtil;
 import com.lyw.appgeneration.ai.VueToolNames;
-import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import com.lyw.appgeneration.ai.skill.SkillCatalog;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.tools.FileToolExecutionScopeManager;
@@ -163,7 +162,6 @@ class AiServiceTokenStreamSkillTest {
         List<ChatRequest> requests = new CopyOnWriteArrayList<>();
         CountDownLatch completed = new CountDownLatch(1);
         AtomicInteger callIndex = new AtomicInteger();
-        AtomicInteger gateIndex = new AtomicInteger();
         AtomicReference<Throwable> streamError = new AtomicReference<>();
         List<ModelRequestGate.Request> gateRequests =
                 new CopyOnWriteArrayList<>();
@@ -203,22 +201,13 @@ class AiServiceTokenStreamSkillTest {
         };
         try (var gate = new ManagedModelRequestGate(request -> {
                  gateRequests.add(request);
-                 ContextCompressionAttemptState state =
-                         request.contextCompressionAttemptState();
-                 if (gateIndex.getAndIncrement() == 0) {
-                     var claim = state.tryEnterCheckpointMode();
-                     assertEquals(ContextCompressionAttemptState
-                                     .EnterDecision.FIRST_ENTRY,
-                             claim.decision());
-                     assertTrue(state.markCheckpointReady(claim));
-                 }
-                 List<ChatMessage> checkpoint = new ArrayList<>();
-                 checkpoint.add(SystemMessage.from("压缩恢复检查点"));
-                 checkpoint.addAll(request.transientMessages());
+                 List<ChatMessage> prepared = new ArrayList<>();
+                 prepared.add(SystemMessage.from("已摘要的历史上下文"));
+                 prepared.addAll(request.transientMessages());
                  return CompletableFuture.completedFuture(
                          new ModelRequestGate.Decision(
                                  ModelRequestGate.Status.ALLOWED,
-                                 checkpoint, checkpoint.size(), ""));
+                                 prepared, prepared.size(), ""));
              });
              var operation = operations.acquire(
                 appId, AppOperationLeaseManager.AppOperationType.GENERATE, turnId);
@@ -268,22 +257,17 @@ class AiServiceTokenStreamSkillTest {
                         ToolProtocolRecoveryPolicy.Phase.RECOVERED),
                 recoveryPhases);
         assertTrue(requests.get(2).messages().toString()
-                .contains("压缩恢复检查点"));
+                .contains("已摘要的历史上下文"));
         assertTrue(requests.get(3).messages().toString()
                 .contains(ToolProtocolRecoveryCoordinator.CORRECTION_INSTRUCTION));
-        Object compressionState = gateRequests.getFirst()
-                .contextCompressionAttemptState();
-        assertTrue(((ContextCompressionAttemptState) compressionState)
-                .checkpointProjectionRequired());
-        assertTrue(gateRequests.stream().allMatch(request ->
-                request.contextCompressionAttemptState() == compressionState));
+        assertEquals(6, gateRequests.size());
         List<String> toolResults = requests.getLast().messages().stream()
                 .filter(ToolExecutionResultMessage.class::isInstance)
                 .map(ToolExecutionResultMessage.class::cast)
                 .map(ToolExecutionResultMessage::text)
                 .toList();
         assertEquals(0, toolResults.size(),
-                "压缩门禁返回检查点视图，正文不应绕过门禁重新注入");
+                "压缩门禁返回摘要视图，正文不应绕过门禁重新注入");
         List<String> committedToolResults = gateRequests.getLast()
                 .latestMemory().get().messages().stream()
                 .filter(ToolExecutionResultMessage.class::isInstance)

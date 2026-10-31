@@ -91,119 +91,7 @@ class ContextCompressionModelRequestGateTest {
             已完成早期回合
             """.strip();
 
-    @Test
-    void 六十四K未完成工具链只映射到Decision临时检查点而不改写真实L0()
-            throws Exception {
-        long appId = 64L;
-        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
-        MessageWindowChatMemory delegate = MessageWindowChatMemory.builder()
-                .id(appId).chatMemoryStore(store)
-                .maxMessages(Integer.MAX_VALUE).build();
-        MemorySummaryService summaryService = mock(MemorySummaryService.class);
-        UserMemoryService userMemoryService = mock(UserMemoryService.class);
-        when(summaryService.getCurrentSummary(appId)).thenReturn("");
-        when(summaryService.readSnapshot(appId)).thenReturn(MemorySummarySnapshot.empty());
-        when(userMemoryService.recallByApp(appId)).thenReturn("");
-        CompressionAwareChatMemory memory = new CompressionAwareChatMemory(
-                new TokenAwareChatMemory(delegate), summaryService,
-                userMemoryService);
-        ToolExecutionRequest toolRequest = ToolExecutionRequest.builder()
-                .id("checkpoint-read")
-                .name("readFile")
-                .arguments("{\"path\":\"src/App.vue\"}")
-                .build();
-        memory.add(UserMessage.from("调整首页"));
-        memory.add(AiMessage.from(toolRequest));
-        memory.add(ToolExecutionResultMessage.from(toolRequest,
-                "{\"protocol\":\"file-tool/v1\","
-                        + "\"operation\":\"readFile\","
-                        + "\"status\":\"APPLIED\","
-                        + "\"relativePath\":\"src/App.vue\","
-                        + "\"changed\":false,\"message\":\"已执行\","
-                        + "\"failureReason\":null,"
-                        + "\"content\":\"不得泄漏的源码\"}"));
-        List<ChatMessage> l0Before = List.copyOf(store.getMessages(appId));
 
-        ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
-        when(estimator.estimateRequest(anyList(), anyList())).thenAnswer(
-                invocation -> containsCheckpoint(invocation.getArgument(0))
-                        ? 18_000 : 65_536);
-        ChatHistoryService historyService = mock(ChatHistoryService.class);
-        when(historyService.listRecentCompleteTurnBoundaries(appId, 1))
-                .thenReturn(List.of());
-        MemoryTokenProperties properties = new MemoryTokenProperties();
-        try (ExecutorService compressionExecutor =
-                     Executors.newSingleThreadExecutor();
-             ExecutorService gateExecutor =
-                     Executors.newVirtualThreadPerTaskExecutor()) {
-            ContextCompressionCoordinator coordinator =
-                    new ContextCompressionCoordinator(estimator,
-                            historyService, summaryService, properties,
-                            compressionExecutor, new AppDataLifecycleFence(),
-                            new MemoryCompressionMetricsCollector(
-                                    new SimpleMeterRegistry()));
-            ContextCompressionModelRequestGate gate =
-                    new ContextCompressionModelRequestGate(
-                            coordinator, gateExecutor);
-            ModelRequestGate.Request request = new ModelRequestGate.Request(
-                    appId, () -> memory,
-                    List.of(ToolSpecification.builder().name("readFile").build()),
-                    action -> {
-                        action.run();
-                        return true;
-                    }, List.of());
-
-            ModelRequestGate.Decision decision = gate.prepare(request)
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
-
-            assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
-            assertTrue(containsCheckpoint(decision.messages()));
-            assertEquals(l0Before, store.getMessages(appId));
-            assertEquals(l0Before, memory.messages());
-            assertFalse(memory.messages().stream().anyMatch(
-                    SystemMessage.class::isInstance));
-            verify(summaryService, never()).compressNow(
-                    anyLong(), anyLong(), any(Duration.class));
-            verifyNoInteractions(historyService);
-        }
-    }
-
-    @Test
-    void Request显式状态引用必须原样传给协调器() throws Exception {
-        ContextCompressionCoordinator coordinator =
-                mock(ContextCompressionCoordinator.class);
-        CompressionAwareChatMemory memory = compressionMemory("共享状态");
-        ContextCompressionAttemptState attemptState =
-                new ContextCompressionAttemptState();
-        ModelRequestGate.Request request = new ModelRequestGate.Request(
-                7L, () -> memory, List.of(), action -> {
-                    action.run();
-                    return true;
-                }, List.of(), attemptState);
-        when(coordinator.admit(
-                eq(memory), eq(List.of()), eq(List.of()), any(), any(),
-                eq(attemptState)))
-                .thenReturn(result(ContextCompressionMode.NORMAL,
-                        ContextAdmissionResult.FailureReason.NONE,
-                        100, 100));
-
-        try (ExecutorService executor =
-                     Executors.newVirtualThreadPerTaskExecutor()) {
-            ContextCompressionModelRequestGate gate =
-                    new ContextCompressionModelRequestGate(
-                            coordinator, executor);
-
-            ModelRequestGate.Decision decision = gate.prepare(request)
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
-
-            assertSame(attemptState,
-                    request.contextCompressionAttemptState());
-            assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
-            verify(coordinator).admit(
-                    eq(memory), eq(List.of()), eq(List.of()), any(), any(),
-                    eq(attemptState));
-        }
-    }
 
     @Test
     void 阻塞压缩只通过真实回合门发布固定开始和完成进度()
@@ -249,118 +137,8 @@ class ContextCompressionModelRequestGateTest {
         }
     }
 
-    @Test
-    void 首次六十四K检查点发布一次开始和完成进度() throws Exception {
-        ContextCompressionCoordinator coordinator =
-                mock(ContextCompressionCoordinator.class);
-        CompressionAwareChatMemory memory = compressionMemory("检查点进度");
-        RecordingProgressGate continuation = new RecordingProgressGate();
-        when(coordinator.admit(eq(memory), eq(List.of()), eq(List.of()),
-                any(), any(), any()))
-                .thenAnswer(invocation -> {
-                    Consumer<ContextAdmissionResult> listener =
-                            invocation.getArgument(3);
-                    ContextContinuationGate actualGate =
-                            invocation.getArgument(4);
-                    assertTrue(actualGate.tryRun(() -> listener.accept(result(
-                            ContextCompressionMode
-                                    .TOOL_CHAIN_CHECKPOINT_STARTED,
-                            ContextAdmissionResult.FailureReason.NONE,
-                            65_536, 65_536))));
-                    return result(
-                            ContextCompressionMode
-                                    .TOOL_CHAIN_CHECKPOINT_COMPLETED,
-                            ContextAdmissionResult.FailureReason.NONE,
-                            65_536, 18_000);
-                });
 
-        try (ExecutorService executor =
-                     Executors.newVirtualThreadPerTaskExecutor()) {
-            ContextCompressionModelRequestGate gate =
-                    new ContextCompressionModelRequestGate(
-                            coordinator, executor);
 
-            ModelRequestGate.Decision decision = gate.prepare(
-                            request(memory, continuation))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
-
-            assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
-            assertEquals(List.of(
-                            ContextCompressionMessage.Phase.STARTED,
-                            ContextCompressionMessage.Phase.COMPLETED),
-                    continuation.phases());
-        }
-    }
-
-    @Test
-    void ACTIVE检查点重建不得重复发布开始或完成进度() throws Exception {
-        ContextCompressionCoordinator coordinator =
-                mock(ContextCompressionCoordinator.class);
-        CompressionAwareChatMemory memory = compressionMemory("检查点重建");
-        RecordingProgressGate continuation = new RecordingProgressGate();
-        when(coordinator.admit(eq(memory), eq(List.of()), eq(List.of()),
-                any(), any(), any()))
-                .thenReturn(result(
-                        ContextCompressionMode
-                                .TOOL_CHAIN_CHECKPOINT_REBUILT,
-                        ContextAdmissionResult.FailureReason.NONE,
-                        30_000, 18_000));
-
-        try (ExecutorService executor =
-                     Executors.newVirtualThreadPerTaskExecutor()) {
-            ContextCompressionModelRequestGate gate =
-                    new ContextCompressionModelRequestGate(
-                            coordinator, executor);
-
-            ModelRequestGate.Decision decision = gate.prepare(
-                            request(memory, continuation))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
-
-            assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
-            assertTrue(continuation.phases().isEmpty());
-        }
-    }
-
-    @Test
-    void 检查点开始后回合终态先赢不得发布迟到完成进度()
-            throws Exception {
-        ContextCompressionCoordinator coordinator =
-                mock(ContextCompressionCoordinator.class);
-        CompressionAwareChatMemory memory = compressionMemory("检查点终态");
-        RecordingProgressGate continuation = new RecordingProgressGate();
-        when(coordinator.admit(eq(memory), eq(List.of()), eq(List.of()),
-                any(), any(), any()))
-                .thenAnswer(invocation -> {
-                    Consumer<ContextAdmissionResult> listener =
-                            invocation.getArgument(3);
-                    ContextContinuationGate actualGate =
-                            invocation.getArgument(4);
-                    assertTrue(actualGate.tryRun(() -> listener.accept(result(
-                            ContextCompressionMode
-                                    .TOOL_CHAIN_CHECKPOINT_STARTED,
-                            ContextAdmissionResult.FailureReason.NONE,
-                            65_536, 65_536))));
-                    continuation.close();
-                    return result(
-                            ContextCompressionMode
-                                    .TOOL_CHAIN_CHECKPOINT_COMPLETED,
-                            ContextAdmissionResult.FailureReason.NONE,
-                            65_536, 18_000);
-                });
-
-        try (ExecutorService executor =
-                     Executors.newVirtualThreadPerTaskExecutor()) {
-            ContextCompressionModelRequestGate gate =
-                    new ContextCompressionModelRequestGate(
-                            coordinator, executor);
-
-            gate.prepare(request(memory, continuation))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
-
-            assertEquals(List.of(ContextCompressionMessage.Phase.STARTED),
-                    continuation.phases());
-        }
-    }
 
     @ParameterizedTest
     @EnumSource(value = ContextCompressionMode.class,
@@ -500,16 +278,9 @@ class ContextCompressionModelRequestGateTest {
         ModelRequestGate.Request request = new ModelRequestGate.Request(
                 7L, () -> memory("真实消息"), List.of(),
                 action -> true, mutable);
-        ModelRequestGate.Request anotherCompatibleRequest =
-                new ModelRequestGate.Request(
-                        7L, () -> memory("另一个真实消息"), List.of(),
-                        action -> true, List.of());
         mutable.clear();
 
         assertEquals(List.of(transientMessage), request.transientMessages());
-        assertNotSame(request.contextCompressionAttemptState(),
-                anotherCompatibleRequest.contextCompressionAttemptState(),
-                "五参数兼容构造器必须为每个请求创建独立状态");
         assertTrue(new ModelRequestGate.Request(
                 7L, () -> memory("真实消息"), List.of(),
                 action -> true, null).transientMessages().isEmpty());
@@ -519,11 +290,9 @@ class ContextCompressionModelRequestGateTest {
                         7L, () -> memory("真实消息"), List.of(),
                         action -> true,
                         java.util.Arrays.asList((ChatMessage) null)));
-        org.junit.jupiter.api.Assertions.assertThrows(
-                NullPointerException.class,
-                () -> new ModelRequestGate.Request(
-                        7L, () -> memory("真实消息"), List.of(),
-                        action -> true, List.of(), null));
+        assertNull(new ModelRequestGate.Request(
+                7L, () -> memory("真实消息"), List.of(),
+                action -> true, List.of(), null).requestBoundary());
     }
 
     @Test
@@ -875,50 +644,37 @@ class ContextCompressionModelRequestGateTest {
     }
 
     @Test
-    void 真实59K压缩进度贯通Vue回合且不串入普通回合()
-            throws Exception {
-        try (RealGateFixture fixture = new RealGateFixture(47_000, 12_000);
-             SimpleGenerationTurnContext isolatedSimple =
-                     openIndependentSimpleTurn("isolated-simple-progress")) {
-            VueTurnContext turnContext = fixture.openVueTurn(
-                    "real-vue-progress-59k");
-            CompletableFuture<GenerationStreamEvent> simpleBusinessResult =
-                    new CompletableFuture<>();
-            AtomicInteger simpleSubscriptions = new AtomicInteger();
-            CompletableFuture<List<GenerationStreamEvent>> simpleEvents =
-                            isolatedSimple.mergeProgress(Flux.defer(() -> {
-                                simpleSubscriptions.incrementAndGet();
-                                return Mono.fromFuture(simpleBusinessResult)
-                                        .flux();
-                            }))
-                            .collectList()
-                            .toFuture();
-            AtomicInteger businessSubscriptions = new AtomicInteger();
+    void 统一摘要压缩进度贯通Vue回合且不串入普通回合() throws Exception {
+        try (var fixture = new UnifiedContextRequestGateTest.Fixture(true);
+             SimpleGenerationTurnContext isolated = openIndependentSimpleTurn("isolated-progress")) {
+            var release = new CountDownLatch(1);
+            var simpleResult = new CompletableFuture<GenerationStreamEvent>();
+            var simpleEvents = isolated.mergeProgress(Mono.fromFuture(simpleResult).flux()).collectList().toFuture();
+            when(fixture.estimator.estimateRequest(anyList(), anyList())).thenReturn(59_000, 12_000);
+            when(fixture.summaries.compressUnified(any(), any())).thenAnswer(invocation -> {
+                assertTrue(release.await(3, TimeUnit.SECONDS));
+                return new MemoryCompressionResult(MemoryCompressionResult.Status.COMPRESSED, 0, 100, "测试摘要");
+            });
+            var request = new ModelRequestGate.Request(7L, () -> fixture.memory, fixture.tools,
+                    fixture.context, fixture.transientMessages, fixture.boundary);
+            Flux<GenerationStreamEvent> business = Mono.fromCompletionStage(() -> fixture.gate.prepare(request))
+                    .<GenerationStreamEvent>map(decision -> {
+                        assertEquals(ModelRequestGate.Status.ALLOWED, decision.status());
+                        return GenerationStreamEvent.content("Vue正文");
+                    }).flux();
             try {
-                StepVerifier.create(turnContext.mergeProgress(realGateBusiness(
-                                fixture, turnContext, "Vue正文",
-                                businessSubscriptions)))
-                        .expectNext(GenerationStreamEvent.contextCompression(
-                                ContextCompressionMessage.started()))
-                        .then(() -> releaseStartedCompression(fixture))
-                        .expectNext(GenerationStreamEvent.contextCompression(
-                                ContextCompressionMessage.completed()))
+                StepVerifier.create(fixture.context.mergeProgress(business))
+                        .expectNext(GenerationStreamEvent.contextCompression(ContextCompressionMessage.started()))
+                        .then(release::countDown)
+                        .expectNext(GenerationStreamEvent.contextCompression(ContextCompressionMessage.completed()))
                         .expectNext(GenerationStreamEvent.content("Vue正文"))
                         .verifyComplete();
-
-                assertEquals(1, businessSubscriptions.get());
-                assertFalse(simpleEvents.isDone(),
-                        "Vue 回合完成不得关闭或写入普通回合私有通道");
-                simpleBusinessResult.complete(
-                        GenerationStreamEvent.content("普通占位正文"));
-                assertEquals(List.of(
-                                GenerationStreamEvent.content("普通占位正文")),
-                        simpleEvents.get(2, TimeUnit.SECONDS));
-                assertEquals(1, simpleSubscriptions.get());
+                assertFalse(simpleEvents.isDone());
+                simpleResult.complete(GenerationStreamEvent.content("普通正文"));
+                assertEquals(List.of(GenerationStreamEvent.content("普通正文")), simpleEvents.get(2, TimeUnit.SECONDS));
             } finally {
-                simpleBusinessResult.complete(
-                        GenerationStreamEvent.content("普通占位正文"));
-                turnContext.closeResources();
+                release.countDown();
+                simpleResult.complete(GenerationStreamEvent.content("普通正文"));
             }
         }
     }
@@ -1133,11 +889,6 @@ class ContextCompressionModelRequestGateTest {
         });
     }
 
-    private boolean containsCheckpoint(List<ChatMessage> messages) {
-        return messages.stream().anyMatch(message ->
-                message instanceof SystemMessage systemMessage
-                        && systemMessage.text().startsWith("本轮可信执行检查点"));
-    }
 
     private ChatResponse toolResponse() {
         ToolExecutionRequest request = ToolExecutionRequest.builder()

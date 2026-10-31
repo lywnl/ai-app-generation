@@ -28,6 +28,10 @@
 | 6.1 | 终态赢家在短事务中合并最终证据、保存 AI 可信结果并仅登记前沿结束；132 项本地回归及 9 项真实存储测试通过，真实故障证明证据、AI 行与摘要终态同步回滚，未增加模型调用。 | `.codex/unify-context-summarization/runs/038-terminal-real-storage/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 6.2 | 合法完整回合保留原文并以稳定 ID 附加后端终态，错误分支更换 epoch 保持原恢复语义，收尾不再触发 L1；138 项回归及 10 项真实存储测试通过，L2 仍单次使用稳定 AI ID。 | `.codex/unify-context-summarization/runs/040-source-retention/command.json`、原始日志、JUnit 与代码内容哈希 |
 | 6.3 | 26 项聚焦测试通过；请求投影只消费相容快照，保留原始工具批次，将带持久身份的后端终态去重汇入状态说明；完整旧副本不受之后的回收影响，分层组装不再隐式读活动 L0/L1。实际模型调用链由后续 7.2 接线。 | `.codex/unify-context-summarization/runs/042-trusted-request-view/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 7.2 | 124 项测试通过；初始、续调和两类恢复经过真实请求编排及统一门禁，计划每次刷新且资料各一份，最终发送使用同次完整估算。同步重组、相容副本、读失败、截止及取消已覆盖；修复终态已认领但回调票据仍开放时的迟到放行。存储及模型仍为本地替身。 | `.codex/unify-context-summarization/runs/046-unified-request-snapshot/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 7.3 | 249 项回归通过；生产三个阈值与共享截止、已覆盖大 L0 不重复摘要、最新大批次及固定资料超限、真实失败受控停止均已验证。删除旧检查点投影、结果类型、专用状态和专用重建；原检查点专项测试由统一摘要来源／门禁场景替换，保留非 Vue 完整历史兼容路径。 | `.codex/unify-context-summarization/runs/050-unified-admission/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 7.4 | 118 项测试通过；完整请求捕获验证 RAG、图片 URL／路径和 Skill 目录各一份，同步等待后不叠加、不再检索；下一用户回合保留正常历史而不继承临时资料。构建及升级反馈仍由有效模型响应确认，准备、失败和取消均不提前送达；资料与反馈不写入 L0。 | `.codex/unify-context-summarization/runs/051-transient-lifecycle/command.json`、原始日志、JUnit 与代码内容哈希 |
+| 7.5 | 142 项计划／构建／只读升级／恢复组合测试通过；实际模型请求链验证同版本 REPLAN_PENDING、单份偏差反馈及修订后的刷新，既有权限、绑定次数、真实构建判定、恢复代次和取消规则保持。此项为本地可控输出回归，不替代真实模型长任务验收。 | `.codex/unify-context-summarization/runs/052-plan-guard-recovery/command.json`、原始日志、JUnit 与代码内容哈希 |
 
 ## 环境边界
 

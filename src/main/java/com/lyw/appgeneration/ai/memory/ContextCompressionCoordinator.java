@@ -17,7 +17,6 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ExecutionException;
@@ -29,11 +28,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
-import java.util.stream.Collectors;
 
 import static com.lyw.appgeneration.ai.memory.ContextAdmissionResult.FailureReason;
 
-/** 统一编排异步压缩、阻塞压缩和输入硬上限工具链检查点。 */
+/** Vue 统一摘要与非 Vue 完整历史的上下文准入入口。 */
 @Slf4j
 @Component
 public class ContextCompressionCoordinator {
@@ -51,12 +49,9 @@ public class ContextCompressionCoordinator {
     private final AppDataLifecycleFence lifecycleFence;
     private final MemoryCompressionMetricsCollector metricsCollector;
     private final LongSupplier nanoTime;
+    private final UnifiedContextRequestPreparer unifiedPreparer;
     private final ConversationTurnSelector turnSelector =
             new ConversationTurnSelector();
-    private final ConversationTurnSnapshotParser snapshotParser =
-            new ConversationTurnSnapshotParser();
-    private final UnfinishedToolChainCheckpointProjector checkpointProjector =
-            new UnfinishedToolChainCheckpointProjector();
 
     @Autowired
     public ContextCompressionCoordinator(
@@ -154,6 +149,8 @@ public class ContextCompressionCoordinator {
                 metricsCollector, "记忆压缩指标收集器不能为空");
         this.nanoTime = Objects.requireNonNull(
                 nanoTime, "单调时钟不能为空");
+        this.unifiedPreparer = new UnifiedContextRequestPreparer(tokenEstimator, summaryService, properties,
+                memoryReadExecutor, compressionExecutor, lifecycleFence, metricsCollector);
     }
 
     ContextCompressionCoordinator(
@@ -172,88 +169,43 @@ public class ContextCompressionCoordinator {
                 metricsCollector, nanoTime);
     }
 
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools) {
-        return admit(memory, tools, List.of(), ignored -> { },
-                ContextContinuationGate.alwaysOpen(),
-                new ContextCompressionAttemptState());
+    public ContextAdmissionResult admit(CompressionAwareChatMemory memory, List<ToolSpecification> tools) {
+        return admit(memory, tools, List.of(), ignored -> { }, ContextContinuationGate.alwaysOpen(), null);
     }
 
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            ContextCompressionAttemptState attemptState) {
-        return admit(memory, tools, List.of(), ignored -> { },
-                ContextContinuationGate.alwaysOpen(), attemptState);
+    public ContextAdmissionResult admit(CompressionAwareChatMemory memory, List<ToolSpecification> tools,
+            Consumer<ContextAdmissionResult> transitions) {
+        return admit(memory, tools, List.of(), transitions, ContextContinuationGate.alwaysOpen(), null);
     }
 
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            Consumer<ContextAdmissionResult> transitionListener) {
-        return admit(memory, tools, List.of(), transitionListener,
-                ContextContinuationGate.alwaysOpen(),
-                new ContextCompressionAttemptState());
+    public ContextAdmissionResult admit(CompressionAwareChatMemory memory, List<ToolSpecification> tools,
+            Consumer<ContextAdmissionResult> transitions, ContextContinuationGate continuationGate) {
+        return admit(memory, tools, List.of(), transitions, continuationGate, null);
     }
 
-    /**
-     * 通过调用方的原子回调门提交游标裁剪、worker 启动和完成结果。
-     *
-     * <p>{@code tryRun} 成功表示本次提交先于终态获胜；返回的可继续结果不是
-     * 永久通行证，实际模型请求仍须再次通过同一个真实回调门。</p>
-     */
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            Consumer<ContextAdmissionResult> transitionListener,
+    public ContextAdmissionResult admit(CompressionAwareChatMemory memory, List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages, Consumer<ContextAdmissionResult> transitions,
             ContextContinuationGate continuationGate) {
-        return admit(memory, tools, List.of(), transitionListener,
-                continuationGate, new ContextCompressionAttemptState());
+        return admit(memory, tools, transientMessages, transitions, continuationGate, null);
     }
 
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            List<ChatMessage> transientMessages,
-            Consumer<ContextAdmissionResult> transitionListener,
-            ContextContinuationGate continuationGate) {
-        return admit(memory, tools, transientMessages, transitionListener,
-                continuationGate, new ContextCompressionAttemptState());
-    }
-
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            List<ChatMessage> transientMessages,
-            Consumer<ContextAdmissionResult> transitionListener,
-            ContextContinuationGate continuationGate,
-            ContextCompressionAttemptState attemptState) {
-        return admit(memory, tools, transientMessages, transitionListener,
-                continuationGate, attemptState, null);
-    }
-
-    public ContextAdmissionResult admit(
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            List<ChatMessage> transientMessages,
-            Consumer<ContextAdmissionResult> transitionListener,
-            ContextContinuationGate continuationGate,
-            ContextCompressionAttemptState attemptState,
-            TurnRequestBoundary requestBoundary) {
-        AdmissionDeadline deadline = AdmissionDeadline.start(
-                properties.getBlockingTimeout(), nanoTime,
-                System::currentTimeMillis,
-                nanos -> TimeUnit.NANOSECONDS.sleep(nanos));
-        ContextAdmissionResult result = admitInternal(
-                memory, tools, transientMessages, transitionListener,
-                continuationGate,
-                deadline, Objects.requireNonNull(
-                        attemptState, "上下文压缩尝试状态不能为空"),
-                requestBoundary);
-        metricsCollector.recordContextGate(
-                result.mode(), result.failureReason());
-        return result;
+    /** 同一次准入的相容读取、压缩、重组及最终模型启动共用原绝对截止。 */
+    public ContextAdmissionResult admit(CompressionAwareChatMemory memory, List<ToolSpecification> tools,
+            List<ChatMessage> transientMessages, Consumer<ContextAdmissionResult> transitions,
+            ContextContinuationGate continuationGate, TurnRequestBoundary boundary) {
+        AdmissionDeadline deadline = AdmissionDeadline.start(properties.getBlockingTimeout(), nanoTime,
+                System::currentTimeMillis, nanos -> TimeUnit.NANOSECONDS.sleep(nanos));
+        ContextAdmissionResult result;
+        if (continuationGate instanceof com.lyw.appgeneration.core.handler.VueTurnContext context) {
+            result = unifiedPreparer.admit(memory, context, boundary, tools, transientMessages, transitions, deadline);
+        } else if (boundary != null && boundary.userHistoryId() > 0) {
+            result = failure(ContextCompressionMode.ADMISSION_FAILED, EMPTY_REQUEST_SNAPSHOT, EMPTY_REQUEST_SNAPSHOT,
+                    0, FailureReason.ALIGNMENT_FAILED, "来源请求缺少原 Vue 回合上下文");
+        } else {
+            result = admitInternal(memory, tools, transientMessages, transitions, continuationGate, deadline);
+        }
+        metricsCollector.recordContextGate(result.mode(), result.failureReason());
+        return result.withDeadline(deadline);
     }
 
     private ContextAdmissionResult admitInternal(
@@ -262,9 +214,7 @@ public class ContextCompressionCoordinator {
             List<ChatMessage> transientMessages,
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate,
-            AdmissionDeadline deadline,
-            ContextCompressionAttemptState attemptState,
-            TurnRequestBoundary requestBoundary) {
+            AdmissionDeadline deadline) {
         Objects.requireNonNull(memory, "在线记忆不能为空");
         Objects.requireNonNull(transitionListener, "状态监听器不能为空");
         Objects.requireNonNull(continuationGate, "回合原子提交门不能为空");
@@ -324,13 +274,6 @@ public class ContextCompressionCoordinator {
         metricsCollector.recordEstimatedTokens(
                 MemoryCompressionMetricsCollector.EstimationStage.BEFORE,
                 initialTokens);
-        if (attemptState.checkpointProjectionRequired()) {
-            return checkpointOrReject(
-                    appId, memory, stableTools, stableTransientMessages,
-                    initialRequest, initialRequest, 0L, continuationGate,
-                    attemptState, null, transitionListener, deadline,
-                    requestBoundary);
-        }
         if (initialTokens < properties.getAsyncCompressionThreshold()) {
             if (!tryCommitContinuation(continuationGate)) {
                 return turnTerminated(ContextCompressionMode.ADMISSION_FAILED,
@@ -374,11 +317,9 @@ public class ContextCompressionCoordinator {
             }
             if (plan.failureReason() == FailureReason.NO_COMPRESSIBLE_TURN
                     && initialTokens >= properties.getHardInputLimit()) {
-                return checkpointOrReject(
-                        appId, memory, stableTools, stableTransientMessages,
-                        initialRequest, initialRequest, 0L, continuationGate,
-                        attemptState, null, transitionListener, deadline,
-                        requestBoundary);
+                return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                        initialRequest, initialRequest, 0L, FailureReason.NO_COMPRESSIBLE_TURN,
+                        "没有可压缩的完整历史，必要请求仍达到输入硬上限");
             }
             return failure(planningFailureMode(initialTokens),
                     initialRequest, initialRequest, 0L,
@@ -387,8 +328,7 @@ public class ContextCompressionCoordinator {
         return blockAndRecheck(
                 appId, memory, stableTools, stableTransientMessages,
                 initialRequest, plan,
-                transitionListener, continuationGate, deadline, attemptState,
-                requestBoundary);
+                transitionListener, continuationGate, deadline);
     }
 
     private ContextAdmissionResult scheduleAsyncCompressionPlanning(
@@ -419,412 +359,6 @@ public class ContextCompressionCoordinator {
                 "已提交异步压缩计划");
     }
 
-    private ContextAdmissionResult checkpointOrReject(
-            long appId,
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            List<ChatMessage> transientMessages,
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId,
-            ContextContinuationGate continuationGate,
-            ContextCompressionAttemptState attemptState,
-            PreparedBlockingRequest blockingPreparation,
-            Consumer<ContextAdmissionResult> transitionListener,
-            AdmissionDeadline deadline,
-            TurnRequestBoundary requestBoundary) {
-        MemoryCompressionMetricsCollector.CheckpointObservation observation =
-                metricsCollector.startToolChainCheckpoint(
-                        currentRequest.estimatedTokens());
-        ContextAdmissionResult result = checkpointOrRejectObserved(
-                appId, memory, tools, transientMessages,
-                initialRequest, currentRequest, summarizeThroughId,
-                continuationGate, attemptState, blockingPreparation,
-                transitionListener, deadline, requestBoundary);
-        observation.complete(
-                checkpointOutcome(result), result.finalTokens());
-        return result;
-    }
-
-    private ContextAdmissionResult checkpointOrRejectObserved(
-            long appId,
-            CompressionAwareChatMemory memory,
-            List<ToolSpecification> tools,
-            List<ChatMessage> transientMessages,
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId,
-            ContextContinuationGate continuationGate,
-            ContextCompressionAttemptState attemptState,
-            PreparedBlockingRequest blockingPreparation,
-            Consumer<ContextAdmissionResult> transitionListener,
-            AdmissionDeadline deadline,
-            TurnRequestBoundary requestBoundary) {
-        ContextCompressionAttemptState.CheckpointClaim claim =
-                attemptState.tryEnterCheckpointMode();
-        ContextCompressionAttemptState.EnterDecision enterDecision =
-                claim.decision();
-        if (enterDecision == ContextCompressionAttemptState.EnterDecision
-                .ALREADY_FAILED
-                || enterDecision == ContextCompressionAttemptState
-                .EnterDecision.IN_PROGRESS) {
-            return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.CHECKPOINT_ALREADY_ATTEMPTED,
-                    enterDecision == ContextCompressionAttemptState
-                            .EnterDecision.IN_PROGRESS
-                            ? "本回合工具链检查点正在构建"
-                            : "本回合工具链检查点已失败，禁止递归重试");
-        }
-        try {
-            if (!tryCommitContinuation(continuationGate)) {
-                attemptState.markCheckpointFailed(claim);
-                return checkpointTurnTerminated(
-                        initialRequest, currentRequest,
-                        summarizeThroughId, appId);
-            }
-            if (enterDecision == ContextCompressionAttemptState.EnterDecision
-                    .FIRST_ENTRY && blockingPreparation == null
-                    && !continuationGate.tryRun(() -> transitionListener.accept(
-                    success(ContextCompressionMode
-                                    .TOOL_CHAIN_CHECKPOINT_STARTED,
-                            initialRequest, currentRequest, summarizeThroughId,
-                            "开始生成未完成工具链检查点")))) {
-                attemptState.markCheckpointFailed(claim);
-                return checkpointTurnTerminated(
-                        initialRequest, currentRequest,
-                        summarizeThroughId, appId);
-            }
-            CheckpointPreparation preparation = prepareCheckpointRequest(
-                    appId, tools, transientMessages,
-                    currentRequest, blockingPreparation, deadline,
-                    requestBoundary);
-            if (!preparation.complete()) {
-                attemptState.markCheckpointFailed(claim);
-                return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                        initialRequest, currentRequest, summarizeThroughId,
-                        preparation.failureReason(), preparation.detail());
-            }
-            AtomicReference<ContextAdmissionResult> committed =
-                    new AtomicReference<>();
-            boolean accepted = continuationGate.tryRun(() -> committed.set(
-                    commitCheckpoint(
-                            appId, memory, initialRequest, currentRequest,
-                            summarizeThroughId, preparation,
-                            blockingPreparation, deadline,
-                            attemptState, claim)));
-            if (!accepted) {
-                attemptState.markCheckpointFailed(claim);
-                return checkpointTurnTerminated(
-                        initialRequest, currentRequest,
-                        summarizeThroughId, appId);
-            }
-            return requireCommitted(committed, "工具链检查点提交");
-        } catch (RuntimeException exception) {
-            attemptState.markCheckpointFailed(claim);
-            return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.DEPENDENCY_FAILED,
-                    "生成工具链检查点依赖异常，type="
-                            + exception.getClass().getSimpleName());
-        }
-    }
-
-    private MemoryCompressionMetricsCollector.CheckpointOutcome checkpointOutcome(
-            ContextAdmissionResult result) {
-        if (result.failureReason()
-                == FailureReason.CHECKPOINT_ALREADY_ATTEMPTED) {
-            return MemoryCompressionMetricsCollector.CheckpointOutcome
-                    .ALREADY_ATTEMPTED;
-        }
-        if (result.failureReason() == FailureReason.NO_COMPRESSIBLE_TURN) {
-            return MemoryCompressionMetricsCollector.CheckpointOutcome
-                    .NO_UNFINISHED_TAIL;
-        }
-        if (result.canProceed()
-                && (result.mode() == ContextCompressionMode
-                .TOOL_CHAIN_CHECKPOINT_COMPLETED
-                || result.mode() == ContextCompressionMode
-                .TOOL_CHAIN_CHECKPOINT_REBUILT)) {
-            return MemoryCompressionMetricsCollector.CheckpointOutcome.SUCCESS;
-        }
-        return MemoryCompressionMetricsCollector.CheckpointOutcome.FAILED;
-    }
-
-    private CheckpointPreparation prepareCheckpointRequest(
-            long appId,
-            List<ToolSpecification> tools,
-            List<ChatMessage> transientMessages,
-            RequestSnapshot currentRequest,
-            PreparedBlockingRequest blockingPreparation,
-            AdmissionDeadline deadline,
-            TurnRequestBoundary requestBoundary) {
-        if (deadline.remainingNanos() <= 0L) {
-            return CheckpointPreparation.failed(
-                    FailureReason.TIMED_OUT,
-                    "准备工具链检查点前截止时间已到");
-        }
-        LayeredChatMemory.PreparedLayeredMessages source = Objects.requireNonNull(
-                currentRequest.sourceMessages(), "检查点缺少已审核的分层快照");
-        List<ChatMessage> currentMessages = source.requestMessages();
-        ConversationTurnSnapshotParser.Snapshot snapshot =
-                snapshotParser.parse(currentMessages);
-        if (!snapshot.hasUnfinishedTail()) {
-            return CheckpointPreparation.failed(
-                    FailureReason.NO_COMPRESSIBLE_TURN,
-                    "当前请求达到输入硬上限，但没有可安全压缩的未完成工具链");
-        }
-        ToolChainCheckpointResult projection = checkpointProjector.project(
-                snapshot, registeredToolNames(tools), requestBoundary);
-        if (!projection.complete()) {
-            metricsCollector.recordToolChainCheckpointFailure(
-                    projection.failureReason());
-            log.warn("未完成工具链检查点校验失败,appId={},reason={},"
-                            + "tailMessageCount={}",
-                    appId, projection.failureReason(),
-                    snapshot.unfinishedTail().size());
-            return CheckpointPreparation.failed(
-                    FailureReason.INVALID_TOOL_CHAIN_CHECKPOINT,
-                    "未完成工具链不满足可信检查点协议，reason="
-                            + projection.failureReason().name());
-        }
-        List<ChatMessage> baseProjectedMessages = replaceUnfinishedTail(
-                currentMessages, snapshot.unfinishedTail(),
-                projection.messagesWithoutLatestReadBatch());
-        if (deadline.remainingNanos() <= 0L) {
-            return CheckpointPreparation.failed(
-                    FailureReason.TIMED_OUT,
-                    "生成工具链检查点投影时超过截止时间");
-        }
-        RequestSnapshot baseProjectedRequest;
-        try {
-            baseProjectedRequest = requestSnapshot(
-                    baseProjectedMessages, tools, transientMessages);
-        } catch (RuntimeException exception) {
-            return CheckpointPreparation.failed(
-                    FailureReason.DEPENDENCY_FAILED,
-                    "估算工具链检查点请求失败");
-        }
-        if (deadline.remainingNanos() <= 0L) {
-            return CheckpointPreparation.failed(
-                    FailureReason.TIMED_OUT,
-                    "估算工具链检查点请求时超过截止时间");
-        }
-        if (baseProjectedRequest.estimatedTokens()
-                >= properties.getHardInputLimit()) {
-            return CheckpointPreparation.failed(
-                    FailureReason.STILL_OVER_HARD_LIMIT,
-                    "工具链检查点压缩后仍达到输入硬上限");
-        }
-        RequestSnapshot projectedRequest = baseProjectedRequest;
-        if (!projection.latestReadBatch().isEmpty()) {
-            List<ChatMessage> withLatestReadMessages = replaceUnfinishedTail(
-                    currentMessages, snapshot.unfinishedTail(),
-                    projection.requestMessages());
-            try {
-                RequestSnapshot withLatestReadRequest = requestSnapshot(
-                        withLatestReadMessages, tools, transientMessages);
-                if (withLatestReadRequest.estimatedTokens()
-                        < properties.getHardInputLimit()) {
-                    projectedRequest = withLatestReadRequest;
-                } else if (projection.latestReadBatchContainsReadDir()) {
-                    return CheckpointPreparation.failed(
-                            FailureReason.STILL_OVER_HARD_LIMIT,
-                            "最新readDir完整结果无法在输入硬上限内保留");
-                }
-            } catch (RuntimeException exception) {
-                return CheckpointPreparation.failed(
-                        FailureReason.DEPENDENCY_FAILED,
-                        "估算最新读取批次失败");
-            }
-        }
-        metricsCollector.recordEstimatedTokens(
-                MemoryCompressionMetricsCollector.EstimationStage.AFTER,
-                projectedRequest.estimatedTokens());
-        return CheckpointPreparation.completed(
-                projectedRequest, blockingPreparation == null
-                        ? source.retainedL0() : source.l0Snapshot());
-    }
-
-    private ContextAdmissionResult commitCheckpoint(
-            long appId,
-            CompressionAwareChatMemory memory,
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId,
-            CheckpointPreparation preparation,
-            PreparedBlockingRequest blockingPreparation,
-            AdmissionDeadline deadline,
-            ContextCompressionAttemptState attemptState,
-            ContextCompressionAttemptState.CheckpointClaim claim) {
-        if (deadline.remainingNanos() <= 0L) {
-            attemptState.markCheckpointFailed(claim);
-            return checkpointTimedOut(
-                    initialRequest, currentRequest,
-                    summarizeThroughId,
-                    "提交工具链检查点前截止时间已到");
-        }
-        AppDataLifecycleFence.WriterPermit writerPermit =
-                tryAcquireLifecycleWriter(appId);
-        if (writerPermit == null) {
-            attemptState.markCheckpointFailed(claim);
-            return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.DELETE_REJECTED,
-                    "应用删除流程已接管，appId=" + appId);
-        }
-        try (writerPermit) {
-            if (deadline.remainingNanos() <= 0L) {
-                attemptState.markCheckpointFailed(claim);
-                return checkpointTimedOut(
-                        initialRequest, currentRequest,
-                        summarizeThroughId,
-                        "获取工具链检查点提交许可时超时");
-            }
-            ContextAdmissionResult consistencyFailure =
-                    verifyAndApplyCheckpointBase(
-                            memory, initialRequest, currentRequest,
-                            summarizeThroughId, preparation,
-                            blockingPreparation, deadline);
-            if (consistencyFailure != null) {
-                attemptState.markCheckpointFailed(claim);
-                return consistencyFailure;
-            }
-            if (deadline.remainingNanos() <= 0L) {
-                attemptState.markCheckpointFailed(claim);
-                return checkpointTimedOut(
-                        initialRequest, currentRequest,
-                        summarizeThroughId,
-                        "复检工具链检查点请求时超过截止时间");
-            }
-            if (!attemptState.markCheckpointReady(claim)) {
-                return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                        initialRequest, currentRequest, summarizeThroughId,
-                        FailureReason.CHECKPOINT_ALREADY_ATTEMPTED,
-                        "工具链检查点owner已失效");
-            }
-            return success(
-                    claim.decision() == ContextCompressionAttemptState
-                            .EnterDecision.FIRST_ENTRY
-                            ? ContextCompressionMode
-                            .TOOL_CHAIN_CHECKPOINT_COMPLETED
-                            : ContextCompressionMode
-                            .TOOL_CHAIN_CHECKPOINT_REBUILT,
-                    initialRequest, preparation.request(),
-                    summarizeThroughId, "未完成工具链检查点已生成");
-        }
-    }
-
-    private ContextAdmissionResult verifyAndApplyCheckpointBase(
-            CompressionAwareChatMemory memory,
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId,
-            CheckpointPreparation preparation,
-            PreparedBlockingRequest blockingPreparation,
-            AdmissionDeadline deadline) {
-        if (blockingPreparation != null) {
-            DeadlineAwareReplaceResult replaceResult =
-                    memory.applyPreparedPrefix(
-                            blockingPreparation.messages(), deadline);
-            if (replaceResult == DeadlineAwareReplaceResult.REPLACED) {
-                return null;
-            }
-            return checkpointReplaceFailure(
-                    replaceResult, initialRequest, currentRequest,
-                    summarizeThroughId);
-        }
-        List<ChatMessage> latestMessages;
-        try {
-            latestMessages = List.copyOf(memory.l0Messages());
-        } catch (RuntimeException exception) {
-            return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.DEPENDENCY_FAILED,
-                    "复检最新活动记忆失败");
-        }
-        if (!latestMessages.equals(preparation.expectedMessages())) {
-            return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.PREFIX_CHANGED,
-                    "检查点准备后活动记忆已变化");
-        }
-        return null;
-    }
-
-    private ContextAdmissionResult checkpointReplaceFailure(
-            DeadlineAwareReplaceResult replaceResult,
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId) {
-        return switch (replaceResult) {
-            case PREFIX_CHANGED -> failure(
-                    ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.PREFIX_CHANGED,
-                    "提交可靠L1前L0旧前缀已变化");
-            case TIMED_OUT -> failure(
-                    ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.TIMED_OUT,
-                    "提交可靠L1超过绝对截止时间");
-            case INTERRUPTED -> failure(
-                    ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.INTERRUPTED,
-                    "提交可靠L1被中断");
-            case DEPENDENCY_FAILED -> failure(
-                    ContextCompressionMode.HARD_LIMIT_REJECTED,
-                    initialRequest, currentRequest, summarizeThroughId,
-                    FailureReason.DEPENDENCY_FAILED,
-                    "提交可靠L1依赖失败");
-            case REPLACED -> throw new IllegalStateException(
-                    "成功替换不应进入失败映射");
-        };
-    }
-
-    private ContextAdmissionResult checkpointTurnTerminated(
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId,
-            long appId) {
-        return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                initialRequest, currentRequest, summarizeThroughId,
-                FailureReason.TURN_TERMINATED,
-                "回合已取消或终态已被占用，appId=" + appId);
-    }
-
-    private ContextAdmissionResult checkpointTimedOut(
-            RequestSnapshot initialRequest,
-            RequestSnapshot currentRequest,
-            long summarizeThroughId,
-            String detail) {
-        return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
-                initialRequest, currentRequest, summarizeThroughId,
-                FailureReason.TIMED_OUT, detail);
-    }
-
-    private Set<String> registeredToolNames(List<ToolSpecification> tools) {
-        return tools.stream().map(ToolSpecification::name)
-                .collect(Collectors.toUnmodifiableSet());
-    }
-
-    private List<ChatMessage> replaceUnfinishedTail(
-            List<ChatMessage> currentMessages,
-            List<ChatMessage> unfinishedTail,
-            List<ChatMessage> replacement) {
-        int start = currentMessages.size() - unfinishedTail.size();
-        if (start < 0 || !currentMessages.subList(
-                start, currentMessages.size()).equals(unfinishedTail)) {
-            throw new MemoryPrefixChangedException("未完成工具链已变化");
-        }
-        List<ChatMessage> projected = new java.util.ArrayList<>(
-                start + replacement.size());
-        projected.addAll(currentMessages.subList(0, start));
-        projected.addAll(replacement);
-        return List.copyOf(projected);
-    }
-
     private void runAsyncCompressionPlanning(
             long appId,
             CompressionAwareChatMemory memory,
@@ -853,9 +387,7 @@ public class ContextCompressionCoordinator {
             CompressionPlan plan,
             Consumer<ContextAdmissionResult> transitionListener,
             ContextContinuationGate continuationGate,
-            AdmissionDeadline deadline,
-            ContextCompressionAttemptState attemptState,
-            TurnRequestBoundary requestBoundary) {
+            AdmissionDeadline deadline) {
         if (!tryCommitContinuation(continuationGate)) {
             return turnTerminated(ContextCompressionMode.BLOCKING_FAILED,
                     initialRequest, plan.summarizeThroughId(), appId);
@@ -974,12 +506,9 @@ public class ContextCompressionCoordinator {
         }
         if (prepared.request().estimatedTokens()
                 >= properties.getHardInputLimit()) {
-            return checkpointOrReject(
-                    appId, memory, tools, transientMessages,
-                    initialRequest, prepared.request(),
-                    prepared.summarizedThroughId(), continuationGate,
-                    attemptState, prepared, transitionListener, deadline,
-                    requestBoundary);
+            return failure(ContextCompressionMode.HARD_LIMIT_REJECTED,
+                    initialRequest, prepared.request(), prepared.summarizedThroughId(),
+                    FailureReason.STILL_OVER_HARD_LIMIT, "完整历史压缩后请求仍达到输入硬上限");
         }
         return commitPreparedBlockingRequest(
                 appId, memory, initialRequest, plan,
@@ -1487,9 +1016,7 @@ public class ContextCompressionCoordinator {
             LayeredChatMemory.PreparedLayeredMessages prepared,
             List<ToolSpecification> tools,
             List<ChatMessage> transientMessages) {
-        RequestSnapshot request = requestSnapshot(
-                prepared.requestMessages(), tools, transientMessages);
-        return new RequestSnapshot(request.messages(), request.estimatedTokens(), prepared);
+        return requestSnapshot(prepared.requestMessages(), tools, transientMessages);
     }
 
     private RequestSnapshot requestSnapshot(
@@ -1601,12 +1128,7 @@ public class ContextCompressionCoordinator {
 
     private record RequestSnapshot(
             List<ChatMessage> messages,
-            int estimatedTokens,
-            LayeredChatMemory.PreparedLayeredMessages sourceMessages) {
-
-        private RequestSnapshot(List<ChatMessage> messages, int estimatedTokens) {
-            this(messages, estimatedTokens, null);
-        }
+            int estimatedTokens) {
 
         private RequestSnapshot {
             messages = List.copyOf(Objects.requireNonNull(
@@ -1764,28 +1286,5 @@ public class ContextCompressionCoordinator {
         }
     }
 
-    private record CheckpointPreparation(
-            boolean complete,
-            RequestSnapshot request,
-            List<ChatMessage> expectedMessages,
-            FailureReason failureReason,
-            String detail) {
 
-        private CheckpointPreparation {
-            expectedMessages = List.copyOf(expectedMessages);
-        }
-
-        private static CheckpointPreparation completed(
-                RequestSnapshot request,
-                List<ChatMessage> expectedMessages) {
-            return new CheckpointPreparation(
-                    true, request, expectedMessages, FailureReason.NONE, "");
-        }
-
-        private static CheckpointPreparation failed(
-                FailureReason failureReason, String detail) {
-            return new CheckpointPreparation(
-                    false, null, List.of(), failureReason, detail);
-        }
-    }
 }

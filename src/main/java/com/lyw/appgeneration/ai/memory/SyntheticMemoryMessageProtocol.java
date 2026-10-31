@@ -11,6 +11,8 @@ public final class SyntheticMemoryMessageProtocol {
             "[[server.synthetic-memory/l1-summary/v1]]";
     public static final String L2_PREFERENCE_ACK =
             "[[server.synthetic-memory/l2-preference/v1]]";
+    public static final String PLAN_SNAPSHOT_ACK =
+            "[[server.synthetic-memory/plan-snapshot/v1]]";
 
     private SyntheticMemoryMessageProtocol() {
     }
@@ -19,7 +21,8 @@ public final class SyntheticMemoryMessageProtocol {
     public static boolean isReservedMessage(String text) {
         return TRUSTED_TURN_ACK.equals(text)
                 || L1_SUMMARY_ACK.equals(text)
-                || L2_PREFERENCE_ACK.equals(text);
+                || L2_PREFERENCE_ACK.equals(text)
+                || PLAN_SNAPSHOT_ACK.equals(text);
     }
 
 }

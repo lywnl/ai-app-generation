@@ -96,23 +96,13 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
         }
         ContextContinuationGate continuationGate =
                 ContextContinuationGate.from(request.continuationGate());
-        ContextAdmissionResult admission = request.requestBoundary() == null
-                ? coordinator.admit(
+        ContextAdmissionResult admission = coordinator.admit(
                 memory,
                 request.toolSpecifications(),
                 request.transientMessages(),
                 transition -> publishStarted(
                         continuationGate, transition),
                 continuationGate,
-                request.contextCompressionAttemptState())
-                : coordinator.admit(
-                memory,
-                request.toolSpecifications(),
-                request.transientMessages(),
-                transition -> publishStarted(
-                        continuationGate, transition),
-                continuationGate,
-                request.contextCompressionAttemptState(),
                 request.requestBoundary());
         publishCompleted(continuationGate, admission);
         return map(admission);
@@ -121,9 +111,7 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
     private void publishStarted(
             ContextContinuationGate continuationGate,
             ContextAdmissionResult transition) {
-        if (transition.mode() == ContextCompressionMode.BLOCKING_STARTED
-                || transition.mode() == ContextCompressionMode
-                .TOOL_CHAIN_CHECKPOINT_STARTED) {
+        if (transition.mode() == ContextCompressionMode.BLOCKING_STARTED) {
             continuationGate.publishContextCompression(
                     ContextCompressionMessage.started());
         }
@@ -132,9 +120,7 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
     private void publishCompleted(
             ContextContinuationGate continuationGate,
             ContextAdmissionResult admission) {
-        if (admission.mode() != ContextCompressionMode.BLOCKING_COMPLETED
-                && admission.mode() != ContextCompressionMode
-                .TOOL_CHAIN_CHECKPOINT_COMPLETED) {
+        if (admission.mode() != ContextCompressionMode.BLOCKING_COMPLETED) {
             return;
         }
         continuationGate.tryRun(() ->
@@ -155,7 +141,7 @@ public class ContextCompressionModelRequestGate implements ModelRequestGate {
         }
         if (admission.canProceed()) {
             return new Decision(Status.ALLOWED, admission.requestMessages(),
-                    admission.finalTokens(), "");
+                    admission.finalTokens(), "", admission.deadline());
         }
         return new Decision(Status.COMPRESSION_FAILED,
                 admission.requestMessages(),

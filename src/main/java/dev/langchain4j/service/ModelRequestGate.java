@@ -1,6 +1,5 @@
 package dev.langchain4j.service;
 
-import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.ChatMessage;
@@ -44,10 +43,9 @@ public interface ModelRequestGate {
             List<ToolSpecification> toolSpecifications,
             ContinuationGate continuationGate,
             List<ChatMessage> transientMessages,
-            ContextCompressionAttemptState contextCompressionAttemptState,
             TurnRequestBoundary requestBoundary) {
 
-        /** 兼容既有调用；生产模型请求必须显式传入回合共享状态。 */
+        /** 非 Vue 及不需要持久来源边界的兼容调用。 */
         public Request(
                 Object memoryId,
                 Supplier<ChatMemory> latestMemory,
@@ -55,19 +53,7 @@ public interface ModelRequestGate {
                 ContinuationGate continuationGate,
                 List<ChatMessage> transientMessages) {
             this(memoryId, latestMemory, toolSpecifications, continuationGate,
-                    transientMessages, new ContextCompressionAttemptState(), null);
-        }
-
-        /** 兼容带共享压缩状态的既有调用。 */
-        public Request(
-                Object memoryId,
-                Supplier<ChatMemory> latestMemory,
-                List<ToolSpecification> toolSpecifications,
-                ContinuationGate continuationGate,
-                List<ChatMessage> transientMessages,
-                ContextCompressionAttemptState contextCompressionAttemptState) {
-            this(memoryId, latestMemory, toolSpecifications, continuationGate,
-                    transientMessages, contextCompressionAttemptState, null);
+                    transientMessages, null);
         }
 
         public Request {
@@ -80,9 +66,6 @@ public interface ModelRequestGate {
                     continuationGate, "回合原子门不能为空");
             transientMessages = List.copyOf(
                     transientMessages == null ? List.of() : transientMessages);
-            contextCompressionAttemptState = Objects.requireNonNull(
-                    contextCompressionAttemptState,
-                    "上下文压缩尝试状态不能为空");
         }
     }
 
@@ -90,7 +73,17 @@ public interface ModelRequestGate {
             Status status,
             List<ChatMessage> messages,
             int estimatedInputTokens,
-            String safeMessage) {
+            String safeMessage,
+            com.lyw.appgeneration.ai.memory.AdmissionDeadline deadline) {
+
+        public Decision(Status status, List<ChatMessage> messages, int estimatedInputTokens, String safeMessage) {
+            this(status, messages, estimatedInputTokens, safeMessage, null);
+        }
+
+        /** 发送前沿用本次准备的原截止；排队派发不产生新的通行期限。 */
+        public boolean canStart() {
+            return deadline == null || deadline.remainingNanos() > 0;
+        }
 
         public Decision {
             status = Objects.requireNonNull(status, "门禁状态不能为空");

@@ -1,6 +1,5 @@
 package dev.langchain4j.service;
 
-import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import com.lyw.appgeneration.ai.memory.ContextContinuationGate;
 import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.Internal;
@@ -80,7 +79,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             incompleteRecoveryCoordinator;
     private final Consumer<GenerationStreamSignal>
             generationStreamSignalHandler;
-    private final ContextCompressionAttemptState compressionAttemptState;
     private List<ChatMessage> turnTransientMessages = List.of();
     private TurnRequestBoundary requestBoundary;
     private final ToolProtocolRecoveryDetector recoveryDetector;
@@ -121,7 +119,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, new StreamingRequestController(),
                 ToolExecutionGuard.direct(), 0L, null, null, null, false,
-                null, null, false, new ContextCompressionAttemptState(),
+                null, null, false,
                 null);
     }
 
@@ -149,8 +147,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController, toolExecutionGuard,
                 requestController.latestModelRequestGeneration(), null, null,
-                null, false, null, null, false,
-                new ContextCompressionAttemptState(), null);
+                null, false, null, null, false, null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -179,7 +176,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, null, null, null, false,
-                null, null, false, new ContextCompressionAttemptState(),
+                null, null, false,
                 null);
     }
 
@@ -212,7 +209,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, null, false, null,
-                null, false, new ContextCompressionAttemptState(),
+                null, false,
                 null);
     }
 
@@ -246,7 +243,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator,
-                null, new ContextCompressionAttemptState(),
+                null,
                 null);
     }
 
@@ -272,42 +269,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             ModelRequestGate modelRequestGate,
             ModelRequestGate.ContinuationGate continuationGate,
             ToolProtocolRecoveryCoordinator recoveryCoordinator,
-            ContextCompressionAttemptState compressionAttemptState) {
-        this(chatExecutor, context, memoryId, partialResponseHandler,
-                partialToolExecutionRequestHandler,
-                completeToolExecutionRequestHandler,
-                toolExecutionHandler, completeResponseHandler, errorHandler,
-                temporaryMemory, tokenUsage, toolSpecifications, toolExecutors,
-                commonGuardrailParams, methodKey, requestController,
-                toolExecutionGuard, requestGeneration, modelRequestGate,
-                continuationGate, recoveryCoordinator, null,
-                compressionAttemptState, null);
-    }
-
-    AiServiceStreamingResponseHandler(
-            ChatExecutor chatExecutor,
-            AiServiceContext context,
-            Object memoryId,
-            Consumer<String> partialResponseHandler,
-            BiConsumer<Integer, ToolExecutionRequest> partialToolExecutionRequestHandler,
-            BiConsumer<Integer, ToolExecutionRequest> completeToolExecutionRequestHandler,
-            Consumer<ToolExecution> toolExecutionHandler,
-            Consumer<ChatResponse> completeResponseHandler,
-            Consumer<Throwable> errorHandler,
-            ChatMemory temporaryMemory,
-            TokenUsage tokenUsage,
-            List<ToolSpecification> toolSpecifications,
-            Map<String, ToolExecutor> toolExecutors,
-            GuardrailRequestParams commonGuardrailParams,
-            Object methodKey,
-            StreamingRequestController requestController,
-            ToolExecutionGuard toolExecutionGuard,
-            long requestGeneration,
-            ModelRequestGate modelRequestGate,
-            ModelRequestGate.ContinuationGate continuationGate,
-            ToolProtocolRecoveryCoordinator recoveryCoordinator,
-            IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
-            ContextCompressionAttemptState compressionAttemptState) {
+            IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator) {
         this(chatExecutor, context, memoryId, partialResponseHandler,
                 partialToolExecutionRequestHandler,
                 completeToolExecutionRequestHandler,
@@ -316,8 +278,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 commonGuardrailParams, methodKey, requestController,
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator, false, null,
-                incompleteRecoveryCoordinator, false,
-                compressionAttemptState, null);
+                incompleteRecoveryCoordinator, false, null);
     }
 
     AiServiceStreamingResponseHandler(
@@ -343,7 +304,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             ModelRequestGate.ContinuationGate continuationGate,
             ToolProtocolRecoveryCoordinator recoveryCoordinator,
             IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
-            ContextCompressionAttemptState compressionAttemptState,
             Consumer<GenerationStreamSignal> generationStreamSignalHandler) {
         this(chatExecutor, context, memoryId, partialResponseHandler,
                 partialToolExecutionRequestHandler,
@@ -354,7 +314,7 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 toolExecutionGuard, requestGeneration, modelRequestGate,
                 continuationGate, recoveryCoordinator, false,
                 null, incompleteRecoveryCoordinator,
-                false, compressionAttemptState,
+                false,
                 generationStreamSignalHandler);
     }
 
@@ -384,7 +344,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
             GenerationAwareModelRequestOrchestrator requestOrchestrator,
             IncompleteToolChainRecoveryCoordinator incompleteRecoveryCoordinator,
             boolean incompleteRecoveryGeneration,
-            ContextCompressionAttemptState compressionAttemptState,
             Consumer<GenerationStreamSignal> generationStreamSignalHandler) {
         this.chatExecutor = ensureNotNull(chatExecutor, "chatExecutor");
         this.context = ensureNotNull(context, "context");
@@ -431,8 +390,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
         this.recoveryCoordinator = recoveryCoordinator;
         this.incompleteRecoveryCoordinator = incompleteRecoveryCoordinator;
         this.generationStreamSignalHandler = generationStreamSignalHandler;
-        this.compressionAttemptState = ensureNotNull(
-                compressionAttemptState, "上下文压缩尝试状态不能为空");
         this.recoveryDetector = recoveryCoordinator == null
                 ? null : recoveryCoordinator.newDetector();
         this.recoveryGeneration = recoveryGeneration;
@@ -1438,7 +1395,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         toolSpecifications,
                         continuationGate,
                         withTurnTransientMessages(recoveryMessages),
-                        compressionAttemptState,
                         requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
@@ -1472,7 +1428,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         continuationGate,
                         withTurnTransientMessages(
                                 recoveryTransientMessages),
-                        compressionAttemptState,
                         requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.recovery(
@@ -1544,7 +1499,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                         toolSpecifications,
                         continuationGate,
                         withTurnTransientMessages(requestTransientMessages),
-                        compressionAttemptState,
                         requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.continuation(
@@ -1644,7 +1598,6 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
                 requestOrchestrator,
                 incompleteRecoveryCoordinator,
                 incompleteRecoveryGeneration,
-                compressionAttemptState,
                 generationStreamSignalHandler);
         child.turnTransientMessages(turnTransientMessages);
         child.turnRequestBoundary(requestBoundary);

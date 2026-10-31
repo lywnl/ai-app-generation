@@ -490,6 +490,106 @@
         ".codex/unify-context-summarization/runs/042-trusted-request-view/output.log",
         ".codex/unify-context-summarization/runs/042-trusted-request-view/code-state.json"
       ]
+    },
+    {
+      "id": "task:7.2",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/RequestContextSnapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinator.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextAdmissionResult.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGate.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SyntheticMemoryMessageProtocol.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/dev/langchain4j/service/ModelRequestGate.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/046-unified-request-snapshot/command.json",
+        ".codex/unify-context-summarization/runs/046-unified-request-snapshot/output.log",
+        ".codex/unify-context-summarization/runs/046-unified-request-snapshot/code-state.json"
+      ]
+    },
+    {
+      "id": "task:7.3",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinator.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionMode.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGate.java",
+        "src/main/java/dev/langchain4j/service/ModelRequestGate.java",
+        "src/main/java/dev/langchain4j/service/AiServiceTokenStream.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "README.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/MemorySummarySnapshotIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/050-unified-admission/command.json",
+        ".codex/unify-context-summarization/runs/050-unified-admission/output.log",
+        ".codex/unify-context-summarization/runs/050-unified-admission/code-state.json"
+      ]
+    },
+    {
+      "id": "task:7.4",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/dev/langchain4j/service/AiServiceTokenStream.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/dev/langchain4j/service/BuildProgressGuard.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamSkillTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/051-transient-lifecycle/command.json",
+        ".codex/unify-context-summarization/runs/051-transient-lifecycle/output.log",
+        ".codex/unify-context-summarization/runs/051-transient-lifecycle/code-state.json"
+      ]
+    },
+    {
+      "id": "task:7.5",
+      "status": "verified",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java",
+        "src/main/java/dev/langchain4j/service/AiServiceTokenStream.java",
+        "src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "README.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerRecoveryTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/dev/langchain4j/service/MutationPromotionStreamingTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/ReadOnlyMutationPromotionTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
+      ],
+      "evidence": [
+        ".codex/unify-context-summarization/runs/052-plan-guard-recovery/command.json",
+        ".codex/unify-context-summarization/runs/052-plan-guard-recovery/output.log",
+        ".codex/unify-context-summarization/runs/052-plan-guard-recovery/code-state.json"
+      ]
     }
   ],
   "commands": [
@@ -745,6 +845,42 @@
       "finished_at": "2026-10-31T15:47:39.853352+00:00",
       "evidence": ".codex/unify-context-summarization/runs/042-trusted-request-view/output.log",
       "code_state": ".codex/unify-context-summarization/runs/042-trusted-request-view/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/046-unified-request-snapshot/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/046-unified-request-snapshot/tmp -Dtest=UnifiedContextRequestGateTest,AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T15:59:54.071189+00:00",
+      "finished_at": "2026-10-31T16:00:06.596657+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/046-unified-request-snapshot/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/046-unified-request-snapshot/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/050-unified-admission/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/050-unified-admission/tmp -Dtest=UnifiedContextRequestGateTest,ContextCompressionCoordinatorTest,ContextCompressionModelRequestGateTest,MemoryCompressionMetricsCollectorTest,MemorySummarySnapshotIntegrationTest,AiServiceTokenStreamTest,AiServiceStreamingResponseHandlerTest,AiServiceTokenStreamSkillTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T16:06:01.035689+00:00",
+      "finished_at": "2026-10-31T16:06:13.095771+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/050-unified-admission/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/050-unified-admission/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/051-transient-lifecycle/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/051-transient-lifecycle/tmp -Dtest=UnifiedContextRequestGateTest,AiCodeGeneratorFacadeTest,AiServiceTokenStreamSkillTest,BuildProgressStreamingTest,MutationPromotionStreamingTest,BuildProgressGuardTest,RepeatedReadLoopGuardTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T16:07:19.389817+00:00",
+      "finished_at": "2026-10-31T16:07:29.531868+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/051-transient-lifecycle/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/051-transient-lifecycle/code-state.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/052-plan-guard-recovery/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/unify-context-summarization/runs/052-plan-guard-recovery/tmp -Dtest=UnifiedContextRequestGateTest,ReplanContextTest,ReplanDetectorTest,StreamingRequestControllerReplanTest,StreamingRequestControllerRecoveryTest,BuildProgressStreamingTest,MutationPromotionStreamingTest,ReadOnlyMutationPromotionTest,AppPlanReadOnlyTest,AppPlanStateManagerTest,VueTurnContextTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-10-31T16:08:15.389568+00:00",
+      "finished_at": "2026-10-31T16:08:26.180904+00:00",
+      "evidence": ".codex/unify-context-summarization/runs/052-plan-guard-recovery/output.log",
+      "code_state": ".codex/unify-context-summarization/runs/052-plan-guard-recovery/code-state.json"
     }
   ]
 }

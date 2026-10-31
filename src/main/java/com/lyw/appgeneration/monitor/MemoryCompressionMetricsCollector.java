@@ -2,7 +2,6 @@ package com.lyw.appgeneration.monitor;
 
 import com.lyw.appgeneration.ai.memory.ContextAdmissionResult;
 import com.lyw.appgeneration.ai.memory.ContextCompressionMode;
-import com.lyw.appgeneration.ai.memory.ToolChainCheckpointResult;
 import com.lyw.appgeneration.service.MemoryCompressionResult;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -57,17 +56,6 @@ public final class MemoryCompressionMetricsCollector {
     public CompressionObservation startCompression(CompressionMode mode) {
         return new CompressionObservation(
                 this, mode, currentNanosOrUnavailable());
-    }
-
-    public CheckpointObservation startToolChainCheckpoint(int beforeTokens) {
-        return new CheckpointObservation(
-                this, beforeTokens, currentNanosOrUnavailable());
-    }
-
-    public void recordToolChainCheckpointFailure(
-            ToolChainCheckpointResult.FailureReason reason) {
-        safely(() -> counter("memory_tool_chain_checkpoint_failure_total",
-                "reason", tag(reason)).increment());
     }
 
     public void recordCompressionExecutorRejected(CompressionMode mode) {
@@ -137,36 +125,6 @@ public final class MemoryCompressionMetricsCollector {
                 .record(Duration.ofNanos(elapsedNanos)));
     }
 
-    private void completeToolChainCheckpoint(
-            int beforeTokens,
-            CheckpointOutcome outcome,
-            int afterTokens,
-            long startedAtNanos) {
-        String outcomeTag = tag(outcome);
-        safely(() -> counter("memory_tool_chain_checkpoint_total",
-                "outcome", outcomeTag).increment());
-        safely(() -> summary("memory_tool_chain_checkpoint_tokens",
-                "stage", tag(EstimationStage.BEFORE))
-                .record(beforeTokens));
-        safely(() -> summary("memory_tool_chain_checkpoint_tokens",
-                "stage", tag(EstimationStage.AFTER))
-                .record(afterTokens));
-        long completedAtNanos = currentNanosOrUnavailable();
-        if (startedAtNanos == UNAVAILABLE_NANOS
-                || completedAtNanos == UNAVAILABLE_NANOS) {
-            return;
-        }
-        long elapsedNanos = Math.max(0L,
-                completedAtNanos - startedAtNanos);
-        safely(() -> Timer.builder(
-                        "memory_tool_chain_checkpoint_duration_seconds")
-                .description("未完成工具链检查点判定耗时")
-                .publishPercentileHistogram()
-                .tags("outcome", outcomeTag)
-                .register(registry)
-                .record(Duration.ofNanos(elapsedNanos)));
-    }
-
     private Counter counter(String name, String... tags) {
         return Counter.builder(name).tags(tags).register(registry);
     }
@@ -225,48 +183,12 @@ public final class MemoryCompressionMetricsCollector {
         }
     }
 
-    /** 单次真实工具链检查点判定的 CAS 终态句柄。 */
-    public static final class CheckpointObservation {
-
-        private final MemoryCompressionMetricsCollector collector;
-        private final int beforeTokens;
-        private final long startedAtNanos;
-        private final AtomicBoolean completed = new AtomicBoolean();
-
-        private CheckpointObservation(
-                MemoryCompressionMetricsCollector collector,
-                int beforeTokens,
-                long startedAtNanos) {
-            this.collector = collector;
-            this.beforeTokens = beforeTokens;
-            this.startedAtNanos = startedAtNanos;
-        }
-
-        public boolean complete(
-                CheckpointOutcome outcome, int afterTokens) {
-            Objects.requireNonNull(outcome, "检查点结果不能为空");
-            if (!completed.compareAndSet(false, true)) {
-                return false;
-            }
-            collector.completeToolChainCheckpoint(
-                    beforeTokens, outcome, afterTokens, startedAtNanos);
-            return true;
-        }
-    }
-
     public enum EstimationStage {
         BEFORE, AFTER
     }
 
     public enum CompressionMode {
         ASYNC, BLOCKING
-    }
-
-    public enum CheckpointOutcome {
-        SUCCESS,
-        FAILED,
-        ALREADY_ATTEMPTED,
-        NO_UNFINISHED_TAIL
     }
 
     public enum DebounceOutcome {

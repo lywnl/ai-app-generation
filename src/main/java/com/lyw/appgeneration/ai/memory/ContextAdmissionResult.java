@@ -18,7 +18,18 @@ public record ContextAdmissionResult(
         List<ChatMessage> requestMessages,
         long summarizeThroughId,
         FailureReason failureReason,
-        String detail) {
+        String detail,
+        AdmissionDeadline deadline) {
+
+    public ContextAdmissionResult(ContextCompressionMode mode, int initialTokens, int finalTokens,
+            List<ChatMessage> requestMessages, long summarizeThroughId, FailureReason failureReason, String detail) {
+        this(mode, initialTokens, finalTokens, requestMessages, summarizeThroughId, failureReason, detail, null);
+    }
+
+    public ContextAdmissionResult withDeadline(AdmissionDeadline deadline) {
+        return new ContextAdmissionResult(mode, initialTokens, finalTokens, requestMessages, summarizeThroughId,
+                failureReason, detail, Objects.requireNonNull(deadline));
+    }
 
     public ContextAdmissionResult {
         mode = Objects.requireNonNull(mode, "压缩模式不能为空");
@@ -37,9 +48,7 @@ public record ContextAdmissionResult(
     public boolean canProceed() {
         return mode == ContextCompressionMode.NORMAL
                 || mode == ContextCompressionMode.ASYNC_SCHEDULED
-                || mode == ContextCompressionMode.BLOCKING_COMPLETED
-                || mode == ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_COMPLETED
-                || mode == ContextCompressionMode.TOOL_CHAIN_CHECKPOINT_REBUILT;
+                || mode == ContextCompressionMode.BLOCKING_COMPLETED;
     }
 
     public enum FailureReason {
@@ -48,6 +57,7 @@ public record ContextAdmissionResult(
         ALIGNMENT_FAILED,
         CURSOR_READ_FAILED,
         SUMMARY_READ_FAILED,
+        PLAN_READ_FAILED,
         PREFIX_CHANGED,
         EXECUTOR_REJECTED,
         TURN_TERMINATED,
@@ -57,8 +67,6 @@ public record ContextAdmissionResult(
         MODEL_FAILED,
         DELETE_REJECTED,
         STILL_OVER_HARD_LIMIT,
-        INVALID_TOOL_CHAIN_CHECKPOINT,
-        CHECKPOINT_ALREADY_ATTEMPTED,
         UNKNOWN
     }
 }

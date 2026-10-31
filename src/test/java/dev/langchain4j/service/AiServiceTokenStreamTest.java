@@ -1,6 +1,5 @@
 package dev.langchain4j.service;
 
-import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
@@ -992,132 +991,7 @@ class AiServiceTokenStreamTest {
         }
     }
 
-    @Test
-    void 不同用户回合必须创建彼此隔离的压缩状态() throws Exception {
-        List<ModelRequestGate.Request> firstRequests =
-                new CopyOnWriteArrayList<>();
-        List<ModelRequestGate.Request> secondRequests =
-                new CopyOnWriteArrayList<>();
-        RecordingRecoveryModel firstModel = new RecordingRecoveryModel();
-        RecordingRecoveryModel secondModel = new RecordingRecoveryModel();
-        try (ManagedModelRequestGate firstGate = allowingGate(firstRequests);
-             ManagedModelRequestGate secondGate = allowingGate(secondRequests)) {
-            recoveryService(firstModel, memoryWithQuestion())
-                    .chat(7L, "第一回合")
-                    .modelRequestGate(firstGate, directContinuation())
-                    .onPartialResponse(ignored -> { })
-                    .ignoreErrors()
-                    .start();
-            recoveryService(secondModel, memoryWithQuestion())
-                    .chat(7L, "第二回合")
-                    .modelRequestGate(secondGate, directContinuation())
-                    .onPartialResponse(ignored -> { })
-                    .ignoreErrors()
-                    .start();
 
-            assertTrue(firstModel.awaitCalls(1));
-            assertTrue(secondModel.awaitCalls(1));
-            firstGate.awaitIdle();
-            secondGate.awaitIdle();
-
-            assertEquals(1, firstRequests.size());
-            assertEquals(1, secondRequests.size());
-            assertNotSame(
-                    firstRequests.getFirst()
-                            .contextCompressionAttemptState(),
-                    secondRequests.getFirst()
-                            .contextCompressionAttemptState());
-        }
-    }
-
-    @Test
-    void ACTIVE状态下多个续调基于最新完整批次重建临时检查点视图()
-            throws Exception {
-        MutableChatMemory memory = memoryWithQuestion();
-        RecordingRecoveryModel model = new RecordingRecoveryModel();
-        List<ModelRequestGate.Request> gateRequests =
-                new CopyOnWriteArrayList<>();
-        List<Integer> completedResultCounts =
-                new CopyOnWriteArrayList<>();
-        AtomicInteger gateCalls = new AtomicInteger();
-        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(
-                request -> {
-                    gateRequests.add(request);
-                    int call = gateCalls.getAndIncrement();
-                    ContextCompressionAttemptState state =
-                            request.contextCompressionAttemptState();
-                    if (call == 0) {
-                        ContextCompressionAttemptState.CheckpointClaim claim =
-                                state.tryEnterCheckpointMode();
-                        assertEquals(ContextCompressionAttemptState
-                                        .EnterDecision.FIRST_ENTRY,
-                                claim.decision());
-                        assertTrue(state.markCheckpointReady(claim));
-                        return CompletableFuture.completedFuture(
-                                new ModelRequestGate.Decision(
-                                        ModelRequestGate.Status.ALLOWED,
-                                        request.latestMemory().get().messages(),
-                                        100,
-                                        ""));
-                    }
-                    assertTrue(state.checkpointProjectionRequired());
-                    long resultCount = request.latestMemory().get().messages()
-                            .stream()
-                            .filter(ToolExecutionResultMessage.class::isInstance)
-                            .count();
-                    completedResultCounts.add(Math.toIntExact(resultCount));
-                    List<ChatMessage> checkpointMessages = List.of(
-                            SystemMessage.from("请求级检查点-" + resultCount),
-                            UserMessage.from("继续完成任务"));
-                    return CompletableFuture.completedFuture(
-                            new ModelRequestGate.Decision(
-                                    ModelRequestGate.Status.ALLOWED,
-                                    checkpointMessages,
-                                    checkpointMessages.size(),
-                                    ""));
-                })) {
-            RecoveryAiService service = AiServices.builder(
-                            RecoveryAiService.class)
-                    .streamingChatModel(model)
-                    .chatMemoryProvider(ignored -> memory)
-                    .tools(new SourceReturningTools())
-                    .build();
-            service.chat(7L, "本轮问题")
-                    .modelRequestGate(gate, directContinuation())
-                    .onPartialResponse(ignored -> { })
-                    .onError(error -> org.junit.jupiter.api.Assertions.fail(
-                            "多批次检查点续调不应失败", error))
-                    .start();
-            assertTrue(model.awaitCalls(1));
-
-            model.handler(0).onCompleteResponse(toolResponse(
-                    ToolExecutionRequest.builder().id("source-1")
-                            .name("writeFile").arguments("{}").build()));
-            assertTrue(model.awaitCalls(2));
-            model.handler(1).onCompleteResponse(toolResponse(
-                    ToolExecutionRequest.builder().id("source-2")
-                            .name("writeFile").arguments("{}").build()));
-            assertTrue(model.awaitCalls(3));
-            gate.awaitIdle();
-
-            assertEquals(List.of(1, 2), completedResultCounts,
-                    "每次续调必须读取到最新完整工具批次");
-            Object state = compressionAttemptState(gateRequests.getFirst());
-            assertSame(state, compressionAttemptState(gateRequests.get(1)));
-            assertSame(state, compressionAttemptState(gateRequests.get(2)));
-            assertTrue(model.request(1).messages().toString()
-                    .contains("请求级检查点-1"));
-            assertTrue(model.request(2).messages().toString()
-                    .contains("请求级检查点-2"));
-            assertFalse(model.request(1).messages().toString()
-                    .contains("绝密原始源码"));
-            assertFalse(model.request(2).messages().toString()
-                    .contains("绝密原始源码"));
-            assertTrue(memory.messages().toString()
-                    .contains("绝密原始源码"),
-                    "请求级检查点不得改写真实 ChatMemory");
-        }
-    }
 
     @Test
     void partial与complete并发确认同一重复块必须只启动一次恢复请求()
@@ -1919,14 +1793,6 @@ class AiServiceTokenStreamTest {
             assertTrue(model.awaitCalls(3));
             assertEquals(1, toolCalls.get());
             assertEquals(3, gateRequests.size());
-            Object initialState = compressionAttemptState(
-                    gateRequests.get(0));
-            assertSame(initialState,
-                    compressionAttemptState(gateRequests.get(1)),
-                    "recovery 必须复用 initial 的共享状态");
-            assertSame(initialState,
-                    compressionAttemptState(gateRequests.get(2)),
-                    "continuation 必须复用 initial 的共享状态");
             assertEquals(List.of(ToolProtocolRecoveryPolicy.Phase.STARTED,
                     ToolProtocolRecoveryPolicy.Phase.RECOVERED), phases);
 
@@ -2259,6 +2125,32 @@ class AiServiceTokenStreamTest {
             gate.awaitIdle();
 
             assertEquals(0, modelCalls.get());
+        }
+    }
+
+    @Test
+    void 门禁通过但原准备截止已过时不得迟到启动模型() throws Exception {
+        MutableChatMemory memory = new MutableChatMemory(7L);
+        AtomicInteger calls = new AtomicInteger();
+        StreamingChatModel model = new StreamingChatModel() {
+            @Override public void doChat(ChatRequest request,
+                    dev.langchain4j.model.chat.response.StreamingChatResponseHandler handler) {
+                calls.incrementAndGet();
+            }
+        };
+        TestAiService service = AiServices.builder(TestAiService.class).streamingChatModel(model)
+                .chatMemoryProvider(ignored -> memory).build();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        try (ManagedModelRequestGate gate = new ManagedModelRequestGate(request ->
+                CompletableFuture.completedFuture(new ModelRequestGate.Decision(ModelRequestGate.Status.ALLOWED,
+                        request.latestMemory().get().messages(), 10, "",
+                        com.lyw.appgeneration.ai.memory.AdmissionDeadline.start(java.time.Duration.ZERO))))) {
+            service.chat(7L, "当前需求").modelRequestGate(gate, directContinuation())
+                    .onPartialResponse(ignored -> { }).onError(failure::set).start();
+            gate.awaitIdle();
+            assertEquals(0, calls.get());
+            var rejected = org.junit.jupiter.api.Assertions.assertInstanceOf(ModelRequestGateException.class, failure.get());
+            assertEquals(ModelRequestGate.Status.COMPRESSION_FAILED, rejected.status());
         }
     }
 
@@ -2717,9 +2609,6 @@ class AiServiceTokenStreamTest {
         return !pendingIds.isEmpty();
     }
 
-    private Object compressionAttemptState(ModelRequestGate.Request request) {
-        return request.contextCompressionAttemptState();
-    }
 
     private ChatResponse response(String text, TokenUsage usage) {
         return ChatResponse.builder()

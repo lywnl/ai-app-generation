@@ -1,6 +1,5 @@
 package dev.langchain4j.service;
 
-import com.lyw.appgeneration.ai.memory.ContextCompressionAttemptState;
 import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -278,8 +277,6 @@ public class AiServiceTokenStream implements TokenStream {
 
         List<ChatMessage> transientSnapshot = turnTransientMessages;
         ChatMemory temporaryMemory = initTemporaryMemory(context, messages);
-        ContextCompressionAttemptState compressionAttemptState =
-                new ContextCompressionAttemptState();
         requestOrchestrator = new GenerationAwareModelRequestOrchestrator(
                 requestController, modelRequestGate, continuationGate);
         if (generationStreamSignalHandler != null) {
@@ -296,7 +293,6 @@ public class AiServiceTokenStream implements TokenStream {
                         toolSpecifications,
                         continuationGate,
                         transientSnapshot,
-                        compressionAttemptState,
                         requestBoundary);
         requestOrchestrator.submit(
                 GenerationAwareModelRequestOrchestrator.initial(
@@ -309,7 +305,6 @@ public class AiServiceTokenStream implements TokenStream {
                                         preparedMessages,
                                         temporaryMemory,
                                         generation,
-                                        compressionAttemptState,
                                         transientSnapshot)));
     }
 
@@ -317,7 +312,6 @@ public class AiServiceTokenStream implements TokenStream {
             List<ChatMessage> requestMessages,
             ChatMemory temporaryMemory,
             long requestGeneration,
-            ContextCompressionAttemptState compressionAttemptState,
             List<ChatMessage> transientSnapshot) {
         ChatRequest.Builder requestBuilder = ChatRequest.builder()
                 .messages(requestMessages)
@@ -355,7 +349,6 @@ public class AiServiceTokenStream implements TokenStream {
                 continuationGate,
                 recoveryCoordinator,
                 incompleteRecoveryCoordinator,
-                compressionAttemptState,
                 generationStreamSignalHandler);
         handler.turnRequestBoundary(requestBoundary);
         handler.turnTransientMessages(transientSnapshot);

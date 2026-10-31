@@ -182,7 +182,7 @@ final class GenerationAwareModelRequestOrchestrator {
             return;
         }
         if (decision.status() == ModelRequestGate.Status.ALLOWED) {
-            dispatchAllowed(submission, decision.messages());
+            dispatchAllowed(submission, decision);
             return;
         }
         if (decision.status() == ModelRequestGate.Status.CANCELLED) {
@@ -211,11 +211,12 @@ final class GenerationAwareModelRequestOrchestrator {
     }
 
     private void dispatchAllowed(
-            Submission submission, List<ChatMessage> messages) {
+            Submission submission, ModelRequestGate.Decision decision) {
         boolean accepted;
         try {
+            ensureStartAllowed(submission, decision);
             accepted = continuationGate.tryRun(
-                    () -> claimAndStart(submission, messages));
+                    () -> claimAndStart(submission, decision.messages(), decision));
         } catch (RuntimeException exception) {
             failSource(submission, exception);
             return;
@@ -227,6 +228,12 @@ final class GenerationAwareModelRequestOrchestrator {
 
     private void claimAndStart(
             Submission submission, List<ChatMessage> messages) {
+        claimAndStart(submission, messages, null);
+    }
+
+    private void claimAndStart(Submission submission, List<ChatMessage> messages,
+            ModelRequestGate.Decision decision) {
+        ensureStartAllowed(submission, decision);
         if (!submission.tryOwnStart()) {
             return;
         }
@@ -259,15 +266,24 @@ final class GenerationAwareModelRequestOrchestrator {
             if (sdkStart == null) {
                 throw new IllegalStateException("模型请求启动器未返回 SDK 启动动作");
             }
+            ensureStartAllowed(submission, decision);
             if (!requestController.tryCommitModelRequestStart(claim)) {
                 closeOwnedAsCancelled(submission);
                 return;
             }
             submission.commitStart();
             submission.startCommittedHandler().accept(claim.generation());
+            ensureStartAllowed(submission, decision);
             sdkStart.run();
         } catch (RuntimeException exception) {
             failClaimedGeneration(submission, claim.generation(), exception);
+        }
+    }
+
+    private void ensureStartAllowed(Submission submission, ModelRequestGate.Decision decision) {
+        if (decision != null && !decision.canStart()) {
+            throw new ModelRequestGateException(submission.rejectionStage(),
+                    ModelRequestGate.Status.COMPRESSION_FAILED, "上下文准备已超时，请重试");
         }
     }
 

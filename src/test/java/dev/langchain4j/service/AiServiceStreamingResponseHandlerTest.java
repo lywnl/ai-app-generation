@@ -1285,8 +1285,6 @@ class AiServiceStreamingResponseHandlerTest {
                         ToolExecutionGuard.direct(),
                         initialClaim.generation(),
                         null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
                         publisher);
 
         handler.onCompleteResponse(responseWithTools(
@@ -1878,8 +1876,6 @@ class AiServiceStreamingResponseHandlerTest {
                         ToolExecutionGuard.direct(),
                         initialClaim.generation(),
                         null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
                         ignored -> { });
         ToolExecutionRequest callbackRequest =
                 ToolExecutionRequest.builder()
@@ -2109,8 +2105,6 @@ class AiServiceStreamingResponseHandlerTest {
                         ToolExecutionGuard.direct(),
                         initialClaim.generation(),
                         null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
                         signals::add);
 
         handler.onPartialResponse(originalText);
@@ -2841,8 +2835,6 @@ class AiServiceStreamingResponseHandlerTest {
                         ToolExecutionGuard.direct(),
                         initialClaim.generation(),
                         null, null, null, null,
-                        new com.lyw.appgeneration.ai.memory
-                                .ContextCompressionAttemptState(),
                         listener);
         return new GuardrailUnifiedFixture(
                 handler, memory, controller, completed);
