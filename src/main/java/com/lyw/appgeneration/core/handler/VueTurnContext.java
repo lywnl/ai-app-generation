@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -72,6 +73,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             new AtomicReference<>();
     private final CompletableFuture<VueTurnFinalizer.FinalizationResult> finalization =
             new CompletableFuture<>();
+    private final AtomicReference<CompletableFuture<Void>> preCommitCleanup = new AtomicReference<>();
     private final Object finalizationObserverLock = new Object();
     private final Map<Long, FinalizationObserver> finalizationObservers =
             new LinkedHashMap<>();
@@ -923,6 +925,23 @@ public final class VueTurnContext implements ContextContinuationGate {
     /** 暴露唯一稳定终态，供主动取消接口继续通过原 SSE 返回终态。 */
     public Mono<VueTurnFinalizer.FinalizationResult> finalizationSignal() {
         return Mono.fromFuture(finalization, true);
+    }
+
+    /** 清理完成或失败后仍复用同一结果；每个等待者只持有可独立取消的副本。 */
+    CompletionStage<Void> preCommitCleanupOnce(Supplier<CompletionStage<Void>> action) {
+        CompletableFuture<Void> proposed = new CompletableFuture<>();
+        CompletableFuture<Void> existing = preCommitCleanup.compareAndExchange(null, proposed);
+        if (existing != null) return existing.copy();
+        try {
+            Objects.requireNonNull(action.get(), "预提交清理结果不能为空")
+                    .whenComplete((ignored, failure) -> {
+                        if (failure == null) proposed.complete(null);
+                        else proposed.completeExceptionally(failure);
+                    });
+        } catch (RuntimeException | Error failure) {
+            proposed.completeExceptionally(failure);
+        }
+        return proposed.copy();
     }
 
     public void closeResources() {

@@ -86,6 +86,144 @@ import static org.mockito.Mockito.times;
 class AppServiceImplVueTurnTest {
 
     @Test
+    void 主动取消准备中的回合不得写用户消息或伪造AI终态() throws Exception {
+        CountDownLatch enteredHistory = new CountDownLatch(1);
+        CountDownLatch releaseHistory = new CountDownLatch(1);
+        when(history.getLastMessage(APP_ID)).thenAnswer(invocation -> {
+            enteredHistory.countDown();
+            assertTrue(releaseHistory.await(2, TimeUnit.SECONDS));
+            return null;
+        });
+        try (var cancellationExecutor = Executors.newVirtualThreadPerTaskExecutor();
+             var coordinator = installRealVuePipeline(mock(ToolMessageCollapser.class), cancellationExecutor)) {
+            StepVerifier.create(service.chatToGenCode(APP_ID, "需求", "cancel-before-user-commit",
+                            User.builder().id(USER_ID).build()))
+                    .then(() -> {
+                        try {
+                            assertTrue(enteredHistory.await(2, TimeUnit.SECONDS));
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(failure);
+                        }
+                        assertTrue(service.cancelGeneration(APP_ID, "cancel-before-user-commit",
+                                User.builder().id(USER_ID).build()));
+                        releaseHistory.countDown();
+                    })
+                    .expectError(java.util.concurrent.CancellationException.class)
+                    .verify(Duration.ofSeconds(3));
+        } finally {
+            releaseHistory.countDown();
+        }
+        verify(history, never()).addChatMessageAndReturn(anyLong(), anyString(), anyString(), anyLong());
+        verify(history, never()).addAiMessageAndReturn(anyLong(), anyString(), anyString(), any(), anyLong());
+        verify(facade, never()).prepareVueGenerator(anyLong());
+        operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-precommit-cancellation").close();
+    }
+
+    @Test
+    void 主动取消收尾本身失败必须结束原流并传播错误() {
+        prepareExplicitCancellation();
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenReturn(Flux.concat(Flux.just("已开始"), Flux.never()));
+        when(executor.doExecuteVue(any(), any())).thenAnswer(invocation ->
+                invocation.<Flux<String>>getArgument(0).map(GenerationStreamEvent::content));
+        IllegalStateException failure = new IllegalStateException("取消收尾失败");
+        when(finalizer.finalizeOnce(any(), any())).thenAnswer(invocation -> {
+            VueTurnContext context = invocation.getArgument(0);
+            context.closeResources();
+            ReflectionTestUtils.invokeMethod(context, "failFinalization", failure);
+            throw failure;
+        });
+        try (var coordinator = new VueTurnCancellationCoordinator(finalizer, Runnable::run,
+                new VueBuildRepairMetricsCollector(metricsRegistry))) {
+            ReflectionTestUtils.setField(service, "vueTurnCancellationCoordinator", coordinator);
+            StepVerifier.create(service.chatToGenCode(APP_ID, "需求", "cancel-finalization-failure",
+                            User.builder().id(USER_ID).build()))
+                    .expectNext(GenerationStreamEvent.content("已开始"))
+                    .then(() -> assertTrue(service.cancelGeneration(APP_ID, "cancel-finalization-failure",
+                            User.builder().id(USER_ID).build())))
+                    .expectErrorMatches(error -> error == failure)
+                    .verify(Duration.ofSeconds(3));
+        }
+        operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-finalization-failure").close();
+    }
+
+    @Test
+    void 已发正文后主动取消必须仍发送唯一终态并结束流() {
+        ToolMessageCollapser collapser = prepareExplicitCancellation();
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenReturn(Flux.concat(Flux.just(startedText()), Flux.never()));
+
+        try (var coordinator = installRealVuePipeline(collapser)) {
+            StepVerifier.create(service.chatToGenCode(APP_ID, "需求", "explicit-after-text",
+                            User.builder().id(USER_ID).build()))
+                    .expectNextMatches(event -> event instanceof GenerationStreamEvent.AiText)
+                    .then(() -> assertTrue(service.cancelGeneration(APP_ID, "explicit-after-text",
+                            User.builder().id(USER_ID).build())))
+                    .expectNextMatches(event -> event instanceof GenerationStreamEvent.TurnOutcome terminal
+                            && terminal.message().getOutcome() == VueTurnOutcome.TurnOutcomeType.CANCELLED)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(3));
+        }
+        verify(history, times(1)).addAiMessageAndReturn(eq(APP_ID), anyString(), anyString(),
+                eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
+        operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-explicit-cancellation").close();
+    }
+
+    @Test
+    void 取消使业务流先结束时必须等持久收尾完成再发送终态() {
+        ToolMessageCollapser collapser = prepareExplicitCancellation();
+        var pending = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var model = reactor.core.publisher.Sinks.many().unicast().<String>onBackpressureBuffer();
+        when(facade.generateVueProjectStream(
+                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                .thenAnswer(invocation -> {
+                    VueTurnContext context = invocation.getArgument(3);
+                    context.registerModelCancellation(model::tryEmitComplete);
+                    model.tryEmitNext(startedText());
+                    return model.asFlux();
+                });
+
+        try (var coordinator = installRealVuePipeline(collapser, pending::add)) {
+            StepVerifier.create(service.chatToGenCode(APP_ID, "需求", "explicit-delayed-finalization",
+                            User.builder().id(USER_ID).build()))
+                    .expectNextMatches(event -> event instanceof GenerationStreamEvent.AiText)
+                    .then(() -> assertTrue(service.cancelGeneration(APP_ID, "explicit-delayed-finalization",
+                            User.builder().id(USER_ID).build())))
+                    .expectNoEvent(Duration.ofMillis(50))
+                    .then(() -> pending.remove().run())
+                    .expectNextMatches(event -> event instanceof GenerationStreamEvent.TurnOutcome terminal
+                            && terminal.message().getOutcome() == VueTurnOutcome.TurnOutcomeType.CANCELLED)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(3));
+        }
+        verify(history, times(1)).addAiMessageAndReturn(eq(APP_ID), anyString(), anyString(),
+                eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
+    }
+
+    private ToolMessageCollapser prepareExplicitCancellation() {
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
+        when(history.addAiMessageAndReturn(eq(APP_ID), anyString(), anyString(),
+                eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
+                .thenAnswer(invocation -> savedAiMessage(invocation.getArgument(1)));
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(collapser.finishLastTurn(any(), any(), any())).thenReturn(collapsed());
+        return collapser;
+    }
+
+    private String startedText() {
+        return cn.hutool.json.JSONUtil.toJsonStr(
+                new com.lyw.appgeneration.ai.model.message.AiResponseMessage(1L, "已经开始检查。"));
+    }
+
+    @Test
     void 相同原文的两次提交向生成入口传递各自持久记录而不猜最后记录() {
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
@@ -975,6 +1113,11 @@ class AppServiceImplVueTurnTest {
 
     private VueTurnCancellationCoordinator installRealVuePipeline(
             ToolMessageCollapser collapser) {
+        return installRealVuePipeline(collapser, Runnable::run);
+    }
+
+    private VueTurnCancellationCoordinator installRealVuePipeline(
+            ToolMessageCollapser collapser, Executor cancellationExecutor) {
         var repairMetrics = new VueBuildRepairMetricsCollector(metricsRegistry);
         VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
                 history, collapser, com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub(),
@@ -983,7 +1126,7 @@ class AppServiceImplVueTurnTest {
                 new FileToolBudgetGuard());
         VueTurnCancellationCoordinator coordinator =
                 new VueTurnCancellationCoordinator(
-                        realFinalizer, Runnable::run, repairMetrics);
+                        realFinalizer, cancellationExecutor, repairMetrics);
         var jsonHandler = new com.lyw.appgeneration.core.handler
                 .JsonMessageStreamHandler(
                 mock(ToolManager.class), realFinalizer, coordinator);

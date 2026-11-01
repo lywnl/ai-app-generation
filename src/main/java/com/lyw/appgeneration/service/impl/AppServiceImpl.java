@@ -77,6 +77,7 @@ import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
 
@@ -339,8 +340,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                         .doExecute(codeStream, chatHistoryService, appId,
                                 loginUser, codeGenType, context)
                         ;
-                return Flux.firstWithSignal(context.mergeProgress(business),
-                                context.cancellationOutcome())
+                return mergeGenerationWithTerminal(context.mergeProgress(business),
+                                context.cancellationOutcome().flux(), context::isCancelled)
                         .doOnCancel(context::requestCancellation)
                         .doFinally(signal -> finishSimpleTurn(
                                 context, codeGenType, loginUser, generationId,
@@ -525,8 +526,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             } catch (RuntimeException exception) {
                 return Flux.error(toPreflightException(exception));
             }
-            Runnable cancellation = () -> vueTurnCancellationCoordinator
-                    .requestCancellation(context, () -> "");
+            Runnable cancellation = () -> cancelVuePreparation(context);
             if (!generationCancellationRegistry.register(appId, generationId,
                     loginUser.getId(), cancellation)) {
                 context.closeResources();
@@ -551,20 +551,43 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                             .<Flux<GenerationStreamEvent>>map(ignored ->
                                     Flux.just(GenerationStreamEvent.turnOutcome(
                                             result.outcome())))
-                            .orElseGet(Flux::never))
-                    .onErrorResume(error -> Flux.never());
-            return Flux.firstWithSignal(
+                            .orElseGet(Flux::empty))
+                    .onErrorResume(error -> isVueCancellationFinalization(context)
+                            ? Flux.error(error) : Flux.empty());
+            return mergeGenerationWithTerminal(
                             turnFlow.onErrorResume(error ->
                                     context.isUserCommitted()
                                             && context.terminalWinner().isPresent()
                                             ? Flux.empty() : Flux.error(error)),
-                            finalizationFlow)
-                    .takeUntil(event -> event
-                            instanceof GenerationStreamEvent.TurnOutcome)
+                            finalizationFlow, () -> isVueCancellationFinalization(context))
                     .doOnCancel(() -> cancelVuePreparation(context))
                     .doFinally(signal -> generationCancellationRegistry.unregister(
                             appId, generationId, cancellation));
         });
+    }
+
+    /** 首条正文不淘汰终态订阅；取消已接管时即使业务先结束，也等待可靠收尾。 */
+    private Flux<GenerationStreamEvent> mergeGenerationWithTerminal(
+            Flux<GenerationStreamEvent> business,
+            Flux<GenerationStreamEvent> terminal,
+            java.util.function.BooleanSupplier awaitingTerminal) {
+        return Flux.defer(() -> {
+            Sinks.Empty<Void> normalCompletion = Sinks.empty();
+            Flux<GenerationStreamEvent> guardedBusiness = business.doOnComplete(() -> {
+                if (!awaitingTerminal.getAsBoolean()) {
+                    normalCompletion.tryEmitEmpty();
+                }
+            });
+            return Flux.merge(terminal.takeUntilOther(normalCompletion.asMono()), guardedBusiness)
+                    .takeUntil(event -> event instanceof GenerationStreamEvent.TurnOutcome
+                            || event instanceof GenerationStreamEvent.SimpleTurnOutcome);
+        });
+    }
+
+    private boolean isVueCancellationFinalization(VueTurnContext context) {
+        return context.terminalWinner().filter(trigger ->
+                trigger == VueTurnContext.TerminalTrigger.CANCELLED
+                        || trigger == VueTurnContext.TerminalTrigger.TIMED_OUT).isPresent();
     }
 
     private VueTurnContext openVueTurn(long appId, long userId) {
@@ -705,10 +728,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 // 终态赢家，不能再把协议内部取消误判为浏览器断连。
                 if (context.terminalWinner().isEmpty()) {
                     vueTurnCancellationCoordinator.requestCancellation(
-                            context, () -> "",
-                            () -> VueTurnMemoryProjection.project(
-                                    List.of(),
-                                    VueTurnOutcome.TurnOutcomeType.CANCELLED));
+                            context, () -> context.decisionSources().transcript().displayText());
                 }
             }
         }

@@ -53,6 +53,118 @@ import static org.mockito.Mockito.doThrow;
 class VueTurnCancellationCoordinatorTest {
 
     @Test
+    void 预提交清理完成后重复请求必须复用结果() throws Exception {
+        VueTurnContext context = VueTurnContext.testing(7L, 9L, "precommit-once", VueBuildPhase.GENERATING);
+        context.claimPreCommitTermination();
+        AtomicInteger starts = new AtomicInteger();
+        try (var coordinator = new VueTurnCancellationCoordinator(mock(VueTurnFinalizer.class), task -> {
+            starts.incrementAndGet();
+            task.run();
+        }, Duration.ofSeconds(1))) {
+            coordinator.requestPreCommitCleanup(context).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            coordinator.requestPreCommitCleanup(context).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertEquals(1, starts.get());
+            assertEquals(0, coordinator.pendingCount());
+        }
+    }
+
+    @Test
+    void 取消一个预提交等待者不得取消共享清理结果() throws Exception {
+        VueTurnContext context = VueTurnContext.testing(7L, 9L, "precommit-waiters", VueBuildPhase.GENERATING);
+        context.claimPreCommitTermination();
+        var queue = new LinkedBlockingQueue<Runnable>();
+        try (var coordinator = new VueTurnCancellationCoordinator(mock(VueTurnFinalizer.class), queue::add,
+                Duration.ofSeconds(1))) {
+            var first = coordinator.requestPreCommitCleanup(context).toCompletableFuture();
+            var second = coordinator.requestPreCommitCleanup(context).toCompletableFuture();
+            assertTrue(first.cancel(false));
+            assertFalse(second.isDone());
+            assertEquals(1, queue.size());
+            queue.remove().run();
+            second.get(1, TimeUnit.SECONDS);
+            coordinator.requestPreCommitCleanup(context).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertEquals(0, coordinator.pendingCount());
+        }
+    }
+
+    @Test
+    void 预提交清理失败且资源排空后重复请求仍返回原失败() {
+        VueTurnContext context = VueTurnContext.testing(7L, 9L, "precommit-failed-once", VueBuildPhase.GENERATING);
+        context.claimPreCommitTermination();
+        AtomicInteger starts = new AtomicInteger();
+        IllegalStateException failure = new IllegalStateException("清理调度失败");
+        try (var coordinator = new VueTurnCancellationCoordinator(mock(VueTurnFinalizer.class), task -> {
+            if (starts.incrementAndGet() == 1) throw failure;
+            task.run();
+        }, Duration.ofSeconds(1))) {
+            for (int index = 0; index < 2; index++) {
+                ExecutionException actual = assertThrows(ExecutionException.class,
+                        () -> coordinator.requestPreCommitCleanup(context).toCompletableFuture().get(1, TimeUnit.SECONDS));
+                assertSame(failure, actual.getCause());
+            }
+            assertEquals(2, starts.get(), "仅首次调度及失败后的排空各执行一次");
+            assertEquals(0, coordinator.pendingCount());
+        }
+    }
+
+    @Test
+    void 默认取消投影必须读取静默后的工具文件和构建事实() {
+        assertDefaultProjectionUsesFinalFacts(false);
+    }
+
+    @Test
+    void 默认超时投影必须读取静默后的工具文件和构建事实() {
+        assertDefaultProjectionUsesFinalFacts(true);
+    }
+
+    private void assertDefaultProjectionUsesFinalFacts(boolean timeout) {
+        VueTurnContext context = VueTurnContext.testing(7L, 9L, "default-facts", VueBuildPhase.GENERATING);
+        context.commitUser(() -> true);
+        var queue = new LinkedBlockingQueue<Runnable>();
+        VueTurnFinalizer finalizer = mock(VueTurnFinalizer.class);
+        AtomicReference<VueTurnOutcome> outcome = new AtomicReference<>();
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
+            VueTurnOutcome requested = invocation.getArgument(1);
+            outcome.set(requested);
+            var result = new VueTurnFinalizer.FinalizationResult(requested, true);
+            context.closeResources();
+            context.completeFinalization(result);
+            return result;
+        });
+        try (var coordinator = new VueTurnCancellationCoordinator(finalizer, queue::add, Duration.ofSeconds(1))) {
+            if (timeout) coordinator.requestTimeout(context, () -> "已执行部分操作").orElseThrow();
+            else assertTrue(coordinator.requestCancellation(context, () -> "已执行部分操作"));
+            // 结果先到达收集器，再允许静默收尾执行；不能在取消入口捕获空事实。
+            var read = com.lyw.appgeneration.ai.tools.VueToolExecutionFact.parse("readFile", """
+                    {"protocol":"file-tool/v1","operation":"readFile","status":"APPLIED",
+                     "relativePath":"src/App.vue","changed":false,"message":"已读取",
+                     "failureReason":null,"content":"仅测试的原文"}
+                    """).orElseThrow();
+            var write = com.lyw.appgeneration.ai.tools.VueToolExecutionFact.parse("writeFile", """
+                    {"protocol":"file-tool/v1","operation":"writeFile","status":"APPLIED",
+                     "relativePath":"src/App.vue","changed":true,"message":"已写入",
+                     "failureReason":null,"content":null}
+                    """).orElseThrow();
+            var build = com.lyw.appgeneration.ai.tools.VueToolExecutionFact.parse("buildProject", """
+                    {"protocol":"vue-build-tool/v1","invocationStatus":"COMPLETED","success":false,
+                     "attempt":2,"maxAttempts":3,"stage":"NPM_BUILD","failureKind":"CODE",
+                     "timedOut":false,"repairable":true,"reflectionRequired":true,"nextAction":"FINAL_DIAGNOSIS",
+                     "message":"构建失败","errorSummary":"缺少组件","terminateToolLoop":false,"finalResponse":null}
+                    """).orElseThrow();
+            context.decisionSources().facts().addAll(List.of(read, write, build));
+            queue.remove().run();
+            assertNotNull(outcome.get());
+            String memory = outcome.get().memoryAiText();
+            assertTrue(memory.contains("实际执行工具：readFile、writeFile、buildProject"), memory);
+            assertTrue(memory.contains("实际变更文件：src/App.vue"), memory);
+            assertTrue(memory.contains("构建状态：失败"), memory);
+            assertTrue(memory.contains("构建尝试次数：2"), memory);
+        } finally {
+            context.closeResources();
+        }
+    }
+
+    @Test
     void 取消必须等待回调静默后执行收尾() throws Exception {
         assertCancellationFinalizationAfterQuiescence(false);
     }

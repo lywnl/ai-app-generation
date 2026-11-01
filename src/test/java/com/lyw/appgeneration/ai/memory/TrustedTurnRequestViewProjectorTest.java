@@ -17,6 +17,38 @@ import static org.mockito.Mockito.*;
 
 class TrustedTurnRequestViewProjectorTest {
     @Test
+    void 同名诊断任务的摘要进度与重启中断回合必须明确区分() {
+        var source = L0Snapshot.empty("1", 3);
+        source = L0SourceOperations.replaceSystem(source, SystemMessage.from("系统约束"));
+        String repeated = "按编号读取全部诊断日志";
+        var first = TurnRequestBoundary.of(repeated, List.of(), 10, "history-10");
+        source = L0SourceOperations.append(source, first.userMessage(), first);
+        source = L0SourceOperations.finishTurn(source, 10, "history-10", 20, ChatMemoryOutcome.CANCELLED,
+                "较早任务已取消", 3);
+        var interrupted = TurnRequestBoundary.of(repeated, List.of(), 30, "history-30");
+        source = L0SourceOperations.append(source, interrupted.userMessage(), interrupted);
+        source = L0SourceOperations.finishTurn(source, 30, "history-30", 40, ChatMemoryOutcome.SYSTEM_ERROR,
+                "上一轮因系统中断未完成，最终构建结果未确认。", 3);
+        var current = TurnRequestBoundary.of("上一轮读到哪了？", List.of(), 50, "current");
+        source = L0SourceOperations.append(source, current.userMessage(), current);
+        var frontier = new SummaryCoverage(10, "old-run", "old-epoch", 71, "a".repeat(64), 3,
+                20L, ChatMemoryOutcome.CANCELLED, true);
+        var summary = new MemorySummarySnapshot(summary(0).summary().replace("旧回合已结束", "已读到 09.log"),
+                0, 3, 2, frontier);
+
+        var view = new TrustedTurnRequestViewProjector().project(pair(summary, source));
+        String state = view.trustedState().text();
+        assertTrue(state.contains("L1 进度所属用户回合 userHistoryId=10"), state);
+        assertTrue(state.contains("上一用户回合 userHistoryId=30，终态=SYSTEM_ERROR"), state);
+        assertTrue(state.contains("本请求未保留该回合的原始工具轨迹"), state);
+        assertTrue(state.contains("无法确认时说明未知"), state);
+        assertFalse(state.contains("09.log"), "摘要正文不能又复制进状态投影");
+        assertEquals(List.of(first.userMessage(), interrupted.userMessage(), current.userMessage()),
+                view.conversationMessages().stream().filter(UserMessage.class::isInstance).toList());
+        assertEquals(source.messages().getLast(), view.conversationMessages().getLast());
+    }
+
+    @Test
     void 跨回合保留工具原文且普通AI说明不能进入可信结果通道() {
         var original = source();
         var view = new TrustedTurnRequestViewProjector().project(pair(MemorySummarySnapshot.empty(), original));

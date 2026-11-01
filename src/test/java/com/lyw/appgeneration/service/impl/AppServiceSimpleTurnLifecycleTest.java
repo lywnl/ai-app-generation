@@ -63,6 +63,30 @@ import static org.mockito.Mockito.when;
 
 class AppServiceSimpleTurnLifecycleTest {
 
+    @ParameterizedTest
+    @EnumSource(value = CodeGenTypeEnum.class, names = {"HTML", "MULTI_FILE"})
+    void 已发正文后主动取消原生模式必须发送终态并结束流(CodeGenTypeEnum mode) {
+        App target = app(APP_ID);
+        target.setCodeGenType(mode.getValue());
+        org.mockito.Mockito.doReturn(target).when(service).getById(APP_ID);
+        when(history.addAiMessageAndReturn(eq(APP_ID), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID)))
+                .thenReturn(savedAiMessage("本次生成已取消。", AI_MESSAGE_ID));
+        when(facade.generateAndSaveCodeStream(any(), any(), eq(APP_ID), anyBoolean(), any(), any()))
+                .thenReturn(Flux.concat(Flux.just("已开始"), Flux.never()));
+
+        StepVerifier.create(service.chatToGenCode(APP_ID, "需求", "cancel-after-text", user()))
+                .expectNext(GenerationStreamEvent.content("已开始"))
+                .then(() -> assertTrue(service.cancelGeneration(APP_ID, "cancel-after-text", user())))
+                .expectNextMatches(event -> event instanceof GenerationStreamEvent.SimpleTurnOutcome terminal
+                        && terminal.message().getOutcome()
+                        == com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.CANCELLED)
+                .expectComplete()
+                .verify(Duration.ofSeconds(3));
+        verify(history, times(1)).addAiMessageAndReturn(eq(APP_ID), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
+    }
+
     @Test
     void 普通服务真实回合在模型正文前合并压缩进度且只订阅业务一次() {
         AtomicInteger businessSubscriptions = new AtomicInteger();

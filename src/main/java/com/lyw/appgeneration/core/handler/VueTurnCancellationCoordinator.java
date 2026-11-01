@@ -70,7 +70,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             VueTurnContext context, Supplier<String> canonicalPrefix) {
         return requestCancellation(context, canonicalPrefix,
                 () -> VueTurnMemoryProjection.project(
-                        java.util.List.of(),
+                        java.util.List.copyOf(context.decisionSources().facts()),
                         VueTurnOutcome.TurnOutcomeType.CANCELLED));
     }
 
@@ -87,7 +87,7 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
             VueTurnContext context, Supplier<String> canonicalPrefix) {
         return requestTimeout(context, canonicalPrefix,
                 () -> VueTurnMemoryProjection.project(
-                        java.util.List.of(),
+                        java.util.List.copyOf(context.decisionSources().facts()),
                         VueTurnOutcome.TurnOutcomeType.TIMED_OUT));
     }
 
@@ -108,6 +108,10 @@ public class VueTurnCancellationCoordinator implements AutoCloseable {
                 != VueTurnContext.UserCommitState.PRE_COMMIT_TERMINATED) {
             throw new IllegalStateException("预提交清理只接受已经终止的准备回合");
         }
+        return context.preCommitCleanupOnce(() -> startPreCommitCleanup(context));
+    }
+
+    private CompletionStage<Void> startPreCommitCleanup(VueTurnContext context) {
         PendingPreCommitCleanup existing =
                 pendingPreCommitCleanups.get(context.turnId());
         if (existing != null) {
