@@ -158,7 +158,7 @@ class VueTurnCancellationCoordinatorTest {
             assertTrue(memory.contains("实际执行工具：readFile、writeFile、buildProject"), memory);
             assertTrue(memory.contains("实际变更文件：src/App.vue"), memory);
             assertTrue(memory.contains("构建状态：失败"), memory);
-            assertTrue(memory.contains("构建尝试次数：2"), memory);
+            assertTrue(memory.contains("构建尝试次数：至少 2 次（依据已记录结果）"), memory);
         } finally {
             context.closeResources();
         }

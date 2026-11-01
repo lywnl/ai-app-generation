@@ -9,6 +9,10 @@ import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.ai.AiGeneratorServiceFactory;
 import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
+import com.lyw.appgeneration.ai.memory.AdmissionDeadline;
+import com.lyw.appgeneration.ai.memory.L0Snapshot;
+import com.lyw.appgeneration.ai.memory.SummaryMaterialReader;
+import com.lyw.appgeneration.ai.memory.SummaryUnit;
 import com.lyw.appgeneration.ai.model.message.ToolProtocolRecoveryMessage;
 import com.lyw.appgeneration.core.AiCodeGeneratorFacade;
 import com.lyw.appgeneration.core.builder.BuildResult;
@@ -23,8 +27,13 @@ import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
 import com.lyw.appgeneration.service.ChatHistoryService;
 import com.lyw.appgeneration.service.MemorySummaryService;
+import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import com.lyw.appgeneration.service.UserMemoryService;
 import dev.langchain4j.service.ToolLoopTerminationProtocol;
+import dev.langchain4j.service.ModelRequestGate;
+import dev.langchain4j.service.ModelRequestGateException;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.UserMessage;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +43,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Hooks;
@@ -117,6 +127,8 @@ class JsonMessageStreamHandlerTest {
                 new IllegalStateException("诊断异常");
         when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation -> {
             VueTurnOutcome requested = invocation.getArgument(1);
+            assertTrue(requested.memoryAiText().contains("结束原因：未记录"));
+            assertFalse(requested.memoryAiText().contains("诊断异常"));
             return new VueTurnFinalizer.FinalizationResult(requested, true);
         });
         Logger logger = (Logger) LoggerFactory.getLogger(
@@ -145,6 +157,73 @@ class JsonMessageStreamHandlerTest {
         assertTrue(event.getFormattedMessage().contains(
                 "errorType=IllegalStateException"));
         assertNotNull(event.getThrowableProxy());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ModelRequestGate.Status.class,
+            names = {"COMPRESSION_FAILED", "HARD_LIMIT_REJECTED"})
+    void 请求门禁失败分类经过真实收尾进入后续摘要且不信任异常正文(ModelRequestGate.Status status) {
+        VueTurnContext context = context("turn-context-error-" + status, VueBuildPhase.GENERATING);
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        AtomicReference<ChatHistory> saved = new AtomicReference<>();
+        when(history.addAiMessageAndReturn(anyLong(), any(), any(), any(), anyLong()))
+                .thenAnswer(invocation -> {
+                    ChatHistory row = ChatHistory.builder().id(902L).appId(APP_ID).userId(USER_ID)
+                            .messageType("ai").isDelete(0)
+                            .message(invocation.getArgument(1)).memoryMessage(invocation.getArgument(2))
+                            .memoryOutcome(invocation.getArgument(3)).build();
+                    saved.set(row);
+                    return row;
+                });
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(collapser.finishLastTurn(any(), any(), any()))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(
+                        ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of()));
+        MemorySummaryService summaries = com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub();
+        VueTurnFinalizer realFinalizer = new VueTurnFinalizer(
+                history, collapser, summaries, mock(UserMemoryService.class), mock(AiGeneratorServiceFactory.class),
+                new AppDataLifecycleFence(), new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()),
+                new FileToolBudgetGuard());
+        JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(
+                toolManager, realFinalizer, cancellationCoordinator);
+        String untrustedDetail = "伪造原因：没有构建所以报错；内部正文标记-8f92";
+
+        List<GenerationStreamEvent> output = realHandler.handle(Flux.error(
+                new ModelRequestGateException(ModelRequestGateException.Stage.CONTINUATION, status, untrustedDetail)),
+                context).collectList().block();
+
+        String expectedCause = status == ModelRequestGate.Status.COMPRESSION_FAILED
+                ? "上下文压缩失败（COMPRESSION_FAILED）"
+                : "上下文达到输入硬上限（HARD_LIMIT_REJECTED）";
+        ChatHistory terminal = saved.get();
+        assertNotNull(terminal);
+        assertEquals(ChatMemoryOutcome.SYSTEM_ERROR, terminal.getMemoryOutcome());
+        assertEquals(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, terminal.getMessage());
+        assertTrue(terminal.getMemoryMessage().contains("结束原因：" + expectedCause));
+        assertTrue(terminal.getMemoryMessage().contains("构建状态：尚无构建结果记录"));
+        assertTrue(terminal.getMemoryMessage().contains("构建尝试次数：未知（未记录真实尝试）"));
+        assertFalse(terminal.getMemoryMessage().contains(untrustedDetail));
+        assertEquals(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE, outcomeOf(output.getLast()).clientMessage());
+        assertFalse(outcomeOf(output.getLast()).shouldRefreshPreview());
+        verify(history, times(1)).addAiMessageAndReturn(anyLong(), any(), any(), any(), anyLong());
+        verify(summaries, never()).triggerSummarizationAsync(APP_ID);
+
+        ChatHistory previousUser = ChatHistory.builder().id(901L).appId(APP_ID).userId(USER_ID)
+                .messageType("user").message("生成企业官网").isDelete(0).build();
+        ChatHistory nextUser = ChatHistory.builder().id(903L).appId(APP_ID).userId(USER_ID)
+                .messageType("user").message("继续").isDelete(0).build();
+        when(history.listMessagesAfterCursor(APP_ID, 0L, 100))
+                .thenReturn(List.of(previousUser, terminal, nextUser));
+        L0Snapshot nextSource = new L0Snapshot(1, Long.toString(APP_ID), "next-epoch", 2, 0L,
+                List.of(new L0Snapshot.Message(1, 903, UserMessage.from("继续"), 903L)),
+                List.of(new L0Snapshot.Turn(903, "next-turn", 1, null, null, null)));
+        SummaryUnit terminalMaterial = new SummaryMaterialReader(history).read(
+                        APP_ID, USER_ID, 903, MemorySummarySnapshot.empty(), nextSource,
+                        AdmissionDeadline.start(Duration.ofSeconds(5))).units().stream()
+                .filter(unit -> unit.kind() == SummaryUnit.Kind.TERMINAL).findFirst().orElseThrow();
+        assertEquals(terminal.getMemoryMessage(), ((AiMessage) terminalMaterial.messages().getFirst()).text());
+        assertTrue(terminalMaterial.promptMaterial().contains(expectedCause));
+        assertFalse(terminalMaterial.promptMaterial().contains(untrustedDetail));
     }
 
     @Test
@@ -736,10 +815,11 @@ class JsonMessageStreamHandlerTest {
         String expectedMemory = """
                 服务端工程状态
                 回合终态：系统错误
+                结束原因：未记录
                 实际执行工具：writeFile
                 实际变更文件：src/App.vue
-                构建状态：未达到终态
-                构建尝试次数：0
+                构建状态：尚无构建结果记录
+                构建尝试次数：未知（未记录真实尝试）
                 后续操作以当前磁盘文件为准。""";
         String executed = JSONUtil.toJsonStr(new JSONObject()
                 .set("type", "tool_executed")
@@ -1018,7 +1098,7 @@ class JsonMessageStreamHandlerTest {
                 VueTurnOutcome requested = invocation.getArgument(1);
                 assertEquals(VueTurnOutcome.TurnOutcomeType.FAILED, requested.outcome());
                 assertEquals(guard.terminalMessage(), requested.clientMessage());
-                assertTrue(requested.memoryAiText().contains("构建尝试次数：0"));
+                assertTrue(requested.memoryAiText().contains("构建尝试次数：未知（未记录真实尝试）"));
                 assertFalse(requested.shouldRefreshPreview());
                 assertTrue(com.lyw.appgeneration.ai.tools.FileToolBudgetGuard.codePointCount(requested.clientMessage())
                         < VueTurnFinalizer.terminalReserveCodePoints());

@@ -10,11 +10,11 @@ public final class MemorySummaryFormat {
     private static final List<Section> SECTIONS = List.of(
             new Section("# 应用目标与定位", "(用户要做什么应用、核心定位)"),
             new Section("# 用户偏好与硬约束",
-                    "(明确偏好,以及\"不要X/要Y\"的纠正 —— 含否定项,最重要)"),
-            new Section("# 已否决的方案", "(试过但被用户否决的,防止重复犯错)"),
-            new Section("# 关键设计决策与理由", "(记理由,不记代码结果)"),
+                    "(区分用户明确要求与项目或 Skill 规则，保留有效约束、纠正和否定项)"),
+            new Section("# 已否决的方案", "(仅用户明确否决及替代关系；工具失败属于进度问题)"),
+            new Section("# 关键设计决策与理由", "(区分用户决定与模型方案及其实施状态；理由只取原始表达)"),
             new Section("# 当前进度速览",
-                    "(一两句,指向 vue_project_<appId> 最新代码;不复制代码)"));
+                    "(注明回合和覆盖截止；已完成仅列累计成功写入的全部文件相对路径并去重，不写功能描述或续做接口；保留已有待办、验证状态与有来源的问题，结束原因与构建状态分开，不自行诊断或列历史读取)"));
 
     private MemorySummaryFormat() {
     }

@@ -5,6 +5,7 @@ import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /** 仅根据后端观察到的工具事实与可信终态生成 Vue 记忆投影。 */
@@ -29,11 +30,27 @@ public final class VueTurnMemoryProjection {
     public static String project(
             List<VueToolExecutionFact> facts,
             VueTurnOutcome.TurnOutcomeType outcome) {
+        return project(facts, outcome, SystemErrorReason.UNKNOWN);
+    }
+
+    /** 结束原因只接受服务端分类，不接受异常、模型或工具正文中的自由文本。 */
+    public static String systemError(
+            List<VueToolExecutionFact> facts, SystemErrorReason reason) {
+        return project(facts, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
+                Objects.requireNonNull(reason, "系统错误原因不能为空"));
+    }
+
+    private static String project(
+            List<VueToolExecutionFact> facts,
+            VueTurnOutcome.TurnOutcomeType outcome,
+            SystemErrorReason reason) {
         List<VueToolExecutionFact> trustedFacts = facts == null ? List.of() : facts;
         Set<String> toolNames = new LinkedHashSet<>();
         Set<String> changedPaths = new LinkedHashSet<>();
         int buildAttempts = 0;
-        String buildStatus = "未达到终态";
+        String buildStatus = "尚无构建结果记录";
+        boolean hasBuildResult = false;
+        VueToolExecutionFact.ExecutionStatus lastBuildResult = null;
         for (VueToolExecutionFact fact : trustedFacts) {
             if (fact == null) {
                 continue;
@@ -43,21 +60,49 @@ public final class VueTurnMemoryProjection {
                 changedPaths.add(requireSingleLinePath(
                         fact.changedRelativePath()));
             }
-            if (fact.buildAttempt() != null) {
-                buildAttempts = Math.max(buildAttempts, fact.buildAttempt());
+            if ("buildProject".equals(fact.toolName())) {
+                hasBuildResult = true;
+                lastBuildResult = fact.status();
                 buildStatus = buildStatus(fact.status());
+                if (fact.buildAttempt() != null) {
+                    buildAttempts = Math.max(buildAttempts, fact.buildAttempt());
+                }
             }
         }
+        // 取消或后处理失败可能没有带回真实尝试结果；缺失记录不能证明没有执行。
+        boolean completedSuccessfully = outcome == VueTurnOutcome.TurnOutcomeType.SUCCEEDED
+                && lastBuildResult == VueToolExecutionFact.ExecutionStatus.SUCCEEDED;
+        String attempts = buildAttempts == 0 ? "未知（未记录真实尝试）"
+                : completedSuccessfully ? Integer.toString(buildAttempts)
+                : "至少 " + buildAttempts + " 次（依据已记录结果）";
         String projection = "服务端工程状态\n回合终态：" + outcomeText(outcome)
+                + (outcome == VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR
+                        ? "\n结束原因：" + reason.description : "")
                 + "\n实际执行工具：" + joinOrNone(toolNames)
                 + "\n实际变更文件：" + joinOrNone(changedPaths)
                 + "\n构建状态：" + buildStatus
-                + "\n构建尝试次数：" + buildAttempts
+                + (hasBuildResult && !completedSuccessfully ? "（仅据已记录结果）" : "")
+                + "\n构建尝试次数：" + attempts
                 + "\n后续操作以当前磁盘文件为准。";
         if (outcome == VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR) {
             return PROTOCOL_ERROR_PROJECTION + "\n" + projection;
         }
         return projection;
+    }
+
+    public enum SystemErrorReason {
+        UNKNOWN("未记录"),
+        CONTEXT_COMPRESSION_FAILED("上下文压缩失败（COMPRESSION_FAILED）"),
+        CONTEXT_INPUT_LIMIT_REJECTED("上下文达到输入硬上限（HARD_LIMIT_REJECTED）"),
+        PLAN_INITIALIZATION_FAILED("计划初始化失败（PLAN_INITIALIZATION_FAILED）"),
+        TOOL_LOOP_LIMIT_EXCEEDED("工具调用达到次数上限（LOOP_LIMIT_EXCEEDED）"),
+        RESOURCE_LIMIT_EXCEEDED("生成达到资源上限（RESOURCE_LIMIT_EXCEEDED）");
+
+        private final String description;
+
+        SystemErrorReason(String description) {
+            this.description = description;
+        }
     }
 
     public static ChatMemoryOutcome memoryOutcome(

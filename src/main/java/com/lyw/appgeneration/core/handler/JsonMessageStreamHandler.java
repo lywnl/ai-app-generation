@@ -14,6 +14,7 @@ import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.VueToolExecutionFact;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.manger.ToolManager;
+import dev.langchain4j.service.ModelRequestGateException;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -247,12 +248,14 @@ public final class JsonMessageStreamHandler {
         if (reason == ControlledTerminationReason.PLAN_INITIALIZATION_FAILED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix), facts,
-                    VueTurnFinalizer.PLAN_INITIALIZATION_FAILED_MESSAGE, false);
+                    VueTurnFinalizer.PLAN_INITIALIZATION_FAILED_MESSAGE, false,
+                    VueTurnMemoryProjection.SystemErrorReason.PLAN_INITIALIZATION_FAILED);
         }
         if (reason == ControlledTerminationReason.LOOP_LIMIT_EXCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix),
-                    facts, LOOP_LIMIT_MESSAGE, false);
+                    facts, LOOP_LIMIT_MESSAGE, false,
+                    VueTurnMemoryProjection.SystemErrorReason.TOOL_LOOP_LIMIT_EXCEEDED);
         }
         if (reason == ControlledTerminationReason.REPEATED_READ_LOOP) {
             return new VueTurnOutcome(
@@ -277,7 +280,8 @@ public final class JsonMessageStreamHandler {
         if (reason == ControlledTerminationReason.RESOURCE_LIMIT_EXCEEDED) {
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
                     stripUntrustedControlledTerminal(prefix),
-                    facts, RESOURCE_LIMIT_MESSAGE, false);
+                    facts, RESOURCE_LIMIT_MESSAGE, false,
+                    VueTurnMemoryProjection.SystemErrorReason.RESOURCE_LIMIT_EXCEEDED);
         }
         if (reason == ControlledTerminationReason.CANCELLED
                 || phase == VueBuildPhase.CANCELLED) {
@@ -293,8 +297,17 @@ public final class JsonMessageStreamHandler {
             return protocolErrorOutcome(phase, facts);
         }
         if (error != null) {
+            VueTurnMemoryProjection.SystemErrorReason errorReason =
+                    VueTurnMemoryProjection.SystemErrorReason.UNKNOWN;
+            if (error instanceof ModelRequestGateException gateError) {
+                errorReason = switch (gateError.status()) {
+                    case COMPRESSION_FAILED -> VueTurnMemoryProjection.SystemErrorReason.CONTEXT_COMPRESSION_FAILED;
+                    case HARD_LIMIT_REJECTED -> VueTurnMemoryProjection.SystemErrorReason.CONTEXT_INPUT_LIMIT_REJECTED;
+                    default -> VueTurnMemoryProjection.SystemErrorReason.UNKNOWN;
+                };
+            }
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
-                    prefix, facts, SYSTEM_ERROR_MESSAGE, false);
+                    prefix, facts, SYSTEM_ERROR_MESSAGE, false, errorReason);
         }
         return outcome(phase, VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 prefix, facts, PROTOCOL_MESSAGE, false);
@@ -332,10 +345,23 @@ public final class JsonMessageStreamHandler {
             List<VueToolExecutionFact> facts,
             String message,
             boolean refresh) {
+        return outcome(phase, type, prefix, facts, message, refresh,
+                VueTurnMemoryProjection.SystemErrorReason.UNKNOWN);
+    }
+
+    private VueTurnOutcome outcome(
+            VueBuildPhase phase, VueTurnOutcome.TurnOutcomeType type,
+            String prefix,
+            List<VueToolExecutionFact> facts,
+            String message,
+            boolean refresh,
+            VueTurnMemoryProjection.SystemErrorReason errorReason) {
         return new VueTurnOutcome(
                 phase, type,
                 appendTerminalText(prefix, message),
-                VueTurnMemoryProjection.project(facts, type),
+                type == VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR
+                        ? VueTurnMemoryProjection.systemError(facts, errorReason)
+                        : VueTurnMemoryProjection.project(facts, type),
                 refresh, message);
     }
 

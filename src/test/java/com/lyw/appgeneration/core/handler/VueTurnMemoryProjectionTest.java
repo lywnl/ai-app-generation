@@ -107,7 +107,7 @@ class VueTurnMemoryProjectionTest {
         assertTrue(projection.contains("回合终态：工具协议异常"));
         assertTrue(projection.contains("实际执行工具：writeFile"));
         assertTrue(projection.contains("实际变更文件：src/App.vue"));
-        assertTrue(projection.contains("构建状态：未达到终态"));
+        assertTrue(projection.contains("构建状态：尚无构建结果记录"));
         assertEquals(ChatMemoryOutcome.PROTOCOL_ERROR,
                 VueTurnMemoryProjection.memoryOutcome(PROTOCOL_ERROR));
     }
@@ -123,7 +123,7 @@ class VueTurnMemoryProjectionTest {
         assertTrue(projection.contains("回合终态：工具链未完成"));
         assertTrue(projection.contains("实际执行工具：writeFile"));
         assertTrue(projection.contains("实际变更文件：src/App.vue"));
-        assertTrue(projection.contains("构建状态：未达到终态"));
+        assertTrue(projection.contains("构建状态：尚无构建结果记录"));
         assertEquals(ChatMemoryOutcome.INCOMPLETE_TOOL_CHAIN,
                 VueTurnMemoryProjection.memoryOutcome(INCOMPLETE_TOOL_CHAIN));
     }
@@ -146,6 +146,49 @@ class VueTurnMemoryProjectionTest {
         assertFalse(projection.contains("vue-frontend-design"));
         assertFalse(projection.contains("vue-online-store"));
         assertEquals(1, projection.split("readSkill", -1).length - 1);
+    }
+
+    @Test
+    void 上下文失败原因与已发生的真实构建结果分别保留() {
+        String projection = VueTurnMemoryProjection.systemError(
+                List.of(parse("buildProject", buildFailure(1))),
+                VueTurnMemoryProjection.SystemErrorReason.CONTEXT_COMPRESSION_FAILED);
+
+        assertAll(
+                () -> assertTrue(projection.contains("回合终态：系统错误")),
+                () -> assertTrue(projection.contains("结束原因：上下文压缩失败（COMPRESSION_FAILED）")),
+                () -> assertTrue(projection.contains("构建状态：失败")),
+                () -> assertTrue(projection.contains("构建尝试次数：至少 1 次（依据已记录结果）")),
+                () -> assertFalse(projection.contains("构建状态：未调用")));
+    }
+
+    @Test
+    void 未知系统异常只记录未知原因及缺失构建记录而不补因果() {
+        String projection = VueTurnMemoryProjection.project(
+                List.of(parse("writeFile", fileResult("writeFile", "src/App.vue", true, null))),
+                VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR);
+
+        assertAll(
+                () -> assertTrue(projection.contains("结束原因：未记录")),
+                () -> assertTrue(projection.contains("实际变更文件：src/App.vue")),
+                () -> assertTrue(projection.contains("构建状态：尚无构建结果记录")),
+                () -> assertTrue(projection.contains("构建尝试次数：未知（未记录真实尝试）")),
+                () -> assertFalse(projection.contains("COMPRESSION_FAILED")));
+    }
+
+    @Test
+    void 已有构建记录后又返回缺少次数的拒绝结果时只保留次数下界() throws Exception {
+        String rejected = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
+                com.lyw.appgeneration.ai.tools.BuildProjectToolResult.rejected("PROTOCOL_ERROR: 后处理失败"));
+        String projection = VueTurnMemoryProjection.project(
+                List.of(parse("buildProject", buildFailure(1)), parse("buildProject", rejected)),
+                VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR);
+
+        assertTrue(projection.contains("实际执行工具：buildProject"));
+        assertTrue(projection.contains("构建状态：被拒绝（仅据已记录结果）"));
+        assertTrue(projection.contains("构建尝试次数：至少 1 次（依据已记录结果）"));
+        assertFalse(projection.contains("构建尝试次数：1\n"));
+        assertFalse(projection.contains("构建状态：未调用"));
     }
 
     @Test

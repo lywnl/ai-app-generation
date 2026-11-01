@@ -446,6 +446,15 @@ class BuildProjectToolTest {
             assertEquals(VueBuildPhase.REPAIRING, harness.lease.snapshot().phase());
             assertEquals(VueBuildFailureKind.CODE, harness.lease.snapshot().failureKind());
             assertEquals(1, harness.lease.snapshot().buildAttempt());
+
+            var fact = VueToolExecutionFact.parse("buildProject", json.toString()).orElseThrow();
+            String projection = com.lyw.appgeneration.core.handler.VueTurnMemoryProjection.project(
+                    java.util.List.of(fact), com.lyw.appgeneration.core.handler.VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR);
+            assertTrue(projection.contains("实际执行工具：buildProject"));
+            assertTrue(projection.contains("构建状态：被拒绝（仅据已记录结果）"));
+            assertTrue(projection.contains("构建尝试次数：未知（未记录真实尝试）"));
+            assertFalse(projection.contains("构建尝试次数：0"));
+            assertFalse(projection.contains("构建状态：未调用"));
         }
     }
 
