@@ -194,16 +194,22 @@ class UnifiedContextRequestGateTest {
     }
 
     @Test
-    void 同版本计划状态每次重读且完整消息与工具统一估算() {
+    void 同版本计划每次重读但状态变化复用附件并统一估算() {
         try (var fixture = new Fixture(true)) {
             var first = fixture.admit();
             assertTrue(first.canProceed(), first.detail());
             assertTrue(first.requestMessages().toString().contains("状态=PENDING"));
+            var attachment = fixture.memory.capturePlanContext().attachment();
+            var write = ToolExecutionRequest.builder().id("write").name("writeFile").arguments("{}").build();
+            fixture.l0.add(AiMessage.from(write));
+            var written = ToolExecutionResultMessage.from(write, "文件已经成功写入");
+            fixture.l0.add(written);
             fixture.plan.set(plan(1, PlanFileState.TOUCHED));
             var next = fixture.admit();
             assertTrue(next.canProceed(), next.detail());
-            assertTrue(next.requestMessages().toString().contains("状态=TOUCHED"));
-            assertFalse(next.requestMessages().toString().contains("状态=PENDING"));
+            assertSame(attachment, fixture.memory.capturePlanContext().attachment());
+            assertTrue(next.requestMessages().toString().contains("状态=PENDING"));
+            assertTrue(next.requestMessages().indexOf(written) > next.requestMessages().indexOf(attachment.messages().getLast()));
             assertEquals(2, fixture.planReads.get());
             assertCompleteSnapshot(fixture, next.requestMessages());
             assertEquals(fixture.lastEstimated.get(), next.requestMessages());
@@ -239,7 +245,7 @@ class UnifiedContextRequestGateTest {
             assertEquals(1_500, result.finalTokens());
             assertFalse(result.requestMessages().toString().contains("待合并的长原文"));
             assertTrue(result.requestMessages().toString().contains("最近保留的说明"));
-            assertTrue(result.requestMessages().toString().contains("当前计划 version=2"));
+            assertTrue(result.requestMessages().toString().contains("恢复时的计划快照 version=2"));
             assertEquals(2, fixture.planReads.get());
             assertEquals(fixture.lastEstimated.get(), result.requestMessages());
             assertCompleteSnapshot(fixture, result.requestMessages());
@@ -361,7 +367,7 @@ class UnifiedContextRequestGateTest {
                 stream.start();
                 var initial = model.calls.poll(3, TimeUnit.SECONDS);
                 assertNotNull(initial, errors.toString());
-                assertTrue(initial.request.messages().toString().contains("当前计划 version=1"));
+                assertTrue(initial.request.messages().toString().contains("恢复时的计划快照 version=1"));
                 assertCompleteSnapshot(fixture, initial.request.messages());
                 assertEquals(fixture.lastEstimated.get(), initial.request.messages());
                 fixture.plan.set(plan(2, PlanFileState.TOUCHED));
@@ -375,14 +381,14 @@ class UnifiedContextRequestGateTest {
                 }
                 var next = model.calls.poll(3, TimeUnit.SECONDS);
                 assertNotNull(next, errors.toString());
-                assertTrue(next.request.messages().toString().contains("当前计划 version=2"));
-                assertFalse(next.request.messages().toString().contains("当前计划 version=1"));
+                assertTrue(next.request.messages().toString().contains("恢复时的计划快照 version=2"));
+                assertFalse(next.request.messages().toString().contains("恢复时的计划快照 version=1"));
                 assertCompleteSnapshot(fixture, next.request.messages());
                 assertEquals(fixture.lastEstimated.get(), next.request.messages());
                 assertEquals(next.request.toolSpecifications(), fixture.lastTools.get());
                 assertEquals(2, fixture.planReads.get());
                 assertTrue(errors.isEmpty(), errors.toString());
-                assertFalse(fixture.l0.messages().toString().contains("当前计划 version="));
+                assertFalse(fixture.l0.messages().toString().contains("恢复时的计划快照 version="));
                 assertFalse(fixture.l0.messages().toString().contains("临时模板资料"));
             } finally {
                 stream.cancel();
@@ -401,7 +407,7 @@ class UnifiedContextRequestGateTest {
     }
 
     @Test
-    void 软Replan反馈与同版本计划状态一起刷新且修订后下一请求不重复偏差() throws Exception {
+    void 同版本状态复用快照但软Replan反馈照常送达且修订后不重复偏差() throws Exception {
         try (var fixture = new Fixture(false)) {
             var model = new RecordingModel();
             var service = AiServices.builder(TestService.class).streamingChatModel(model)
@@ -423,8 +429,8 @@ class UnifiedContextRequestGateTest {
                         .id("replan-read").name("readFile").arguments("{}").build())));
                 var pending = model.calls.poll(3, TimeUnit.SECONDS);
                 assertNotNull(pending, errors.toString());
-                assertTrue(pending.request.messages().toString().contains("当前计划 version=1"));
-                assertTrue(pending.request.messages().toString().contains("状态=REPLAN_PENDING"));
+                assertTrue(pending.request.messages().toString().contains("恢复时的计划快照 version=1"));
+                assertFalse(pending.request.messages().toString().contains("状态=REPLAN_PENDING"));
                 assertEquals(1, pending.request.messages().stream().filter(message -> message.toString().contains("【内部计划校正】")).count());
                 fixture.plan.set(plan(2, PlanFileState.TOUCHED));
                 fixture.context.replanContext().acknowledgePlanUpdate();
@@ -432,7 +438,7 @@ class UnifiedContextRequestGateTest {
                         .id("after-replan-read").name("readFile").arguments("{}").build())));
                 var revised = model.calls.poll(3, TimeUnit.SECONDS);
                 assertNotNull(revised, errors.toString());
-                assertTrue(revised.request.messages().toString().contains("当前计划 version=2"));
+                assertTrue(revised.request.messages().toString().contains("恢复时的计划快照 version=2"));
                 assertFalse(revised.request.messages().toString().contains("【内部计划校正】"));
                 assertFalse(revised.request.messages().toString().contains("状态=REPLAN_PENDING"));
                 assertCompleteSnapshot(fixture, revised.request.messages());

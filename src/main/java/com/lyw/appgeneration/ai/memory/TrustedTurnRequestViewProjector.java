@@ -33,12 +33,32 @@ final class TrustedTurnRequestViewProjector {
     }
 
     ProjectedView project(CompatibleMemorySnapshot compatible, String currentTrustedState) {
+        return project(compatible, currentTrustedState, null);
+    }
+
+    /** 计划判定和最终消息投影共享同一可见来源规则，尚未物理回收的原文也不能越过可靠覆盖。 */
+    static L0SourceParser.Parsed visibleSource(CompatibleMemorySnapshot compatible) {
         Objects.requireNonNull(compatible);
         MemorySummarySnapshot summary = compatible.summary();
         L0Snapshot source = summary.summaryRevision() > 0
                 ? L0SourceOperations.prune(compatible.source(), summary, compatible.userHistoryId()) : compatible.source();
         var parsed = new L0SourceParser().parse(source);
+        // 旧版摘要没有 summaryRevision，仍会在请求中隐藏游标已覆盖的完整回合。
+        // 该过滤也必须共享，否则计划检查会误把最终不发送的旧工具结果当作可见依据。
+        return new L0SourceParser.Parsed(parsed.leadingMessages(), parsed.turns().stream()
+                .filter(turn -> !turn.closed() || turn.boundary().terminalHistoryId() > summary.lastSummarizedId()).toList());
+    }
+
+    ProjectedView project(CompatibleMemorySnapshot compatible, String currentTrustedState,
+                          PlanContext.Attachment attachment) {
+        var parsed = visibleSource(compatible);
+        MemorySummarySnapshot summary = compatible.summary();
+        if (attachment != null && (attachment.appId() != compatible.appId()
+                || !attachment.memoryEpoch().equals(compatible.source().memoryEpoch()))) {
+            throw new IllegalArgumentException("计划附件与请求来源不属于同一应用或 epoch");
+        }
         var conversation = new ArrayList<ChatMessage>();
+        int attachmentIndex = -1;
         var state = new StringBuilder(Objects.requireNonNull(currentTrustedState)).append('\n');
         appendSummaryIdentity(state, compatible);
         var previous = compatible.source().turns().stream()
@@ -48,12 +68,14 @@ final class TrustedTurnRequestViewProjector {
         var representedTerminals = new HashSet<Long>();
         for (var turn : parsed.turns()) {
             var boundary = turn.boundary();
-            if (boundary.closed() && boundary.terminalHistoryId() <= summary.lastSummarizedId()) continue;
             int before = conversation.size();
             for (var unit : turn.units()) {
                 if (unit.kind() != L0SourceParser.Kind.BACKEND_TERMINAL) {
                     conversation.addAll(unit.messages());
                     if (unit.messages().getFirst() instanceof UserMessage) visibleUsers.add(boundary.userHistoryId());
+                    if (attachment != null && PlanContext.isAnchor(unit, attachment.afterSequence())) {
+                        attachmentIndex = conversation.size();
+                    }
                     continue;
                 }
                 Long historyId = unit.entries().getFirst().historyRecordId();
@@ -76,7 +98,15 @@ final class TrustedTurnRequestViewProjector {
             if (boundary.closed() && conversation.size() == before + 1
                     && conversation.getLast() instanceof dev.langchain4j.data.message.UserMessage) {
                 conversation.add(AiMessage.from(HISTORICAL_ACK));
+                if (attachment != null && attachment.afterSequence() == boundary.userSequence()) {
+                    attachmentIndex = conversation.size();
+                }
             }
+        }
+        // 最后才插入服务端资料，不能影响真实用户回合计数或历史确认消息的判定。
+        if (attachment != null) {
+            if (attachmentIndex < 0) throw new IllegalStateException("计划附件的完整来源锚点已不可见");
+            conversation.addAll(attachmentIndex, attachment.messages());
         }
         var frontier = summary.coverageState();
         if (frontier != null && frontier.terminalHistoryId() != null && !frontier.terminalIncluded()

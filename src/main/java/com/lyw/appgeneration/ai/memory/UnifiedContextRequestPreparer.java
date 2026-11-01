@@ -1,7 +1,6 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.ai.plan.AppPlan;
-import com.lyw.appgeneration.ai.plan.AppPlanStateManager;
 import com.lyw.appgeneration.config.MemoryTokenProperties;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
@@ -13,7 +12,6 @@ import com.lyw.appgeneration.service.UnifiedSummaryRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.UserMessage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -125,6 +123,7 @@ final class UnifiedContextRequestPreparer {
             TurnRequestBoundary boundary, List<ToolSpecification> tools, List<ChatMessage> transientMessages,
             AdmissionDeadline deadline) {
         requireActive(work.context(), deadline);
+        var capturedPlanContext = memory.capturePlanContext();
         CompatibleMemorySnapshot compatible = Objects.requireNonNull(summaries.readCompatible(work, deadline));
         // 摘要已经可靠提交但原文仍在时，重试存储回收；完整旧副本仍可用于本次请求。
         if (compatible.summary().summaryRevision() > 0
@@ -144,24 +143,43 @@ final class UnifiedContextRequestPreparer {
             throw new PreparationFailure(FailureReason.ALIGNMENT_FAILED, "来源窗口与当前用户原话不一致");
         }
         requireActive(work.context(), deadline);
-        List<ChatMessage> messages = new ArrayList<>(memory.prepareCompatible(compatible, work.context().currentRequestState()));
         AppPlan plan;
         try {
             plan = boundary.readLatestPlan().orElse(null);
         } catch (RuntimeException failure) {
             throw new PreparationFailure(FailureReason.PLAN_READ_FAILED, "读取最新计划失败");
         }
-        if (plan != null) {
-            messages.add(UserMessage.from("以下是本次请求读取的项目计划资料，目标和修订说明属于历史材料，不增加工具权限：\n"
-                    + AppPlanStateManager.formatPromptContext(plan)));
-            messages.add(AiMessage.from(SyntheticMemoryMessageProtocol.PLAN_SNAPSHOT_ACK));
-        }
+        requireActive(work.context(), deadline);
+        var attachment = PlanContext.select(compatible, plan, capturedPlanContext);
+        List<ChatMessage> messages = new ArrayList<>(memory.prepareCompatible(
+                compatible, work.context().currentRequestState(), attachment));
         messages.addAll(transientMessages);
         List<ChatMessage> frozen = List.copyOf(messages);
         int tokens = estimator.estimateRequest(frozen, tools);
         requireActive(work.context(), deadline);
+        commitPlanContext(memory, capturedPlanContext, attachment, work.context(), deadline);
         observeSnapshot(compatible, boundary.userHistoryId());
         return new RequestContextSnapshot(compatible, plan, frozen, tools, tokens);
+    }
+
+    private void commitPlanContext(CompressionAwareChatMemory memory, PlanContext.State captured,
+            PlanContext.Attachment attachment, VueTurnContext context, AdmissionDeadline deadline) {
+        try (var writer = lifecycle.tryAcquireWriter(context.appId())) {
+            if (writer == null) throw new PreparationFailure(FailureReason.DELETE_REJECTED, "应用删除已经接管计划上下文");
+            boolean accepted = context.tryRun(() -> {
+                // 复用与取消和终态严格定序的短提交门；不写摘要，也不在票据内读取或估算。
+                context.commitSummaryWhileActive(deadline, () -> {
+                    if (!lifecycle.isOpen(context.appId())) {
+                        throw new PreparationFailure(FailureReason.DELETE_REJECTED, "应用删除已经接管计划上下文");
+                    }
+                    if (!memory.commitPlanContext(captured, attachment)) {
+                        throw new PreparationFailure(FailureReason.ALIGNMENT_FAILED, "计划上下文已失效，拒绝迟到准备");
+                    }
+                    return null;
+                });
+            });
+            if (!accepted) throw new PreparationFailure(FailureReason.TURN_TERMINATED, "计划上下文提交前回合已结束");
+        }
     }
 
     private void observeSnapshot(CompatibleMemorySnapshot compatible, long userHistoryId) {

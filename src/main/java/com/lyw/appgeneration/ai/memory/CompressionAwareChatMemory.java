@@ -6,11 +6,13 @@ import dev.langchain4j.data.message.ChatMessage;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** 同时暴露最新分层请求视图与可原子裁剪 L0 的在线记忆。 */
 public final class CompressionAwareChatMemory extends LayeredChatMemory {
 
     private final ConversationTurnSnapshotParser snapshotParser;
+    private final AtomicReference<PlanContext.State> planContext = new AtomicReference<>(new PlanContext.State(null));
 
     public CompressionAwareChatMemory(
             TokenAwareChatMemory l0Memory,
@@ -80,5 +82,25 @@ public final class CompressionAwareChatMemory extends LayeredChatMemory {
 
     public TokenAwareChatMemory l0Memory() {
         return (TokenAwareChatMemory) delegateMemory();
+    }
+
+    PlanContext.State capturePlanContext() {
+        return planContext.get();
+    }
+
+    /** 调用方已取得回合及应用提交边界；此处只做短内存 CAS。 */
+    boolean commitPlanContext(PlanContext.State expected, PlanContext.Attachment attachment) {
+        return planContext.compareAndSet(expected, new PlanContext.State(attachment));
+    }
+
+    void invalidatePlanContext() {
+        planContext.set(new PlanContext.State(null));
+    }
+
+    @Override
+    public void clear() {
+        // 先废弃准备中的附件候选；原 L0 对 clear 的限制继续生效，不能借附件清空回收原文。
+        invalidatePlanContext();
+        super.clear();
     }
 }

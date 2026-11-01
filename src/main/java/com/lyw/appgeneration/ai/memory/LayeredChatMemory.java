@@ -103,8 +103,13 @@ public class LayeredChatMemory implements ChatMemory {
     }
 
     public List<ChatMessage> prepareCompatible(CompatibleMemorySnapshot snapshot, String currentTrustedState) {
+        return prepareCompatible(snapshot, currentTrustedState, null);
+    }
+
+    List<ChatMessage> prepareCompatible(CompatibleMemorySnapshot snapshot, String currentTrustedState,
+                                      PlanContext.Attachment attachment) {
         if (snapshot.appId() != appId) throw new IllegalArgumentException("分层记忆与相容快照不属于同一应用");
-        return composeLayered(requestViewProjector.project(snapshot, currentTrustedState), snapshot.summary().summary());
+        return composeLayered(requestViewProjector.project(snapshot, currentTrustedState, attachment), snapshot.summary().summary());
     }
 
     private List<ChatMessage> layeredRequestView(
