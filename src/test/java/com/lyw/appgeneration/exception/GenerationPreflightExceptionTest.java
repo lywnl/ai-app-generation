@@ -9,6 +9,20 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class GenerationPreflightExceptionTest {
 
     @Test
+    void DeepSeek余额不足使用明确提示且保留原协议字段() {
+        var cause = new com.lyw.appgeneration.service.VueTurnModeRoutingException("分类失败",
+                new dev.langchain4j.exception.HttpException(402, "Insufficient Balance private-test-key"));
+        for (var exception : java.util.List.of(GenerationPreflightException.system(cause),
+                GenerationPreflightException.system("系统内部错误，请稍后尝试。", cause))) {
+            assertEquals(GenerationPreflightException.Kind.SYSTEM, exception.kind());
+            assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), exception.code());
+            assertEquals("模型服务余额不足，请充值后重试。", exception.safeMessage());
+            assertEquals(exception.safeMessage(), exception.getMessage());
+            assertSame(cause, exception.getCause());
+        }
+    }
+
+    @Test
     void businessPreflightPreservesSafeCodeMessageAndCause() {
         BusinessException cause = new BusinessException(
                 ErrorCode.NO_AUTH_ERROR, "无权限访问该应用");

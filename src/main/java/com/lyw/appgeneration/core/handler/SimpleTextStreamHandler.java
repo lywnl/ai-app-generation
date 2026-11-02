@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.core.handler;
 
 import com.lyw.appgeneration.exception.GenerationPreflightException;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
@@ -85,8 +86,9 @@ public class SimpleTextStreamHandler {
             AppDataLifecycleFence lifecycleFence,
             SimpleGenerationTurnContext context) {
         try {
+            String message = ModelServiceErrorMessages.messageOrDefault(failure, FAILURE_MESSAGE);
             PersistenceResult result = persistStableMessage(
-                    FAILURE_MESSAGE, FAILURE_MESSAGE, ChatMemoryOutcome.SYSTEM_ERROR,
+                    message, message, ChatMemoryOutcome.SYSTEM_ERROR,
                     false, chatHistoryService, appId,
                     loginUser, memorySummaryService, userMemoryService,
                     lifecycleFence, context);

@@ -13,6 +13,7 @@ import com.lyw.appgeneration.ai.model.message.TrustedToolDisplayMessage;
 import com.lyw.appgeneration.ai.tools.BaseTool;
 import com.lyw.appgeneration.ai.tools.VueToolExecutionFact;
 import com.lyw.appgeneration.core.builder.VueBuildPhase;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.manger.ToolManager;
 import dev.langchain4j.service.ModelRequestGateException;
 import dev.langchain4j.service.ToolLoopTerminationProtocol.ControlledTerminationReason;
@@ -297,9 +298,12 @@ public final class JsonMessageStreamHandler {
             return protocolErrorOutcome(phase, facts);
         }
         if (error != null) {
+            boolean insufficientBalance = ModelServiceErrorMessages.isInsufficientBalance(error);
             VueTurnMemoryProjection.SystemErrorReason errorReason =
                     VueTurnMemoryProjection.SystemErrorReason.UNKNOWN;
-            if (error instanceof ModelRequestGateException gateError) {
+            if (insufficientBalance) {
+                errorReason = VueTurnMemoryProjection.SystemErrorReason.MODEL_INSUFFICIENT_BALANCE;
+            } else if (error instanceof ModelRequestGateException gateError) {
                 errorReason = switch (gateError.status()) {
                     case COMPRESSION_FAILED -> VueTurnMemoryProjection.SystemErrorReason.CONTEXT_COMPRESSION_FAILED;
                     case HARD_LIMIT_REJECTED -> VueTurnMemoryProjection.SystemErrorReason.CONTEXT_INPUT_LIMIT_REJECTED;
@@ -307,7 +311,9 @@ public final class JsonMessageStreamHandler {
                 };
             }
             return outcome(phase, VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
-                    prefix, facts, SYSTEM_ERROR_MESSAGE, false, errorReason);
+                    prefix, facts, insufficientBalance
+                            ? ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE : SYSTEM_ERROR_MESSAGE,
+                    false, errorReason);
         }
         return outcome(phase, VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR,
                 prefix, facts, PROTOCOL_MESSAGE, false);

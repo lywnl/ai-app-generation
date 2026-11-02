@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.memory.ToolMessageCollapser;
 import com.lyw.appgeneration.ai.tools.BuildProjectToolResult;
 import com.lyw.appgeneration.ai.tools.FileToolBudgetGuard;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.monitor.VueBuildRepairMetricsCollector;
@@ -61,6 +62,7 @@ public class VueTurnFinalizer implements InitializingBean {
             SUCCESS_MESSAGE,
             BUILD_FAILED_MESSAGE,
             SYSTEM_ERROR_MESSAGE,
+            ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE,
             PLAN_INITIALIZATION_FAILED_MESSAGE,
             PROTOCOL_MESSAGE,
             SCOPE_PROTOCOL_MESSAGE,

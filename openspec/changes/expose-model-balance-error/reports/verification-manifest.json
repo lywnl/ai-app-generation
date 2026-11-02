@@ -1,0 +1,411 @@
+{
+  "version": 1,
+  "change": "expose-model-balance-error",
+  "profile": "standard",
+  "environment": "本地 Java 25 / Maven 离线及 Node 24 / Vitest；真实 SDK 异常和收尾编码，模型与存储依赖使用替身。",
+  "requirements": [
+    {
+      "id": "Requirement: 明确识别模型余额不足",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/exception/ModelServiceErrorMessagesTest.java",
+        "src/test/java/com/lyw/appgeneration/exception/GenerationPreflightExceptionTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.ModelServiceErrorMessagesTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GenerationPreflightExceptionTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 模型余额错误被多层包装",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/exception/ModelServiceErrorMessagesTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.ModelServiceErrorMessagesTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 未知错误与伪余额文本",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/exception/GlobalExceptionHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/exception/ModelServiceErrorMessagesTest.java",
+        "src/test/java/com/lyw/appgeneration/exception/GenerationPreflightExceptionTest.java",
+        "src/test/java/com/lyw/appgeneration/exception/GlobalExceptionHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/VueTurnModeRouterTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.ModelServiceErrorMessagesTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GenerationPreflightExceptionTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GlobalExceptionHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 前置和普通接口显示余额提示",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/exception/GlobalExceptionHandler.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/exception/GenerationPreflightExceptionTest.java",
+        "src/test/java/com/lyw/appgeneration/exception/GlobalExceptionHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GenerationPreflightExceptionTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GlobalExceptionHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.controller.AppControllerSseTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 分类模型在用户消息提交前余额不足",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.controller.AppControllerSseTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 普通接口遇到模型余额不足",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GlobalExceptionHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/exception/GlobalExceptionHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GlobalExceptionHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 生成中余额失败保持一致终态",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceSimpleTurnLifecycleTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.JsonMessageStreamHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.SimpleTextStreamHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnMemoryProjectionTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnFinalizerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceSimpleTurnLifecycleTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: Vue 生成或提交后启动时余额不足",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.JsonMessageStreamHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnFinalizerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: HTML 或多文件生成时余额不足",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceSimpleTurnLifecycleTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.SimpleTextStreamHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceSimpleTurnLifecycleTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 前端展示后端明确提示",
+      "implementation": [
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageGeneratingStatus.test.ts"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.controller.AppControllerSseTest.xml",
+        ".codex/expose-model-balance-error/page-confirmation/vitest.json",
+        ".codex/expose-model-balance-error/page-confirmation/command.json",
+        ".codex/expose-model-balance-error/page-confirmation/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 前置或流式余额错误到达前端",
+      "implementation": [
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageGeneratingStatus.test.ts"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.controller.AppControllerSseTest.xml",
+        ".codex/expose-model-balance-error/page-confirmation/vitest.json",
+        ".codex/expose-model-balance-error/page-confirmation/command.json",
+        ".codex/expose-model-balance-error/page-confirmation/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 1.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/exception/GlobalExceptionHandler.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/exception/ModelServiceErrorMessagesTest.java",
+        "src/test/java/com/lyw/appgeneration/exception/GenerationPreflightExceptionTest.java",
+        "src/test/java/com/lyw/appgeneration/exception/GlobalExceptionHandlerTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.ModelServiceErrorMessagesTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GenerationPreflightExceptionTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.exception.GlobalExceptionHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 2.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandler.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjection.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnFinalizer.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/core/handler/JsonMessageStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/SimpleTextStreamHandlerTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnMemoryProjectionTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnFinalizerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.JsonMessageStreamHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.SimpleTextStreamHandlerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnMemoryProjectionTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnFinalizerTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 3.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/exception/ModelServiceErrorMessages.java",
+        "src/main/java/com/lyw/appgeneration/exception/GenerationPreflightException.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "ai-app-generation-frontend/src/utils/generationSession.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/controller/AppControllerSseTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceSimpleTurnLifecycleTest.java",
+        "src/test/java/com/lyw/appgeneration/service/VueTurnModeRouterTest.java",
+        "ai-app-generation-frontend/src/utils/generationSession.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageGeneratingStatus.test.ts"
+      ],
+      "evidence": [
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.controller.AppControllerSseTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceSimpleTurnLifecycleTest.xml",
+        ".codex/expose-model-balance-error/actual-format-regression/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
+        ".codex/expose-model-balance-error/page-confirmation/vitest.json",
+        ".codex/expose-model-balance-error/page-confirmation/command.json",
+        ".codex/expose-model-balance-error/page-confirmation/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-regression/command.json",
+        ".codex/expose-model-balance-error/actual-format-regression/code-state.json",
+        ".codex/expose-model-balance-error/actual-format-sample.json",
+        ".codex/expose-model-balance-error/final-checks.json",
+        ".codex/expose-model-balance-error/summary.json"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/exceptions/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/exceptions/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/exceptions/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ModelServiceErrorMessagesTest,GenerationPreflightExceptionTest,GlobalExceptionHandlerTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/exceptions/command.json",
+      "started_at": "2026-11-02T02:57:20.564068+00:00",
+      "finished_at": "2026-11-02T02:57:33.480256+00:00"
+    },
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/generation/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/generation/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/generation/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=JsonMessageStreamHandlerTest,SimpleTextStreamHandlerTest,VueTurnMemoryProjectionTest,VueTurnFinalizerTest,AppServiceImplVueTurnTest,AppControllerSseTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 1,
+      "evidence": ".codex/expose-model-balance-error/generation/command.json",
+      "started_at": "2026-11-02T03:00:46.830515+00:00",
+      "finished_at": "2026-11-02T03:01:00.590228+00:00",
+      "disposition": "两处测试断言修正后由 regression 当前通过结果替代；原失败证据保留。"
+    },
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/regression/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/regression/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/regression/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ModelServiceErrorMessagesTest,GenerationPreflightExceptionTest,GlobalExceptionHandlerTest,JsonMessageStreamHandlerTest,SimpleTextStreamHandlerTest,VueTurnMemoryProjectionTest,VueTurnFinalizerTest,AppServiceImplVueTurnTest,AppControllerSseTest,AppServiceSimpleTurnLifecycleTest,VueTurnModeRouterTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/regression/command.json",
+      "started_at": "2026-11-02T03:03:06.366414+00:00",
+      "finished_at": "2026-11-02T03:03:17.413576+00:00"
+    },
+    {
+      "command": "/opt/homebrew/opt/node@24/bin/node /Users/lllyw/ai-app-generation/ai-app-generation-frontend/node_modules/vitest/vitest.mjs run --config /Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/frontend/vitest.config.mjs --reporter=json --outputFile /Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/frontend/vitest.json src/utils/generationSession.test.ts src/pages/app/AppChatPageGeneratingStatus.test.ts",
+      "cwd": "/Users/lllyw/ai-app-generation/ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/frontend/command.json",
+      "started_at": "2026-11-02T03:01:51.023570+00:00",
+      "finished_at": "2026-11-02T03:01:58.692580+00:00"
+    },
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/actual-format-regression/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/actual-format-regression/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/actual-format-regression/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ModelServiceErrorMessagesTest,GenerationPreflightExceptionTest,GlobalExceptionHandlerTest,JsonMessageStreamHandlerTest,SimpleTextStreamHandlerTest,VueTurnMemoryProjectionTest,VueTurnFinalizerTest,AppServiceImplVueTurnTest,AppControllerSseTest,AppServiceSimpleTurnLifecycleTest,VueTurnModeRouterTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/actual-format-regression/command.json",
+      "started_at": "2026-11-02T03:18:51.050672+00:00",
+      "finished_at": "2026-11-02T03:19:04.777358+00:00"
+    },
+    {
+      "command": "/opt/homebrew/opt/node@24/bin/node /Users/lllyw/ai-app-generation/ai-app-generation-frontend/node_modules/vitest/vitest.mjs run --config /Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/page-confirmation/vitest.config.mjs --reporter=json --outputFile /Users/lllyw/ai-app-generation/.codex/expose-model-balance-error/page-confirmation/vitest.json src/utils/generationSession.test.ts src/pages/app/AppChatPageGeneratingStatus.test.ts",
+      "cwd": "/Users/lllyw/ai-app-generation/ai-app-generation-frontend",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/page-confirmation/command.json",
+      "started_at": "2026-11-02T03:18:51.088745+00:00",
+      "finished_at": "2026-11-02T03:18:58.785860+00:00"
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/final-checks.json",
+      "started_at": "2026-11-02T03:22:02.841325+00:00",
+      "finished_at": "2026-11-02T03:22:02.860092+00:00"
+    },
+    {
+      "command": "openspec validate expose-model-balance-error --strict",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/final-checks.json",
+      "started_at": "2026-11-02T03:22:02.860145+00:00",
+      "finished_at": "2026-11-02T03:22:03.051328+00:00"
+    },
+    {
+      "command": "python3 -B .agents/shared/openspec/scripts/evidence.py check-plan --root . --change openspec/changes/expose-model-balance-error --profile standard",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "evidence": ".codex/expose-model-balance-error/final-checks.json",
+      "started_at": "2026-11-02T03:22:03.051376+00:00",
+      "finished_at": "2026-11-02T03:22:03.117900+00:00"
+    }
+  ]
+}

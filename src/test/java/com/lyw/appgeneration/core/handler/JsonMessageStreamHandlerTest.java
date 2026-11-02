@@ -21,6 +21,7 @@ import com.lyw.appgeneration.core.builder.VueBuildPhase;
 import com.lyw.appgeneration.core.builder.VueBuildSessionManager;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.manger.ToolManager;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
@@ -94,6 +95,66 @@ class JsonMessageStreamHandlerTest {
     void setUp() {
         handler = new JsonMessageStreamHandler(
                 toolManager, finalizer, cancellationCoordinator);
+    }
+
+    @Test
+    void Vue余额不足终态与真实持久化展示一致且不泄漏提供方原文() {
+        VueTurnContext context = context("balance-stream", VueBuildPhase.GENERATING);
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(history.addAiMessageAndReturn(anyLong(), any(), any(), any(), anyLong()))
+                .thenReturn(ChatHistory.builder().id(903L).build());
+        when(collapser.finishLastTurn(any(), any(), any()))
+                .thenReturn(new ToolMessageCollapser.CollapseResult(
+                        ToolMessageCollapser.CollapseStatus.COLLAPSED, List.of()));
+        VueTurnFinalizer realFinalizer = new VueTurnFinalizer(history, collapser,
+                com.lyw.appgeneration.service.MemorySummaryTestSupport.terminalPersistenceStub(),
+                mock(UserMemoryService.class), mock(AiGeneratorServiceFactory.class), new AppDataLifecycleFence(),
+                new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()), new FileToolBudgetGuard());
+        JsonMessageStreamHandler realHandler = new JsonMessageStreamHandler(toolManager, realFinalizer, cancellationCoordinator);
+        String message = ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE;
+        String prefix = "已有生成内容";
+        var failure = new java.util.concurrent.CompletionException(
+                new dev.langchain4j.exception.HttpException(402, "PRIVATE api-key request-id"));
+
+        List<GenerationStreamEvent> events = realHandler.handle(Flux.concat(
+                Flux.just("{\"type\":\"ai_response\",\"generation\":1,\"data\":\"" + prefix + "\"}"),
+                Flux.error(failure)), context).collectList().block();
+
+        assertEquals(1, events.stream().filter(event -> event instanceof GenerationStreamEvent.TurnOutcome).count());
+        VueTurnOutcome outcome = outcomeOf(events.getLast());
+        assertEquals(message, outcome.clientMessage());
+        assertEquals(prefix, contentText(events.getFirst()));
+        assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR, outcome.outcome());
+        assertFalse(outcome.shouldRefreshPreview());
+        // SSE 终态只携带简短提示，完整展示及可信投影从实际持久化参数核对。
+        ArgumentCaptor<String> persistedMemory = ArgumentCaptor.forClass(String.class);
+        verify(history, times(1)).addAiMessageAndReturn(eq(APP_ID), eq(prefix + "\n\n" + message),
+                persistedMemory.capture(), eq(ChatMemoryOutcome.SYSTEM_ERROR), eq(USER_ID));
+        assertTrue(persistedMemory.getValue().contains("结束原因：模型服务余额不足（INSUFFICIENT_BALANCE）"));
+        assertFalse(persistedMemory.getValue().contains("PRIVATE"));
+        assertTrue(VueTurnFinalizer.fixedTerminalMessages().contains(message));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ToolLoopTerminationProtocol.ControlledTerminationReason.class,
+            names = {"PROTOCOL_ERROR", "CANCELLED"})
+    void 余额错误不能覆盖已经确定的协议终止或取消(
+            ToolLoopTerminationProtocol.ControlledTerminationReason reason) {
+        VueTurnContext context = context("balance-priority", VueBuildPhase.GENERATING);
+        context.recordControlledTermination(new ToolLoopTerminationProtocol.ControlledTermination(reason, null));
+        when(finalizer.finalizeOnce(eq(context), any())).thenAnswer(invocation ->
+                new VueTurnFinalizer.FinalizationResult(invocation.getArgument(1), true));
+        try {
+            VueTurnOutcome outcome = outcomeOf(handler.handle(Flux.error(
+                    new dev.langchain4j.exception.HttpException(402, "Insufficient Balance")), context).blockLast());
+            assertEquals(reason == ToolLoopTerminationProtocol.ControlledTerminationReason.PROTOCOL_ERROR
+                            ? VueTurnOutcome.TurnOutcomeType.PROTOCOL_ERROR : VueTurnOutcome.TurnOutcomeType.CANCELLED,
+                    outcome.outcome());
+            assertFalse(outcome.clientMessage().contains("余额"));
+        } finally {
+            context.closeResources();
+        }
     }
 
     @Test

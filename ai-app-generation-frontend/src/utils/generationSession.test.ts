@@ -687,6 +687,47 @@ describe('generationSession generation-stream/v1 状态机', () => {
     expect(snapshot).toMatchObject({ status: 'error', outcome: 'protocol_error' })
   })
 
+  it.each([true, false])('DeepSeek 前置余额错误在 vue=%s 时保留明确提示', async (vue) => {
+    const message = '模型服务余额不足，请充值后重试。'
+    const failure = businessError(message)
+    failure.data.kind = 'SYSTEM'
+    failure.data.code = 50000
+
+    const snapshot = await runSession([failure, done(1)], { vue })
+
+    expect(snapshot).toMatchObject({
+      loading: false, status: 'done', outcome: 'system_error', errorMessage: message,
+    })
+    expect(shouldRefreshGenerationPreview(snapshot)).toBe(false)
+  })
+
+  it('Vue 生成中的余额终态结束加载并展示服务端提示', async () => {
+    const message = '模型服务余额不足，请充值后重试。'
+    const terminal = outcome(2, 'SYSTEM_ERROR', false)
+    terminal.data.message = message
+
+    const snapshot = await runSession([vueMessage(1, 'ai_text', '已经生成的正文'), terminal, done(3)])
+
+    expect(snapshot).toMatchObject({
+      loading: false, status: 'done', outcome: 'system_error', errorMessage: message,
+    })
+    expect(shouldRefreshGenerationPreview(snapshot)).toBe(false)
+  })
+
+  it('普通生成中途余额错误不被通用错误覆盖', async () => {
+    const message = '模型服务余额不足，请充值后重试。'
+    const failure = businessError(message)
+    failure.data.kind = 'SYSTEM'
+    failure.data.code = 50000
+
+    const snapshot = await runSession([simpleMessage(1, '已生成正文'), failure, done(2)], { vue: false })
+
+    expect(snapshot).toMatchObject({
+      loading: false, status: 'done', outcome: 'system_error', errorMessage: message,
+    })
+    expect(shouldRefreshGenerationPreview(snapshot)).toBe(false)
+  })
+
   it.each([
     ['首部错误', [businessError('首部失败'), done(1)]],
     ['已有业务帧后的错误', [contextCompression(1, 'STARTED'), businessError('中途失败'), done(2)]],

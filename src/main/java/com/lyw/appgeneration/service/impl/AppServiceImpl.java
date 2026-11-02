@@ -37,6 +37,7 @@ import com.lyw.appgeneration.ai.memory.TurnRequestBoundary;
 import com.lyw.appgeneration.exception.BusinessException;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.exception.ThrowUtils;
 import com.lyw.appgeneration.mapper.AppMapper;
 import com.lyw.appgeneration.model.dto.app.AppAddRequest;
@@ -766,15 +767,20 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             return Flux.empty();
         }
         try {
+            boolean insufficientBalance = ModelServiceErrorMessages.isInsufficientBalance(failure);
+            String message = insufficientBalance ? ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE
+                    : VueTurnFinalizer.SYSTEM_ERROR_MESSAGE;
             VueTurnFinalizer.FinalizationResult result = vueTurnFinalizer
                     .finalizeOnce(context, new VueTurnOutcome(
                             context.phase(),
                             VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR,
-                            VueTurnFinalizer.SYSTEM_ERROR_MESSAGE,
-                            VueTurnMemoryProjection.project(
+                            message,
+                            VueTurnMemoryProjection.systemError(
                                     List.of(),
-                                    VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR),
-                            false, VueTurnFinalizer.SYSTEM_ERROR_MESSAGE));
+                                    insufficientBalance
+                                            ? VueTurnMemoryProjection.SystemErrorReason.MODEL_INSUFFICIENT_BALANCE
+                                            : VueTurnMemoryProjection.SystemErrorReason.UNKNOWN),
+                            false, message));
             return Flux.just(GenerationStreamEvent.turnOutcome(
                     result.outcome()));
         } catch (RuntimeException finalizationFailure) {

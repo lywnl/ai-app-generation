@@ -25,6 +25,8 @@ import dev.langchain4j.service.ModelRequestGateException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -68,6 +70,47 @@ class AppControllerSseTest {
         ReflectionTestUtils.setField(controller, "userService", userService);
         ReflectionTestUtils.setField(controller, "appLifecycleMetricsCollector", lifecycleMetrics);
         when(userService.getLoginUser(request)).thenReturn(LOGIN_USER);
+    }
+
+    @Test
+    void DeepSeek同步余额异常通过Sse明确提示并只发送一次done() {
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER)).thenThrow(
+                new com.lyw.appgeneration.service.VueTurnModeRoutingException("分类失败",
+                        new dev.langchain4j.exception.HttpException(402, "PRIVATE api-key request-id")));
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(requestBody(), request).collectList().block();
+
+        assertEquals(List.of("business-error", "done"), events.stream().map(ServerSentEvent::event).toList());
+        var error = JSONUtil.parseObj(events.getFirst().data());
+        assertEquals("SYSTEM", error.getStr("kind"));
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), error.getInt("code"));
+        assertEquals("模型服务余额不足，请充值后重试。", error.getStr("message"));
+        assertFalse(events.getFirst().data().contains("PRIVATE"));
+        assertDone(events.getLast(), 1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void 已转换的前置余额错误及生成终态都保留明确文案(boolean preflight) {
+        String message = com.lyw.appgeneration.exception.ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE;
+        Flux<GenerationStreamEvent> business = preflight
+                ? Flux.error(GenerationPreflightException.system("系统内部错误，请稍后尝试。",
+                        new dev.langchain4j.exception.HttpException(402, "PRIVATE")))
+                : Flux.just(GenerationStreamEvent.turnOutcome(new VueTurnOutcome(VueBuildPhase.GENERATING,
+                        VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR, message,
+                        VueTurnMemoryProjection.systemError(List.of(),
+                                VueTurnMemoryProjection.SystemErrorReason.MODEL_INSUFFICIENT_BALANCE), false, message)));
+        when(appService.chatToGenCode(APP_ID, "需求", LOGIN_USER)).thenReturn(business);
+
+        List<ServerSentEvent<String>> events = controller.chatToGenCode(requestBody(), request).collectList().block();
+
+        assertEquals(List.of(preflight ? "business-error" : "turn-outcome", "done"),
+                events.stream().map(ServerSentEvent::event).toList());
+        var payload = JSONUtil.parseObj(events.getFirst().data());
+        assertEquals(message, payload.getStr("message"));
+        assertFalse(events.getFirst().data().contains("PRIVATE"));
+        if (!preflight) assertFalse(payload.getBool("refreshPreview"));
+        assertDone(events.getLast(), preflight ? 1L : 2L);
     }
 
     @Test

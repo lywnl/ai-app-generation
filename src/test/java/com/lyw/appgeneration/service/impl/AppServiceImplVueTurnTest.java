@@ -25,6 +25,7 @@ import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
 import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
 import com.lyw.appgeneration.core.handler.VueTurnOutcome;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.model.entity.App;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
@@ -43,6 +44,8 @@ import com.lyw.appgeneration.service.rag.RagPromptAssembler;
 import com.lyw.appgeneration.service.rag.RagRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
@@ -662,6 +665,91 @@ class AppServiceImplVueTurnTest {
                 .tags("operation", "generate", "result", "rejected",
                         "conflict_with", "deploy").counter().count());
         verifyNoInteractions(history, facade, executor);
+    }
+
+    @Test
+    void DeepSeek分类余额不足在用户提交前明确提示并释放租约() {
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(vueTurnModeRoutingService.route("页面都有什么"))
+                .thenThrow(new dev.langchain4j.exception.InvalidRequestException(
+                        new dev.langchain4j.exception.HttpException(402, "Insufficient Balance PRIVATE")));
+
+        GenerationPreflightException failure = assertThrows(GenerationPreflightException.class,
+                () -> service.chatToGenCode(APP_ID, "页面都有什么", User.builder().id(USER_ID).build()).blockLast());
+
+        assertEquals("模型服务余额不足，请充值后重试。", failure.safeMessage());
+        assertEquals(GenerationPreflightException.Kind.SYSTEM, failure.kind());
+        verify(history, never()).addChatMessageAndReturn(eq(APP_ID), anyString(), anyString(), eq(USER_ID));
+        verify(facade, never()).generateVueProjectStream(anyString(), anyLong(), anyBoolean(), any(), any());
+        operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                "after-routing-balance-error").close();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void 生成同步或流式余额异常在真实收尾链路只保存一次失败(boolean synchronous) {
+        String message = ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE;
+        String projection = VueTurnMemoryProjection.systemError(List.of(),
+                VueTurnMemoryProjection.SystemErrorReason.MODEL_INSUFFICIENT_BALANCE);
+        var failure = new dev.langchain4j.exception.HttpException(402, "PRIVATE api-key request-id");
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(history.getLastMessage(APP_ID)).thenReturn(null);
+        when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
+                .thenReturn(savedUser(101L, "需求"));
+        when(history.addAiMessageAndReturn(APP_ID, message, projection, ChatMemoryOutcome.SYSTEM_ERROR, USER_ID))
+                .thenReturn(savedAiMessage(message));
+        when(collapser.finishLastTurn(any(), any(), any())).thenReturn(collapsed());
+        if (synchronous) {
+            when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                    .thenThrow(failure);
+        } else {
+            when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                    .thenReturn(Flux.error(new java.util.concurrent.CompletionException(failure)));
+        }
+
+        try (var coordinator = installRealVuePipeline(collapser)) {
+            List<GenerationStreamEvent> events = service.chatToGenCode(APP_ID, "需求", User.builder().id(USER_ID).build())
+                    .collectList().block();
+            assertEquals(1, events.size());
+            var outcome = ((GenerationStreamEvent.TurnOutcome) events.getFirst()).message();
+            assertEquals(VueTurnOutcome.TurnOutcomeType.SYSTEM_ERROR, outcome.getOutcome());
+            assertEquals(message, outcome.getMessage());
+            assertFalse(outcome.isShouldRefreshPreview());
+            operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-stream-balance-error").close();
+        }
+        verify(history, times(1)).addAiMessageAndReturn(APP_ID, message, projection,
+                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
+        verify(collapser, times(1)).finishLastTurn(any(), any(), any());
+    }
+
+    @Test
+    void 提交后启动失败分支保留余额提示并真实持久化() throws Exception {
+        var fixture = createCommittedTurnFixture("balance-startup");
+        String message = ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE;
+        String projection = VueTurnMemoryProjection.systemError(List.of(),
+                VueTurnMemoryProjection.SystemErrorReason.MODEL_INSUFFICIENT_BALANCE);
+        ToolMessageCollapser collapser = mock(ToolMessageCollapser.class);
+        when(history.addAiMessageAndReturn(APP_ID, message, projection, ChatMemoryOutcome.SYSTEM_ERROR, USER_ID))
+                .thenReturn(savedAiMessage(message));
+        when(collapser.finishLastTurn(any(), any(), any())).thenReturn(collapsed());
+
+        try (var coordinator = installRealVuePipeline(collapser)) {
+            Flux<GenerationStreamEvent> flow = ReflectionTestUtils.invokeMethod(service,
+                    "finalizeCommittedVueFailure", fixture.context(),
+                    new dev.langchain4j.exception.HttpException(402, "PRIVATE"));
+            var events = flow.collectList().block();
+            assertEquals(1, events.size());
+            var outcome = ((GenerationStreamEvent.TurnOutcome) events.getFirst()).message();
+            assertEquals(message, outcome.getMessage());
+            assertFalse(outcome.isShouldRefreshPreview());
+            operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
+                    "after-startup-balance-error").close();
+        } finally {
+            fixture.context().closeResources();
+        }
+        verify(history, times(1)).addAiMessageAndReturn(APP_ID, message, projection,
+                ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
     }
 
     @Test

@@ -19,16 +19,14 @@ public final class GenerationPreflightException extends RuntimeException {
     }
 
     public static GenerationPreflightException system(Throwable cause) {
-        return new GenerationPreflightException(
-                Kind.SYSTEM, ErrorCode.SYSTEM_ERROR.getCode(),
-                SYSTEM_SAFE_MESSAGE, cause);
+        return system(SYSTEM_SAFE_MESSAGE, cause);
     }
 
     public static GenerationPreflightException system(
             String safeMessage, Throwable cause) {
         return new GenerationPreflightException(
                 Kind.SYSTEM, ErrorCode.SYSTEM_ERROR.getCode(),
-                safeMessage, cause);
+                ModelServiceErrorMessages.messageOrDefault(cause, safeMessage), cause);
     }
 
     private GenerationPreflightException(

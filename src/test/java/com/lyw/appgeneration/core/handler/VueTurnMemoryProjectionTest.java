@@ -18,6 +18,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VueTurnMemoryProjectionTest {
 
     @Test
+    void 余额原因使用固定服务端分类且仍保留未知构建事实() {
+        String projection = VueTurnMemoryProjection.systemError(List.of(),
+                VueTurnMemoryProjection.SystemErrorReason.MODEL_INSUFFICIENT_BALANCE);
+        assertTrue(projection.contains("结束原因：模型服务余额不足（INSUFFICIENT_BALANCE）"));
+        assertTrue(projection.contains("构建状态：尚无构建结果记录"));
+        assertTrue(projection.contains("构建尝试次数：未知（未记录真实尝试）"));
+    }
+
+    @Test
     void 重复读取终止使用固定可信投影且不保存内部纠正提示() {
         assertEquals(
                 "本轮发生重复读取循环，系统已安全停止。"

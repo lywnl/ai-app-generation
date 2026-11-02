@@ -92,6 +92,7 @@ public final class VueTurnMemoryProjection {
 
     public enum SystemErrorReason {
         UNKNOWN("未记录"),
+        MODEL_INSUFFICIENT_BALANCE("模型服务余额不足（INSUFFICIENT_BALANCE）"),
         CONTEXT_COMPRESSION_FAILED("上下文压缩失败（COMPRESSION_FAILED）"),
         CONTEXT_INPUT_LIMIT_REJECTED("上下文达到输入硬上限（HARD_LIMIT_REJECTED）"),
         PLAN_INITIALIZATION_FAILED("计划初始化失败（PLAN_INITIALIZATION_FAILED）"),

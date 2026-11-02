@@ -3,6 +3,7 @@ package com.lyw.appgeneration.core.handler;
 import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.concurrency.AppOperationLeaseManager;
 import com.lyw.appgeneration.exception.GenerationPreflightException;
+import com.lyw.appgeneration.exception.ModelServiceErrorMessages;
 import com.lyw.appgeneration.model.entity.ChatHistory;
 import com.lyw.appgeneration.model.entity.User;
 import com.lyw.appgeneration.model.enums.ChatMemoryOutcome;
@@ -23,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -66,6 +68,30 @@ class SimpleTextStreamHandlerTest {
                 .thenReturn(已保存消息(
                         SimpleTextStreamHandler.FAILURE_MESSAGE,
                         AI_MESSAGE_ID + 1));
+    }
+
+    @Test
+    void 普通流余额不足时客户端与新失败历史使用相同安全提示() {
+        String message = ModelServiceErrorMessages.INSUFFICIENT_BALANCE_MESSAGE;
+        when(history.addAiMessageAndReturn(APP_ID, message, message, ChatMemoryOutcome.SYSTEM_ERROR, USER_ID))
+                .thenReturn(已保存消息(message, AI_MESSAGE_ID));
+        var failure = new java.util.concurrent.CompletionException(
+                new dev.langchain4j.exception.HttpException(402, "PRIVATE api-key request-id"));
+
+        try {
+            StepVerifier.create(handle(Flux.concat(Flux.just("已生成内容"), Flux.error(failure))))
+                    .expectNext("已生成内容")
+                    .expectErrorSatisfies(error -> {
+                        assertTrue(error instanceof GenerationPreflightException);
+                        assertEquals(message, ((GenerationPreflightException) error).safeMessage());
+                    }).verify();
+            verify(history, times(1)).addAiMessageAndReturn(APP_ID, message, message,
+                    ChatMemoryOutcome.SYSTEM_ERROR, USER_ID);
+            verify(summaries, never()).triggerSummarizationAsync(APP_ID);
+            verify(userMemory, never()).triggerPreferenceExtractionAsync(anyLong(), anyLong(), anyLong());
+        } finally {
+            context.close();
+        }
     }
 
     @Test

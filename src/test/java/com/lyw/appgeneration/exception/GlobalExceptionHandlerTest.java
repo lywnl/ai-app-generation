@@ -24,6 +24,17 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 class GlobalExceptionHandlerTest {
 
     @Test
+    void JSON余额错误使用明确文案且未知错误保持原回退() {
+        var handler = new GlobalExceptionHandler(writer());
+        var balance = handler.runtimeExceptionHandler(new RuntimeException("外层内部详情",
+                new dev.langchain4j.exception.HttpException(402, "PRIVATE request-id api-key")));
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), balance.getCode());
+        assertEquals("模型服务余额不足，请充值后重试。", balance.getMessage());
+        assertEquals("系统错误", handler.runtimeExceptionHandler(
+                new IllegalStateException("PRIVATE Insufficient Balance")).getMessage());
+    }
+
+    @Test
     void runtimeExceptionHandlerNeverWritesSseResponseDirectly()
             throws Exception {
         GlobalExceptionHandler handler = new GlobalExceptionHandler(
