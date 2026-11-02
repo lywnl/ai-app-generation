@@ -141,7 +141,7 @@ class PlanContextControlledE2ETest {
             this.evidence = evidence;
             properties.afterPropertiesSet();
             Files.createDirectories(project.resolve("docs"));
-            // 每批约 3 万 Token，保留生产阈值与 12,288 软窗口，以两批真实读结果触发同步压缩。
+            // 每批约 3 万 Token，保留生产阈值与近期原文软窗口，以两批真实读结果触发同步压缩。
             Files.writeString(project.resolve("docs/diagnostics.txt"), "诊断说明：保留文件，不需要重复写入。".repeat(1500));
             var user = ChatHistory.builder().id(10L).appId(APP).userId(9L).messageType("user").message(USER).isDelete(0).build();
             when(histories.listMessagesAfterCursor(APP, 0L, 100)).thenReturn(List.of(user));

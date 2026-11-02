@@ -13,7 +13,7 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "ai.memory.token")
 public class MemoryTokenProperties implements InitializingBean {
 
-    private static final int REQUIRED_L0_RETAINED_TOKENS = 12_288;
+    private static final int REQUIRED_L0_RETAINED_TOKENS = 8_192;
     public static final int L1_MAX_SUMMARY_TOKENS = 3_072;
     private static final int REQUIRED_L2_MAX_RECALL_TOKENS = 512;
     private static final int REQUIRED_ASYNC_COMPRESSION_THRESHOLD = 49_152;

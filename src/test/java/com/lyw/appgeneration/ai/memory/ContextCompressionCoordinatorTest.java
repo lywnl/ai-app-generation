@@ -82,7 +82,7 @@ class ContextCompressionCoordinatorTest {
     void 固定分层Token门禁保持不变() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
 
-        assertEquals(12_288, properties.getL0RetainedTokens());
+        assertEquals(8_192, properties.getL0RetainedTokens());
         assertEquals(3_072, properties.getL1MaxSummaryTokens());
         assertEquals(512, properties.getL2MaxRecallTokens());
         assertEquals(49_152, properties.getAsyncCompressionThreshold());
@@ -366,7 +366,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void 阻塞阈值没有可压缩旧回合时允许当前请求继续() {
         try (Fixture fixture = fixture(57_344, 27_000)) {
-            doReturn(6_000).when(fixture.estimator())
+            doReturn(fixture.properties().getL0RetainedTokens() / 2).when(fixture.estimator())
                     .estimateMessages(anyList());
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -385,7 +385,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void asyncThresholdWithoutCompressibleOldTurnContinuesWithoutScheduling() {
         try (Fixture fixture = fixture(49_152, 49_152)) {
-            doReturn(6_000).when(fixture.estimator())
+            doReturn(fixture.properties().getL0RetainedTokens() / 2).when(fixture.estimator())
                     .estimateMessages(anyList());
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -406,7 +406,7 @@ class ContextCompressionCoordinatorTest {
     @org.junit.jupiter.api.Test
     void hardLimitWithoutCompressibleOldTurnIsRejected() {
         try (Fixture fixture = fixture(65_536, 65_536)) {
-            doReturn(6_000).when(fixture.estimator())
+            doReturn(fixture.properties().getL0RetainedTokens() / 2).when(fixture.estimator())
                     .estimateMessages(anyList());
 
             ContextAdmissionResult result = fixture.coordinator().admit(
@@ -1767,7 +1767,9 @@ class ContextCompressionCoordinatorTest {
         when(estimator.estimateMessages(anyList())).thenAnswer(invocation -> {
             List<ChatMessage> messages = invocation.getArgument(0);
             String userText = ((UserMessage) messages.getFirst()).singleText();
-            return "旧问题".equals(userText) ? 13_000 : 12_000;
+            return "旧问题".equals(userText)
+                    ? properties.getL0RetainedTokens() + 1
+                    : properties.getL0RetainedTokens();
         });
         when(summaryService.readSnapshot(7L)).thenReturn(MemorySummarySnapshot.empty());
         when(historyService.listRecentCompleteTurnBoundaries(7L, 2))

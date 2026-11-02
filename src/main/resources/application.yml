@@ -199,7 +199,7 @@ management:
 ai:
   memory:
     token:
-      l0-retained-tokens: 12288
+      l0-retained-tokens: 8192
       l1-max-summary-tokens: 3072
       l2-max-recall-tokens: 512
       async-compression-threshold: 49152

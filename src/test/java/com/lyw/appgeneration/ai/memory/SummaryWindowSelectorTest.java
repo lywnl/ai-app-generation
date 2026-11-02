@@ -5,6 +5,8 @@ import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.List;
 import java.util.Map;
@@ -14,6 +16,31 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 class SummaryWindowSelectorTest {
+    @ParameterizedTest
+    @CsvSource({"3000,8192,true", "3001,5192,false"})
+    void 八K边界整批保留且当前用户原话不挤占额度(int previousTokens, int retainedTokens, boolean keepPrevious) {
+        var user = unit("user:10", 10, SummaryUnit.Kind.USER, 1, 1, List.of(UserMessage.from("保留用户要求")));
+        var old = batch("old", 10, 2, true);
+        var previous = batch("previous", 10, 5, true);
+        var latest = batch("latest", 10, 8, true);
+        var estimator = mock(ChatTokenEstimator.class);
+        when(estimator.estimateMessages(user.messages())).thenReturn(20_000);
+        when(estimator.estimateMessages(old.messages())).thenReturn(1_000);
+        when(estimator.estimateMessages(previous.messages())).thenReturn(previousTokens);
+        when(estimator.estimateMessages(latest.messages())).thenReturn(5_192);
+        var input = materials(10, List.of(user, old, previous, latest));
+
+        var selection = new SummaryWindowSelector(estimator, new MemoryTokenProperties()).select(input, input.units());
+
+        assertEquals(retainedTokens, selection.retainedRawTokens());
+        assertTrue(selection.retainedSourceIds().containsAll(List.of(user.sourceId(), latest.sourceId())));
+        assertEquals(keepPrevious, selection.retainedSourceIds().contains(previous.sourceId()));
+        assertFalse(selection.retainedSourceIds().contains(old.sourceId()));
+        assertTrue(selection.selected().contains(old));
+        assertEquals(!keepPrevious, selection.selected().contains(previous));
+        assertEquals(3, latest.messages().size());
+    }
+
     @Test
     void 并行工具批次保持原序整批保留且较早当前用户原话独立保护() {
         var estimator = estimator(5000);

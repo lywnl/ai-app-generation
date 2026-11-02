@@ -472,13 +472,13 @@ class ContextCompressionModelRequestGateTest {
     @Test
     void 真实47K首次请求直接调用模型且不发布压缩控制事件()
             throws Exception {
-        assertRealNonBlockingInitialRequest(35_000, false);
+        assertRealNonBlockingInitialRequest(47_000, false);
     }
 
     @Test
     void 冷启动跳过已摘要回合后模型请求仍必须携带严格L1()
             throws Exception {
-        try (RealGateFixture fixture = new RealGateFixture(35_000, 12_000);
+        try (RealGateFixture fixture = new RealGateFixture(47_000);
              SimpleGenerationTurnContext turnContext =
                      fixture.openTurn("cold-rebuild-strict-l1")) {
             fixture.rebuildL0AfterSummaryCursor();
@@ -519,16 +519,17 @@ class ContextCompressionModelRequestGateTest {
     @Test
     void 真实52K首次请求异步压旧回合且模型仍使用原审核快照()
             throws Exception {
-        assertRealNonBlockingInitialRequest(40_000, true);
+        assertRealNonBlockingInitialRequest(52_000, true);
     }
 
     @Test
     void 首次请求真实压缩后仍达输入硬上限时不得调用模型且只返回安全拒绝()
             throws Exception {
-        String oversizedCurrentUser = "超".repeat(54_000);
-        try (RealGateFixture fixture = new RealGateFixture(47_000, 12_000);
+        try (RealGateFixture fixture = new RealGateFixture(59_000);
              SimpleGenerationTurnContext turnContext =
                      fixture.openTurn("real-initial-hard-limit")) {
+            String oversizedCurrentUser = "超".repeat(fixture.properties().getHardInputLimit()
+                    - fixture.properties().getL0RetainedTokens() + 1);
             RecordingStreamingChatModel model =
                     new RecordingStreamingChatModel();
             RealGateAiService service = AiServices.builder(
@@ -598,7 +599,7 @@ class ContextCompressionModelRequestGateTest {
     @Test
     void 真实59K压缩进度贯通普通回合且不串入Vue回合()
             throws Exception {
-        try (RealGateFixture fixture = new RealGateFixture(47_000, 12_000);
+        try (RealGateFixture fixture = new RealGateFixture(59_000);
              SimpleGenerationTurnContext turnContext =
                      fixture.openTurn("real-simple-progress-59k")) {
             VueTurnContext isolatedVue = openIndependentVueTurn(
@@ -682,7 +683,7 @@ class ContextCompressionModelRequestGateTest {
     @Test
     void 首次请求真实跨入59K时必须等待协调器裁剪后再调用模型()
             throws Exception {
-        try (RealGateFixture fixture = new RealGateFixture(47_000, 12_000);
+        try (RealGateFixture fixture = new RealGateFixture(59_000);
              SimpleGenerationTurnContext turnContext =
                      fixture.openTurn("real-initial-59k")) {
             RecordingStreamingChatModel model =
@@ -725,7 +726,7 @@ class ContextCompressionModelRequestGateTest {
     void 工具结果真实跨入59K时必须等待协调器压缩后才能续调模型()
             throws Exception {
         String largeToolResult = "工".repeat(12_000);
-        try (RealGateFixture fixture = new RealGateFixture(35_000, 12_000);
+        try (RealGateFixture fixture = new RealGateFixture(47_000);
              SimpleGenerationTurnContext turnContext =
                      fixture.openTurn("real-tool-59k")) {
             RecordingStreamingChatModel model =
@@ -784,14 +785,13 @@ class ContextCompressionModelRequestGateTest {
     }
 
     private void assertRealNonBlockingInitialRequest(
-            int oldTurnTokens, boolean expectAsyncCompression)
+            int historyTokens, boolean expectAsyncCompression)
             throws Exception {
         String owner = expectAsyncCompression
                 ? "real-initial-52k" : "real-initial-47k";
         String content = expectAsyncCompression
                 ? "52K占位正文" : "47K占位正文";
-        try (RealGateFixture fixture = new RealGateFixture(
-                oldTurnTokens, 12_000);
+        try (RealGateFixture fixture = new RealGateFixture(historyTokens);
              SimpleGenerationTurnContext turnContext =
                      fixture.openTurn(owner)) {
             RecordingStreamingChatModel model =
@@ -1056,9 +1056,10 @@ class ContextCompressionModelRequestGateTest {
         private final AppOperationLeaseManager operationManager =
                 new AppOperationLeaseManager();
 
-        private RealGateFixture(
-                int oldTurnTokens,
-                int recentTurnTokens) {
+        private RealGateFixture(int historyTokens) {
+            // 请求总量由场景指定，最近完整回合始终落在生产保留窗口内。
+            int recentTurnTokens = properties.getL0RetainedTokens();
+            int oldTurnTokens = historyTokens - recentTurnTokens;
             oldUser = "旧".repeat(oldTurnTokens / 2);
             oldAi = "答".repeat(oldTurnTokens - oldUser.length());
             recentUser = "新".repeat(recentTurnTokens / 2);

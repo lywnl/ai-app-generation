@@ -34,7 +34,7 @@ public interface MemorySummaryService {
      */
     @Deprecated
     default void triggerSummarizationAsync(Long appId) {
-        // 12K 淘汰边界只能由上下文门禁计算，不能在这里猜测。
+        // 近期原文淘汰边界只能由上下文门禁计算，不能在这里猜测。
     }
 
     /**

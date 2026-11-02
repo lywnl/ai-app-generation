@@ -1,0 +1,70 @@
+{
+  "profile": "standard",
+  "independent": null,
+  "decision": "PASS",
+  "inputs": [
+    ".agents/shared/openspec/workflow-policy.md",
+    "AGENTS.md",
+    "openspec/changes/reduce-recent-context-window/.openspec.yaml",
+    "openspec/changes/reduce-recent-context-window/design.md",
+    "openspec/changes/reduce-recent-context-window/proposal.md",
+    "openspec/changes/reduce-recent-context-window/sources",
+    "openspec/changes/reduce-recent-context-window/specs",
+    "openspec/changes/reduce-recent-context-window/tasks.md",
+    "openspec/changes/unify-context-summarization/specs/context-summarization/spec.md",
+    "openspec/config.yaml"
+  ],
+  "tasks": "openspec/changes/reduce-recent-context-window/tasks.md",
+  "reports": [
+    "openspec/changes/reduce-recent-context-window/reviews/change-review.md"
+  ],
+  "reference_inputs": [
+    "pom.xml",
+    "src/main/java/com/lyw/appgeneration/ai/memory/ConversationTurnSelector.java",
+    "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java",
+    "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+    "src/main/java/com/lyw/appgeneration/service/MemorySummaryService.java",
+    "src/main/resources/application.yml",
+    "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java",
+    "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+    "src/test/java/com/lyw/appgeneration/config/MemoryTokenPropertiesTest.java",
+    "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+    "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextRealModelIntegrationTest.java"
+  ],
+  "reference_snapshot": {
+    "pom.xml": "file:exec=000:sha256=9f44686b21235898ddad4795e0e965952ee64c55ef64d5b64b91e13f4891ceed",
+    "src/main/java/com/lyw/appgeneration/ai/memory/ConversationTurnSelector.java": "file:exec=000:sha256=4b3d5f4205a52e78c45edaca85362feab0496d878bcf09253c5c57abd94534c6",
+    "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java": "file:exec=000:sha256=aa6013ef387bca859cf2911776e38fe3ff8bc63ed4a42e17d39ea83902c14a90",
+    "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java": "file:exec=000:sha256=77b76abfcdbc86d171e1fa00485437fa88623e7d0fd2e927f5188cd04dfffafe",
+    "src/main/java/com/lyw/appgeneration/service/MemorySummaryService.java": "file:exec=000:sha256=9956bb618827763d1a8a47231846b402fba1e86552f72361ff3532ff1af6bf78",
+    "src/main/resources/application.yml": "file:exec=000:sha256=de0c02724561cd1d2440d0018b520a6d7fc4366434899fbf3893376284c3dcaa",
+    "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java": "file:exec=000:sha256=5994e4537c7289d5adfff2f0fdaba05b5183ad420a172a06f8d6d1866e3adb6e",
+    "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java": "file:exec=000:sha256=525118224223cfd1a64332e1adfb654fbcf74f90c20ecf8c0dca245505515b9d",
+    "src/test/java/com/lyw/appgeneration/config/MemoryTokenPropertiesTest.java": "file:exec=000:sha256=ffdab8ecd2c8ecf101de257311214cc24bcc88f6d5b30200862e40bbd2f00c52",
+    "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java": "file:exec=000:sha256=5dc0b808138d4737adbb3b86412e306997bef41200ab417cfc14832f1854cb1b",
+    "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextRealModelIntegrationTest.java": "file:exec=000:sha256=133404ac94581a15437712c0a04382872fe521b3cb1cff19590f38282c0e3b85"
+  },
+  "implementation_started": "2026-11-02T01:09:19.556855+00:00",
+  "snapshot": {
+    ".agents/shared/openspec/workflow-policy.md": "file:exec=000:sha256=7feb9a6e73bd484a37266d6d628533a4f79c6fa053e6e5f4f2b208bf95f1b10e",
+    "AGENTS.md": "file:exec=000:sha256=9cfd034c51f64460dd478a826a7d858435462850b8429407ebb94157ec6b5e7f",
+    "openspec/changes/reduce-recent-context-window/.openspec.yaml": "file:exec=000:sha256=e2f1b02b461f6b384885d7c41d9e9d60ea83e4bfc8b435e8fe544cc78bcaf9e4",
+    "openspec/changes/reduce-recent-context-window/design.md": "file:exec=000:sha256=1470b17596f929d664e39387f68a43c3c8308b0f5a7af4f82906fd8fcc9f2f8d",
+    "openspec/changes/reduce-recent-context-window/proposal.md": "file:exec=000:sha256=2ee044af128a92bcb054eab1038ac6a80c926ebc9ac2bbd62adc388327d5cf14",
+    "openspec/changes/reduce-recent-context-window/sources/": "directory",
+    "openspec/changes/reduce-recent-context-window/sources/user-request.md": "file:exec=000:sha256=4dd627996aa7ac24a3da31c78d8664652e043f82bbb5600e384fdc50705ea148",
+    "openspec/changes/reduce-recent-context-window/specs/": "directory",
+    "openspec/changes/reduce-recent-context-window/specs/context-summarization/": "directory",
+    "openspec/changes/reduce-recent-context-window/specs/context-summarization/spec.md": "file:exec=000:sha256=e8b36318c81a0151cf5ffbd0078ffd17a77d205241ccea9642d4f72cb083dcc4",
+    "openspec/changes/reduce-recent-context-window/tasks.md": "file:exec=000:sha256=4391170d6b45b5271845c4232c6435560cbd12b831495e4783c5ea1bf2c317f7",
+    "openspec/changes/unify-context-summarization/specs/context-summarization/spec.md": "file:exec=000:sha256=f600b9c82e9f3053d9961445c1f7356f4e31f1a496da694ad84d1e97e499fde4",
+    "openspec/config.yaml": "file:exec=000:sha256=e8826c219d6cfa70e6c4732ad39e124354a60b28317b9b818c41250144d33bb7"
+  },
+  "report_snapshot": {
+    "openspec/changes/reduce-recent-context-window/reviews/change-review.md": "file:exec=000:sha256=e90ebe09c865fdb91dfe0db61885f7a4b9c5760dc9676dace15b4e3f86e9f6c1"
+  },
+  "version": 1,
+  "kind": "plan",
+  "change": "openspec/changes/reduce-recent-context-window",
+  "recorded_at": "2026-11-02T01:09:19.349491+00:00"
+}

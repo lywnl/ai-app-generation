@@ -2,7 +2,15 @@ package com.lyw.appgeneration.config;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.io.ClassPathResource;
 
+import java.io.IOException;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -15,7 +23,7 @@ class MemoryTokenPropertiesTest {
     void defaultValuesMatchApprovedTokenBudgets() {
         MemoryTokenProperties properties = new MemoryTokenProperties();
 
-        assertEquals(12_288, properties.getL0RetainedTokens());
+        assertEquals(8_192, properties.getL0RetainedTokens());
         assertEquals(3_072, properties.getL1MaxSummaryTokens());
         assertEquals(512, properties.getL2MaxRecallTokens());
         assertEquals(49_152, properties.getAsyncCompressionThreshold());
@@ -36,10 +44,21 @@ class MemoryTokenPropertiesTest {
     }
 
     @Test
-    @DisplayName("启动校验拒绝任何非 12288 的 L0 保留预算")
-    void rejectsNonCanonicalL0RetainedTokens() {
+    void applicationYamlBindsApprovedTokenBudgets() throws IOException {
+        var sources = new YamlPropertySourceLoader().load("application", new ClassPathResource("application.yml"));
+        var properties = new Binder(ConfigurationPropertySources.from(sources))
+                .bind("ai.memory.token", Bindable.of(MemoryTokenProperties.class)).get();
+
+        assertEquals(8_192, properties.getL0RetainedTokens());
+        assertDoesNotThrow(properties::afterPropertiesSet);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {8_191, 8_193, 12_288})
+    @DisplayName("启动校验拒绝旧预算及相邻的非 8192 值")
+    void rejectsNonCanonicalL0RetainedTokens(int retainedTokens) {
         MemoryTokenProperties properties = new MemoryTokenProperties();
-        properties.setL0RetainedTokens(12_289);
+        properties.setL0RetainedTokens(retainedTokens);
 
         assertThrows(IllegalStateException.class, properties::afterPropertiesSet);
     }

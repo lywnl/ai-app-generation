@@ -194,7 +194,8 @@ class UnifiedContextRealModelIntegrationTest extends UnifiedMemoryStorageFixture
         write("acceptance.json", Map.of("semanticCommits", commits.size(), "summaryModelCalls", summaryCalls.get(),
                 "mainModelCalls", mainCalls.get(), "builds", builds, "tokenUsage", usage,
                 "requestEstimates", estimates, "firstTurn", firstContext.turnId(), "secondUserHistoryId", next.getId(),
-                "productionBudgets", Map.of("async", 49152, "blocking", 57344, "hard", 65536, "retained", 12288, "deadlineSeconds", 60)));
+                "productionBudgets", Map.of("async", 49152, "blocking", 57344, "hard", 65536,
+                        "retained", properties.getL0RetainedTokens(), "deadlineSeconds", 60)));
         System.out.println("真实模型验收通过：语义摘要=" + commits.size() + "，摘要调用=" + summaryCalls.get()
                 + "，主模型请求=" + mainCalls.get() + "，真实构建=" + builds.size() + "；证据=" + artifacts);
     }

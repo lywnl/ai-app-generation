@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "change": "reduce-recent-context-window",
+  "profile": "standard",
+  "requirements": [
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryReclamationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryWindowSelectorTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.TrustedTurnRequestViewProjectorTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryReclamationTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "context-summarization/近期原文预算配置必须一致",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/resources/application.yml"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/config/MemoryTokenPropertiesTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.config.MemoryTokenPropertiesTest.xml",
+        ".codex/reduce-recent-context-window/coordinator-03/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml"
+      ],
+      "status": "verified",
+      "说明": "YAML 实际绑定并执行 afterPropertiesSet；其他预算逐项断言。"
+    },
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留/Scenario: 完整回合结束但未达到压缩条件",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified",
+      "说明": "正常终态保留恢复而协议恢复与冷重建清除它；真实 Java 工具链在构建完成后没有固定新增摘要。"
+    },
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留/Scenario: 下一回合继续处理上一回合问题",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.TrustedTurnRequestViewProjectorTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+      ],
+      "status": "verified",
+      "说明": "跨回合保留工具原文且普通AI说明不能进入可信结果通道；下一用户回合复用原文但不继承上轮临时资料。"
+    },
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留/Scenario: 最近批次恰好达到软目标",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryWindowSelectorTest.xml"
+      ],
+      "status": "verified",
+      "说明": "八K边界整批保留且当前用户原话不挤占额度，CSV 3000/8192/true。"
+    },
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留/Scenario: 加入较早批次超过目标一个 Token",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryWindowSelectorTest.xml"
+      ],
+      "status": "verified",
+      "说明": "八K边界整批保留且当前用户原话不挤占额度，CSV 3001/5192/false。"
+    },
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留/Scenario: 最新完整批次超过软目标",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryWindowSelectorTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+      ],
+      "status": "verified",
+      "说明": "最新超软目标批次和后面的模型说明一起保留；跨回合保留并且未完成批次不能被裁剪；最新大批次或固定资料超限时受控拒绝。"
+    },
+    {
+      "id": "context-summarization/近期原文必须跨回合按 Token 保留/Scenario: 较早原文已经可靠覆盖",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryPersistenceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryReclamationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryPersistenceTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryReclamationTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+      ],
+      "status": "verified",
+      "说明": "故障注入验证摘要失败、提交无法确认及回收失败时保留原文；不声明本轮验证真实存储。"
+    },
+    {
+      "id": "context-summarization/近期原文预算配置必须一致/Scenario: 使用新版默认配置启动",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/resources/application.yml"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/config/MemoryTokenPropertiesTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.config.MemoryTokenPropertiesTest.xml"
+      ],
+      "status": "verified",
+      "说明": "defaultValuesMatchApprovedTokenBudgets、approvedDefaultsPassStartupValidation、applicationYamlBindsApprovedTokenBudgets。"
+    },
+    {
+      "id": "context-summarization/近期原文预算配置必须一致/Scenario: 混用旧值或其他未批准预算",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/config/MemoryTokenPropertiesTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.config.MemoryTokenPropertiesTest.xml"
+      ],
+      "status": "verified",
+      "说明": "rejectsNonCanonicalL0RetainedTokens：8191、8193、12288 均拒绝。"
+    },
+    {
+      "id": "task/1.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/resources/application.yml"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/config/MemoryTokenPropertiesTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.config.MemoryTokenPropertiesTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "task/1.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelector.java",
+        "src/main/java/com/lyw/appgeneration/service/MemorySummaryService.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextRealModelIntegrationTest.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ConversationTurnSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ConservativeChatTokenEstimatorTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryWindowSelectorTest.xml",
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.ConversationTurnSelectorTest.xml",
+        ".codex/reduce-recent-context-window/focused-01/junit/TEST-com.lyw.appgeneration.ai.memory.ConservativeChatTokenEstimatorTest.xml"
+      ],
+      "status": "verified",
+      "说明": "预算记录改为读取实际配置；真实模型夹具由 Maven testCompile 编译，但未运行真实模型测试。"
+    },
+    {
+      "id": "task/2.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
+      ],
+      "evidence": [
+        ".codex/reduce-recent-context-window/coordinator-03/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionModelRequestGateTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/reduce-recent-context-window/regression-02/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/focused-01/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/focused-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=MemoryTokenPropertiesTest,SummaryWindowSelectorTest,ConversationTurnSelectorTest,ConservativeChatTokenEstimatorTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-02T01:09:57.289319+00:00",
+      "finished_at": "2026-11-02T01:10:08.858536+00:00",
+      "evidence": ".codex/reduce-recent-context-window/focused-01/maven.log",
+      "record": ".codex/reduce-recent-context-window/focused-01/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/regression-01/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/regression-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ContextCompressionCoordinatorTest,UnifiedContextRequestGateTest,ContextCompressionModelRequestGateTest,LayeredChatMemoryTest,TrustedTurnRequestViewProjectorTest,PlanContextTest,PlanContextRequestGateTest,PlanRestoreWindowTest,PlanRestoreEventGateTest,UnifiedSummaryCoordinationTest,UnifiedSummaryPersistenceTest,UnifiedSummaryReclamationTest,SummaryCoveragePlannerTest,PlanContextControlledE2ETest,LayeredMemoryIntegrationTest,LayeredMemoryL2IntegrationTest test",
+      "cwd": ".",
+      "exit_code": 1,
+      "started_at": "2026-11-02T01:10:52.201175+00:00",
+      "finished_at": "2026-11-02T01:11:11.786607+00:00",
+      "evidence": ".codex/reduce-recent-context-window/regression-01/maven.log",
+      "record": ".codex/reduce-recent-context-window/regression-01/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/regression-02/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/regression-02/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ContextCompressionCoordinatorTest,UnifiedContextRequestGateTest,ContextCompressionModelRequestGateTest,LayeredChatMemoryTest,TrustedTurnRequestViewProjectorTest,PlanContextTest,PlanContextRequestGateTest,PlanRestoreWindowTest,PlanRestoreEventGateTest,UnifiedSummaryCoordinationTest,UnifiedSummaryPersistenceTest,UnifiedSummaryReclamationTest,SummaryCoveragePlannerTest,PlanContextControlledE2ETest,LayeredMemoryIntegrationTest,LayeredMemoryL2IntegrationTest test",
+      "cwd": ".",
+      "exit_code": 1,
+      "started_at": "2026-11-02T01:13:19.598175+00:00",
+      "finished_at": "2026-11-02T01:13:33.595484+00:00",
+      "evidence": ".codex/reduce-recent-context-window/regression-02/maven.log",
+      "record": ".codex/reduce-recent-context-window/regression-02/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/coordinator-03/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reduce-recent-context-window/coordinator-03/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ContextCompressionCoordinatorTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-02T01:14:48.698625+00:00",
+      "finished_at": "2026-11-02T01:14:59.687404+00:00",
+      "evidence": ".codex/reduce-recent-context-window/coordinator-03/maven.log",
+      "record": ".codex/reduce-recent-context-window/coordinator-03/command.json"
+    },
+    {
+      "command": "git diff --check",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-02T01:16:11.878222+00:00",
+      "finished_at": "2026-11-02T01:16:11.905597+00:00",
+      "evidence": ".codex/reduce-recent-context-window/final-checks/check-1.log"
+    },
+    {
+      "command": "openspec validate reduce-recent-context-window --strict",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-02T01:16:11.905702+00:00",
+      "finished_at": "2026-11-02T01:16:12.095943+00:00",
+      "evidence": ".codex/reduce-recent-context-window/final-checks/check-2.log"
+    },
+    {
+      "command": "python3 -B .agents/shared/openspec/scripts/evidence.py check-plan --root /Users/lllyw/ai-app-generation --change openspec/changes/reduce-recent-context-window --profile standard",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-02T01:16:12.096011+00:00",
+      "finished_at": "2026-11-02T01:16:12.148218+00:00",
+      "evidence": ".codex/reduce-recent-context-window/final-checks/check-3.log"
+    }
+  ],
+  "final_unique_totals": {
+    "tests": 253,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "说明": "两个中间失败轮次保留；最终按最新通过的类级 JUnit 合并，253 项全部通过。旧测试夹具依赖 12K 导致的失败已按 8K 输入布局修复，不降低门禁断言。真实模型、真实数据库和服务重启未执行。"
+}
