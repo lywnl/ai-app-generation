@@ -33,7 +33,7 @@ public final class L0SourceOperations {
             throw new IllegalArgumentException("冷重建只能导入完整用户原话与持久后端结果");
         }
         long sequence = source.nextSequence();
-        var entries = new ArrayList<>(source.entries());
+        var entries = new ArrayList<L0Snapshot.Entry>(source.window());
         entries.add(new L0Snapshot.Message(sequence, history.turnId(), user, history.turnId()));
         entries.add(new L0Snapshot.Message(sequence + 1, history.turnId(), ai, history.completedThroughId()));
         var turns = new ArrayList<>(source.turns());
@@ -63,7 +63,7 @@ public final class L0SourceOperations {
             }
             turn = turns.getLast();
         }
-        var entries = new ArrayList<>(source.entries());
+        var entries = new ArrayList<L0Snapshot.Entry>(source.window());
         entries.add(new L0Snapshot.Message(source.nextSequence(), turn.userHistoryId(), message));
         return copy(source, source.memoryEpoch(), Math.addExact(source.nextSequence(), 1),
                 source.appliedSummaryRevision(), entries, turns);
@@ -71,9 +71,10 @@ public final class L0SourceOperations {
 
     public static L0Snapshot replaceSystem(L0Snapshot source, SystemMessage message) {
         requireSource(source);
-        var entries = new ArrayList<L0Snapshot.Message>();
+        var entries = new ArrayList<L0Snapshot.Entry>();
         entries.add(new L0Snapshot.Message(0L, 0L, message));
-        source.entries().stream().filter(entry -> !(entry.payload() instanceof SystemMessage)).forEach(entries::add);
+        source.window().stream().filter(entry -> !(entry instanceof L0Snapshot.Message original
+                && original.payload() instanceof SystemMessage)).forEach(entries::add);
         return copy(source, source.memoryEpoch(), source.nextSequence(), source.appliedSummaryRevision(), entries, source.turns());
     }
 
@@ -81,11 +82,11 @@ public final class L0SourceOperations {
     public static L0Snapshot reconcile(L0Snapshot source, List<ChatMessage> messages, TurnRequestBoundary boundary) {
         requireSource(source);
         L0Snapshot result = source;
-        List<ChatMessage> before = source.messages();
+        List<ChatMessage> before = source.originalMessages();
         List<ChatMessage> after = List.copyOf(messages);
         if (!after.isEmpty() && after.getFirst() instanceof SystemMessage system) {
             result = replaceSystem(result, system);
-            before = result.messages();
+            before = result.originalMessages();
         }
         if (after.size() < before.size() || !after.subList(0, before.size()).equals(before)) {
             throw new IllegalStateException("整窗口更新将破坏 L0 来源，请使用显式恢复或覆盖裁剪");
@@ -110,7 +111,7 @@ public final class L0SourceOperations {
         var turns = new ArrayList<>(source.turns());
         turns.set(turns.indexOf(selected), new L0Snapshot.Turn(userHistoryId, turnId, selected.userSequence(),
                 terminalHistoryId, outcome, source.nextSequence() - 1));
-        return copy(source, source.memoryEpoch(), source.nextSequence(), source.appliedSummaryRevision(), source.entries(), turns);
+        return copy(source, source.memoryEpoch(), source.nextSequence(), source.appliedSummaryRevision(), source.window(), turns);
     }
 
     /**
@@ -145,14 +146,14 @@ public final class L0SourceOperations {
                     || entry.payload() instanceof UserMessage).map(L0Snapshot.Message::payload).forEach(retained::add);
             working = resetActive(source, retained);
             working = copy(working, working.memoryEpoch(), working.nextSequence(), committedSummaryRevision,
-                    working.entries(), working.turns());
+                    working.window(), working.turns());
         } else {
             var parsed = new L0SourceParser().parse(source);
             if (parsed.units().stream().anyMatch(unit -> !unit.complete())) {
                 throw new IllegalStateException("未完成工具批次不能被正常关闭为完整原文");
             }
         }
-        var entries = new ArrayList<>(working.entries());
+        var entries = new ArrayList<L0Snapshot.Entry>(working.window());
         long sequence = working.nextSequence();
         entries.add(new L0Snapshot.Message(sequence, userHistoryId,
                 dev.langchain4j.data.message.AiMessage.from(trustedText), historyId));
@@ -194,10 +195,16 @@ public final class L0SourceOperations {
             throw new IllegalArgumentException("未确认的摘要不能回收来源");
         }
         if (summary.summaryRevision() < source.appliedSummaryRevision()) return source;
-        var retained = new ArrayList<L0Snapshot.Message>();
+        var retained = new ArrayList<L0Snapshot.Entry>();
+        var coverageBoundary = PlanCoverageBoundary.of(summary);
         boolean partialRemoved = false;
         SummaryCoverage coverage = summary.coverageState();
-        for (var entry : source.entries()) {
+        for (var item : source.window()) {
+            if (item instanceof L0Snapshot.PlanRestore restore) {
+                if (restore.coverage().equals(coverageBoundary)) retained.add(restore);
+                continue;
+            }
+            var entry = (L0Snapshot.Message) item;
             boolean protectedUser = entry.userHistoryId() == protectedUserHistoryId && entry.payload() instanceof UserMessage;
             var turn = source.turn(entry.userHistoryId());
             boolean complete = turn != null && turn.closed() && turn.terminalHistoryId() <= summary.lastSummarizedId();
@@ -209,7 +216,7 @@ public final class L0SourceOperations {
                 partialRemoved |= partial && !complete;
             }
         }
-        if (retained.equals(source.entries())) return source;
+        if (retained.equals(source.window())) return source;
         if (partialRemoved && hasWholePrefix(source, coverage)
                 && !fingerprint(source, coverage.userHistoryId(), coverage.coveredSequence(),
                 coverage.evidenceRevision()).equals(coverage.sourceFingerprint())) {
@@ -218,9 +225,13 @@ public final class L0SourceOperations {
         var last = source.turns().isEmpty() ? null : source.turns().getLast();
         var turns = source.turns().stream().filter(turn -> turn.equals(last)
                 || (coverage != null && turn.userHistoryId() == coverage.userHistoryId())
-                || retained.stream().anyMatch(entry -> entry.userHistoryId() == turn.userHistoryId())).toList();
+                || retained.stream().anyMatch(entry -> entry instanceof L0Snapshot.Message original
+                && original.userHistoryId() == turn.userHistoryId())).toList();
+        // 只移除恢复资料不能凭空推进摘要依赖或扩大原文回收权限。
+        boolean removedOriginal = source.entries().stream().anyMatch(entry -> !retained.contains(entry));
         return copy(source, source.memoryEpoch(), source.nextSequence(),
-                Math.max(source.appliedSummaryRevision(), summary.summaryRevision()), retained, turns);
+                removedOriginal ? Math.max(source.appliedSummaryRevision(), summary.summaryRevision())
+                        : source.appliedSummaryRevision(), retained, turns);
     }
 
     private static boolean hasWholePrefix(L0Snapshot source, SummaryCoverage coverage) {
@@ -245,6 +256,20 @@ public final class L0SourceOperations {
             throw new IllegalArgumentException("重置 epoch 也不能降低摘要读取下界");
         }
         if (!before.memoryEpoch().equals(after.memoryEpoch())) return;
+        var oldRestore = before.planRestore();
+        var newRestore = after.planRestore();
+        if (oldRestore != null && newRestore != null && oldRestore.restoreId().equals(newRestore.restoreId())) {
+            if (!oldRestore.equals(newRestore)) throw new IllegalArgumentException("同一恢复身份的正文不可改写");
+            var beforePosition = before.window().subList(0, before.window().indexOf(oldRestore));
+            var afterPosition = after.window().subList(0, after.window().indexOf(newRestore));
+            var oldOrder = beforePosition.stream().filter(entry -> entry instanceof L0Snapshot.Message original
+                    && original.sequence() > 0 && after.window().contains(entry)).toList();
+            var newOrder = afterPosition.stream().filter(entry -> entry instanceof L0Snapshot.Message original
+                    && original.sequence() > 0).toList();
+            if (!oldOrder.equals(newOrder)) {
+                throw new IllegalArgumentException("保留的计划恢复资料不可越过原文移动");
+            }
+        }
         if (after.nextSequence() < before.nextSequence()) throw new IllegalArgumentException("同 epoch 不能重新编号");
         var old = new HashMap<Long, L0Snapshot.Message>();
         for (var entry : before.entries()) old.put(entry.sequence(), entry);
@@ -291,13 +316,31 @@ public final class L0SourceOperations {
         return expected.equals(actual);
     }
 
+    /** 只改变有类型恢复资料；插入一次后，后续原文直接追加在其后。 */
+    static L0Snapshot replacePlanRestore(L0Snapshot source, L0Snapshot.PlanRestore restore,
+                                        L0SourceParser.Parsed visible) {
+        requireSource(source);
+        if (Objects.equals(source.planRestore(), restore)) return source;
+        var window = new ArrayList<L0Snapshot.Entry>(source.entries());
+        if (restore != null) {
+            var anchor = visible.units().stream().filter(unit -> unit.complete()
+                    && unit.kind() != L0SourceParser.Kind.BACKEND_TERMINAL)
+                    .reduce((earlier, later) -> later)
+                    .orElseThrow(() -> new IllegalStateException("计划恢复缺少完整可见来源位置"));
+            int index = window.indexOf(anchor.entries().getLast());
+            if (index < 0) throw new IllegalStateException("计划恢复的来源位置已失效");
+            window.add(index + 1, restore);
+        }
+        return copy(source, source.memoryEpoch(), source.nextSequence(), source.appliedSummaryRevision(), window, source.turns());
+    }
+
     private static void requireSource(L0Snapshot source) {
         Objects.requireNonNull(source, "来源窗口不能为空");
         if (!source.hasKnownSource()) throw new IllegalStateException("旧 L0 来源及读取下界尚未对齐");
     }
 
     private static L0Snapshot copy(L0Snapshot source, String epoch, long next, long revision,
-                                    List<L0Snapshot.Message> entries, List<L0Snapshot.Turn> turns) {
+                                    List<? extends L0Snapshot.Entry> entries, List<L0Snapshot.Turn> turns) {
         return new L0Snapshot(L0Snapshot.CURRENT_VERSION, source.memoryId(), epoch, next, revision, entries, turns);
     }
 }

@@ -4,76 +4,43 @@
   "profile": "strict",
   "requirements": [
     {
-      "id": "vue-soft-replan/Requirement: 在线变更回合必须维护结构化计划",
-      "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
-      ],
-      "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [],
-      "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
-      ],
-      "status": "verified"
-    },
-    {
       "id": "vue-soft-replan/在线变更回合必须维护结构化计划/Scenario: 首轮创建计划",
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
         "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
         "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "在线变更作用域可以创建并修订计划"
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml"
       ],
       "status": "verified"
     },
     {
       "id": "vue-soft-replan/在线变更回合必须维护结构化计划/Scenario: 空计划被拒绝",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
-        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
         "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java"
       ],
-      "test_cases": [
-        "空完整计划和悬空依赖都会被拒绝"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml"
       ],
       "status": "verified"
     },
@@ -82,24 +49,21 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
         "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java"
-      ],
-      "test_cases": [
-        "新回合可以接管上一版本并按期望版本提交",
-        "跨用户回合复用相同附件且不会携带上一回合临时资料"
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml"
       ],
       "status": "verified"
     },
@@ -108,26 +72,24 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
         "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
         "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "在线变更作用域可以创建并修订计划",
-        "非法修订拒绝后计划字节和版本不变且没有成功检查提示"
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml"
       ],
       "status": "verified"
     },
@@ -136,21 +98,26 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java"
-      ],
-      "test_cases": [
-        "跨用户回合复用相同附件且不会携带上一回合临时资料",
-        "查询缺失计划无副作用且重复读取保持文件原样"
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml"
       ],
       "status": "verified"
     },
@@ -159,25 +126,26 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
         "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
       ],
-      "test_cases": [
-        "完整成功结果匹配时保留原始批次并撤下恢复附件",
-        "新版完整成功工具结果取代已有恢复附件"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
       ],
       "status": "verified"
     },
@@ -186,26 +154,21 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "文件和依赖顺序不改变定义而状态与回合绑定不导致重建",
-        "同版本计划每次重读但状态变化复用附件并统一估算",
-        "同版本状态复用快照但软Replan反馈照常送达且修订后不重复偏差"
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
       ],
       "status": "verified"
     },
@@ -214,26 +177,19 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
         "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
-        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java"
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
-      ],
-      "test_cases": [
-        "查询缺失计划无副作用且重复读取保持文件原样",
-        "只读在线作用域拒绝计划变更"
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml"
       ],
       "status": "verified"
     },
@@ -242,21 +198,21 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
-      ],
-      "test_cases": [
-        "请求边界逐次读取版本及同版本状态并保留动作依赖说明",
-        "初始续调和两类恢复都发送最新计划及同一份已计量资料"
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml"
       ],
       "status": "verified"
     },
@@ -265,21 +221,19 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
       ],
-      "test_cases": [
-        "无计划时清除附件且正文每个文件仅一行并保留修订说明",
-        "计划不存在与读取失败明确区分"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
       ],
       "status": "verified"
     },
@@ -288,21 +242,19 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java"
-      ],
-      "test_cases": [
-        "计划不存在与读取失败明确区分",
-        "损坏及悬空依赖不得作为正常空计划返回"
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml"
       ],
       "status": "verified"
     },
@@ -311,26 +263,30 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
         "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
       ],
-      "test_cases": [
-        "已有完整成功计划时最终请求和预算不再有额外快照",
-        "恢复附件本身超限时计入预算并受控拒绝而不删字段",
-        "同步完成后重取相容记忆与计划并重新计量全部资料"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
       ],
       "status": "verified"
     },
@@ -339,46 +295,22 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "无计划时清除附件且正文每个文件仅一行并保留修订说明"
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
-      ],
-      "status": "verified"
-    },
-    {
-      "id": "vue-soft-replan/Requirement: 完整计划可见性必须基于真实来源",
-      "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
-      ],
-      "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [],
-      "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.BuildProjectPlanGateTest.xml"
       ],
       "status": "verified"
     },
@@ -387,19 +319,17 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java"
       ],
-      "test_cases": [
-        "非成功完整计划的材料不能免除恢复",
-        "失败拒绝和冲突即使携带完整字段也不算成功计划"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml"
       ],
       "status": "verified"
     },
@@ -408,21 +338,28 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceParserTest.java"
       ],
-      "test_cases": [
-        "并行批次必须全部返回才可提供完整计划且附件不插入半批次",
-        "非法工具配对保持原有失败通道"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SourceParserTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SourceParserTest.xml"
       ],
       "status": "verified"
     },
@@ -431,19 +368,19 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java"
-      ],
-      "test_cases": [
-        "定义变化不能只凭相同版本或旧工具结果复用",
-        "文件和依赖顺序不改变定义而状态与回合绑定不导致重建"
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml"
       ],
       "status": "verified"
     },
@@ -452,320 +389,717 @@
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
-      ],
-      "test_cases": [
-        "已可靠覆盖但尚未回收的成功结果不能免除恢复且摘要概述不能冒充计划",
-        "旧版零修订摘要隐藏的成功计划也必须按实际可见历史恢复"
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/Requirement: 计划恢复附件必须可复用且保持来源顺序",
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 缺失恢复及连续复用",
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 新工具结果不得被旧快照移到后面",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 可靠覆盖推进与连续压缩",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
         "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
       ],
-      "test_cases": [],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 缺失恢复及连续复用",
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 摘要失败或仅登记终态",
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "后续文件工具结果在固定附件之后且原始批次保持完整",
-        "异步已提交覆盖在下一请求恢复且连续覆盖只保留一份附件"
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryTerminalTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryTerminalTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 新工具结果不得被旧快照移到后面",
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 跨回合与冷重建",
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
-      ],
-      "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "后续文件工具结果在固定附件之后且原始批次保持完整",
-        "并行批次必须全部返回才可提供完整计划且附件不插入半批次"
-      ],
-      "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
-      ],
-      "status": "verified"
-    },
-    {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 可靠覆盖推进与连续压缩",
-      "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "覆盖推进会恢复最新快照而物理回收本身不改变附件",
-        "异步已提交覆盖在下一请求恢复且连续覆盖只保留一份附件",
-        "同步完成后重取相容记忆与计划并重新计量全部资料"
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryStorageIntegrationTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 摘要失败或仅登记终态",
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 取消删除与跨应用隔离",
       "implementation": [
         "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextStorageOnlineIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedContextStorageOnlineIntegrationTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 恢复正文与原文边界",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 恢复条目不得进入摘要新增材料",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UserMemoryOutputBoundaryTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredMemoryL2IntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UserMemoryOutputBoundaryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.LayeredMemoryL2IntegrationTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 有效窗口连续续调",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 服务端定义变化同步可见",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 并发恢复提交",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java"
       ],
-      "test_cases": [
-        "仅终态登记增加摘要修订号时继续复用原附件",
-        "压缩失败不重建附件也不改变原文或摘要新增来源"
-      ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 跨回合与冷重建",
+      "id": "vue-soft-replan/计划恢复消息必须可复用且保持来源顺序/Scenario: 协议恢复使用原文视图",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java"
-      ],
-      "test_cases": [
-        "跨回合复用仍保留真实用户归属与冷历史确认",
-        "新epoch冷缓存与其他应用都不能复用旧附件",
-        "冷记忆实例从磁盘恢复最新状态而不继承原实例附件",
-        "初始续调和两类恢复都发送最新计划及同一份已计量资料",
-        "Redis缺失时正式冷启动只回填完整可信投影"
+        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerRecoveryTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.AiGeneratorServiceFactoryTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.AiServiceTokenStreamTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.StreamingRequestControllerRecoveryTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 取消删除与跨应用隔离",
+      "id": "vue-soft-replan/计划热窗口编码必须兼容升级与停机回退/Scenario: v1 原子升级",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
         "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java",
-        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
-      ],
-      "test_cases": [
-        "读取期间缓存代次失效后迟到候选不能复活",
-        "等待计划时终止请求不能提交缓存或继续发送",
-        "新epoch冷缓存与其他应用都不能复用旧附件",
-        "invalidationTargetsOneServiceKeyAndStillClearsCaffeineWhenRedisFails"
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStoreTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.AiGeneratorServiceFactoryTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml"
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SpringRedisChatMemoryStoreTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 恢复正文与原文边界",
+      "id": "vue-soft-replan/计划热窗口编码必须兼容升级与停机回退/Scenario: 分类编码严格验证",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
-      ],
-      "test_cases": [
-        "无计划时清除附件且正文每个文件仅一行并保留修订说明",
-        "跨回合复用仍保留真实用户归属与冷历史确认"
-      ],
-      "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
-      ],
-      "status": "verified"
-    },
-    {
-      "id": "vue-soft-replan/计划恢复附件必须可复用且保持来源顺序/Scenario: 附件不得进入摘要新增材料",
-      "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
-      ],
-      "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
         "src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java"
       ],
-      "test_cases": [
-        "压缩失败不重建附件也不改变原文或摘要新增来源",
-        "创建写入修订连续压缩续做和构建使用同一真实请求链"
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SnapshotCodecTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/计划热窗口编码必须兼容升级与停机回退/Scenario: 停机显式降级",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java"
       ],
       "evidence": [
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
-        ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SnapshotCodecTest.xml",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/token-comparison.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log"
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/Requirement: 在线变更回合必须维护结构化计划",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.BuildProjectPlanGateTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/Requirement: 完整计划可见性必须基于真实来源",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceParserTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SourceParserTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/Requirement: 计划恢复消息必须可复用且保持来源顺序",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryTerminalTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextStorageOnlineIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UserMemoryOutputBoundaryTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredMemoryL2IntegrationTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerRecoveryTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryTerminalTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedContextStorageOnlineIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UserMemoryOutputBoundaryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.LayeredMemoryL2IntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.AiServiceTokenStreamTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.StreamingRequestControllerRecoveryTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "vue-soft-replan/Requirement: 计划热窗口编码必须兼容升级与停机回退",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStoreTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SpringRedisChatMemoryStoreTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SnapshotCodecTest.xml"
       ],
       "status": "verified"
     },
     {
       "id": "Task: 1.1",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java"
       ],
       "test_cases": [],
       "evidence": [
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
         ".codex/reuse-plan-context/regression-01/command.json",
-        ".codex/reuse-plan-context/regression-01/code-state.json"
+        ".codex/reuse-plan-context/regression-01/code-state.json",
+        "openspec/changes/reuse-plan-context/history/fc4685e/reports/verification.md"
       ],
-      "status": "verified"
+      "status": "verified",
+      "scope": "historical_fc4685e_only",
+      "说明": "历史已完成项，U3 替代其存放位置/编码/逐次读取实现；不作为当前新方案通过证据。"
     },
     {
       "id": "Task: 1.2",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java"
       ],
       "test_cases": [],
       "evidence": [
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
         ".codex/reuse-plan-context/regression-01/command.json",
-        ".codex/reuse-plan-context/regression-01/code-state.json"
+        ".codex/reuse-plan-context/regression-01/code-state.json",
+        "openspec/changes/reuse-plan-context/history/fc4685e/reports/verification.md"
       ],
-      "status": "verified"
+      "status": "verified",
+      "scope": "historical_fc4685e_only",
+      "说明": "历史已完成项，U3 替代其存放位置/编码/逐次读取实现；不作为当前新方案通过证据。"
     },
     {
       "id": "Task: 2.1",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java"
       ],
       "test_cases": [],
       "evidence": [
@@ -774,24 +1108,27 @@
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.TrustedTurnRequestViewProjectorTest.xml",
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/reuse-plan-context/regression-01/command.json",
-        ".codex/reuse-plan-context/regression-01/code-state.json"
+        ".codex/reuse-plan-context/regression-01/code-state.json",
+        "openspec/changes/reuse-plan-context/history/fc4685e/reports/verification.md"
       ],
-      "status": "verified"
+      "status": "verified",
+      "scope": "historical_fc4685e_only",
+      "说明": "历史已完成项，U3 替代其存放位置/编码/逐次读取实现；不作为当前新方案通过证据。"
     },
     {
       "id": "Task: 2.2",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java"
       ],
       "test_cases": [],
       "evidence": [
@@ -800,22 +1137,25 @@
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/reuse-plan-context/regression-01/junit/TEST-com.lyw.appgeneration.ai.AiGeneratorServiceFactoryTest.xml",
         ".codex/reuse-plan-context/regression-01/command.json",
-        ".codex/reuse-plan-context/regression-01/code-state.json"
+        ".codex/reuse-plan-context/regression-01/code-state.json",
+        "openspec/changes/reuse-plan-context/history/fc4685e/reports/verification.md"
       ],
-      "status": "verified"
+      "status": "verified",
+      "scope": "historical_fc4685e_only",
+      "说明": "历史已完成项，U3 替代其存放位置/编码/逐次读取实现；不作为当前新方案通过证据。"
     },
     {
       "id": "Task: 3.1",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
       ],
       "test_cases": [],
       "evidence": [
@@ -826,54 +1166,57 @@
         ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/pipeline.log",
         ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/final-plan.json",
         ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/source-final.json",
-        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/summary-inputs.json"
+        ".codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/summary-inputs.json",
+        "openspec/changes/reuse-plan-context/history/fc4685e/reports/verification.md"
       ],
-      "status": "verified"
+      "status": "verified",
+      "scope": "historical_fc4685e_only",
+      "说明": "历史已完成项，U3 替代其存放位置/编码/逐次读取实现；不作为当前新方案通过证据。"
     },
     {
       "id": "Task: 3.2",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
-        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/ai/plan/ReplanDetectorTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
-        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryReclamationTest.java",
-        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
-        "src/test/java/dev/langchain4j/service/StreamingRequestControllerReplanTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceParserTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java",
-        "src/test/java/dev/langchain4j/service/ReplanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
-        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryCoordinationTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/tools/FileToolSecurityTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryCoveragePlannerTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceOperationsTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java",
-        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/tools/VueToolExecutionFactTest.java",
-        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryPersistenceTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemoryTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/SyntheticMemoryMessageProtocolTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredChatMemoryTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
-        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
-        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java"
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/plan/ReplanDetectorTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryReclamationTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/dev/langchain4j/service/StreamingRequestControllerReplanTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/L0SourceParserTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/dev/langchain4j/service/ReplanContextTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryCoordinationTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/tools/FileToolSecurityTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/SummaryCoveragePlannerTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/L0SourceOperationsTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/tools/VueToolExecutionFactTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryPersistenceTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemoryTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/SyntheticMemoryMessageProtocolTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/LayeredChatMemoryTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        ".codex/plan-restore-l0/baseline-fc4685e-sorted/source/src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java"
       ],
       "test_cases": [],
       "evidence": [
@@ -914,118 +1257,521 @@
         ".codex/reuse-plan-context/regression-01/command.json",
         ".codex/reuse-plan-context/regression-01/code-state.json",
         ".codex/reuse-plan-context/final-checks/commands.json",
-        ".codex/reuse-plan-context/final-checks/code-freshness.json"
+        ".codex/reuse-plan-context/final-checks/code-freshness.json",
+        "openspec/changes/reuse-plan-context/history/fc4685e/reports/verification.md"
+      ],
+      "status": "verified",
+      "scope": "historical_fc4685e_only",
+      "说明": "历史已完成项，U3 替代其存放位置/编码/逐次读取实现；不作为当前新方案通过证据。"
+    },
+    {
+      "id": "Task: 4.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SnapshotCodecTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 4.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 5.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollectorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryTerminalTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryMaterialReaderTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.DecisionEvidenceTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueDecisionSourceCollectorTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryTerminalTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 5.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryStorageIntegrationTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 6.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 6.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextStorageOnlineIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedContextStorageOnlineIntegrationTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 7.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextStorageOnlineIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedContextStorageOnlineIntegrationTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/comparison.json",
+        ".codex/plan-restore-l0/final-checks/code-freshness.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 7.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanContext.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/CompressionAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TurnRequestBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestPreparer.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanDefinition.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/AppPlanStateManager.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0Snapshot.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceOperations.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SourceParser.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/PlanCoverageBoundary.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjector.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/LayeredChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemory.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/L0PlanRestoreDowngrade.java",
+        "dev/l0-plan-restore-rollback.md",
+        "src/main/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReader.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceAssembler.java",
+        "src/main/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStore.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollector.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/MakePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/UpdatePlanTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/tools/BuildProjectTool.java",
+        "src/main/java/dev/langchain4j/service/GenerationAwareModelRequestOrchestrator.java",
+        "src/main/java/dev/langchain4j/service/StreamingRequestController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/UnifiedContextRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/TrustedTurnRequestViewProjectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredChatMemoryTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionModelRequestGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/ContextCompressionCoordinatorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceParserTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SourceOperationsTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodecTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryWindowSelectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryCoveragePlannerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SyntheticMemoryMessageProtocolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/TokenAwareChatMemoryTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupportTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/PlanToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanReadOnlyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/AppPlanStateManagerTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/BuildProjectPlanGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/FileToolSecurityTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/tools/VueToolExecutionFactTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/plan/ReplanDetectorTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactoryTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceStreamingResponseHandlerTest.java",
+        "src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java",
+        "src/test/java/dev/langchain4j/service/ReplanContextTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerReplanTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressGuardTest.java",
+        "src/test/java/dev/langchain4j/service/BuildProgressStreamingTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryCoordinationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryPersistenceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryReclamationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanContextControlledE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreWindowTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/L0AtomicMemoryBoundaryTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/AtomicChatMemoryStoreConcurrencyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/DeadlineAwareAtomicChatMemoryStoreTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SpringRedisChatMemoryStoreTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/SummaryMaterialReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/DecisionEvidenceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ConversationDecisionEvidenceServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueDecisionSourceCollectorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryTerminalTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryObservabilityTest.java",
+        "src/test/java/dev/langchain4j/service/StreamingRequestControllerRecoveryTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredMemoryIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/LayeredMemoryL2IntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UserMemoryOutputBoundaryTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/PlanRestoreStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedSummaryStorageIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/UnifiedContextStorageOnlineIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.TrustedTurnRequestViewProjectorTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.LayeredChatMemoryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionModelRequestGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SourceParserTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SourceOperationsTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0SnapshotCodecTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryWindowSelectorTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryCoveragePlannerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SyntheticMemoryMessageProtocolTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.TokenAwareChatMemoryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolProtocolSupportTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.PlanToolTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanReadOnlyTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.AppPlanStateManagerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.BuildProjectPlanGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.FileToolSecurityTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.tools.VueToolExecutionFactTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.plan.ReplanDetectorTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.AiGeneratorServiceFactoryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.AiServiceStreamingResponseHandlerTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.AiServiceTokenStreamTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.ReplanContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.StreamingRequestControllerReplanTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.BuildProgressGuardTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.BuildProgressStreamingTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryCoordinationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryPersistenceTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryReclamationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.PlanContextControlledE2ETest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.L0AtomicMemoryBoundaryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.AtomicChatMemoryStoreConcurrencyTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.DeadlineAwareAtomicChatMemoryStoreTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SpringRedisChatMemoryStoreTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.SummaryMaterialReaderTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.DecisionEvidenceTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.ConversationDecisionEvidenceServiceTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.core.handler.VueDecisionSourceCollectorTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryTerminalTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryObservabilityTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-dev.langchain4j.service.StreamingRequestControllerRecoveryTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.LayeredMemoryIntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.ai.memory.LayeredMemoryL2IntegrationTest.xml",
+        ".codex/plan-restore-l0/regression-01/junit/TEST-com.lyw.appgeneration.service.impl.UserMemoryOutputBoundaryTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.PlanRestoreStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedSummaryStorageIntegrationTest.xml",
+        ".codex/plan-restore-l0/storage-03/junit/TEST-com.lyw.appgeneration.service.impl.UnifiedContextStorageOnlineIntegrationTest.xml",
+        ".codex/plan-restore-l0/comparison.json",
+        ".codex/plan-restore-l0/final-checks/code-freshness.json"
       ],
       "status": "verified"
     }
   ],
   "commands": [
     {
-      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/unit-01/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/unit-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,UnifiedContextRequestGateTest,TrustedTurnRequestViewProjectorTest,LayeredChatMemoryTest test",
-      "cwd": ".",
-      "exit_code": 0,
-      "evidence": ".codex/reuse-plan-context/unit-01/maven.log",
-      "record": ".codex/reuse-plan-context/unit-01/command.json",
-      "started_at": "2026-11-01T12:39:06.712714+00:00",
-      "finished_at": "2026-11-01T12:39:18.651803+00:00",
-      "code_state": ".codex/reuse-plan-context/unit-01/code-state.json"
-    },
-    {
-      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/gate-01/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/gate-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,UnifiedContextRequestGateTest,TrustedTurnRequestViewProjectorTest,LayeredChatMemoryTest test",
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-01/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-01/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,L0SnapshotCodecTest,L0SourceParserTest,L0SourceOperationsTest,TrustedTurnRequestViewProjectorTest,UnifiedContextRequestGateTest test",
       "cwd": ".",
       "exit_code": 1,
-      "evidence": ".codex/reuse-plan-context/gate-01/maven.log",
-      "record": ".codex/reuse-plan-context/gate-01/command.json",
-      "started_at": "2026-11-01T12:41:01.248200+00:00",
-      "finished_at": "2026-11-01T12:41:10.580389+00:00",
-      "code_state": ".codex/reuse-plan-context/gate-01/code-state.json"
+      "started_at": "2026-11-01T15:50:06.099617+00:00",
+      "finished_at": "2026-11-01T15:50:15.788404+00:00",
+      "evidence": ".codex/plan-restore-l0/unit-01/maven.log",
+      "record": ".codex/plan-restore-l0/unit-01/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
     },
     {
-      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/gate-02/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/gate-02/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextRequestGateTest test",
-      "cwd": ".",
-      "exit_code": 0,
-      "evidence": ".codex/reuse-plan-context/gate-02/maven.log",
-      "record": ".codex/reuse-plan-context/gate-02/command.json",
-      "started_at": "2026-11-01T12:42:40.642213+00:00",
-      "finished_at": "2026-11-01T12:42:50.447001+00:00",
-      "code_state": ".codex/reuse-plan-context/gate-02/code-state.json"
-    },
-    {
-      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/e2e-01/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/e2e-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextControlledE2ETest test",
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-02/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-02/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-02/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,L0SnapshotCodecTest,L0SourceParserTest,L0SourceOperationsTest,TrustedTurnRequestViewProjectorTest,UnifiedContextRequestGateTest test",
       "cwd": ".",
       "exit_code": 1,
-      "evidence": ".codex/reuse-plan-context/e2e-01/maven.log",
-      "record": ".codex/reuse-plan-context/e2e-01/command.json",
-      "started_at": "2026-11-01T12:46:40.770504+00:00",
-      "finished_at": "2026-11-01T12:46:48.389896+00:00",
-      "code_state": ".codex/reuse-plan-context/e2e-01/code-state.json"
+      "started_at": "2026-11-01T15:50:47.114966+00:00",
+      "finished_at": "2026-11-01T15:51:56.579354+00:00",
+      "evidence": ".codex/plan-restore-l0/unit-02/maven.log",
+      "record": ".codex/plan-restore-l0/unit-02/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
     },
     {
-      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/e2e-02/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/e2e-02/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextControlledE2ETest test",
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-03/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-03/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-03/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,PlanRestoreWindowTest,PlanRestoreEventGateTest,L0SnapshotCodecTest,L0SourceParserTest,L0SourceOperationsTest,TrustedTurnRequestViewProjectorTest,UnifiedContextRequestGateTest,AppPlanStateManagerTest test",
       "cwd": ".",
       "exit_code": 1,
-      "evidence": ".codex/reuse-plan-context/e2e-02/maven.log",
-      "record": ".codex/reuse-plan-context/e2e-02/command.json",
-      "started_at": "2026-11-01T12:48:32.275050+00:00",
-      "finished_at": "2026-11-01T12:48:44.455771+00:00",
-      "code_state": ".codex/reuse-plan-context/e2e-02/code-state.json"
+      "started_at": "2026-11-01T15:55:13.262632+00:00",
+      "finished_at": "2026-11-01T15:55:23.586292+00:00",
+      "evidence": ".codex/plan-restore-l0/unit-03/maven.log",
+      "record": ".codex/plan-restore-l0/unit-03/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
     },
     {
-      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/e2e-03/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/e2e-03/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextControlledE2ETest test",
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-04/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-04/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/unit-04/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,PlanRestoreWindowTest,PlanRestoreEventGateTest,L0SnapshotCodecTest,L0SourceParserTest,L0SourceOperationsTest,TrustedTurnRequestViewProjectorTest,UnifiedContextRequestGateTest,AppPlanStateManagerTest,PlanContextControlledE2ETest test",
       "cwd": ".",
-      "exit_code": 0,
-      "evidence": ".codex/reuse-plan-context/e2e-03/maven.log",
-      "record": ".codex/reuse-plan-context/e2e-03/command.json",
-      "started_at": "2026-11-01T12:49:40.754632+00:00",
-      "finished_at": "2026-11-01T12:49:50.583616+00:00",
-      "code_state": ".codex/reuse-plan-context/e2e-03/code-state.json"
+      "exit_code": 1,
+      "started_at": "2026-11-01T15:57:34.453696+00:00",
+      "finished_at": "2026-11-01T15:57:43.617105+00:00",
+      "evidence": ".codex/plan-restore-l0/unit-04/maven.log",
+      "record": ".codex/plan-restore-l0/unit-04/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
     },
     {
-      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/regression-01/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/regression-01/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/reuse-plan-context/regression-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,UnifiedContextRequestGateTest,TrustedTurnRequestViewProjectorTest,LayeredChatMemoryTest,ContextCompressionModelRequestGateTest,ContextCompressionCoordinatorTest,L0SourceParserTest,L0SourceOperationsTest,L0SnapshotCodecTest,SummaryWindowSelectorTest,SummaryCoveragePlannerTest,SyntheticMemoryMessageProtocolTest,TokenAwareChatMemoryTest,PlanToolProtocolSupportTest,PlanToolTest,AppPlanReadOnlyTest,AppPlanStateManagerTest,BuildProjectPlanGateTest,FileToolSecurityTest,VueToolExecutionFactTest,ReplanDetectorTest,AiGeneratorServiceFactoryTest,AiServiceStreamingResponseHandlerTest,AiServiceTokenStreamTest,ReplanContextTest,StreamingRequestControllerReplanTest,BuildProgressGuardTest,BuildProgressStreamingTest,VueTurnContextTest,UnifiedSummaryCoordinationTest,UnifiedSummaryPersistenceTest,UnifiedSummaryReclamationTest,PlanContextControlledE2ETest test",
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/race-01/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/race-01/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/race-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanRestoreEventGateTest,PlanRestoreWindowTest,UnifiedContextRequestGateTest test",
       "cwd": ".",
       "exit_code": 0,
-      "evidence": ".codex/reuse-plan-context/regression-01/maven.log",
-      "record": ".codex/reuse-plan-context/regression-01/command.json",
-      "started_at": "2026-11-01T12:51:14.263032+00:00",
-      "finished_at": "2026-11-01T12:51:22.947506+00:00",
-      "code_state": ".codex/reuse-plan-context/regression-01/code-state.json"
+      "started_at": "2026-11-01T16:05:11.653611+00:00",
+      "finished_at": "2026-11-01T16:05:19.977144+00:00",
+      "evidence": ".codex/plan-restore-l0/race-01/maven.log",
+      "record": ".codex/plan-restore-l0/race-01/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/storage-01/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/storage-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanRestoreStorageIntegrationTest,UnifiedSummaryStorageIntegrationTest,UnifiedContextStorageOnlineIntegrationTest test",
+      "cwd": ".",
+      "exit_code": 1,
+      "started_at": "2026-11-01T15:58:30.036882+00:00",
+      "finished_at": "2026-11-01T15:58:45.093378+00:00",
+      "evidence": ".codex/plan-restore-l0/storage-01/maven.log",
+      "record": ".codex/plan-restore-l0/storage-01/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/storage-02/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/storage-02/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanRestoreStorageIntegrationTest,UnifiedSummaryStorageIntegrationTest,UnifiedContextStorageOnlineIntegrationTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-01T16:01:05.872662+00:00",
+      "finished_at": "2026-11-01T16:01:23.006859+00:00",
+      "evidence": ".codex/plan-restore-l0/storage-02/maven.log",
+      "record": ".codex/plan-restore-l0/storage-02/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/storage-03/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/storage-03/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanRestoreStorageIntegrationTest,UnifiedSummaryStorageIntegrationTest,UnifiedContextStorageOnlineIntegrationTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-01T16:09:43.703842+00:00",
+      "finished_at": "2026-11-01T16:09:59.151824+00:00",
+      "evidence": ".codex/plan-restore-l0/storage-03/maven.log",
+      "record": ".codex/plan-restore-l0/storage-03/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
+    },
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/regression-01/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/regression-01/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/regression-01/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=PlanContextTest,PlanContextRequestGateTest,UnifiedContextRequestGateTest,TrustedTurnRequestViewProjectorTest,LayeredChatMemoryTest,ContextCompressionModelRequestGateTest,ContextCompressionCoordinatorTest,L0SourceParserTest,L0SourceOperationsTest,L0SnapshotCodecTest,SummaryWindowSelectorTest,SummaryCoveragePlannerTest,SyntheticMemoryMessageProtocolTest,TokenAwareChatMemoryTest,PlanToolProtocolSupportTest,PlanToolTest,AppPlanReadOnlyTest,AppPlanStateManagerTest,BuildProjectPlanGateTest,FileToolSecurityTest,VueToolExecutionFactTest,ReplanDetectorTest,AiGeneratorServiceFactoryTest,AiServiceStreamingResponseHandlerTest,AiServiceTokenStreamTest,ReplanContextTest,StreamingRequestControllerReplanTest,BuildProgressGuardTest,BuildProgressStreamingTest,VueTurnContextTest,UnifiedSummaryCoordinationTest,UnifiedSummaryPersistenceTest,UnifiedSummaryReclamationTest,PlanContextControlledE2ETest,PlanRestoreWindowTest,PlanRestoreEventGateTest,L0AtomicMemoryBoundaryTest,AtomicChatMemoryStoreConcurrencyTest,DeadlineAwareAtomicChatMemoryStoreTest,SpringRedisChatMemoryStoreTest,SummaryMaterialReaderTest,DecisionEvidenceTest,ConversationDecisionEvidenceServiceTest,VueDecisionSourceCollectorTest,UnifiedSummaryTerminalTest,UnifiedSummaryObservabilityTest,StreamingRequestControllerRecoveryTest,LayeredMemoryIntegrationTest,LayeredMemoryL2IntegrationTest,UserMemoryOutputBoundaryTest test",
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-01T16:06:23.400372+00:00",
+      "finished_at": "2026-11-01T16:06:46.960616+00:00",
+      "evidence": ".codex/plan-restore-l0/regression-01/maven.log",
+      "record": ".codex/plan-restore-l0/regression-01/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
+    },
+    {
+      "command": "mvn -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/baseline-fc4685e/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/baseline-fc4685e/tmp -q -Dtest=PlanContextControlledE2ETest test",
+      "cwd": ".codex/plan-restore-l0/baseline-fc4685e/source",
+      "exit_code": 0,
+      "started_at": "2026-11-01T16:00:06.641530+00:00",
+      "finished_at": "2026-11-01T16:00:17.407533+00:00",
+      "evidence": ".codex/plan-restore-l0/baseline-fc4685e/maven.log",
+      "record": ".codex/plan-restore-l0/baseline-fc4685e/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
+    },
+    {
+      "command": "mvn -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/baseline-fc4685e-sorted/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/plan-restore-l0/baseline-fc4685e-sorted/tmp -q -Dtest=PlanContextControlledE2ETest test",
+      "cwd": ".codex/plan-restore-l0/baseline-fc4685e-sorted/source",
+      "exit_code": 0,
+      "started_at": "2026-11-01T16:06:22.437604+00:00",
+      "finished_at": "2026-11-01T16:06:36.485108+00:00",
+      "evidence": ".codex/plan-restore-l0/baseline-fc4685e-sorted/maven.log",
+      "record": ".codex/plan-restore-l0/baseline-fc4685e-sorted/command.json",
+      "说明": "本轮中间失败按真实退出码保留；最终结论仅使用完成修复后的相关通过证据。"
     },
     {
       "command": "git diff --check",
       "cwd": ".",
       "exit_code": 0,
-      "started_at": "2026-11-01T12:54:17.022495+00:00",
-      "finished_at": "2026-11-01T12:54:17.057641+00:00",
-      "evidence": ".codex/reuse-plan-context/final-checks/1.log",
-      "output": ""
+      "started_at": "2026-11-01T16:13:44.854530+00:00",
+      "finished_at": "2026-11-01T16:13:44.875634+00:00",
+      "evidence": ".codex/plan-restore-l0/final-checks/1.log"
     },
     {
       "command": "openspec validate reuse-plan-context --strict",
       "cwd": ".",
       "exit_code": 0,
-      "started_at": "2026-11-01T12:54:17.057733+00:00",
-      "finished_at": "2026-11-01T12:54:18.875031+00:00",
-      "evidence": ".codex/reuse-plan-context/final-checks/2.log",
-      "output": "Change 'reuse-plan-context' is valid\n"
+      "started_at": "2026-11-01T16:13:44.875712+00:00",
+      "finished_at": "2026-11-01T16:13:47.563769+00:00",
+      "evidence": ".codex/plan-restore-l0/final-checks/2.log"
     },
     {
       "command": "python3 .agents/shared/openspec/scripts/evidence.py check-plan --root . --change openspec/changes/reuse-plan-context --profile strict",
       "cwd": ".",
       "exit_code": 0,
-      "started_at": "2026-11-01T12:54:18.875206+00:00",
-      "finished_at": "2026-11-01T12:54:18.950066+00:00",
-      "evidence": ".codex/reuse-plan-context/final-checks/3.log",
-      "output": "{\"valid\": true, \"change\": \"openspec/changes/reuse-plan-context\", \"profile\": \"strict\"}\n"
+      "started_at": "2026-11-01T16:13:47.563874+00:00",
+      "finished_at": "2026-11-01T16:13:47.630626+00:00",
+      "evidence": ".codex/plan-restore-l0/final-checks/3.log"
     },
     {
-      "command": "git diff dd51e25 --name-only -- openspec/changes/unify-context-summarization src/main/resources src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java src/main/java/com/lyw/appgeneration/ai/tools/PlanToolResult.java src/main/java/com/lyw/appgeneration/ai/tools/PlanToolProtocolSupport.java src/main/java/com/lyw/appgeneration/ai/memory/L0SnapshotCodec.java",
+      "command": "git diff fc4685e --name-only -- openspec/changes/unify-context-summarization src/main/resources src/main/java/com/lyw/appgeneration/config/MemoryTokenProperties.java src/main/java/com/lyw/appgeneration/ai/tools src/main/java/com/lyw/appgeneration/ai/model/message sql",
       "cwd": ".",
       "exit_code": 0,
-      "started_at": "2026-11-01T12:54:18.950127+00:00",
-      "finished_at": "2026-11-01T12:54:18.959352+00:00",
-      "evidence": ".codex/reuse-plan-context/final-checks/4.log",
-      "output": ""
+      "started_at": "2026-11-01T16:13:47.630689+00:00",
+      "finished_at": "2026-11-01T16:13:47.637982+00:00",
+      "evidence": ".codex/plan-restore-l0/final-checks/4.log"
     }
   ],
-  "说明": "新需求与继承场景逐项映射；所有 verified 依据为当前 regression-01。中间失败保留命令，不作为通过证据。模型/存储适配器/构建进程替身边界见验收报告。"
+  "说明": "32个当前场景、4项需求、8项新任务均映射本轮真实证据；6项旧任务仅保留历史完成状态。主模型与npm构建进程为本地替身，Redis/MySQL使用已授权随机库和三个应用键，夹具执行后核对清理。607项回归加27项真实存储=634项，另有1项独立基线E2E不计入当前通过数量。"
 }

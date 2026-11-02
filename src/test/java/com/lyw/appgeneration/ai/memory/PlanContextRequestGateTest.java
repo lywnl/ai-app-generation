@@ -40,12 +40,12 @@ class PlanContextRequestGateTest {
                 var admission = fixture.admit();
                 assertTrue(admission.canProceed(), admission.detail());
                 assertEquals(0, attachmentCount(admission.requestMessages()));
-                assertNull(fixture.memory.capturePlanContext().attachment());
+                assertNull(fixture.l0.sourceSnapshot().planRestore());
                 assertTrue(admission.requestMessages().contains(result));
                 assertEquals(fixture.lastEstimated.get(), admission.requestMessages());
                 assertEquals(fixture.realEstimator.estimateRequest(admission.requestMessages(), fixture.tools), admission.finalTokens());
             }
-            assertEquals(3, fixture.planReads.get());
+            assertEquals(0, fixture.planReads.get());
             assertEquals(source, fixture.store.value.get());
         }
     }
@@ -62,7 +62,7 @@ class PlanContextRequestGateTest {
             var revised = fixture.admit();
             assertTrue(revised.canProceed());
             assertEquals(0, attachmentCount(revised.requestMessages()));
-            assertNull(fixture.memory.capturePlanContext().attachment());
+            assertNull(fixture.l0.sourceSnapshot().planRestore());
             assertTrue(revised.requestMessages().contains(result));
             assertFalse(revised.requestMessages().toString().contains("恢复时的计划快照"));
         }
@@ -87,14 +87,14 @@ class PlanContextRequestGateTest {
             var next = fixture.admit();
             assertEquals(1, attachmentCount(next.requestMessages()));
             assertFalse(next.requestMessages().stream().anyMatch(ToolExecutionResultMessage.class::isInstance));
-            var recovered = fixture.memory.capturePlanContext().attachment();
+            var recovered = fixture.l0.sourceSnapshot().planRestore();
             assertEquals(1, attachmentCount(fixture.admit().requestMessages()));
-            assertSame(recovered, fixture.memory.capturePlanContext().attachment());
+            assertSame(recovered, fixture.l0.sourceSnapshot().planRestore());
             cover(fixture, 4, 2);
             var third = fixture.admit();
             assertTrue(third.canProceed(), third.detail());
             assertEquals(1, attachmentCount(third.requestMessages()));
-            assertNotSame(recovered, fixture.memory.capturePlanContext().attachment());
+            assertNotSame(recovered, fixture.l0.sourceSnapshot().planRestore());
             assertFalse(fixture.l0.messages().toString().contains(SyntheticMemoryMessageProtocol.PLAN_SNAPSHOT_ACK));
         }
     }
@@ -103,7 +103,7 @@ class PlanContextRequestGateTest {
     void 压缩失败不重建附件也不改变原文或摘要新增来源() {
         try (var fixture = new UnifiedContextRequestGateTest.Fixture(true)) {
             fixture.admit();
-            var restored = fixture.memory.capturePlanContext().attachment();
+            var restored = fixture.l0.sourceSnapshot().planRestore();
             fixture.l0.add(AiMessage.from("未压缩的工具说明"));
             var original = fixture.store.value.get();
             when(fixture.estimator.estimateRequest(anyList(), anyList())).thenReturn(60_000);
@@ -116,7 +116,7 @@ class PlanContextRequestGateTest {
             var failed = fixture.admit();
             assertFalse(failed.canProceed());
             assertEquals(ContextAdmissionResult.FailureReason.MODEL_FAILED, failed.failureReason());
-            assertSame(restored, fixture.memory.capturePlanContext().attachment());
+            assertSame(restored, fixture.l0.sourceSnapshot().planRestore());
             assertEquals(original, fixture.store.value.get());
         }
     }
@@ -143,8 +143,8 @@ class PlanContextRequestGateTest {
             var failed = pending.get(3, TimeUnit.SECONDS);
             assertFalse(failed.canProceed());
             assertEquals(ContextAdmissionResult.FailureReason.ALIGNMENT_FAILED, failed.failureReason());
-            assertNull(fixture.memory.capturePlanContext().attachment());
-            assertEquals(original, fixture.store.value.get(), "附件失效不得绕过 L0 对 clear 的保护");
+            assertNull(fixture.memory.capturePlanContext().checked());
+            assertEquals(original, fixture.store.value.get(), "检查失效不得绕过 L0 对 clear 的保护");
             var next = fixture.admit();
             assertTrue(next.canProceed(), next.detail());
             assertEquals(1, attachmentCount(next.requestMessages()));
@@ -177,7 +177,7 @@ class PlanContextRequestGateTest {
             assertFalse(failed.canProceed());
             assertEquals(kind.equals("取消") ? ContextAdmissionResult.FailureReason.TURN_TERMINATED
                     : ContextAdmissionResult.FailureReason.DELETE_REJECTED, failed.failureReason());
-            assertNull(fixture.memory.capturePlanContext().attachment());
+            assertNull(fixture.l0.sourceSnapshot().planRestore());
             verify(fixture.estimator, never()).estimateRequest(anyList(), anyList());
         }
     }
@@ -186,15 +186,15 @@ class PlanContextRequestGateTest {
     void 冷记忆实例从磁盘恢复最新状态而不继承原实例附件() {
         try (var fixture = new UnifiedContextRequestGateTest.Fixture(true)) {
             fixture.admit();
-            var old = fixture.memory.capturePlanContext().attachment();
+            var old = fixture.l0.sourceSnapshot().planRestore();
             fixture.plan.set(PlanContextTest.plan(1, PlanFileState.TOUCHED));
             var cold = new CompressionAwareChatMemory(fixture.l0, fixture.summaries, mock(UserMemoryService.class));
-            assertNull(cold.capturePlanContext().attachment());
+            assertNull(cold.capturePlanContext().checked());
             var admission = fixture.coordinator.admit(cold, fixture.tools, List.of(), ignored -> { }, fixture.context, fixture.boundary);
             assertTrue(admission.canProceed(), admission.detail());
-            assertNotSame(old, cold.capturePlanContext().attachment());
-            assertTrue(cold.capturePlanContext().attachment().body().contains("状态=TOUCHED"));
-            assertSame(old, fixture.memory.capturePlanContext().attachment());
+            assertNotSame(old, cold.l0Memory().sourceSnapshot().planRestore());
+            assertTrue(cold.l0Memory().sourceSnapshot().planRestore().body().contains("状态=TOUCHED"));
+            assertSame(cold.l0Memory().sourceSnapshot().planRestore(), fixture.l0.sourceSnapshot().planRestore());
         }
     }
 
@@ -202,7 +202,7 @@ class PlanContextRequestGateTest {
     void 跨用户回合复用相同附件且不会携带上一回合临时资料() {
         try (var fixture = new UnifiedContextRequestGateTest.Fixture(true)) {
             fixture.admit();
-            var attachment = fixture.memory.capturePlanContext().attachment();
+            var attachment = fixture.l0.sourceSnapshot().planRestore();
             fixture.store.value.updateAndGet(source -> L0SourceOperations.finishTurn(source, 10, "turn", 20,
                     ChatMemoryOutcome.ANSWERED, "上一轮已结束", 0));
             fixture.context.closeResources();
@@ -214,13 +214,13 @@ class PlanContextRequestGateTest {
                 next.commitUserAndBindHistory(() -> ChatHistory.builder().id(30L).appId(7L).userId(9L)
                         .messageType("user").message("继续完成").build());
                 var boundary = TurnRequestBoundary.of("继续完成", List.of(), 30, "next")
-                        .withPlanReader(() -> Optional.of(fixture.plan.get().rebindActiveTurn("next")));
+                        .withPlanReader(() -> Optional.of(fixture.plan.get().rebindActiveTurn("next")), fixture::change);
                 CanonicalUserMessageScope.call(boundary, () -> { fixture.l0.add(boundary.userMessage()); return null; });
                 doAnswer(ignored -> new CompatibleMemorySnapshot(7, 30, "next", MemorySummarySnapshot.empty(), fixture.store.value.get()))
                         .when(fixture.summaries).readCompatible(any(), any());
                 var result = fixture.coordinator.admit(fixture.memory, fixture.tools, List.of(), ignored -> { }, next, boundary);
                 assertTrue(result.canProceed(), result.detail());
-                assertSame(attachment, fixture.memory.capturePlanContext().attachment());
+                assertSame(attachment, fixture.l0.sourceSnapshot().planRestore());
                 assertEquals(1, attachmentCount(result.requestMessages()));
                 assertTrue(result.requestMessages().indexOf(attachment.messages().getLast()) < result.requestMessages().indexOf(boundary.userMessage()));
                 fixture.transientMessages.forEach(material -> assertFalse(result.requestMessages().contains(material)));

@@ -32,10 +32,6 @@ final class TrustedTurnRequestViewProjector {
         return project(compatible, "当前用户回合进行中，尚未登记最终结果。");
     }
 
-    ProjectedView project(CompatibleMemorySnapshot compatible, String currentTrustedState) {
-        return project(compatible, currentTrustedState, null);
-    }
-
     /** 计划判定和最终消息投影共享同一可见来源规则，尚未物理回收的原文也不能越过可靠覆盖。 */
     static L0SourceParser.Parsed visibleSource(CompatibleMemorySnapshot compatible) {
         Objects.requireNonNull(compatible);
@@ -49,16 +45,10 @@ final class TrustedTurnRequestViewProjector {
                 .filter(turn -> !turn.closed() || turn.boundary().terminalHistoryId() > summary.lastSummarizedId()).toList());
     }
 
-    ProjectedView project(CompatibleMemorySnapshot compatible, String currentTrustedState,
-                          PlanContext.Attachment attachment) {
+    ProjectedView project(CompatibleMemorySnapshot compatible, String currentTrustedState) {
         var parsed = visibleSource(compatible);
         MemorySummarySnapshot summary = compatible.summary();
-        if (attachment != null && (attachment.appId() != compatible.appId()
-                || !attachment.memoryEpoch().equals(compatible.source().memoryEpoch()))) {
-            throw new IllegalArgumentException("计划附件与请求来源不属于同一应用或 epoch");
-        }
-        var conversation = new ArrayList<ChatMessage>();
-        int attachmentIndex = -1;
+        var projectedOriginals = new java.util.HashMap<Long, List<ChatMessage>>();
         var state = new StringBuilder(Objects.requireNonNull(currentTrustedState)).append('\n');
         appendSummaryIdentity(state, compatible);
         var previous = compatible.source().turns().stream()
@@ -68,14 +58,12 @@ final class TrustedTurnRequestViewProjector {
         var representedTerminals = new HashSet<Long>();
         for (var turn : parsed.turns()) {
             var boundary = turn.boundary();
-            int before = conversation.size();
+            var originals = turn.units().stream().filter(unit -> unit.kind() != L0SourceParser.Kind.BACKEND_TERMINAL)
+                    .flatMap(unit -> unit.entries().stream()).toList();
             for (var unit : turn.units()) {
                 if (unit.kind() != L0SourceParser.Kind.BACKEND_TERMINAL) {
-                    conversation.addAll(unit.messages());
+                    for (var entry : unit.entries()) projectedOriginals.put(entry.sequence(), List.of(entry.payload()));
                     if (unit.messages().getFirst() instanceof UserMessage) visibleUsers.add(boundary.userHistoryId());
-                    if (attachment != null && PlanContext.isAnchor(unit, attachment.afterSequence())) {
-                        attachmentIndex = conversation.size();
-                    }
                     continue;
                 }
                 Long historyId = unit.entries().getFirst().historyRecordId();
@@ -95,18 +83,19 @@ final class TrustedTurnRequestViewProjector {
                 }
             }
             // 仅冷重建的“用户＋后端结果”需要轻量确认；已有模型原文或工具批次时不替换它们。
-            if (boundary.closed() && conversation.size() == before + 1
-                    && conversation.getLast() instanceof dev.langchain4j.data.message.UserMessage) {
-                conversation.add(AiMessage.from(HISTORICAL_ACK));
-                if (attachment != null && attachment.afterSequence() == boundary.userSequence()) {
-                    attachmentIndex = conversation.size();
-                }
+            if (boundary.closed() && originals.size() == 1 && originals.getFirst().payload() instanceof UserMessage user) {
+                projectedOriginals.put(originals.getFirst().sequence(), List.of(user, AiMessage.from(HISTORICAL_ACK)));
             }
         }
-        // 最后才插入服务端资料，不能影响真实用户回合计数或历史确认消息的判定。
-        if (attachment != null) {
-            if (attachmentIndex < 0) throw new IllegalStateException("计划附件的完整来源锚点已不可见");
-            conversation.addAll(attachmentIndex, attachment.messages());
+        // 窗口本身保存位置；这里按顺序展开有类型资料，不再按 afterSequence 查找、插入附件。
+        var conversation = new ArrayList<ChatMessage>();
+        for (var entry : compatible.source().window()) {
+            if (entry instanceof L0Snapshot.Message original) {
+                conversation.addAll(projectedOriginals.getOrDefault(original.sequence(), List.of()));
+            } else if (entry instanceof L0Snapshot.PlanRestore restore
+                    && restore.coverage().equals(PlanCoverageBoundary.of(summary))) {
+                conversation.addAll(restore.messages());
+            }
         }
         var frontier = summary.coverageState();
         if (frontier != null && frontier.terminalHistoryId() != null && !frontier.terminalIncluded()

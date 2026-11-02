@@ -100,7 +100,7 @@ class PlanContextControlledE2ETest {
         static final String HELP_CONTENT = "<template><aside>帮助与支持</aside></template>";
         final Path evidence;
         final Path project = Path.of(AppConstant.CODE_OUTPUT_ROOT_DIR, "vue_project_" + APP);
-        final ObjectMapper json = new ObjectMapper();
+        final ObjectMapper json = new ObjectMapper().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
         final MemoryTokenProperties properties = new MemoryTokenProperties();
         final ChatTokenEstimator realEstimator = new ConservativeChatTokenEstimator(properties);
         final RecordingEstimator estimator = new RecordingEstimator(realEstimator);
@@ -172,7 +172,7 @@ class PlanContextControlledE2ETest {
             context.initializePlanContext(plans);
             boundary = TurnRequestBoundary.of(USER, transientMessages, 10, TURN).withPlanReader(() -> {
                 planReads.incrementAndGet(); return plans.loadReadOnly(APP);
-            });
+            }, () -> plans.definitionChange(APP));
             var engine = new MemorySummaryDraftEngine(histories, summaryModel, modelWorkers, realEstimator, properties);
             engine.configureMetrics(metrics);
             summaries = new MemorySummaryServiceImpl(mapper, engine, background, mock(StringRedisTemplate.class), lifecycle,
@@ -289,7 +289,9 @@ class PlanContextControlledE2ETest {
             assertTrue(errors.isEmpty(), errors.toString());
             assertFalse(L0SnapshotCodec.encode(store.value.get()).contains(SyntheticMemoryMessageProtocol.PLAN_SNAPSHOT_ACK));
             assertTrue(summaryPrompts.size() >= 2);
-            assertTrue(planReads.get() > samples.size(), "同步压缩后必须重新读取并准备");
+            assertEquals(3, planReads.get(), "只在初始无计划检查及两次覆盖推进时额外读盘");
+            assertEquals(2, samples.stream().map(sample -> sample.get("恢复ID")).filter(java.util.Objects::nonNull).distinct().count());
+            assertNotNull(store.value.get().planRestore());
             assertTrue(samples.stream().anyMatch(sample -> ((Number) sample.get("旧规则Token")).intValue()
                     > ((Number) sample.get("新请求Token")).intValue() && ((Number) sample.get("恢复附件数")).intValue() == 0));
             json.writerWithDefaultPrettyPrinter().writeValue(evidence.resolve("token-comparison.json").toFile(), samples);
@@ -332,6 +334,12 @@ class PlanContextControlledE2ETest {
             sample.put("新请求Token", realEstimator.estimateRequest(call.request().messages(), call.request().toolSpecifications()));
             sample.put("旧规则Token", realEstimator.estimateRequest(oldRule, call.request().toolSpecifications()));
             sample.put("恢复附件数", attachments(call.request()).size());
+            sample.put("上下文计划读取累计", planReads.get());
+            var restored = store.value.get().planRestore();
+            sample.put("恢复ID", restored == null ? null : restored.restoreId());
+            sample.put("Redis窗口字节", L0SnapshotCodec.encode(store.value.get()).getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            sample.put("不含恢复的v1字节", L0SnapshotCodec.encode(L0SnapshotCodec.downgradeToV1(store.value.get()))
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
             sample.put("摘要修订", summary.get() == null ? 0 : summary.get().getSummaryRevision());
             samples.add(sample);
             Files.writeString(evidence.resolve("request-" + samples.size() + ".json"), ChatMessageSerializer.messagesToJson(call.request().messages()));

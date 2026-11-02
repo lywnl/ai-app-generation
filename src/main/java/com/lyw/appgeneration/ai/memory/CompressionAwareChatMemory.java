@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class CompressionAwareChatMemory extends LayeredChatMemory {
 
     private final ConversationTurnSnapshotParser snapshotParser;
-    private final AtomicReference<PlanContext.State> planContext = new AtomicReference<>(new PlanContext.State(null));
+    private final AtomicReference<PlanContext.State> planContext = new AtomicReference<>(new PlanContext.State(0, null));
 
     public CompressionAwareChatMemory(
             TokenAwareChatMemory l0Memory,
@@ -88,13 +88,16 @@ public final class CompressionAwareChatMemory extends LayeredChatMemory {
         return planContext.get();
     }
 
-    /** 调用方已取得回合及应用提交边界；此处只做短内存 CAS。 */
-    boolean commitPlanContext(PlanContext.State expected, PlanContext.Attachment attachment) {
-        return planContext.compareAndSet(expected, new PlanContext.State(attachment));
+    /** 与显式失效串行；调用方在原截止、应用和回合边界内完成 L0 CAS。 */
+    synchronized boolean commitPlanContext(PlanContext.State expected, PlanContext.Check checked,
+                                          java.util.function.BooleanSupplier commitWindow) {
+        if (planContext.get() != expected || !commitWindow.getAsBoolean()) return false;
+        planContext.set(new PlanContext.State(expected.generation(), checked));
+        return true;
     }
 
-    void invalidatePlanContext() {
-        planContext.set(new PlanContext.State(null));
+    synchronized void invalidatePlanContext() {
+        planContext.updateAndGet(old -> new PlanContext.State(Math.addExact(old.generation(), 1), null));
     }
 
     @Override

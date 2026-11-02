@@ -117,6 +117,7 @@ public class TokenAwareChatMemory implements ChatMemory {
 
     @Override
     public List<ChatMessage> messages() {
+        if (supportsSourceSnapshots()) return sourceSnapshot().originalMessages();
         return withMemoryLock(() -> List.copyOf(delegate.messages()));
     }
 

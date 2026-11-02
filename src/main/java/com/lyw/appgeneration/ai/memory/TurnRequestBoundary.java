@@ -78,7 +78,7 @@ public record TurnRequestBoundary(
         return UserMessage.from(canonicalUserName, rawUserText);
     }
 
-    /** 仅绑定只读读取能力；每次实际请求准备时再读取，不能将一次结果缓存为本轮固定资料。 */
+    /** 绑定按需只读能力；普通续调沿用已检查窗口。 */
     public TurnRequestBoundary withPlanReader(PlanSnapshotReader reader) {
         return new TurnRequestBoundary(rawUserText, canonicalUserName, transientMessages, userHistoryId, turnId,
                 Objects.requireNonNull(reader));
@@ -92,9 +92,27 @@ public record TurnRequestBoundary(
         return planReader == null ? Optional.empty() : Objects.requireNonNull(planReader.read(), "只读计划读取未返回明确结果");
     }
 
+    public com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange planDefinitionChange() {
+        return planReader == null ? com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange.UNKNOWN
+                : Objects.requireNonNull(planReader.change(), "计划定义标记不能为空");
+    }
+
+    public TurnRequestBoundary withPlanReader(PlanSnapshotReader reader,
+            java.util.function.Supplier<com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange> changes) {
+        Objects.requireNonNull(reader);
+        Objects.requireNonNull(changes);
+        return withPlanReader(new PlanSnapshotReader() {
+            @Override public Optional<AppPlan> read() { return reader.read(); }
+            @Override public com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange change() { return changes.get(); }
+        });
+    }
+
     @FunctionalInterface
     public interface PlanSnapshotReader {
         Optional<AppPlan> read();
+        default com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange change() {
+            return com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange.UNKNOWN;
+        }
     }
 
     private static boolean containsUnsafeControl(String value) {

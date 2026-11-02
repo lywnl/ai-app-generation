@@ -1,98 +1,62 @@
 package com.lyw.appgeneration.ai.memory;
 
 import com.lyw.appgeneration.ai.plan.AppPlan;
+import com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange;
+import com.lyw.appgeneration.ai.plan.PlanDefinition;
 import com.lyw.appgeneration.ai.plan.PlanFile;
-import com.lyw.appgeneration.ai.plan.PlanFileAction;
 import com.lyw.appgeneration.ai.tools.PlanToolProtocolSupport;
 import com.lyw.appgeneration.ai.tools.PlanToolResult;
 import com.lyw.appgeneration.service.CompatibleMemorySnapshot;
-import com.lyw.appgeneration.service.MemorySummarySnapshot;
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
-import dev.langchain4j.data.message.UserMessage;
 
-import java.util.Comparator;
-import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
-/** 仅供请求投影使用的计划资料；不属于 L0 原文或摘要新增来源。 */
+/** 恢复正文保存在 L0；运行期状态只记录检查边界，不缓存另一份附件。 */
 final class PlanContext {
     private PlanContext() { }
 
-    /** 引用身份同时作为缓存代次，清空后不能用旧候选覆盖新状态。 */
-    record State(Attachment attachment) { }
+    record State(long generation, Check checked) { }
 
-    record Attachment(long appId, Definition definition, String memoryEpoch,
-                      CoverageBoundary coverage, long afterSequence, String body) {
-        Attachment {
-            Objects.requireNonNull(definition);
-            Objects.requireNonNull(memoryEpoch);
-            Objects.requireNonNull(coverage);
-            Objects.requireNonNull(body);
-            if (appId <= 0 || afterSequence <= 0) throw new IllegalArgumentException("计划附件缺少应用或来源位置");
-        }
-
-        List<ChatMessage> messages() {
-            return List.of(UserMessage.from(body), AiMessage.from(SyntheticMemoryMessageProtocol.PLAN_SNAPSHOT_ACK));
+    record Check(String epoch, PlanCoverageBoundary coverage, DefinitionChange change,
+                 String restoreId, long nextSequence, boolean pendingBatch) {
+        boolean matches(CompatibleMemorySnapshot snapshot, DefinitionChange current) {
+            var restore = snapshot.source().planRestore();
+            return epoch.equals(snapshot.source().memoryEpoch())
+                    && coverage.equals(PlanCoverageBoundary.of(snapshot.summary()))
+                    && change.equals(current)
+                    && Objects.equals(restoreId, restore == null ? null : restore.restoreId())
+                    && (!pendingBatch || nextSequence == snapshot.source().nextSequence());
         }
     }
 
-    /** 只比较定义；普通触达、构建状态及活动回合变化不是计划修订。 */
-    record Definition(String planId, int version, String summary, List<FileDefinition> files) {
-        Definition { files = List.copyOf(files); }
-
-        static Definition of(AppPlan plan) {
-            return of(plan.planId(), plan.version(), plan.summary(), plan.files());
-        }
-
-        static Definition of(String planId, int version, String summary, List<PlanFile> files) {
-            return new Definition(planId, version, summary, files.stream()
-                    .map(file -> new FileDefinition(file.path(), file.purpose(), file.action(), file.dependsOn()))
-                    .sorted(Comparator.comparing(FileDefinition::path)).toList());
-        }
+    static Check checked(CompatibleMemorySnapshot snapshot, DefinitionChange change, boolean pendingBatch) {
+        var restore = snapshot.source().planRestore();
+        return new Check(snapshot.source().memoryEpoch(), PlanCoverageBoundary.of(snapshot.summary()), change,
+                restore == null ? null : restore.restoreId(), snapshot.source().nextSequence(), pendingBatch);
     }
 
-    record FileDefinition(String path, String purpose, PlanFileAction action, List<String> dependsOn) {
-        FileDefinition { dependsOn = dependsOn.stream().sorted().toList(); }
-    }
-
-    /** 终态登记会增加 summaryRevision，但不推进这里的实际覆盖边界。 */
-    record CoverageBoundary(long lastSummarizedId, long userHistoryId, String turnId,
-                            String memoryEpoch, long coveredSequence) {
-        static CoverageBoundary of(MemorySummarySnapshot summary) {
-            var frontier = summary.coverageState();
-            return frontier == null ? new CoverageBoundary(summary.lastSummarizedId(), 0, null, null, 0)
-                    : new CoverageBoundary(summary.lastSummarizedId(), frontier.userHistoryId(), frontier.turnId(),
-                            frontier.memoryEpoch(), frontier.coveredSequence());
+    static L0Snapshot select(CompatibleMemorySnapshot snapshot, AppPlan plan, boolean allowReuse) {
+        var visible = TrustedTurnRequestViewProjector.visibleSource(snapshot);
+        if (plan == null) return L0SourceOperations.replacePlanRestore(snapshot.source(), null, visible);
+        var identity = PlanDefinition.of(plan).identity();
+        if (hasFullPlan(visible, identity)) return L0SourceOperations.replacePlanRestore(snapshot.source(), null, visible);
+        var previous = snapshot.source().planRestore();
+        var coverage = PlanCoverageBoundary.of(snapshot.summary());
+        if (allowReuse && previous != null && previous.definition().equals(identity) && previous.coverage().equals(coverage)) {
+            return snapshot.source();
         }
+        return L0SourceOperations.replacePlanRestore(snapshot.source(), new L0Snapshot.PlanRestore(
+                UUID.randomUUID().toString(), identity, coverage, recoveryBody(plan)), visible);
     }
 
-    /** 使用与最终投影相同的可靠覆盖来源，绝不扫描摘要或合成资料来推断工具成功。 */
-    static Attachment select(CompatibleMemorySnapshot snapshot, AppPlan plan, State captured) {
-        if (plan == null) return null;
-        var definition = Definition.of(plan);
-        var units = TrustedTurnRequestViewProjector.visibleSource(snapshot).units();
-        if (units.stream().anyMatch(unit -> containsFullPlan(unit, definition))) return null;
-
-        var previous = captured.attachment();
-        var coverage = CoverageBoundary.of(snapshot.summary());
-        if (previous != null && previous.appId() == snapshot.appId()
-                && previous.definition().equals(definition)
-                && previous.memoryEpoch().equals(snapshot.source().memoryEpoch())
-                && previous.coverage().equals(coverage)
-                && units.stream().anyMatch(unit -> isAnchor(unit, previous.afterSequence()))) {
-            return previous;
-        }
-        long anchor = units.stream().filter(PlanContext::canAnchor)
-                .mapToLong(L0SourceParser.Unit::lastSequence).max()
-                .orElseThrow(() -> new IllegalStateException("计划恢复缺少完整可见来源位置"));
-        return new Attachment(snapshot.appId(), definition, snapshot.source().memoryEpoch(), coverage,
-                anchor, recoveryBody(plan));
+    static boolean hasFullPlan(L0SourceParser.Parsed visible, PlanDefinition.Identity identity) {
+        return identity != null && visible.units().stream().anyMatch(unit -> containsFullPlan(unit, identity));
     }
 
-    private static boolean containsFullPlan(L0SourceParser.Unit unit, Definition definition) {
+    private static boolean containsFullPlan(L0SourceParser.Unit unit, PlanDefinition.Identity identity) {
         if (unit.kind() != L0SourceParser.Kind.TOOL_BATCH) return false;
         var call = (AiMessage) unit.messages().getFirst();
         for (var message : unit.messages()) {
@@ -105,25 +69,17 @@ final class PlanContext {
                 if (plan.status() == PlanToolResult.Status.APPLIED && plan.operation().equals(result.toolName())
                         && !plan.files().isEmpty()
                         && plan.files().stream().map(PlanFile::path).distinct().count() == plan.files().size()
-                        && definition.equals(Definition.of(plan.planId(), plan.version(), plan.summary(), plan.files()))) {
+                        && identity.equals(PlanDefinition.of(plan.planId(), plan.version(), plan.summary(), plan.files()).identity())) {
                     return true;
                 }
             } catch (RuntimeException ignored) {
-                // 保留原始失败或非法结果，但不能以它免除完整计划恢复。
+                // 保留真实失败或非法结果，但不能以它免除完整计划恢复。
             }
         }
         return false;
     }
 
-    static boolean isAnchor(L0SourceParser.Unit unit, long sequence) {
-        return canAnchor(unit) && unit.lastSequence() == sequence;
-    }
-
-    private static boolean canAnchor(L0SourceParser.Unit unit) {
-        return unit.complete() && unit.kind() != L0SourceParser.Kind.BACKEND_TERMINAL;
-    }
-
-    private static String recoveryBody(AppPlan plan) {
+    static String recoveryBody(AppPlan plan) {
         String revisions = plan.history().stream().skip(Math.max(0, plan.history().size() - 3L))
                 .map(change -> "v" + change.version() + ":" + inline(change.reason()))
                 .collect(Collectors.joining("；"));

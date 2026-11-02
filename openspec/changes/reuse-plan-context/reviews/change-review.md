@@ -1,74 +1,74 @@
 # Change Review: reuse-plan-context
 
 - 评审日期：2026-11-01
-- Profile：strict（用户明确指定，元数据 `x-workflow_profile: strict`）
-- Source Coverage：Pass。用户批准计划及实施授权已保存，全部有效要求可追踪；旧统一摘要变更仅计划供给方式被明确替代。
+- Profile：strict。沿用用户指定等级；本轮增加 Redis 值编码迁移及来源隔离风险，等级适用。
+- Source Coverage：Pass。U3 明确替代 U1 的存放位置、逐请求读盘和 Redis 编码不变约定；其余来源、协议、预算与生命周期约束继续有效。
 - Pre-Apply Decision：PASS
-- Validation Confidence：已检查当前磁盘规划、必要工程规则、来源与关键真实调用链；独立执行 `openspec status --change reuse-plan-context --json` 确认四件套齐备，`openspec validate reuse-plan-context --strict` 退出码为 0。此结论证明规划可实施，不证明尚未编写的实现及测试已通过。
-- 评审者与独立性：独立执行上下文 `/root/plan_context_review`，未撰写本变更规划或业务代码，直接形成本主报告；主执行者按评审意见修订了引用路径与清空入口说明，本评审者已复核。
-- 核验方式：machine。当前为单根项目，Python 3.14.8 可用，规划输入未发现符号链接；6 项任务均为 UTF-8 Markdown checkbox，尚未勾选。
-- 机器记录：`reviews/planning-review.json`。本报告不手工生成指纹；主执行者在报告定稿后运行 `record-plan`、`check-plan`，实施前运行 `start-apply`。
+- Validation Confidence：已独立核对当前四件套、来源、已确认计划和关键调用链，执行 `openspec status --change reuse-plan-context --json` 与 `openspec validate reuse-plan-context --strict`，后者退出码为 0。此结论仅证明规划可实施，不证明 U3 实现或测试已完成。
+- 评审者与独立性：独立执行上下文 `/root/l0_plan_independent_review`，未编写本轮规划或业务代码，直接形成本报告；主执行者修订了本次指出的两处表述，本评审者已重新读取并复核。
+- 核验方式：machine。Python 3.14.8；单根普通文件，当前规划输入无符号链接。任务 1.1—3.2 明确为历史完成记录，本轮 4.1—7.2 为 8 项未完成任务。
+- 机器记录：`reviews/planning-review.json`。旧记录仅适用于历史实现；本报告定稿后由主执行者登记新的 `record-plan`、`check-plan`，首次业务修改前执行 `start-apply`。本评审未手写或覆盖机器记录。
 
 ## 评审范围与依据
 
-实际 schema 为 `spec-driven`，规划根为 `/Users/lllyw/ai-app-generation/openspec/changes/reuse-plan-context`。本次阅读并核对 `proposal.md`、`design.md`、`tasks.md`、`specs/vue-soft-replan/spec.md`、`sources/user-request.md` 和用户批准计划；使用当前磁盘文件，不以文件名或 CLI 完成状态代替内容检查。
+实际 schema 为 `spec-driven`，规划根为 `/Users/lllyw/ai-app-generation/openspec/changes/reuse-plan-context`，本轮实现基线为 `fc4685e`。
 
-持续约束应作为 `source` 登记：
+已核对当前 `proposal.md`、`specs/vue-soft-replan/spec.md`、`design.md`、`tasks.md`、`sources/user-request.md` 及 `.codex/plans/计划恢复消息进入热窗口.md`。历史目录 `history/fc4685e/` 中的 10 份规划、规格及评审/验收文件逐一与 `git show fc4685e:<原路径>` 对比，字节一致；不把历史 PASS 作为 U3 的通过证据。
 
-- 本变更 `sources/` 及 `.codex/plans/计划上下文按需恢复与复用.md` 中的 U1、U2。
-- `AGENTS.md` 与实际采用的 `.agents/shared/openspec/` 工作流、来源、评审、验收规则。
-- `openspec/specs/vue-soft-replan/spec.md`。
-- `openspec/changes/unify-context-summarization/specs/vue-soft-replan/spec.md` 和 `openspec/changes/unify-context-summarization/specs/context-summarization/spec.md`。前者每请求额外完整快照及同版本状态重建要求由 U1 与新 delta 替代；其他行为继续有效。旧评审、验收记录不改写。
+持续约束应按 `source` 绑定：本变更 `sources/` 与已确认新计划，`AGENTS.md` 及实际采用的工作流/来源/评审/证据规则，正式 `openspec/specs/vue-soft-replan/spec.md`，以及 `unify-context-summarization` 中的 `vue-soft-replan`、`context-summarization` 规格。计划供给和恢复缓存编码的替代范围由 U3 与当前 delta 明确，其余约束保持。
 
-实施参考应作为 `reference` 登记，允许按已批准任务修改，不与 `source` 范围重叠：
+允许修改的实施参考按 `reference` 绑定，不能当作持续冻结规则：
 
-- `src/main/java/com/lyw/appgeneration/ai/memory/` 及对应测试：已重点核对 `UnifiedContextRequestPreparer`、`CompressionAwareChatMemory`、`LayeredChatMemory`、`TrustedTurnRequestViewProjector`、`L0SourceParser`、`L0SourceOperations`、`SummaryCoverage` 和请求门禁。
-- `src/main/java/com/lyw/appgeneration/ai/plan/`、`src/main/java/com/lyw/appgeneration/ai/tools/` 及相关测试：计划定义、完整结果协议、实时触达记录与构建闸门。公共协议的保留义务来自规格，不把整个代码目录冻结为需求来源。
-- `src/main/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactory.java`、`src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java`、`src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java`：服务缓存、回调／提交边界和原始工具续调。
-- `src/main/java/com/lyw/appgeneration/service/impl/MemorySummaryServiceImpl.java` 及摘要测试入口：核实终态登记只增加修订号、真实覆盖推进及受控组合验证的装配条件。
+- L0 类型、codec、`SpringRedisChatMemoryStore`、`AtomicChatMemoryStore`、来源操作/解析、`TokenAwareChatMemory`、`PlanContext`、分层请求投影及准备门禁。
+- `SummaryMaterialReader`、摘要服务、决策证据和终态来源路径；相关记忆/摘要测试。
+- `AppPlanStateManager`、计划工具和文件成功变更记录路径，`AiCodeGeneratorFacade` 的请求边界装配、`AiGeneratorServiceFactory` 的冷重建和缓存失效路径。
+- `VueTurnContext` 的回调票据、`commitSummaryWhileActive`/租约提交边界，应用删除栅栏，以及流式工具原文提交与协议恢复入口。
+- 现有 `PlanContextRequestGateTest`、`UnifiedMemoryStorageFixture` 等测试入口与项目 Maven 配置，作为新增验证的实际可用基础。
 
-上述参考用于核实方案和登记本次实际输入；不要求改动所有参考文件。未检查与本变更无关的前端、真实线上服务及业务数据库，没有启动环境或付费模型。
+不要求改动每个参考文件。未运行业务测试、真实服务、模型或维护命令，也未检查无关前端和业务数据；规划验收条件与实现验收严格区分。
 
 ## Blocking findings
 
 无未解决阻塞。
 
-评审中发现的两项表述问题已关闭：
+两项表述缺口已由主执行者修正并经本评审者复核：
 
-1. `proposal.md` 的 C2 原使用不能直接按项目根解析的短路径；已补成真实项目相对路径，引用可追踪。
-2. `design.md` 原“记忆清空”说明可能误导实施去调用普通 `clear()`。实际已对齐 L0 的 `TokenAwareChatMemory.clear()` 会拒绝破坏摘要依赖；现设计已明确沿用工厂显式失效／重建入口，新实例从空附件开始，不绕过原拒绝约束。
+1. 规格“恢复条目不得进入摘要新增材料”原只写不进 L1；现在明确不进 L1/L2、不推进原文 sequence、不占 12,288 Token 原文保留额度，与设计、任务 5.1 和 U3 一致。
+2. proposal 的 D2 第二个引用原为不明确的 `specs/context-summarization/spec.md`；现在已补全为真实项目相对路径，持续约束可定位。
 
 ## Warnings
 
-以下是已确认范围内的实施与验证注意事项，不需要新的产品决策，也不构成暂停条件：
+以下均为既定范围内的实现与验收重点，不构成新的产品决定或暂停条件：
 
-- 生命周期短提交必须使用现有有效边界。`tryRun/tryCallCallback` 提供回调票据；与取消提交严格定序时，应使用既有 `commitPlanState/lease.commitWhileActive` 等实际提交边界并复检应用栅栏。计划读取、L2 召回和估算不能放到这些票据内。任务 1.2、2.1 已要求原子代次与迟到拒绝，验收须用交错测试证明。
-- 冷实例与自然缓存淘汰不能被解释成重放原生成或为本功能新增取消行为。生产显式重建、协议恢复及删除继续沿现有调用路径；附件只在仍有效的应用记忆实例内复用。
-- 受控端到端的合格范围是实际 Java 门禁、摘要来源选择／覆盖、计划与文件工具、构建闸门及发出的 `ChatRequest`。模型和数据库／Redis 适配器可以是本地替身，构建进程替身须核对隔离目录的真实文件并走真实闸门；不得把直接返回预制成功结果或直接拼装最终消息当成整条链已验证。主执行者已说明拟使用真实 `MemorySummaryServiceImpl`、草稿引擎、选择器与覆盖规划器，符合该边界。通过后仍不等于 npm、真实模型或外部存储验收。
-- Token 比较必须固定相同原文、工具定义及临时资料，以旧额外追加规则与新最终请求对比；恢复场景允许仍有计划 Token，不据样例推断线上节省比例。
+- **CAS 必须验证真实旧编码。** v1 解码不能把 expected 悄然升级为 v2；测试应使用从旧版 codec 得到的实际字节，而非仅用新 codec 自造一个标称 v1 的样例。降级须保留原文、epoch、摘要依赖和 TTL，精确 CAS 冲突不得被当作成功。现有正常 Redis 写入会按配置重置 TTL，停机降级不能直接假定复用它即可保持原 TTL。
+- **原文视图必须贯通所有来源消费者。** 采用 `window()` 保存异构有序条目、`entries()`/`originalMessages()` 提供 ORIGINAL 派生视图，是满足设计的合理内部 API 选择。`SourceCommitScope`、fingerprint、containsPrefix、摘要材料、用户计数及协议恢复均不得从 User/Ai 包装反推内部类型；不能让恢复资料触发真实用户回合或进入决策证据。
+- **定义事件不能过早消费。** `AppPlanStateManager.save` 成功与计划外新增路径必须同步更新代次；活动回合重绑定、普通文件触达与构建状态不得发布定义变化。完整批次尚未入窗时必须保留待检查状态，避免只见一条成功计划结果就撤下恢复，或后续批次补齐后永远不再检查。
+- **有界提交和失效必须具备明确先后顺序。** 读盘、L2 召回与估算仍在回调票据之外；恢复写入须使用现有 writer、租约/终态提交门、原绝对截止与 L0 CAS。不能只做提交前的布尔检查再无界写入。取消/删除后迟到读取、并发摘要裁剪及原文追加均需要交错测试。
+- **旧冷重建与升级边界保持事实一致。** 工厂现状是新实例按 MySQL 完整历史重建新 epoch，不是重放 Redis 中所有工具轨迹；本轮不能把持久恢复消息宣传为重启续跑。v1/v2 新旧后端同时写同一键不受支持，停机切换与显式降级是交付要求。
+- **收益以实际度量为准。** 普通续调减少额外计划读盘/扫描，计划正文仍参与每次请求；Redis 快照变大是已确认取舍。读盘次数仅统计请求上下文路径，不能把文件/计划工具自己的正常读盘算作本方案未生效，或宣称所有工具不再读盘。
 
 ## Change Source Coverage 检查结果
 
-U1 的完整行为以批准计划为准，U2 仅解除原规划阶段的“本轮仅输出计划”限制。未采纳无来源的功能扩张；本次无数据库迁移、工具瘦身、新通知、窗口／摘要提示词调整或前端改动。
+U1/U2 保留历史原义，U3 明确当前采纳及替代关系；用户已确认恢复随 L0 持久化、不感知手工编辑，并要求执行及测试。没有把候选功能、线上模型、重启续跑、额外通知或业务数据操作加入实施范围。
 
 | 来源／有效要求 | proposal | specs | design | tasks | 结论与缺口 |
 | --- | --- | --- | --- | --- | --- |
-| U1 实现安排 1：每次只读核实，成功完整历史优先，附件其次，缺失恢复，无计划／读失败分开 | What Changes 第 1 项 | “在线变更回合必须维护结构化计划”；“完整计划可见性必须基于真实来源” | 决策 1、6 | 1.1、2.1、2.2 | 覆盖。判定采用可靠裁剪后的实际来源，排除参数、摘要、失败及未完整批次；不是按字符串或版本号猜测 |
-| U1 实现安排 2、3：不可变正文，应用／定义／epoch／实际覆盖／位置绑定，复用与撤下，不持久化 | What Changes 第 2、3 项 | “计划恢复附件必须可复用且保持来源顺序”及覆盖、终态、跨回合、隔离场景 | 决策 2、3、4 | 1.2、2.1、2.2 | 覆盖。覆盖键排除单纯 summaryRevision 和终态登记；附件不赋予摘要覆盖或回收权限 |
-| U1 实现安排 3、4：固定完整单元后的位置、快照语义、一行文件定义、真实进度来源 | What Changes 第 3 项与非目标 | 同版本状态、已触达未验证、新工具顺序、恢复正文场景 | 决策 4、5 | 1.2、2.1、2.2、3.1 | 覆盖。原始工具参数与结果完整保留，无新增状态通知；锚点只属于完整可见原文单元 |
-| U1 实现安排 5：所有入口冻结后计量、同序列发送、超限与迟到受控 | What Changes 第 4 项 | 请求预算场景；取消删除与隔离场景 | 决策 6、Risks | 2.1、2.2、3.1 | 覆盖。初始、续调、同步重新准备、协议恢复共用门禁，附件计入最终预算 |
-| U1 验收：正常／修订／压缩／生命周期、真实请求捕获、受控链路与 Token 对比 | Impact | 各成功、失败和恢复场景 | Validation | 1.1～3.2 | 覆盖。分层验证与组合验证有依赖关系，受控替身边界公开，不要求未获授权的环境或付费操作 |
-| U1 非目标、D1、D2：保留计划磁盘写入、工具协议、构建、摘要窗口及临时资料，旧记录不改 | 非目标、Capabilities、Source Inputs | 继承既有计划能力；本次 delta 只改计划上下文供给并新增附件约束 | Goals / Non-Goals、Migration Plan | 2.2、3.1、3.2、交付条件 | 覆盖。无需数据迁移；旧记录与本变更记录分离，不把新行为倒写成旧验收事实 |
-| U2、D3：独立变更、strict、正式来源、独立评审与真实验收 | Impact、Source Inputs | 不增加产品行为 | Validation、Migration Plan | 交付条件 | 覆盖。6 项 checkbox 只包含可在正式验收前完成的工作，没有验收指纹／归档的循环前置任务 |
+| U3：恢复消息进入有序 L0、独立类型/ID、位置稳定、最多一份、随 Redis 持久化 | What Changes 1、2 | “计划恢复消息必须可复用且保持来源顺序”及缺失恢复/新工具顺序场景 | 决策 1、5、6 | 4.1、5.2、6.2 | 覆盖；没有为恢复分配真实来源身份 |
+| U3：原文、覆盖、证据、用户计数隔离，不占原文额度但计完整预算 | What Changes 4、非目标 | 恢复正文/摘要材料、协议恢复、请求预算场景 | 决策 1、2、6 | 5.1、5.2、6.2 | 覆盖；原始工具记录仍正常进入原文压缩 |
+| U3：旧数组/v1/v2、v1 CAS 升级、单键停机降级、保留 TTL 与原文 | What Changes 2、Impact | “计划热窗口编码必须兼容升级与停机回退”全部场景 | 决策 3、Migration Plan | 4.1、4.2、7.1 | 覆盖；不新增表/列/键，不清空或全库扫描 |
+| U3：初始/epoch/覆盖/定义事件检查，无计划只检查一次，普通状态不触发，不监听手工编辑 | What Changes 3、非目标 | 有效窗口连续续调、服务端定义变化、无计划与读取失败场景 | 决策 2、4 | 6.1、6.2 | 覆盖；同步落盘标记及未完成批次补查有明确约束 |
+| U1 保留＋U3：完整成功工具批次优先，失败/冲突/参数/摘要不是证明，匹配完整定义 | What Changes 3、5；Source Inputs | “完整计划可见性必须基于真实来源”全部场景；计划修订场景 | 决策 4 | 5.2、6.1 | 覆盖；不缩减原始工具参数与结果 |
+| U1 保留＋U3：覆盖推进/终态修订区分，同步等待、异步下次，跨回合/冷重建/协议恢复 | What Changes 4、5 | 可靠覆盖、仅终态、跨回合、协议恢复场景 | 决策 2、4、5 | 5.1、5.2、6.2、7.1 | 覆盖；不改变既有冷重建范围 |
+| U1 保留＋U3：取消、删除、隔离、截止、并发 CAS、冻结计量与发送一致 | What Changes 5 | 取消删除、并发提交、请求预算场景 | 决策 5、6 | 6.2、7.1、7.2 | 覆盖；恢复持久化成功后才放行 |
+| U1 保留、D1/D2：真实工程状态、TOUCHED 语义、工具/计划协议、构建和非目标 | What Changes 5、6 | 继承计划能力、同版本状态、已触达未验证及恢复正文场景 | 决策 6、Risks | 6.1、7.1、7.2 | 覆盖；不新增文件状态通知，不改摘要/阈值/RAG/前端 |
+| U3、D3：同变更修订、旧证据原样保留、strict、真实存储和受控 E2E、指标比较 | Impact、Source Inputs | 可检验的成功/失败/持久化场景 | Validation、Migration Plan | 4.2、7.1、7.2、交付条件 | 覆盖；原六项明确为历史，独立代码评审/验收不是循环前置任务 |
 
-反向追踪：定义值对象、原子代次、覆盖键、来源锚点、专用正文和请求冻结均是落实 U1 的必要技术选择，未新增独立产品功能。依赖顺序为 1.1 → 1.2 → 2.1 → 2.2 → 3.1 → 3.2，每组有自己的验证条件。
+反向追踪：异构窗口、显式原文视图、定义指纹与代次、CAS 兼容、降级及受控 E2E 都用于满足 U3 或保留现有约束，没有独立功能扩张。任务依赖可推进：4.1 → 5.1 → 5.2 → 6.1 → 6.2；4.2 依赖 4.1，7.1 汇合 4.2/6.2，7.2 完成回归。不存在把正式验收作为其自身前置任务的循环。
 
-跨产物一致性：新规格对旧“每次注入最新完整快照”有明确替代依据；“每次仍只读磁盘”与“附件正文复用”不矛盾，前者核实定义和缺失，后者保留历史时序。现有预算中的计划材料按本变更选择后统一计量，窗口、阈值和摘要来源约束继续有效。
+跨产物一致性：已由 U3 替代的“独立附件不进 L0、编码不变、每次读盘”仅在明确标识的历史记录出现；当前规格、设计和新增任务使用热窗口方案。正文仍按每次请求计量与“减少重复装配检查”并不矛盾。
 
 ## Apply handoff
 
-可在本报告定稿、机器规划基线核验及实施入口登记成功后，从任务 1.1 开始编码。独立评审身份只由本报告事实描述，机器助手用于输入新鲜度核验，不能替代语义检查。
+本报告定稿后，可登记新规划基线并在实施入口核验成功后从任务 4.1 开始。现有 `.DS_Store` 保留；不自动提交、推送、部署、重启或归档。
 
-实施必须兑现来源可信度、附件顺序、覆盖／终态区别、跨应用隔离及取消／删除交错测试；组合测试需捕获实际发送请求并验证 `.plan.json` 和文件状态。严格实现验收还需要当前代码的独立评审、完整结构化需求／场景／任务映射及本轮真实运行证据。当前没有业务代码或新测试通过结论。
-
-基线为 `dd51e25`，保留无关 `.DS_Store`。依用户既有授权继续范围内实施，不自动提交、推送、重启、调用线上模型或归档。
+真实验收须使用已授权的本机隔离 `context_summary_it_*` 随机库及隔离应用三个 Redis 键，验证并清理；规划通过不扩大权限。模型替身测试应驱动真实 Java 门禁、工具、来源/摘要与构建流程，捕获实际发送请求，公开模型及构建替身边界。必需测试、原始日志和当前实现独立质量评审完成后，方可形成 U3 的最终验收结论。

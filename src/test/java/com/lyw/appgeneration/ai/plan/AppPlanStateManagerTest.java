@@ -16,6 +16,32 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class AppPlanStateManagerTest {
 
     @Test
+    void 只有成功定义落盘同步发布变化而普通执行状态不发布() throws Exception {
+        var manager = manager(Files.createTempDirectory("plan-definition-events-"));
+        var file = new PlanFile("src/App.vue", "页面", PlanFileAction.CREATE, List.of(), PlanFileState.PENDING);
+        var first = new AppPlan("plan", "turn-1", "turn-1", 1, 1, PlanMode.FULL,
+                "中文页面", List.of(file), List.of(), PlanStatus.PLANNED);
+        assertEquals(AppPlanStateManager.DefinitionChange.UNKNOWN, manager.definitionChange(7));
+        manager.save(7, first, 0, "turn-1");
+        var created = manager.definitionChange(7);
+        assertEquals(1, created.generation());
+        assertEquals(PlanDefinition.of(first).identity(), created.definition());
+        manager.recordSuccessfulMutation(7, "turn-1", "src/App.vue");
+        manager.markBuilt(7, "turn-1");
+        manager.loadForTurn(7, "turn-2");
+        assertEquals(created, manager.definitionChange(7));
+        assertThrows(AppPlanStateManager.PlanVersionConflictException.class,
+                () -> manager.save(7, first.rebindActiveTurn("turn-2"), 0, "turn-2"));
+        assertEquals(created, manager.definitionChange(7));
+        manager.recordSuccessfulMutation(7, "turn-2", "src/New.vue");
+        var expanded = manager.definitionChange(7);
+        assertEquals(2, expanded.generation());
+        assertEquals(1, expanded.definition().version(), "同版本计划外路径也属于定义变化");
+        assertEquals(PlanDefinition.of(manager.load(7).orElseThrow()).identity(), expanded.definition());
+        assertEquals(AppPlanStateManager.DefinitionChange.UNKNOWN, manager.definitionChange(8));
+    }
+
+    @Test
     void 新回合可以接管上一版本并按期望版本提交() throws Exception {
         Path root = Files.createTempDirectory("plan-state-");
         AppPlanStateManager manager = manager(root);

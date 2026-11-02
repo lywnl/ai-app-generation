@@ -2,43 +2,43 @@
 
 ## Why
 
-Vue 在线请求目前在完整计划工具结果之外，每次又追加完整磁盘计划快照，重复消耗输入预算，并把较早的执行状态不断移动到新工具事实之后。改为检查实际可见来源、复用完整计划并在缺失时恢复，使计划持续可见，同时保留真实执行顺序。
+`fc4685e` 已消除重复完整计划快照，但仍在每次请求读盘、检查计划并按原文锚点插入独立附件。将恢复资料保存为 L0 有序窗口条目，后续直接沿用窗口顺序；检查由实际覆盖、epoch 或服务端计划定义变化触发。
 
 ## What Changes
 
-- 每次只读核实当前磁盘计划；优先使用实际保留历史中的匹配成功计划工具结果，其次复用运行期恢复附件，最后按需生成附件。
-- 在应用对应的 `CompressionAwareChatMemory` 中保留一份不可变附件；绑定计划定义、L0 epoch、实际摘要覆盖边界及完整来源单元后的固定位置。
-- 普通文件状态变化继续由工具结果及服务端工程状态承接；恢复附件明确表示恢复时快照，每个文件仅一行。定义变化、可靠覆盖推进及来源重建按规则重新恢复。
-- 最终消息先冻结再计量，所有在线请求入口共享相同规则；取消、删除及迟到结果继续受现有门禁约束。
-- 非目标：不改变 L1 内容规则、12,288 Token 原文软窗口、压缩阈值、RAG／图片生命周期、计划面板、API、SSE 或任何工具协议；不删减、重写原始工具消息，不新增状态通知、持久字段或后台服务。
+- L0 增加独立类型 `PLAN_RESTORE`，正文、身份和顺序随 Redis 快照持久化；每应用最多一份。
+- formatVersion 升为 2，兼容旧数组和 v1，成功 CAS 时升级；提供显式应用 ID 的停机降级操作。
+- 服务端定义成功落盘同步标记变化，完整工具结果入窗后优先复用；普通文件/构建状态不触发恢复，不感知手动改计划文件。
+- 原文、来源、摘要、证据及回合计数与恢复资料分离；协议恢复使用显式原文视图。恢复不占原文软窗口额度，但计入完整请求预算。
+- 保留快照正文、所有工具原文和协议、既有反馈、冷重建范围、取消删除和截止边界。
+- 非目标：不改变摘要内容、12,288 Token 原文窗口、阈值、RAG/L2、前端、API/SSE；不新增数据库字段/Redis 键，不实现重启续跑或文件监控，不消除计划自身 Token。
 
 ## Capabilities
 
 ### New Capabilities
 
-无。按需恢复属于已有 Vue 计划上下文能力。
+无。
 
 ### Modified Capabilities
 
-- `vue-soft-replan`：修订“在线变更回合必须维护结构化计划”的请求供给方式，增加计划可见性、运行期恢复附件与请求预算／生命周期约束。承接尚未归档的 `unify-context-summarization` delta，本变更获准替代其中每请求额外刷新完整计划的条款，其他约束及旧验收记录保留。
+- `vue-soft-replan`：计划恢复保存到热窗口，事件触发检查及 v1/v2 持久化兼容；替代本变更原来的独立附件约定及 `unify-context-summarization` 的逐请求完整快照条款，其他约束保留。
 
 ## Impact
 
-- 后端改动集中于请求准备、分层投影和 `CompressionAwareChatMemory` 内部状态；需要严格识别 `plan-tool/v1` 的成功完整结果。
-- 计划读写、文件触达更新、构建闸门及流式编排继续使用既有实现，仅用于集成及兼容验证。基线为 `dd51e25`。
-- 风险等级为用户指定的 `strict`。重点核验来源可信度、压缩后完整性、附件时序、跨应用隔离和取消／删除竞态；不涉及数据迁移或公共契约破坏。
-- 受控端到端使用本地模型替身与隔离工作目录，验证实际 Java 请求链、工具落盘及构建闸门；记录同输入 Token 对比，不预设收益比例。真实线上模型与现有业务数据不属于本轮验证前提。
+涉及 L0 类型/codec/存储、来源操作、摘要材料、决策证据、终态/协议恢复、请求门禁、计划状态管理及相应测试。保持 `strict`，本轮新增持久化编码风险与回退验收。基线 `fc4685e`，原记录见 `history/fc4685e/`；旧六项完成记录仅证明历史实现。
+
+测试复用项目 Maven/JUnit、隔离 MySQL/Redis 夹具和受控模型替身，比较上下文读盘、恢复次数、请求 Token 与 Redis 快照字节数。真实模型效果和生产部署不属于本轮验证。
 
 ## Source Inputs
 
 | ID | 位置 | 类型／确认状态 | 采纳范围 | 替代关系 |
 | --- | --- | --- | --- | --- |
-| U1 | `sources/user-request.md` U1；`.codex/plans/计划上下文按需恢复与复用.md` | 用户计划／已确认 | 目标、五项实现安排、验收及兼容边界 | 替代 D2 中重复快照规则 |
-| U2 | `sources/user-request.md` U2 | 用户授权／明确实施 | 保存、独立变更、strict 评审、实施与验收 | 替代原“本轮仅输出计划”阶段限制 |
-| D1 | `openspec/specs/vue-soft-replan/spec.md` | 正式规范／持续约束 | 计划协议、工具与回合隔离、反馈及构建行为 | 请求上下文条款由本变更修订 |
-| D2 | `openspec/changes/unify-context-summarization/specs/vue-soft-replan/spec.md`、`specs/context-summarization/spec.md` | 已验收未归档规范／持续约束 | 来源、压缩、预算、状态与临时资料规则 | 只替代每请求额外完整快照与同版本状态重建要求；预算包含实际选择的有效计划材料 |
-| D3 | `AGENTS.md`、`.agents/shared/openspec/` 工作流、来源、评审及证据规则 | 工程规则／持续约束 | 中文、授权范围、strict 独立评审及可核验交付 | 无 |
-| C1 | `src/main/java/com/lyw/appgeneration/ai/memory/`、对应测试 | 已核实事实／实施参考 | 请求门禁、L0 来源、投影、冻结与运行期记忆；允许按任务修改 | 不冻结待改代码 |
-| C2 | `src/main/java/com/lyw/appgeneration/ai/plan/`、`src/main/java/com/lyw/appgeneration/ai/tools/`、`src/main/java/com/lyw/appgeneration/ai/AiGeneratorServiceFactory.java`、`src/main/java/com/lyw/appgeneration/core/handler/VueTurnContext.java`、`src/main/java/dev/langchain4j/service/AiServiceStreamingResponseHandler.java` | 已核实事实／实施参考 | 只读计划、计划定义及现有工具事实／缓存／取消链路 | 保留公开契约，允许必要内部适配 |
+| U1/U2 | `sources/user-request.md` | 用户要求／部分替代 | 计划真实来源、快照正文、进度通知、预算和生命周期 | 存放位置、编码、检查频率由 U3 替代 |
+| U3 | `sources/user-request.md`；`.codex/plans/计划恢复消息进入热窗口.md` | 用户要求／已确认实施 | 热窗口持久化、事件恢复、兼容降级和本轮验证 | 同上，原报告保留 |
+| D1 | `openspec/specs/vue-soft-replan/spec.md` | 正式规范／持续约束 | 计划协议、回合隔离、反馈、构建 | 上下文供给由本 delta 修订 |
+| D2 | `openspec/changes/unify-context-summarization/specs/vue-soft-replan/spec.md`、`openspec/changes/unify-context-summarization/specs/context-summarization/spec.md` | 已验收规范／持续约束 | 来源、压缩、原文回收、预算、临时资料 | 仅计划供给及恢复缓存编码由本轮替代 |
+| D3 | `AGENTS.md`、`.agents/shared/openspec/` 工作流/来源/评审/证据规则 | 持续约束 | 中文、授权、strict 与可核验交付 | 无 |
+| C1 | `src/main/java/com/lyw/appgeneration/ai/memory/`、`service/`、`core/handler/` 与对应测试 | 实施参考 | L0、摘要/证据、请求、终态及来源边界 | 允许按任务修改 |
+| C2 | `src/main/java/com/lyw/appgeneration/ai/plan/`、`ai/tools/`、`ai/AiGeneratorServiceFactory.java`、`core/AiCodeGeneratorFacade.java`、`src/main/java/dev/langchain4j/service/` 与对应测试 | 实施参考 | 同步定义标记、原文提交、协议恢复与装配 | 保留公共契约，允许内部适配 |
 
-以上路径除变更内文件外均相对于项目根。机器基线区分持续约束 `source` 与允许实施的 `reference`，不把代码变化误判为需求变化。
+路径均相对项目根或变更目录。机器记录区分持续约束和允许修改的参考，不冻结待改源码。

@@ -411,7 +411,8 @@ public class AiCodeGeneratorFacade {
         TurnRequestBoundary requestBoundary = TurnRequestBoundary.of(
                 userMessage, stableTransientMessages, turnContext.userHistoryId(), turnContext.turnId());
         if (appPlanStateManager != null) {
-            requestBoundary = requestBoundary.withPlanReader(() -> appPlanStateManager.loadReadOnly(appId));
+            requestBoundary = requestBoundary.withPlanReader(() -> appPlanStateManager.loadReadOnly(appId),
+                    () -> appPlanStateManager.definitionChange(appId));
         }
         TokenStream tokenStream = CanonicalUserMessageScope.call(
                 requestBoundary,

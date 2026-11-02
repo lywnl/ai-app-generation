@@ -40,6 +40,23 @@ public final class AppPlanStateManager {
     private final PlanStoragePathResolver pathResolver;
     private final ConcurrentHashMap<Long, ReentrantLock> locks =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, DefinitionChange> definitionChanges = new ConcurrentHashMap<>();
+
+    /** 无正文、无磁盘 I/O 的同步变更标记；只有成功定义写入递增。 */
+    public record DefinitionChange(long generation, PlanDefinition.Identity definition) {
+        public static final DefinitionChange UNKNOWN = new DefinitionChange(0, null);
+    }
+
+    public DefinitionChange definitionChange(long appId) {
+        if (appId <= 0) throw new IllegalArgumentException("appId 必须大于 0");
+        return definitionChanges.getOrDefault(appId, DefinitionChange.UNKNOWN);
+    }
+
+    private void definitionWritten(long appId, AppPlan plan) {
+        var identity = PlanDefinition.of(plan).identity();
+        definitionChanges.compute(appId, (ignored, previous) -> new DefinitionChange(
+                previous == null ? 1 : Math.addExact(previous.generation(), 1), identity));
+    }
 
     public AppPlanStateManager(
             ObjectMapper objectMapper,
@@ -123,6 +140,9 @@ public final class AppPlanStateManager {
             }
             AppPlan trimmed = trimHistory(plan);
             write(appId, trimmed);
+            if (existing.isEmpty() || !PlanDefinition.of(existing.get()).equals(PlanDefinition.of(trimmed))) {
+                definitionWritten(appId, trimmed);
+            }
             return trimmed;
         });
     }
@@ -271,10 +291,12 @@ public final class AppPlanStateManager {
                     ? PlanStatus.REPLAN_PENDING
                     : (isReadyToBuild(files, plan.status())
                     ? PlanStatus.READY_TO_BUILD : PlanStatus.PLANNED);
-            write(appId, new AppPlan(
+            AppPlan changed = new AppPlan(
                     plan.planId(), turnId, plan.activeTurnId(),
                     plan.version(), plan.round(), plan.mode(), plan.summary(),
-                    files, plan.history(), status));
+                    files, plan.history(), status);
+            write(appId, changed);
+            if (!planned) definitionWritten(appId, changed);
             return null;
         });
     }

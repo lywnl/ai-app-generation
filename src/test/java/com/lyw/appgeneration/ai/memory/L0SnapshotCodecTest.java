@@ -46,7 +46,7 @@ class L0SnapshotCodecTest {
         String json = L0SnapshotCodec.encode(empty);
         assertThrows(IllegalArgumentException.class, () -> L0SnapshotCodec.decode("8", json));
         for (String invalid : new String[]{"{}", "null", json + "{}",
-                json.replace("\"formatVersion\":1", "\"formatVersion\":2"),
+                json.replace("\"formatVersion\":2", "\"formatVersion\":99"),
                 json.replace("\"appliedSummaryRevision\":3", "\"appliedSummaryRevision\":null"),
                 json.replace("\"nextSequence\":1", "\"nextSequence\":0")}) {
             assertThrows(IllegalArgumentException.class, () -> L0SnapshotCodec.decode("7", invalid));

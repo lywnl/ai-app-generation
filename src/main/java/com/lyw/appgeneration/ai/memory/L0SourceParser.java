@@ -25,7 +25,20 @@ public final class L0SourceParser {
             var entries = snapshot.entries().stream().filter(entry -> entry.userHistoryId() == turn.userHistoryId()).toList();
             turns.add(parseTurn(turn, entries, registeredTools));
         }
-        return new Parsed(snapshot.entries().stream().filter(entry -> entry.payload() instanceof SystemMessage).toList(), turns);
+        var parsed = new Parsed(snapshot.entries().stream().filter(entry -> entry.payload() instanceof SystemMessage).toList(), turns);
+        var restore = snapshot.planRestore();
+        if (restore != null) {
+            int position = snapshot.window().indexOf(restore);
+            for (var unit : parsed.units()) {
+                if (unit.kind() != Kind.TOOL_BATCH && unit.kind() != Kind.PENDING_TOOL_BATCH) continue;
+                int first = snapshot.window().indexOf(unit.entries().getFirst());
+                int last = snapshot.window().indexOf(unit.entries().getLast());
+                if (position > first && (!unit.complete() || position < last)) {
+                    throw new IllegalArgumentException("计划恢复资料不得拆开工具批次");
+                }
+            }
+        }
+        return parsed;
     }
 
     /** 旧完整历史使用查询得到的两端 ID；不猜测缺失的工具轨迹。 */

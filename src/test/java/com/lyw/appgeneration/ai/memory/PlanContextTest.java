@@ -33,7 +33,7 @@ class PlanContextTest {
         var view = new TrustedTurnRequestViewProjector().project(fixture.snapshot());
         assertTrue(view.conversationMessages().contains(AiMessage.from(call)));
         assertTrue(view.conversationMessages().contains(result));
-        assertEquals(source, fixture.source);
+        assertEquals(source.entries(), fixture.source.entries());
     }
 
     @ParameterizedTest
@@ -86,8 +86,8 @@ class PlanContextTest {
         fixture.add(ToolExecutionResultMessage.from(planCall, success("makePlan", fixture.plan)));
         var attachment = fixture.select(null);
         assertNotNull(attachment);
-        assertEquals(1, attachment.afterSequence());
-        var view = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "当前执行中", attachment);
+        assertEquals(1, fixture.source.window().indexOf(attachment));
+        var view = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "当前执行中");
         assertTrue(view.conversationMessages().indexOf(AiMessage.from(SyntheticMemoryMessageProtocol.PLAN_SNAPSHOT_ACK))
                 < view.conversationMessages().indexOf(ai));
         fixture.add(ToolExecutionResultMessage.from(readCall, "读取成功"));
@@ -128,7 +128,7 @@ class PlanContextTest {
         var replacement = fixture.select(restored);
         assertNotNull(replacement);
         assertNotSame(restored, replacement);
-        assertEquals(3, replacement.afterSequence());
+        assertEquals(3, fixture.source.window().indexOf(replacement));
     }
 
     @Test
@@ -147,9 +147,9 @@ class PlanContextTest {
         fixture.add(AiMessage.from(call));
         fixture.add(ToolExecutionResultMessage.from(call, success("makePlan", updated)));
         assertNull(fixture.select(attachment));
-        var left = PlanContext.Definition.of("id", 1, "目标", List.of(new PlanFile("src/App.vue", "页面",
+        var left = PlanDefinition.of("id", 1, "目标", List.of(new PlanFile("src/App.vue", "页面",
                 PlanFileAction.MODIFY, List.of("src/a.ts", "src/b.ts"), PlanFileState.PENDING)));
-        var right = PlanContext.Definition.of("id", 1, "目标", List.of(new PlanFile("src/App.vue", "页面",
+        var right = PlanDefinition.of("id", 1, "目标", List.of(new PlanFile("src/App.vue", "页面",
                 PlanFileAction.MODIFY, List.of("src/b.ts", "src/a.ts"), PlanFileState.TOUCHED)));
         assertEquals(left, right);
     }
@@ -164,7 +164,7 @@ class PlanContextTest {
         fixture.add(result);
         fixture.plan = plan(1, PlanFileState.TOUCHED);
         assertSame(attachment, fixture.select(attachment));
-        var messages = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "当前状态", attachment).conversationMessages();
+        var messages = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "当前状态").conversationMessages();
         assertEquals(List.of(fixture.boundary.userMessage(), attachment.messages().getFirst(), attachment.messages().getLast(),
                 AiMessage.from(call), result), messages);
         assertFalse(fixture.source.messages().contains(attachment.messages().getFirst()));
@@ -182,9 +182,9 @@ class PlanContextTest {
         var original = fixture.source;
         var attachment = fixture.select(null);
         assertNotNull(attachment);
-        assertEquals(4, attachment.afterSequence());
-        assertEquals(original, fixture.source);
-        var messages = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "状态", attachment).conversationMessages();
+        assertEquals(4, fixture.source.window().indexOf(attachment));
+        assertEquals(original.entries(), fixture.source.entries());
+        var messages = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "状态").conversationMessages();
         assertTrue(messages.contains(AiMessage.from("最近一条说明")));
         assertFalse(messages.stream().anyMatch(ToolExecutionResultMessage.class::isInstance));
     }
@@ -202,7 +202,7 @@ class PlanContextTest {
         assertEquals(0, fixture.summary.summaryRevision());
         var attachment = fixture.select(null);
         assertNotNull(attachment, "完整旧结果虽仍在 L0，但已被旧摘要游标隐藏");
-        var projected = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "当前状态", attachment);
+        var projected = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "当前状态");
         assertFalse(projected.conversationMessages().stream().anyMatch(ToolExecutionResultMessage.class::isInstance));
         assertEquals(List.of(fixture.boundary.userMessage(), attachment.messages().getFirst(), attachment.messages().getLast()),
                 projected.conversationMessages());
@@ -250,7 +250,7 @@ class PlanContextTest {
         fixture.boundary = TurnRequestBoundary.of("下一轮继续", List.of(), 30, "next");
         fixture.source = L0SourceOperations.append(fixture.source, fixture.boundary.userMessage(), fixture.boundary);
         assertSame(attachment, fixture.select(attachment));
-        var projected = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "状态", attachment);
+        var projected = new TrustedTurnRequestViewProjector().project(fixture.snapshot(), "状态");
         assertEquals(AiMessage.from(SyntheticMemoryMessageProtocol.TRUSTED_TURN_ACK), projected.conversationMessages().get(1));
         assertEquals(attachment.messages().getFirst(), projected.conversationMessages().get(2));
         assertEquals(fixture.boundary.userMessage(), projected.conversationMessages().getLast());
@@ -269,9 +269,9 @@ class PlanContextTest {
         var other = new Fixture(8);
         var otherAttachment = other.select(attachment);
         assertNotSame(attachment, otherAttachment);
-        assertEquals(8, otherAttachment.appId());
-        assertThrows(IllegalArgumentException.class,
-                () -> new TrustedTurnRequestViewProjector().project(other.snapshot(), "状态", attachment));
+        assertEquals("8", other.source.memoryId());
+        assertNotEquals(attachment.restoreId(), otherAttachment.restoreId());
+        assertThrows(IllegalArgumentException.class, () -> L0SnapshotCodec.decode("7", L0SnapshotCodec.encode(other.source)));
     }
 
     @Test
@@ -323,8 +323,9 @@ class PlanContextTest {
         CompatibleMemorySnapshot snapshot() {
             return new CompatibleMemorySnapshot(appId, boundary.userHistoryId(), boundary.turnId(), summary, source);
         }
-        PlanContext.Attachment select(PlanContext.Attachment previous) {
-            return PlanContext.select(snapshot(), plan, new PlanContext.State(previous));
+        L0Snapshot.PlanRestore select(L0Snapshot.PlanRestore previous) {
+            source = PlanContext.select(snapshot(), plan, previous != null);
+            return source.planRestore();
         }
         void coverThrough(long sequence, long revision) {
             summary = new MemorySummarySnapshot(UnifiedContextRequestGateTest.summaryText(), 0, revision, 2,

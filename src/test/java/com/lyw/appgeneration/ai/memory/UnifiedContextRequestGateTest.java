@@ -89,7 +89,7 @@ class UnifiedContextRequestGateTest {
                 assertFalse(result.requestMessages().toString().contains("已合并旧诊断"));
                 assertTrue(result.requestMessages().toString().contains("最新说明"));
             }
-            assertTrue(source.equals(fixture.store.value.get()), "回收失败仍保留原文及来源元数据");
+            assertOriginalSourceSame(source, fixture.store.value.get());
             verify(fixture.summaries, never()).compressUnified(any(), any());
             verify(fixture.summaries, never()).triggerUnifiedAsync(any(), any());
         }
@@ -114,7 +114,7 @@ class UnifiedContextRequestGateTest {
                     ignored -> { }, fixture.context, fixture.boundary);
             assertEquals(ContextCompressionMode.HARD_LIMIT_REJECTED, result.mode());
             assertTrue(result.finalTokens() >= 65_536);
-            assertEquals(before, fixture.store.value.get());
+            assertOriginalSourceSame(before, fixture.store.value.get());
             assertTrue(result.requestMessages().contains(fixture.boundary.userMessage()));
             if (oversizedTool) {
                 assertEquals(1, result.requestMessages().stream().filter(ToolExecutionResultMessage.class::isInstance).count());
@@ -133,7 +133,7 @@ class UnifiedContextRequestGateTest {
             var result = fixture.admit();
             assertFalse(result.canProceed());
             assertEquals(ContextAdmissionResult.FailureReason.MODEL_FAILED, result.failureReason());
-            assertEquals(before, fixture.store.value.get());
+            assertOriginalSourceSame(before, fixture.store.value.get());
             assertFalse(result.requestMessages().toString().contains("本轮可信执行检查点"));
         }
     }
@@ -194,12 +194,12 @@ class UnifiedContextRequestGateTest {
     }
 
     @Test
-    void 同版本计划每次重读但状态变化复用附件并统一估算() {
+    void 同版本状态沿用热窗口而不重读计划并统一估算() {
         try (var fixture = new Fixture(true)) {
             var first = fixture.admit();
             assertTrue(first.canProceed(), first.detail());
             assertTrue(first.requestMessages().toString().contains("状态=PENDING"));
-            var attachment = fixture.memory.capturePlanContext().attachment();
+            var attachment = fixture.l0.sourceSnapshot().planRestore();
             var write = ToolExecutionRequest.builder().id("write").name("writeFile").arguments("{}").build();
             fixture.l0.add(AiMessage.from(write));
             var written = ToolExecutionResultMessage.from(write, "文件已经成功写入");
@@ -207,10 +207,10 @@ class UnifiedContextRequestGateTest {
             fixture.plan.set(plan(1, PlanFileState.TOUCHED));
             var next = fixture.admit();
             assertTrue(next.canProceed(), next.detail());
-            assertSame(attachment, fixture.memory.capturePlanContext().attachment());
+            assertSame(attachment, fixture.l0.sourceSnapshot().planRestore());
             assertTrue(next.requestMessages().toString().contains("状态=PENDING"));
             assertTrue(next.requestMessages().indexOf(written) > next.requestMessages().indexOf(attachment.messages().getLast()));
-            assertEquals(2, fixture.planReads.get());
+            assertEquals(1, fixture.planReads.get());
             assertCompleteSnapshot(fixture, next.requestMessages());
             assertEquals(fixture.lastEstimated.get(), next.requestMessages());
             assertEquals(fixture.tools, fixture.lastTools.get());
@@ -249,7 +249,7 @@ class UnifiedContextRequestGateTest {
             assertEquals(2, fixture.planReads.get());
             assertEquals(fixture.lastEstimated.get(), result.requestMessages());
             assertCompleteSnapshot(fixture, result.requestMessages());
-            verify(fixture.summaries, times(2)).readCompatible(any(), same(result.deadline()));
+            verify(fixture.summaries, times(3)).readCompatible(any(), same(result.deadline()));
             verify(fixture.summaries).compressUnified(any(), same(result.deadline()));
         }
     }
@@ -257,6 +257,7 @@ class UnifiedContextRequestGateTest {
     @Test
     void 已捕获的完整旧副本不受之后后台普通回收影响() {
         try (var fixture = new Fixture(true)) {
+            assertTrue(fixture.admit().canProceed());
             fixture.l0.add(AiMessage.from("已经捕获的原始日志"));
             var old = fixture.store.value.get();
             when(fixture.summaries.readCompatible(any(), any())).thenAnswer(invocation -> {
@@ -281,6 +282,7 @@ class UnifiedContextRequestGateTest {
             var absent = fixture.admit();
             assertTrue(absent.canProceed());
             assertFalse(absent.requestMessages().contains(AiMessage.from(SyntheticMemoryMessageProtocol.PLAN_SNAPSHOT_ACK)));
+            fixture.memory.invalidatePlanContext();
             fixture.boundary = fixture.boundary.withPlanReader(() -> { throw new IllegalStateException("计划读取故障"); });
             var failed = fixture.admit();
             assertFalse(failed.canProceed());
@@ -443,7 +445,7 @@ class UnifiedContextRequestGateTest {
                 assertFalse(revised.request.messages().toString().contains("状态=REPLAN_PENDING"));
                 assertCompleteSnapshot(fixture, revised.request.messages());
                 assertFalse(fixture.l0.messages().toString().contains("【内部计划校正】"));
-                assertEquals(3, fixture.planReads.get());
+                assertEquals(2, fixture.planReads.get());
                 assertTrue(errors.isEmpty(), errors.toString());
             } finally { stream.cancel(); }
         }
@@ -467,6 +469,14 @@ class UnifiedContextRequestGateTest {
     interface TestService {
         @dev.langchain4j.service.UserMessage("{{request}}")
         TokenStream chat(@MemoryId long appId, @V("request") String request);
+    }
+
+    private static void assertOriginalSourceSame(L0Snapshot before, L0Snapshot after) {
+        assertEquals(before.entries(), after.entries());
+        assertEquals(before.turns(), after.turns());
+        assertEquals(before.memoryEpoch(), after.memoryEpoch());
+        assertEquals(before.nextSequence(), after.nextSequence());
+        assertEquals(before.appliedSummaryRevision(), after.appliedSummaryRevision());
     }
 
     static final class ReadTools {
@@ -518,7 +528,7 @@ class UnifiedContextRequestGateTest {
             context = new VueTurnContext(7, 9, "turn", operation, lease, admission.tryAcquire().orElseThrow(), new FileToolBudgetGuard().newSession());
             context.commitUserAndBindHistory(() -> ChatHistory.builder().id(10L).appId(7L).userId(9L).messageType("user").message(rawUser).build());
             boundary = TurnRequestBoundary.of(rawUser, transientMessages, 10, "turn")
-                    .withPlanReader(() -> { planReads.incrementAndGet(); return Optional.ofNullable(plan.get()); });
+                    .withPlanReader(() -> { planReads.incrementAndGet(); return Optional.ofNullable(plan.get()); }, this::change);
             var prefs = mock(UserMemoryService.class);
             when(prefs.recallByApp(7L)).thenReturn("偏好：简体中文");
             memory = new CompressionAwareChatMemory(l0, summaries, prefs, new UserPreferenceMessageFragmentBuilder(realEstimator, properties), true);
@@ -542,6 +552,13 @@ class UnifiedContextRequestGateTest {
             coordinator = new ContextCompressionCoordinator(estimator, mock(ChatHistoryService.class), summaries, properties,
                     compression, reads, lifecycle, metrics);
             gate = new ContextCompressionModelRequestGate(coordinator, gateExecutor);
+        }
+
+        com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange change() {
+            var current = plan.get();
+            return current == null ? com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange.UNKNOWN
+                    : new com.lyw.appgeneration.ai.plan.AppPlanStateManager.DefinitionChange(current.version(),
+                    com.lyw.appgeneration.ai.plan.PlanDefinition.of(current).identity());
         }
 
         ContextAdmissionResult admit() { return coordinator.admit(memory, tools, transientMessages, ignored -> { }, context, boundary); }

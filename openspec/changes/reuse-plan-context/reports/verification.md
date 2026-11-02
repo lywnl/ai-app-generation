@@ -1,59 +1,62 @@
-# Verification: reuse-plan-context
+# 实现验收：reuse-plan-context
 
-- 日期：2026-11-01
-- Profile：strict；核验方式：machine
-- 结论：**Ready for Archive**。本轮范围内的实现、6 项任务、34 条需求／场景／任务映射与必需验证均完成，无未解决阻塞。
-- 规划基线：`dd51e25` 上的本变更规划及 `reviews/planning-review.json`；已在首次编码前通过 `record-plan`、`check-plan`、`start-apply`。本轮只更新任务 checkbox，规划内容与来源未变；最终 `check-plan` 仍通过。
-- 代码基线：当前未提交实现，5 个后端文件与 4 个测试文件。`regression-01/code-state.json` 覆盖本轮运行时 793 个项目源码／配置／测试文件（包含未跟踪文件）；最终重新枚举、比较后无新增或内容差异。工作区原有 `.DS_Store` 保留。
+- 验收日期：2026-11-02。
+- Profile：strict；核验方式：machine。
+- 范围：`fc4685e` 之后 U3“计划恢复消息进入 L0 热窗口”的未提交实现。规划及实施入口见 `reviews/planning-review.json`；独立代码结论见 `reviews/implementation-review.md`。
+- 结论：**Ready for Archive**。本轮仅完成实现和验收，尚未归档、提交、推送、重启或部署。
 
-## 实现结果
+## 实现与覆盖
 
-`PlanContext` 根据实际可见的完整工具批次识别成功计划，比较身份、版本、目标及文件定义。`CompressionAwareChatMemory` 保存一份独立运行期附件；`TrustedTurnRequestViewProjector` 在固定来源边界插入它，后续事实保持在其后。`UnifiedContextRequestPreparer` 保留每次只读核实磁盘计划，在最终消息冻结及计量后，通过现有取消／终态／删除边界提交短内存状态。
+详细需求/场景/任务 → 实现 → 测试 → 证据维护在 `reports/verification-manifest.json`：覆盖当前 4 项需求、32 个场景和 4.1—7.2 共 8 项新任务。1.1—3.2 的 6 项完成状态明确标为历史，原规划及报告的 10 个文件按 `fc4685e` 原字节保存在 `history/fc4685e/`，不作为新方案通过证据。
 
-普通文件触达和构建进度不重建附件，沿用真实工具结果、工程状态和已有反馈。可靠覆盖推进或 epoch／定义变化后重新检查并按需恢复；仅终态登记增加摘要修订号不触发重建。原始工具参数、结果与配对完整保留，附件未进入 L0、L1 新材料或持久编码。
+- `L0Snapshot.window()` 保存 ORIGINAL 与 PLAN_RESTORE，恢复有独立 ID、定义身份、覆盖键和正文；不分配原文序号、不创建历史记录。派生原文视图承接摘要、证据、工具协议恢复和用户计数。
+- v2 按条目编解码，读取 v1 保留旧版 expected CAS，成功写入才升级。真实旧 codec 黄金快照验证字节兼容。停写降级命令只处理显式应用键，保留原文、epoch、摘要依赖与剩余 TTL，精确 CAS 冲突不覆盖胜出者；独立 Java 维护进程已在隔离键验证。
+- `AppPlanStateManager` 在定义成功写入后同步发布身份和代次；状态、构建及活动回合绑定不发布。普通续调不重读计划或扫描完整计划，已有完整成功批次优先，缺失后按事件恢复。正文留在 L0，后续按窗口顺序展开，移除独立附件及 afterSequence 插入路径。
+- 覆盖键不以 summaryRevision 为依据；可靠覆盖推进、新 epoch 或定义变化触发检查，未完成并行批次补齐后重新判断。原文保留额度和摘要规则保持，恢复仍计入完整请求预算。
+- 真正的恢复增删先通过应用/回合/截止及 L0 CAS，冲突重读；无窗口写入时保留合法同 epoch 相容副本。协议恢复的迟到发送沿用真实 sourceGeneration 门，避免为每次请求增加额外 Redis 读取。
 
-详细的 **3 项 Requirement、25 项 Scenario、6 项任务 → 实现 → 测试节点 → 本轮原始证据** 统一维护于 [verification-manifest.json](verification-manifest.json)，本报告不重复整张映射。
+## 本轮实际验证
 
-## 实际验证
+原始文件统一保留在 `.codex/plan-restore-l0/`；每轮 `command.json` 记录命令、cwd、起止时间、退出码和代码状态，JUnit 保存实际节点结果。命令列表及中间失败都纳入结构化清单。
 
 | 验证 | 结果 | 原始证据 |
 | --- | --- | --- |
-| 最终聚焦及相关回归 | 34 个测试类，**484 项通过，0 失败、0 错误、0 跳过** | `.codex/reuse-plan-context/regression-01/command.json`、`maven.log`、`junit/` |
-| 受控端到端单独运行 | 1 项通过；最终回归再次包含此项 | `.codex/reuse-plan-context/e2e-03/command.json`、`junit/` |
-| 真实 Java 链的请求、文件及计划核对 | 9 次实际 `ChatRequest`，2 次连续同步压缩，3 个真实文件写入，一次构建进程替身调用；最终 v2 `BUILT` | `.codex/reuse-plan-context/regression-01/tmp/plan-context-e2e/` 下的 `pipeline.log`、9 份 `request-*.json`、`summary-inputs.json`、`source-final.json`、`final-plan.json` |
-| OpenSpec 严格校验、规划基线与差异格式 | 均退出 0；旧统一摘要变更、提示词、预算参数、计划协议及 L0 编码没有差异 | `.codex/reuse-plan-context/final-checks/commands.json`、`1.log`～`4.log` |
-| 测试后代码新鲜度 | 793 个登记文件无变化、无新增 | `.codex/reuse-plan-context/final-checks/code-freshness.json` |
+| 记忆、计划、文件、构建、终态、协议恢复及 L2 边界回归 | 607 项通过；0 失败、错误或跳过 | `regression-01/command.json`、`junit/`、`maven.log` |
+| 真实 MySQL/Redis 组合、编码升级、并发 CAS、降级 TTL/CLI 和清理 | 27 项通过；0 失败、错误或跳过 | `storage-03/command.json`、`junit/`、`maven.log` |
+| 定义变化、并行批次、来源追加、并发恢复、取消/恢复交错 | 42 项通过，已包含在 607 项中，不重复计数 | `race-01/` |
+| 真实 Java 工具链受控 E2E | 9 次请求、2 次压缩、3 个文件实际写入、构建闸门通过；已计入 607 项 | `regression-01/tmp/plan-context-e2e/` |
+| 独立重跑 fc4685e 业务代码的相同 E2E | 1 项通过；属于比较基线，不计入当前 634 项 | `baseline-fc4685e-sorted/` |
+| Git 空白检查、OpenSpec 严格校验、规划新鲜度、公共协议/摘要参数未变、旧报告字节核对 | 全部通过 | `final-checks/commands.json`、`code-freshness.json` |
 
-命令、工作目录、起止时间、退出码、代码状态和原始日志路径已保存于对应 `command.json`，并由结构化清单索引。环境为本机 Java 25.0.4.1、Maven 3.10.0，使用项目已有离线仓库与配置。最终回归的文件工具工作目录及 Java 临时目录均位于 `.codex/reuse-plan-context/regression-01/`；受控链另开独立 JVM 和隔离工程目录。
+当前验收合计 **634 项测试通过**。未使用旧版 484 项结果替代本轮验证。607 项回归后唯一变化是新增维护 CLI 用例所在的 `PlanRestoreStorageIntegrationTest.java`，已由后续 27 项真实存储完整覆盖；最终代码状态核验确认其他回归输入未变。
 
-端到端保留生产的 12,288 Token 软窗口、49,152／57,344／65,536 阈值，以隔离诊断文件的真实读取结果制造压缩条件。完整计划成功结果可见时额外附件为 0；压缩移除计划后每次只有 1 份，普通续写正文不变，新覆盖后恢复最新磁盘进度。实际发送消息与估算消息及工具定义逐项相同，两次摘要输入均没有恢复附件。
+真实存储沿用已授权 MySQL `127.0.0.1:3406` 与 Redis `127.0.0.1:6379` DB0。每项只创建 `context_summary_it_*` 随机库、占用随机应用的既有三个键；夹具在 finally 中清理并查询确认不存在。未操作业务库或业务应用键。
 
-### 相同输入的 Token 对比
+## 同输入比较
 
-对捕获请求保留相同原文、工具定义和临时资料，分别计算旧的额外完整快照规则与新请求；使用现有保守估算器，不声称服务商精确计费 Token。
+详见 `.codex/plan-restore-l0/comparison.json`。两边使用各自真实业务代码与同一 9 步测试脚本，测试 ObjectMapper 固定 JSON Map 排序；旧侧仅补计数与排序观测，没有改业务逻辑。实际请求在仅归一随机 plan UUID 后逐条深度相等。
 
-| 固定样例 | 旧规则 | 新请求 | 新请求额外附件 |
-| --- | ---: | ---: | ---: |
-| 创建计划后的请求 | 1,969 | 1,621 | 0 |
-| 第一次文件写入后的请求 | 2,127 | 1,780 | 0 |
-| 修订计划后的请求 | 2,461 | 2,061 | 0 |
-| 首次压缩后的恢复请求 | 33,357 | 33,355 | 1 |
+| 指标 | fc4685e 独立附件 | 当前热窗口恢复 |
+| --- | --- | --- |
+| 模型请求数 | 9 | 9 |
+| 可靠压缩次数 | 2 | 2 |
+| 请求上下文额外计划读盘 | 11 | 3 |
+| 两次压缩后的恢复次数 | 2 | 2；后续复用同一恢复 ID |
+| 逐请求 Token 估算 | 与当前逐项相同 | 9 项差额均为 0 |
+| E2E 最终 Redis 快照 | 83,666 字节 | 85,222 字节 |
 
-完整 9 次比较见 `regression-01/tmp/plan-context-e2e/token-comparison.json`。收益来自省去历史中已有计划之外的副本；需要恢复的请求仍承担完整计划成本，不据固定样例推断线上节省比例。
+Token 使用同一 `ConservativeChatTokenEstimator`，属于本地请求预算估算，不是提供商 tokenizer 实测。该改动减少请求准备的计划读盘和附件定位；计划正文仍发送并占 Token，Redis 快照增加 1,556 字节。该数值只说明本次合成输入，不外推固定收益百分比。E2E 原“旧规则Token”列用于更早的逐次全量快照对照，未拿它冒充本轮 fc4685e 基线收益。
 
-## 独立评审与失败处置
+## 失败、修复及独立评审
 
-[规划评审](../reviews/change-review.md) 和 [独立代码评审](../reviews/implementation-review.md) 均为 PASS，评审者为未撰写相应规划／代码的 `/root/plan_context_review`。
+- 中间轮次存在旧测试接口未适配、仍断言不写 L0/每次读盘，以及新测试漏登记来源等装配问题；已调整为新方案的来源和持久化断言，最终相关节点全部重跑通过。原始非零退出码保留。
+- `storage-01` 暴露无窗口写入时仍要求旧 L0 全值匹配，会替换合法捕获副本的问题；已修复为同 epoch 无写入只登记检查状态，实际恢复写入继续全值 CAS，新 epoch 重读。`storage-02`/`storage-03` 均验证原失败路径，独立评审 IR-U3-1 已关闭。
+- 独立执行上下文 `/root/l0_plan_independent_review` 未参与业务代码/测试编写，完成当前实现审查并独立核对最终 XML、代码状态与比较产物，结论 **PASS**，无未解决阻塞。两项交错补证验证读盘/计量中计划变化只放行最新版本，以及协议恢复撤销后旧 Decision 不触发 SDK 请求。
 
-代码评审发现的 IR1（P2）已关闭：旧版摘要 `summaryRevision=0` 仍可能按完整历史游标隐藏旧计划，而初版判定只共享了新版可靠裁剪。已将该过滤统一放进 `visibleSource()`，新增“旧版零修订摘要隐藏的成功计划也必须按实际可见历史恢复”回归；最终 484 项验证包括此修复。
+## 限制与交付要求
 
-保留所有中间失败记录，未冒充通过：`gate-01` 的一个跨回合测试在 `when` 配置时触发旧 stub，改为 `doAnswer` 后通过；`e2e-01` 为新测试导入及构造器装配错误，`e2e-02` 为对工程状态文字的断言不符。均已修正并由 `e2e-03`／`regression-01` 验证。没有未运行、跳过或以降低验收标准绕过的必需项。
+主生成模型和摘要输出均为本地替身；E2E 实际调用 Java 编排、文件工具、计划工具、来源压缩/恢复及构建闸门，npm 构建进程使用确定性替身。真实 MySQL/Redis 已验证，不代表真实模型生成质量或生产部署通过。本轮没有重启运行中的前后端。
 
-## 交付边界
+部署切换须停止旧版本写入；不支持新旧版本同时写同一 L0。回退先按 `dev/l0-plan-restore-rollback.md` 对显式应用执行停写降级，再启动旧后端。手动修改 `.plan.json` 的实时感知、重启续跑、摘要正文策略与窗口阈值不在本轮范围内。
 
-- 受控端到端使用真实 Java 流式编排、请求门禁、摘要服务／草稿引擎／来源选择／覆盖规划、计划与文件工具及构建闸门。模型、数据库／Redis 适配器和 npm 构建进程使用本地替身；构建替身核对三个真实文件后才生成测试产物。这不等于真实模型效果、外部存储或 npm 构建验证，本次约定也不要求这些外部验证。
-- 未改公共 API、SSE、工具协议、数据库／Redis 结构、摘要提示词、预算参数、RAG 生命周期或前端；未修改旧 `unify-context-summarization` 的评审／验收材料。无需迁移，代码回退即可恢复旧请求组装规则。
-- 当前业务服务未重启，代码未提交、推送或部署。本轮未归档；后续规范同步须先承接旧统一摘要变更，再应用本变更的替代条款，避免旧 delta 覆盖新规则。
-- 原始证据保存在本机项目 `.codex/reuse-plan-context/`，被本报告引用的日志及请求文件应保留；不保证仅克隆 Git 仓库即可复核这些本地材料。
-
-本报告与独立评审定稿后，使用 `evidence_manifest.py` 检查映射，再由 `record-verify`／`check-verify` 绑定当前代码、报告和原始证据。机器记录位于 `reports/verification.json`，不代替上述语义评审和真实运行证据。
+验收记录由 `reports/verification.json` 绑定上述当前源码、规划、独立报告和证据；文件新鲜度检查不替代实际测试或授权。

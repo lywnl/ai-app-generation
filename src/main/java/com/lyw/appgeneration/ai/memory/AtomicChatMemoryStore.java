@@ -115,7 +115,7 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
             if (supportsSourceSnapshots()) {
                 L0Snapshot currentSource = sourceStore().getSnapshot(memoryId);
                 if (currentSource.hasKnownSource()) {
-                    if (!currentSource.messages().equals(expectedSnapshot)) return false;
+                    if (!currentSource.originalMessages().equals(expectedSnapshot)) return false;
                     L0Snapshot next;
                     try {
                         next = L0SourceOperations.reconcile(currentSource, replacementSnapshot,
@@ -185,7 +185,7 @@ public final class AtomicChatMemoryStore implements ChatMemoryStore {
             if (supportsSourceSnapshots()) {
                 L0Snapshot currentSource = sourceStore().getSnapshot(memoryId);
                 if (currentSource.hasKnownSource()) {
-                    if (!currentSource.messages().equals(expectedSnapshot)) return DeadlineAwareReplaceResult.PREFIX_CHANGED;
+                    if (!currentSource.originalMessages().equals(expectedSnapshot)) return DeadlineAwareReplaceResult.PREFIX_CHANGED;
                     L0Snapshot next;
                     try {
                         next = L0SourceOperations.reconcile(currentSource, replacementSnapshot,
