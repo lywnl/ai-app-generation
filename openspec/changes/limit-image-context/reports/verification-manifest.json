@@ -1,0 +1,509 @@
+{
+  "version": 1,
+  "change": "limit-image-context",
+  "profile": "standard",
+  "environment": "Java 25 / Maven 离线；本机随机端口 HTTP；规划与 Logo 替身；测试工作目录隔离在 .codex 内",
+  "requirements": [
+    {
+      "id": "Requirement: 图片任务按有效主题限额执行",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 超量重复搜索任务",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 多个 Logo 任务",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 单次搜索最多交付三张图片",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageSearchToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 提供方超量或夹杂无效结果",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageSearchToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 搜索无结果或失败",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageSearchToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 汇总素材统一去重和限额",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 工具超量与跨搜索重复",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 直接构建素材文本",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 素材说明简短且地址完整",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 长描述和 Unicode 字符",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 带参数的长 URL",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageSearchToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 规划提示与执行上限一致",
+      "implementation": [
+        "src/main/resources/prompt/image-collection-plan-system-prompt.txt",
+        "src/main/java/com/lyw/appgeneration/ai/image/model/ImageCollectionPlan.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/MermaidImageGenerationRemovalContractTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPlanTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.MermaidImageGenerationRemovalContractTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 无图片需求",
+      "implementation": [
+        "src/main/resources/prompt/image-collection-plan-system-prompt.txt",
+        "src/main/java/com/lyw/appgeneration/ai/image/model/ImageCollectionPlan.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPlanTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 收集保留并发及降级行为",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoPollingIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoGeneratorToolTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoPollingIntegrationTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 部分失败及超时",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoPollingIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoPollingIntegrationTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 并发调用和独立请求",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoPollingIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoPollingIntegrationTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 1.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicyTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 1.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageSearchToolTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 2.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoPollingIntegrationTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoPollingIntegrationTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 2.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java",
+        "src/main/resources/prompt/image-collection-plan-system-prompt.txt"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/MermaidImageGenerationRemovalContractTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPlanTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.MermaidImageGenerationRemovalContractTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 3.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPolicy.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/tools/ImageSearchTool.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java",
+        "src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilder.java",
+        "src/main/resources/prompt/image-collection-plan-system-prompt.txt"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageCollectionHttpIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/ImageSearchToolTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPromptBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/ImageCollectionPlanTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoPollingIntegrationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/image/tools/LogoGeneratorToolTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java"
+      ],
+      "evidence": [
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPromptBuilderTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPlanTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoPollingIntegrationTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
+        ".codex/limit-image-context/regression/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/limit-image-context/regression/command.json",
+        ".codex/limit-image-context/regression/code-state.json",
+        ".codex/limit-image-context/final-checks.json",
+        ".codex/limit-image-context/regression/summary.json"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/policy/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/policy/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ImageCollectionPolicyTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-02T02:31:35.419146+00:00",
+      "finished_at": "2026-11-02T02:31:46.595990+00:00",
+      "evidence": ".codex/limit-image-context/policy/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/search/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/search/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ImageSearchToolTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-02T02:33:05.073083+00:00",
+      "finished_at": "2026-11-02T02:33:18.411512+00:00",
+      "evidence": ".codex/limit-image-context/search/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/collection/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/collection/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ImageCollectionServiceTest,ImageCollectionPromptBuilderTest,ImageCollectionPlanTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-02T02:34:41.963279+00:00",
+      "finished_at": "2026-11-02T02:34:56.415133+00:00",
+      "evidence": ".codex/limit-image-context/collection/command.json"
+    },
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/regression/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/regression/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/limit-image-context/regression/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q '-Dtest=ImageCollection*Test,ImageSearchToolTest,Logo*Test,MermaidImageGenerationRemovalContractTest,AiCodeGeneratorFacadeTest' test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-02T02:36:21.418934+00:00",
+      "finished_at": "2026-11-02T02:36:36.912558+00:00",
+      "evidence": ".codex/limit-image-context/regression/command.json"
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-02T02:38:11.962183+00:00",
+      "finished_at": "2026-11-02T02:38:12.012566+00:00",
+      "evidence": ".codex/limit-image-context/final-checks.json"
+    },
+    {
+      "command": "openspec validate limit-image-context --strict",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-02T02:38:12.012604+00:00",
+      "finished_at": "2026-11-02T02:38:12.206645+00:00",
+      "evidence": ".codex/limit-image-context/final-checks.json"
+    }
+  ]
+}

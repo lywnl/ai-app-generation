@@ -22,17 +22,18 @@ public class ImageCollectionPromptBuilder {
 
     /** 仅返回图片参考资料，供在线回合临时 SystemMessage 使用。 */
     public String buildContext(List<ImageResource> images) {
-        if (CollUtil.isEmpty(images)) {
+        List<ImageResource> selected = ImageCollectionPolicy.limitContextResources(images);
+        if (selected.isEmpty()) {
             return "";
         }
         StringBuilder sb = new StringBuilder();
         sb.append("\n\n## 可用素材资源\n");
         sb.append("请在生成网站使用以下图片资源，将这些图片合理地嵌入到网站的相应位置中。\n");
-        for (ImageResource img : images) {
+        for (ImageResource img : selected) {
             sb.append("- ")
                     .append(img.getCategory().getText())
                     .append("：")
-                    .append(img.getDescription())
+                    .append(ImageCollectionPolicy.conciseDescription(img.getDescription()))
                     .append("（")
                     .append(img.getUrl())
                     .append("）\n");

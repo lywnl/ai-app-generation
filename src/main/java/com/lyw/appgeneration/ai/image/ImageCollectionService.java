@@ -97,15 +97,21 @@ public class ImageCollectionService {
                 log.warn("图片收集计划为 null,跳过收集,requestId={}", requestId);
                 return List.of();
             }
+            List<ImageCollectionPlan.ImageSearchTask> photoTasks =
+                    ImageCollectionPolicy.selectSearchTasks(plan.getContentImageTasks());
+            List<ImageCollectionPlan.LogoTask> logoTasks =
+                    ImageCollectionPolicy.selectLogoTasks(plan.getLogoTasks());
+            log.info("[图片耗时] 任务筛选完成,requestId={},selectedPhotoTaskCount={},selectedLogoTaskCount={}",
+                    requestId, photoTasks.size(), logoTasks.size());
             stage = "collection";
             collectionStartedAt = System.nanoTime();
             // Logo 通常最慢，先提交以避免排在照片任务之后等待工作线程。
-            addFutures(plan.getLogoTasks(), (t, cancelled) ->
+            addFutures(logoTasks, (t, cancelled) ->
                     logoGeneratorTool.generateLogos(t.description(), cancelled), logoFutures,
                     requestId, "logo");
 
             List<ImageTaskFuture> futures = new ArrayList<>();
-            addFutures(plan.getContentImageTasks(), (t, cancelled) ->
+            addFutures(photoTasks, (t, cancelled) ->
                     imageSearchTool.searchContentImages(t.query()), futures,
                     requestId, "photo");
             // 提交优先级与交付顺序分开：上下文仍先展示照片，再展示 Logo。
@@ -117,7 +123,9 @@ public class ImageCollectionService {
                 try {
                     List<ImageResource> part = f.get(timeoutSeconds, TimeUnit.SECONDS);
                     if (part != null) {
-                        aggregated.addAll(part);
+                        aggregated.addAll(logoFutures.contains(f)
+                                ? ImageCollectionPolicy.limitLogoResults(part)
+                                : ImageCollectionPolicy.limitSearchResults(part));
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -137,12 +145,13 @@ public class ImageCollectionService {
                             requestId, e.getClass().getSimpleName());
                 }
             }
-            imageCount = aggregated.size();
+            List<ImageResource> selected = ImageCollectionPolicy.limitContextResources(aggregated);
+            imageCount = selected.size();
             if (!"CANCELED".equals(status)) {
                 status = waitFailures > 0 ? "PARTIAL" : "RETURNED";
             }
             log.info("图片并发收集完成,共 {} 张,requestId={}", imageCount, requestId);
-            return aggregated;
+            return selected;
         } catch (Exception e) {
             log.error("图片收集整体失败,降级为原始提示词,requestId={},stage={},errorType={}",
                     requestId, stage, e.getClass().getSimpleName());

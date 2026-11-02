@@ -10,18 +10,24 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.slf4j.MDC;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -241,6 +247,107 @@ class ImageCollectionServiceTest {
         } finally {
             MDC.remove("imageCollectionRequestId");
         }
+    }
+
+    @Test
+    void 超量规划只执行六个有效搜索和一份完整Logo设计() {
+        ImageCollectionPlan plan = new ImageCollectionPlan();
+        List<ImageCollectionPlan.ImageSearchTask> tasks = new ArrayList<>(Arrays.asList(null,
+                new ImageCollectionPlan.ImageSearchTask("\u00a0\n"),
+                new ImageCollectionPlan.ImageSearchTask("  Coffee\nSHOP "),
+                new ImageCollectionPlan.ImageSearchTask("coffee shop")));
+        IntStream.rangeClosed(1, 8).forEach(i -> tasks.add(new ImageCollectionPlan.ImageSearchTask("主题" + i)));
+        plan.setContentImageTasks(tasks);
+        String design = "品牌设计\n" + "完整的中文设计细节".repeat(20);
+        plan.setLogoTasks(Arrays.asList(null, new ImageCollectionPlan.LogoTask(" "),
+                new ImageCollectionPlan.LogoTask(design), new ImageCollectionPlan.LogoTask("不应执行")));
+        when(planService.planImageCollection("官网")).thenReturn(plan);
+        when(imageSearchTool.searchContentImages(anyString())).thenAnswer(invocation -> {
+            String query = invocation.getArgument(0);
+            return IntStream.rangeClosed(1, 5).mapToObj(i -> image(ImageCategoryEnum.CONTENT,
+                    query + i, "https://example.com/" + query.hashCode() + "/" + i)).toList();
+        });
+        when(logoGeneratorTool.generateLogos(eq(design), any(BooleanSupplier.class))).thenReturn(List.of(
+                image(ImageCategoryEnum.LOGO, design, "https://example.com/logo1"),
+                image(ImageCategoryEnum.LOGO, "超量Logo", "https://example.com/logo2")));
+
+        String context = service.collectPromptContext("官网");
+
+        var queries = ArgumentCaptor.forClass(String.class);
+        verify(imageSearchTool, times(6)).searchContentImages(queries.capture());
+        assertEquals(Set.of("Coffee SHOP", "主题1", "主题2", "主题3", "主题4", "主题5"),
+                new HashSet<>(queries.getAllValues()));
+        verify(logoGeneratorTool, times(1)).generateLogos(eq(design), any(BooleanSupplier.class));
+        assertEquals(18, context.lines().filter(line -> line.startsWith("- 内容图片：")).count());
+        assertEquals(1, context.lines().filter(line -> line.startsWith("- LOGO图片：")).count());
+        assertFalse(context.contains("logo2"));
+        for (String query : queries.getAllValues()) {
+            assertFalse(context.contains("https://example.com/" + query.hashCode() + "/4"));
+        }
+        assertTrue(context.indexOf("Coffee SHOP1") < context.indexOf("主题11"));
+        assertTrue(context.indexOf("主题53") < context.indexOf("- LOGO图片："));
+        assertEquals(design, plan.getLogoTasks().get(2).description());
+    }
+
+    @Test
+    void 服务按任务去重限额后再跨任务去重且不补搜() {
+        ImageCollectionPlan plan = new ImageCollectionPlan();
+        plan.setContentImageTasks(List.of(new ImageCollectionPlan.ImageSearchTask("主题一"),
+                new ImageCollectionPlan.ImageSearchTask("主题二")));
+        when(planService.planImageCollection("网站")).thenReturn(plan);
+        when(imageSearchTool.searchContentImages("主题一")).thenReturn(Arrays.asList(null,
+                image(ImageCategoryEnum.CONTENT, "空地址", " "),
+                image(ImageCategoryEnum.LOGO, "搜索不应返回Logo", "https://example.com/wrong-category"),
+                image(ImageCategoryEnum.CONTENT, "首次说明", "https://example.com/shared"),
+                image(ImageCategoryEnum.CONTENT, "重复说明", "https://example.com/shared"),
+                image(ImageCategoryEnum.CONTENT, "照片A", "https://example.com/a"),
+                image(ImageCategoryEnum.CONTENT, "照片B", "https://example.com/b"),
+                image(ImageCategoryEnum.CONTENT, "超额一", "https://example.com/extra1")));
+        when(imageSearchTool.searchContentImages("主题二")).thenReturn(List.of(
+                image(ImageCategoryEnum.CONTENT, "第二任务重复说明", "https://example.com/shared"),
+                image(ImageCategoryEnum.CONTENT, "照片C", "https://example.com/c"),
+                image(ImageCategoryEnum.CONTENT, "照片D", "https://example.com/d"),
+                image(ImageCategoryEnum.CONTENT, "超额二", "https://example.com/extra2")));
+
+        String context = service.collectPromptContext("网站");
+
+        assertEquals(5, context.lines().filter(line -> line.startsWith("- 内容图片：")).count());
+        assertTrue(context.contains("首次说明"));
+        assertFalse(context.contains("重复说明"));
+        assertFalse(context.contains("wrong-category"));
+        assertFalse(context.contains("extra"));
+        verify(imageSearchTool, times(2)).searchContentImages(anyString());
+        verifyNoInteractions(logoGeneratorTool);
+    }
+
+    @Test
+    void 两个入口的连续调用不共享去重状态() {
+        ImageCollectionPlan plan = new ImageCollectionPlan();
+        plan.setContentImageTasks(List.of(new ImageCollectionPlan.ImageSearchTask("照片")));
+        when(planService.planImageCollection("网站")).thenReturn(plan);
+        when(imageSearchTool.searchContentImages("照片")).thenReturn(List.of(
+                image(ImageCategoryEnum.CONTENT, "照片", "https://example.com/photo")));
+
+        String context = service.collectPromptContext("网站");
+        String enhanced = service.enhancePrompt("网站");
+
+        assertTrue(context.contains("https://example.com/photo"));
+        assertEquals("网站" + context, enhanced);
+        verify(imageSearchTool, times(2)).searchContentImages("照片");
+    }
+
+    @Test
+    void 无有效搜索和Logo任务时两个入口均不调用工具() {
+        ImageCollectionPlan plan = new ImageCollectionPlan();
+        plan.setContentImageTasks(Arrays.asList(null, new ImageCollectionPlan.ImageSearchTask(null),
+                new ImageCollectionPlan.ImageSearchTask("\u00a0\n")));
+        plan.setLogoTasks(Arrays.asList(null, new ImageCollectionPlan.LogoTask(null),
+                new ImageCollectionPlan.LogoTask("\u3000")));
+        when(planService.planImageCollection("无图网站")).thenReturn(plan);
+
+        assertEquals("", service.collectPromptContext("无图网站"));
+        assertEquals("无图网站", service.enhancePrompt("无图网站"));
+        verifyNoInteractions(imageSearchTool, logoGeneratorTool);
     }
 
     private ImageResource image(ImageCategoryEnum category, String description, String url) {

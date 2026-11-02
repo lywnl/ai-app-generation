@@ -24,6 +24,12 @@ class ImageCollectionPlanTest {
             String prompt = new String(input.readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(prompt.contains("contentImageTasks"));
             assertTrue(prompt.contains("logoTasks"));
+            assertTrue(prompt.contains("最多 6 个不同的搜索主题"));
+            assertTrue(prompt.contains("每个关键词最多返回 3 张"));
+            assertTrue(prompt.contains("合计最多 18 张"));
+            assertTrue(prompt.contains("最多 1 个生成任务"));
+            assertTrue(prompt.contains("相同或近似主题合并"));
+            assertTrue(prompt.contains("不要求凑满"));
             assertFalse(prompt.contains("illustrationTasks"));
             assertFalse(prompt.contains("Undraw"));
         }
