@@ -694,6 +694,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     failure.data.code = 50000
 
     const snapshot = await runSession([failure, done(1)], { vue })
+    if (!snapshot) throw new Error('会话快照不应为空')
 
     expect(snapshot).toMatchObject({
       loading: false, status: 'done', outcome: 'system_error', errorMessage: message,
@@ -707,6 +708,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     terminal.data.message = message
 
     const snapshot = await runSession([vueMessage(1, 'ai_text', '已经生成的正文'), terminal, done(3)])
+    if (!snapshot) throw new Error('会话快照不应为空')
 
     expect(snapshot).toMatchObject({
       loading: false, status: 'done', outcome: 'system_error', errorMessage: message,
@@ -721,6 +723,7 @@ describe('generationSession generation-stream/v1 状态机', () => {
     failure.data.code = 50000
 
     const snapshot = await runSession([simpleMessage(1, '已生成正文'), failure, done(2)], { vue: false })
+    if (!snapshot) throw new Error('会话快照不应为空')
 
     expect(snapshot).toMatchObject({
       loading: false, status: 'done', outcome: 'system_error', errorMessage: message,
