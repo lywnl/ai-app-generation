@@ -5,6 +5,7 @@ import com.lyw.appgeneration.ai.image.model.ImageCollectionPlan;
 import com.lyw.appgeneration.ai.image.model.ImageResource;
 import com.lyw.appgeneration.ai.image.tools.ImageSearchTool;
 import com.lyw.appgeneration.ai.image.tools.LogoGeneratorTool;
+import com.lyw.appgeneration.core.resource.ResourcePreparationScope;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -68,7 +69,66 @@ public class ImageCollectionService {
         return promptBuilder.buildContext(collectImages(originalPrompt));
     }
 
+    public String collectPromptContext(String originalPrompt, ImageCollectionQuota quota) {
+        return promptBuilder.buildContext(collectImages(originalPrompt, quota), quota);
+    }
+
+    /** 在资料准备池执行规划，子请求交给图片池；此方法不阻塞等待子请求。 */
+    public void startPromptContext(String prompt, ImageCollectionQuota quota,
+                                   ResourcePreparationScope scope, ResourcePreparationScope.Slot slot) {
+        scope.requireActive();
+        ImageCollectionPlan plan = planService.planImageCollection(prompt);
+        scope.requireActive();
+        if (plan == null) { slot.finish(ResourcePreparationScope.Outcome.EMPTY); return; }
+        var photos = ImageCollectionPolicy.selectSearchTasks(plan.getContentImageTasks(), quota);
+        var logos = ImageCollectionPolicy.selectLogoTasks(plan.getLogoTasks());
+        slot.publish("", 0, photos.size());
+        java.util.SortedMap<Integer, List<ImageResource>> completed = new java.util.TreeMap<>();
+        java.util.concurrent.atomic.AtomicInteger failures = new java.util.concurrent.atomic.AtomicInteger();
+        List<CompletableFuture<Void>> tasks = new ArrayList<>();
+        // Logo 先提交，输出顺序仍为主题序号在前、Logo在后。
+        for (int i = 0; i < logos.size(); i++) {
+            int index = photos.size() + i;
+            String description = logos.get(i).description();
+            tasks.add(collectWithinDeadline(scope, slot, quota, completed, failures, index, true, photos.size(),
+                    () -> logoGeneratorTool.generateLogos(description, () -> !scope.canStart())));
+        }
+        for (int i = 0; i < photos.size(); i++) {
+            int index = i;
+            String query = photos.get(i).query();
+            tasks.add(collectWithinDeadline(scope, slot, quota, completed, failures, index, false, photos.size(),
+                    () -> imageSearchTool.searchContentImages(query, scope.remainingMillisForRequest(), scope::canStart)));
+        }
+        CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).whenComplete((ignored, failure) ->
+                slot.finish(failures.get() > 0 ? ResourcePreparationScope.Outcome.PARTIAL
+                        : ResourcePreparationScope.Outcome.SUCCEEDED));
+    }
+
+    private CompletableFuture<Void> collectWithinDeadline(ResourcePreparationScope scope,
+            ResourcePreparationScope.Slot slot, ImageCollectionQuota quota,
+            java.util.SortedMap<Integer, List<ImageResource>> completed,
+            java.util.concurrent.atomic.AtomicInteger failures, int index, boolean logo, int themes,
+            Callable<List<ImageResource>> call) {
+        return scope.submit(executor, logo ? "logo" : "image-search", call).handle((result, failure) -> {
+            if (failure != null) failures.incrementAndGet();
+            else if (scope.canStart()) {
+                synchronized (completed) {
+                    completed.put(index, logo ? ImageCollectionPolicy.limitLogoResults(result)
+                            : ImageCollectionPolicy.limitSearchResults(result));
+                    List<ImageResource> all = completed.values().stream().flatMap(List::stream).toList();
+                    var selected = ImageCollectionPolicy.limitContextResources(all, quota);
+                    slot.publish(promptBuilder.buildContext(selected, quota), selected.size(), themes);
+                }
+            }
+            return null;
+        });
+    }
+
     private List<ImageResource> collectImages(String originalPrompt) {
+        return collectImages(originalPrompt, ImageCollectionQuota.INITIAL);
+    }
+
+    private List<ImageResource> collectImages(String originalPrompt, ImageCollectionQuota quota) {
         String requestId = UUID.randomUUID().toString();
         long startedAt = System.nanoTime();
         long planMs = 0;
@@ -98,7 +158,7 @@ public class ImageCollectionService {
                 return List.of();
             }
             List<ImageCollectionPlan.ImageSearchTask> photoTasks =
-                    ImageCollectionPolicy.selectSearchTasks(plan.getContentImageTasks());
+                    ImageCollectionPolicy.selectSearchTasks(plan.getContentImageTasks(), quota);
             List<ImageCollectionPlan.LogoTask> logoTasks =
                     ImageCollectionPolicy.selectLogoTasks(plan.getLogoTasks());
             log.info("[图片耗时] 任务筛选完成,requestId={},selectedPhotoTaskCount={},selectedLogoTaskCount={}",
@@ -145,7 +205,7 @@ public class ImageCollectionService {
                             requestId, e.getClass().getSimpleName());
                 }
             }
-            List<ImageResource> selected = ImageCollectionPolicy.limitContextResources(aggregated);
+            List<ImageResource> selected = ImageCollectionPolicy.limitContextResources(aggregated, quota);
             imageCount = selected.size();
             if (!"CANCELED".equals(status)) {
                 status = waitFailures > 0 ? "PARTIAL" : "RETURNED";

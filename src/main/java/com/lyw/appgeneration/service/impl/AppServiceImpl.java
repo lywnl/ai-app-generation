@@ -17,6 +17,9 @@ import com.lyw.appgeneration.core.builder.BuildResult;
 import com.lyw.appgeneration.core.builder.BuildStage;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
+import com.lyw.appgeneration.core.handler.VueTurnDecision;
+import com.lyw.appgeneration.core.handler.VueTurnResourcePolicy;
+import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
 import com.lyw.appgeneration.core.handler.VueTurnFinalizer;
 import com.lyw.appgeneration.core.handler.VueTurnMemoryProjection;
@@ -146,6 +149,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Resource
     private ChatHistoryService chatHistoryService;
+
+    @Resource
+    private RagProperties ragProperties;
 
     @Resource
     private StreamHandlerExecutor streamHandlerExecutor;
@@ -286,7 +292,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型");
         }
         if (codeGenTypeEnum == CodeGenTypeEnum.VUE_PROJECT) {
-            return generateVueTurn(appId, message, generationId, loginUser);
+            return generateVueTurn(appId, message, generationId, loginUser, app.getInitPrompt());
         }
         return generateSimpleTurn(appId, message, generationId, loginUser,
                 codeGenTypeEnum);
@@ -519,7 +525,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     }
 
     private Flux<GenerationStreamEvent> generateVueTurn(
-            long appId, String message, String generationId, User loginUser) {
+            long appId, String message, String generationId, User loginUser, String initPrompt) {
         return Flux.defer(() -> {
             VueTurnContext context;
             try {
@@ -535,7 +541,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                         ErrorCode.OPERATION_ERROR, "生成任务 ID 已被占用"));
             }
             Mono<CommittedVueTurn> prepared = Mono.fromCallable(() ->
-                            prepareVueTurn(appId, message, loginUser, context))
+                            prepareVueTurn(appId, message, loginUser, context, initPrompt))
                     .subscribeOn(Schedulers.boundedElastic())
                     .onErrorResume(error -> handleVuePreparationFailure(
                             context, error))
@@ -623,7 +629,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     private CommittedVueTurn prepareVueTurn(
             long appId, String message, User loginUser,
-            VueTurnContext context) {
+            VueTurnContext context, String initPrompt) {
         // 在任何历史写入前校验原始用户边界，避免超长请求进入半执行回合。
         TurnRequestBoundary.of(message, List.of());
         var lastMessage = context.callPreparation(
@@ -647,9 +653,19 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         var generatorService = context.callPreparation(
                 () -> aiCodeGeneratorFacade.prepareVueGenerator(appId));
-        var mode = context.callPreparation(
-                () -> vueTurnModeRouter.route(message, hasHistory));
-        context.initializeMode(mode);
+        boolean hasSucceeded = context.callPreparation(
+                () -> chatHistoryService.hasSucceededGeneration(appId));
+        VueTurnDecision decision = context.callPreparation(
+                () -> vueTurnModeRouter.decide(message));
+        VueTurnResourcePolicy resourcePolicy = VueTurnResourcePolicy.decide(
+                decision, hasSucceeded, ragProperties.isEnabled(), initPrompt);
+        context.initializeMode(decision.mode());
+        log.info("Vue 资料策略已固定,appId={},turnId={},mode={},initial={},rag={},images={},reason={},budgetMs={}",
+                appId, context.turnId(), decision.mode(), resourcePolicy.initialBootstrap(),
+                resourcePolicy.ragScope(), resourcePolicy.prepareImages(),
+                decision.mode() == com.lyw.appgeneration.core.handler.VueTurnMode.READ_ONLY
+                        ? "READ_ONLY" : hasSucceeded ? "ON_DEMAND" : "BOOTSTRAP",
+                resourcePolicy.waitBudget().toMillis());
         VueTurnContext.UserCommitResult commitResult = context.commitUserAndBindHistory(() ->
                 chatHistoryService.addChatMessageAndReturn(
                         appId, message,
@@ -657,7 +673,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                         loginUser.getId()));
         return switch (commitResult) {
             case COMMITTED -> new CommittedVueTurn(
-                    context, generatorService, message, !hasHistory, null);
+                    context, generatorService, message, decision, resourcePolicy, null);
             case TERMINATED_BEFORE_COMMIT -> throw new CancellationException(
                     "Vue 回合在用户消息提交前终止");
             case STORE_FAILED -> throw new IllegalStateException(
@@ -678,7 +694,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                             .tryCallCallback(() -> aiCodeGeneratorFacade
                                     .generateVueProjectStream(
                                             turn.message(), context.appId(),
-                                            turn.firstMessage(), context,
+                                            turn.resourcePolicy(), context,
                                             turn.generatorService()))
                             .orElseGet(Flux::empty));
                     Flux<GenerationStreamEvent> business = streamHandlerExecutor
@@ -705,7 +721,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                             "Vue 回合准备阶段已经终止"));
             case POST_COMMIT_REQUIRED -> Mono.just(
                     new CommittedVueTurn(context, null, null,
-                            false, failure));
+                            null, null, failure));
         };
     }
 
@@ -794,7 +810,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             VueTurnContext context,
             AiCodeGeneratorService generatorService,
             String message,
-            boolean firstMessage,
+            VueTurnDecision decision,
+            VueTurnResourcePolicy resourcePolicy,
             Throwable startupFailure) {
     }
 

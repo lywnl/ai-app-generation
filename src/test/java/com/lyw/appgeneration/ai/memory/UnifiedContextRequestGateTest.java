@@ -521,11 +521,14 @@ class UnifiedContextRequestGateTest {
         final ContextCompressionModelRequestGate gate;
         TurnRequestBoundary boundary;
 
-        Fixture(boolean appendUser) {
+        Fixture(boolean appendUser) { this(appendUser, com.lyw.appgeneration.core.handler.VueTurnMode.READ_ONLY); }
+
+        Fixture(boolean appendUser, com.lyw.appgeneration.core.handler.VueTurnMode mode) {
             var operation = new AppOperationLeaseManager().acquire(7, AppOperationLeaseManager.AppOperationType.GENERATE, "turn");
             var lease = new VueBuildSessionManager().open(operation, 9, "turn");
             var admission = new VueTurnAdmissionController(new VueBuildRepairMetricsCollector(new SimpleMeterRegistry()));
-            context = new VueTurnContext(7, 9, "turn", operation, lease, admission.tryAcquire().orElseThrow(), new FileToolBudgetGuard().newSession());
+            context = new VueTurnContext(7, 9, "turn", operation, lease, admission.tryAcquire().orElseThrow(), new FileToolBudgetGuard().newSession(), true);
+            context.initializeMode(mode);
             context.commitUserAndBindHistory(() -> ChatHistory.builder().id(10L).appId(7L).userId(9L).messageType("user").message(rawUser).build());
             boundary = TurnRequestBoundary.of(rawUser, transientMessages, 10, "turn")
                     .withPlanReader(() -> { planReads.incrementAndGet(); return Optional.ofNullable(plan.get()); }, this::change);

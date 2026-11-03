@@ -77,6 +77,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class VueKnowledgeIngestorTest {
+    private static com.lyw.appgeneration.core.handler.VueTurnResourcePolicy resourcePolicy(boolean initial) {
+        return com.lyw.appgeneration.core.handler.VueTurnResourcePolicy.decide(
+                new com.lyw.appgeneration.core.handler.VueTurnDecision(
+                        com.lyw.appgeneration.core.handler.VueTurnMode.MUTATION_REQUIRED, false, false),
+                !initial, true, "");
+    }
+
 
     private static final Path DATASET_ROOT = Path.of("embed_text/vue-project");
     private static final Set<String> METADATA_KEYS = Set.of(
@@ -251,8 +258,13 @@ class VueKnowledgeIngestorTest {
         properties.getHybrid().setEnabled(false);
         AiCodeGeneratorService generator = mock(AiCodeGeneratorService.class);
         ImageCollectionService imageService = mock(ImageCollectionService.class);
-        when(imageService.collectPromptContext("Vue3 基础工程 登录表单"))
-                .thenReturn("图片增强信息");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            var slot = invocation.<com.lyw.appgeneration.core.resource.ResourcePreparationScope.Slot>getArgument(3);
+            slot.publish("图片增强信息", 1, 1);
+            slot.finish(com.lyw.appgeneration.core.resource.ResourcePreparationScope.Outcome.SUCCEEDED);
+            return null;
+        }).when(imageService).startPromptContext(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         TokenStream stream = mock(TokenStream.class);
         when(generator.generateVueProjectCodeStream(
                 org.mockito.ArgumentMatchers.eq(9L), org.mockito.ArgumentMatchers.any()))
@@ -263,6 +275,10 @@ class VueKnowledgeIngestorTest {
         ReflectionTestUtils.setField(facade, "ragPromptAssembler",
                 new RagPromptAssembler(properties, mock(VueRagMetricsCollector.class)));
         ReflectionTestUtils.setField(facade, "ragProperties", properties);
+        ReflectionTestUtils.setField(facade, "currentVueProjectReader",
+                new com.lyw.appgeneration.service.rag.CurrentVueProjectReader(
+                        new com.lyw.appgeneration.ai.plan.PlanStoragePathResolver(
+                                java.nio.file.Path.of(System.getProperty("java.io.tmpdir"), "empty-ingestion-project"))));
         FileToolBudgetGuard budgetGuard = new FileToolBudgetGuard();
         ReflectionTestUtils.setField(facade, "fileToolExecutionScopeManager",
                 new FileToolExecutionScopeManager(budgetGuard));
@@ -283,15 +299,19 @@ class VueKnowledgeIngestorTest {
                 9L, 11L, "disabled-hybrid-real-turn", operation, lease,
                 permit, budgetGuard.newSession(), true);
         turnContext.initializeMode(VueTurnMode.MUTATION_REQUIRED);
+        turnContext.commitUserAndBindHistory(() -> com.lyw.appgeneration.model.entity.ChatHistory.builder()
+                .id(101L).appId(9L).userId(11L).messageType("user").message("Vue3 基础工程 登录表单").build());
 
         try (var preparationExecutor = new VueContextPreparationExecutorConfig()
                 .vueContextPreparationExecutor(properties)) {
             ReflectionTestUtils.setField(facade, "vueContextPreparationExecutor", preparationExecutor);
             facade.generateVueProjectStream(
-                    "Vue3 基础工程 登录表单", 9L, true,
+                    "Vue3 基础工程 登录表单", 9L, resourcePolicy(true),
                     turnContext, generator);
 
-            verify(imageService).collectPromptContext("Vue3 基础工程 登录表单");
+            verify(imageService).startPromptContext(org.mockito.ArgumentMatchers.eq(
+                            resourcePolicy(true).imagePlanningPrompt("Vue3 基础工程 登录表单")),
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
             ArgumentCaptor<List<ChatMessage>> transientCaptor =
                     ArgumentCaptor.forClass(List.class);
             verify(stream).turnTransientMessages(transientCaptor.capture());

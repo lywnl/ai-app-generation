@@ -177,6 +177,9 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      */
     boolean existsByAppId(Long appId);
 
+    /** 是否存在未删除的 ai/SUCCEEDED 终态；无可靠旧标记不视为成功。 */
+    boolean hasSucceededGeneration(Long appId);
+
     /** 查询应用最后一条持久化消息；不存在时返回 null。 */
     ChatHistory getLastMessage(Long appId);
 

@@ -53,6 +53,13 @@ public final class MemoryCompressionMetricsCollector {
                 "stage", tag(stage)).record(tokens));
     }
 
+    /** 本地预算口径，与本次冻结请求中的临时资料一一对应。 */
+    public void recordTransientResourceTokens(int ragTokens, int imageTokens) {
+        if (ragTokens < 0 || imageTokens < 0) return;
+        safely(() -> summary("memory_transient_resource_tokens", "kind", "rag").record(ragTokens));
+        safely(() -> summary("memory_transient_resource_tokens", "kind", "images").record(imageTokens));
+    }
+
     /** 只记录数量，不接收应用 ID、用户原文、工具正文或自由标签。 */
     public void recordRequestSnapshot(int retainedMessages, int retainedTokens, int deduplicatedResults) {
         if (retainedMessages < 0 || retainedTokens < 0 || deduplicatedResults < 0) return;

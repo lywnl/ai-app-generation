@@ -30,6 +30,47 @@ class VueRagExecutorTest {
 
     private final List<VueRagExecutor> executors = new ArrayList<>();
 
+    @Test
+    void 资料取消清队列但不提前归还仍在运行的请求许可() throws Exception {
+        VueRagExecutor executor = executor(1, 1);
+        CountDownLatch running = new CountDownLatch(1), release = new CountDownLatch(1);
+        AtomicBoolean completed = new AtomicBoolean(), queuedCalled = new AtomicBoolean();
+        try (var deadline = new com.lyw.appgeneration.core.resource.ResourcePreparationScope(
+                Duration.ofSeconds(8), () -> true, System::nanoTime, "held");
+             var request = executor.openRequest(deadline)) {
+            request.submit(VueRagStage.EMBEDDING, null, () -> {
+                running.countDown();
+                boolean interrupted = false;
+                while (true) {
+                    try { release.await(); break; }
+                    catch (InterruptedException ignored) { interrupted = true; }
+                }
+                completed.set(true);
+                if (interrupted) Thread.currentThread().interrupt();
+                return 1;
+            });
+            var queued = request.submit(VueRagStage.DENSE, RagDocumentKind.FEATURE_SNIPPET,
+                    () -> { queuedCalled.set(true); return 2; });
+            assertTrue(running.await(1, TimeUnit.SECONDS));
+            deadline.cancel();
+            assertTrue(queued.isCancelled());
+            var pool = (java.util.concurrent.ThreadPoolExecutor) org.springframework.test.util.ReflectionTestUtils
+                    .getField(executor, "workers");
+            assertTrue(pool.getQueue().isEmpty());
+            try (var next = new com.lyw.appgeneration.core.resource.ResourcePreparationScope(
+                    Duration.ofMillis(50), () -> true, System::nanoTime, "waiting")) {
+                assertThrows(CancellationException.class, () -> executor.openRequest(next));
+            }
+            assertFalse(completed.get());
+            release.countDown();
+            try (var next = executor.openRequest()) {
+                assertTrue(completed.get());
+                assertEquals(3, next.await(next.submit(VueRagStage.EMBEDDING, null, () -> 3)));
+            }
+            assertFalse(queuedCalled.get());
+        } finally { release.countDown(); }
+    }
+
     @AfterEach
     void closeExecutors() {
         executors.forEach(VueRagExecutor::close);

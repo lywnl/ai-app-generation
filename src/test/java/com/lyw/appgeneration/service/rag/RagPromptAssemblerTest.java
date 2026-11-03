@@ -27,6 +27,21 @@ class RagPromptAssemblerTest {
     private static final String FEATURE_HEADER = "## 功能片段（仅供参考）";
     private static final String REQUEST_HEADER = "## 用户生成需求";
 
+    @Test
+    void 后续功能没有骨架重建提示且沿用原子文件块和原预算() {
+        assertEquals("", assembler.assembleVueFeatureContext(
+                com.lyw.appgeneration.service.rag.model.VueFeatureContext.unavailable()));
+        var feature = document("新闻", RagDocumentKind.FEATURE_SNIPPET,
+                file("src/views/News.vue", "COMPLETE_MARKER".repeat(2000)));
+        String context = assembler.assembleVueFeatureContext(
+                new com.lyw.appgeneration.service.rag.model.VueFeatureContext(List.of(feature), "v1", false));
+        assertTrue(context.contains("当前工程"));
+        assertFalse(context.contains("最小可运行工程"));
+        assertFalse(context.contains("COMPLETE_MARKER"));
+        assertTrue(context.contains("因预算未附完整内容"));
+        assertTrue(context.length() <= VueRagBudgetPolicy.FEATURE_CONTEXT_BUDGET);
+    }
+
     private RagPromptAssembler assembler;
     private VueRagMetricsCollector metrics;
 

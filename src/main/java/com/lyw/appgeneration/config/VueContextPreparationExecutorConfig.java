@@ -8,7 +8,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-/** Vue 首轮上下文准备：RAG 入口与图片收集在不同线程执行。 */
+/** Vue 回合资料准备：RAG 协调和图片规划并行，外部子调用使用各自受管池。 */
 @Configuration
 public class VueContextPreparationExecutorConfig {
 
@@ -17,8 +17,8 @@ public class VueContextPreparationExecutorConfig {
         properties.getExecution().validate();
         int workerThreads = Math.min(properties.getExecution().getMaxConcurrentRequests(),
                 VueTurnAdmissionController.MAX_ACTIVE_TURNS);
-        // 每个已准入回合最多提交一个任务；队列足以容纳所有已准入回合。
-        // 此处只运行 RAG 的阻塞入口，不使用图片池、RAG 外部调用池或取消收尾池。
+        // 每轮最多两个准备分支，保持原有线程和队列上限；饱和由本轮资料策略有界降级。
+        // 图片规划只提交子任务即返回，不能在本池等待同池任务；主协调者在调用线程等待。
         return new ThreadPoolExecutor(workerThreads, workerThreads,
                 0L, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(VueTurnAdmissionController.MAX_ACTIVE_TURNS),

@@ -203,8 +203,19 @@ final class UnifiedContextRequestPreparer {
             // 读盘或计量期间若定义成功变更，重新检查；不让旧版本越过本次发送门禁。
             if (!change.equals(boundary.planDefinitionChange())) continue;
             observeSnapshot(observation, boundary.userHistoryId());
+            int ragTokens = resourceTokens(transientMessages, "以下 RAG 工程资料");
+            int imageTokens = resourceTokens(transientMessages, "以下图片资源");
+            metrics.recordTransientResourceTokens(ragTokens, imageTokens);
+            log.info("临时资料预算 appId={},turnId={},ragTokens={},imageTokens={},totalRequestTokens={},口径=本地估算",
+                    compatible.appId(), boundary.turnId(), ragTokens, imageTokens, tokens);
             return new RequestContextSnapshot(compatible, readPlan, frozen, tools, tokens);
         }
+    }
+
+    private int resourceTokens(List<ChatMessage> messages, String prefix) {
+        List<ChatMessage> selected = messages.stream().filter(message ->
+                message instanceof dev.langchain4j.data.message.SystemMessage system && system.text().startsWith(prefix)).toList();
+        return selected.isEmpty() ? 0 : estimator.estimateMessages(selected);
     }
 
     private void requireGeneration(CompressionAwareChatMemory memory, PlanContext.State initial) {

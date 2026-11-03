@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.rag.retrieval;
 
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.core.resource.ResourcePreparationScope;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
 import com.lyw.appgeneration.service.rag.monitor.VueRagStage;
@@ -9,27 +10,18 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
-/**
- * Vue RAG 专用有界执行器。请求在入口等待，工作线程只执行外部调用及非阻塞回调。
- */
+/** Vue RAG 有界执行器；请求许可直到物理调用结束才归还。 */
 @Component
 public class VueRagExecutor implements AutoCloseable {
-
     private static final int MAX_TASKS_PER_REQUEST = 7;
-
     private final ThreadPoolExecutor workers;
     private final Semaphore requests;
     private final int maxConcurrentRequests;
@@ -47,167 +39,214 @@ public class VueRagExecutor implements AutoCloseable {
                 Thread.ofPlatform().name("vue-rag-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     }
 
-    /** 等待许可时尚未提交子任务；不设置新的检索总超时。 */
-    public RequestScope openRequest() {
-        long start = System.nanoTime();
+    /** 保留离线及兼容调用的既有等待语义。 */
+    public RequestScope openRequest() { return openRequest(null); }
+
+    /** 新在线入口把许可等待计入同一个资料截止。 */
+    public RequestScope openRequest(ResourcePreparationScope deadline) {
+        long started = System.nanoTime();
+        boolean acquired = false;
         try {
-            if (closing.get()) {
-                throw new RejectedExecutionException("Vue RAG 执行器正在关闭");
+            if (closing.get()) throw new RejectedExecutionException("Vue RAG 执行器正在关闭");
+            if (deadline == null) {
+                requests.acquire();
+                acquired = true;
+            } else {
+                while (!acquired) {
+                    deadline.requireActive();
+                    acquired = requests.tryAcquire(Math.min(deadline.remainingNanos(),
+                            TimeUnit.MILLISECONDS.toNanos(25)), TimeUnit.NANOSECONDS);
+                }
             }
-            requests.acquire();
-            if (closing.get()) {
-                requests.release();
-                throw new RejectedExecutionException("Vue RAG 执行器正在关闭");
-            }
-            return new RequestScope(MDC.getCopyOfContextMap());
+            if (closing.get()) throw new RejectedExecutionException("Vue RAG 执行器正在关闭");
+            if (deadline != null) deadline.requireActive();
+            RequestScope request = new RequestScope(MDC.getCopyOfContextMap(), deadline);
+            acquired = false; // 许可所有权已转交 RequestScope。
+            request.registerCancellation();
+            return request;
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw cancelled(interrupted);
         } finally {
-            metrics.recordAdmissionWait(Duration.ofNanos(System.nanoTime() - start));
+            if (acquired) requests.release();
+            metrics.recordAdmissionWait(Duration.ofNanos(System.nanoTime() - started));
         }
     }
 
-    /** 等待已接纳请求完整收尾后才关闭线程池，不在关闭过程中拒绝它们的后续依赖任务。 */
-    @Override
-    @PreDestroy
-    public void close() {
-        if (!closing.compareAndSet(false, true)) {
-            return;
-        }
+    @Override @PreDestroy public void close() {
+        if (!closing.compareAndSet(false, true)) return;
         requests.acquireUninterruptibly(maxConcurrentRequests);
-        try {
-            workers.close();
-        } finally {
-            // 唤醒极少数在关闭检查与 acquire 之间进入等待的调用方，让它们明确收到关闭异常。
-            requests.release(maxConcurrentRequests);
-        }
+        try { workers.close(); }
+        finally { requests.release(maxConcurrentRequests); }
     }
 
     private static CancellationException cancelled(InterruptedException cause) {
-        CancellationException cancellation = new CancellationException("Vue RAG 请求已中断");
-        cancellation.initCause(cause);
-        return cancellation;
+        CancellationException result = new CancellationException("Vue RAG 请求已中断");
+        result.initCause(cause);
+        return result;
     }
 
     public final class RequestScope implements AutoCloseable {
-
         private final Map<String, String> context;
-        private int pendingTasks;
+        private final ResourcePreparationScope deadline;
+        private final Set<RequestTask<?>> tasks = new HashSet<>();
         private int submittedTasks;
         private boolean closed;
         private boolean released;
+        private AutoCloseable cancellation;
 
-        private RequestScope(Map<String, String> context) {
+        private RequestScope(Map<String, String> context, ResourcePreparationScope deadline) {
             this.context = context;
+            this.deadline = deadline;
         }
 
-        public <T> CompletableFuture<T> submit(VueRagStage stage, RagDocumentKind kind,
-                                                Supplier<T> operation) {
+        private void registerCancellation() {
+            if (deadline == null) return;
+            AutoCloseable registration = deadline.onClose(this::close);
+            boolean dispose;
+            synchronized (this) { dispose = closed; if (!dispose) cancellation = registration; }
+            if (dispose) closeRegistration(registration);
+        }
+
+        public <T> CompletableFuture<T> submit(VueRagStage stage, RagDocumentKind kind, Supplier<T> operation) {
+            RequestTask<T> task;
             synchronized (this) {
-                if (closed) {
+                if (closed || deadline != null && !deadline.canStart()) {
                     return CompletableFuture.failedFuture(new CancellationException("Vue RAG 请求已结束"));
                 }
                 if (submittedTasks >= MAX_TASKS_PER_REQUEST) {
                     return CompletableFuture.failedFuture(new IllegalStateException("单次 Vue RAG 请求任务数超过 7"));
                 }
                 submittedTasks++;
-                pendingTasks++;
+                task = new RequestTask<>(stage, kind, operation);
+                tasks.add(task);
+                // 与 close 的任务快照互斥，避免撤销在入队之前完成。
+                try { workers.execute(task); }
+                catch (RuntimeException | Error failure) { task.reject(failure); }
             }
-            CompletableFuture<T> result = new CompletableFuture<>();
-            long enqueued = System.nanoTime();
-            try {
-                workers.execute(() -> runTask(stage, kind, operation, result, enqueued));
-            } catch (RuntimeException | Error failure) {
-                try {
-                    result.completeExceptionally(failure);
-                } finally {
-                    taskFinished();
-                }
-            }
-            return result;
+            return task.result;
         }
 
-        private <T> void runTask(VueRagStage stage, RagDocumentKind kind, Supplier<T> operation,
-                                  CompletableFuture<T> result, long enqueued) {
-            Map<String, String> previous = MDC.getCopyOfContextMap();
-            try {
-                restoreContext(context);
-                metrics.recordExecutorQueueDuration(stage, kind,
-                        Duration.ofNanos(System.nanoTime() - enqueued));
-                if (isClosed() || result.isCancelled()) {
-                    result.completeExceptionally(new CancellationException("Vue RAG 请求已结束"));
-                    return;
-                }
-                long start = System.nanoTime();
-                T value;
-                try {
-                    if (stage == VueRagStage.EMBEDDING) {
-                        metrics.recordEmbeddingCall();
-                    }
-                    value = operation.get();
-                } finally {
-                    metrics.recordStageDuration(stage, kind, Duration.ofNanos(System.nanoTime() - start));
-                }
-                // complete 会同步触发依赖回调，所以调用计时必须先结束，避免把后续阶段算入本阶段。
-                result.complete(value);
-            } catch (Throwable failure) {
-                result.completeExceptionally(failure);
-            } finally {
-                restoreContext(previous);
-                taskFinished();
-            }
-        }
-
-        /** 只能由请求调用线程使用；依赖组合通过 thenCompose/thenCombine 完成。 */
         public <T> T await(CompletableFuture<T> result) {
             try {
-                return result.get();
+                return deadline == null ? result.get() : result.get(Math.max(1, deadline.remainingNanos()), TimeUnit.NANOSECONDS);
             } catch (InterruptedException interrupted) {
                 close();
                 Thread.currentThread().interrupt();
                 throw cancelled(interrupted);
+            } catch (TimeoutException timeout) {
+                close();
+                throw new CancellationException("Vue RAG 资料截止已到达");
             } catch (ExecutionException failure) {
                 Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtime) {
-                    throw runtime;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
+                if (cause instanceof RuntimeException runtime) throw runtime;
+                if (cause instanceof Error error) throw error;
                 throw new CompletionException(cause);
             }
         }
 
-        private synchronized boolean isClosed() {
-            return closed;
-        }
+        private synchronized boolean isClosed() { return closed; }
 
-        private synchronized void taskFinished() {
-            pendingTasks--;
+        private synchronized void taskFinished(RequestTask<?> task) {
+            tasks.remove(task);
             releaseIfFinished();
         }
 
-        @Override
-        public synchronized void close() {
-            closed = true;
-            releaseIfFinished();
+        @Override public void close() {
+            java.util.List<RequestTask<?>> pending;
+            AutoCloseable registration;
+            synchronized (this) {
+                if (closed) return;
+                closed = true;
+                pending = new ArrayList<>(tasks);
+                registration = cancellation;
+                cancellation = null;
+                releaseIfFinished();
+            }
+            pending.forEach(task -> task.cancel(deadline != null));
+            closeRegistration(registration);
         }
 
         private void releaseIfFinished() {
-            // Future 取消或调用方中断不等于外部调用停止，许可必须等到所有物理任务退出。
-            if (closed && pendingTasks == 0 && !released) {
+            if (closed && tasks.isEmpty() && !released) {
                 released = true;
                 requests.release();
             }
         }
+
+        private final class RequestTask<T> implements Runnable {
+            private final VueRagStage stage;
+            private final RagDocumentKind kind;
+            private final Supplier<T> operation;
+            private final CompletableFuture<T> result = new CompletableFuture<>();
+            private final long enqueued = System.nanoTime();
+            private int state; // 0排队，1运行，2物理结束；Future取消不等于2。
+            private Thread runner;
+
+            private RequestTask(VueRagStage stage, RagDocumentKind kind, Supplier<T> operation) {
+                this.stage = stage; this.kind = kind; this.operation = operation;
+            }
+
+            @Override public void run() {
+                synchronized (this) {
+                    if (state != 0) return;
+                    state = 1;
+                    runner = Thread.currentThread();
+                }
+                Map<String, String> previous = MDC.getCopyOfContextMap();
+                try {
+                    restoreContext(context);
+                    metrics.recordExecutorQueueDuration(stage, kind, Duration.ofNanos(System.nanoTime() - enqueued));
+                    if (isClosed() || result.isCancelled()) throw new CancellationException("Vue RAG 请求已结束");
+                    if (deadline != null) deadline.requireActive();
+                    long started = System.nanoTime();
+                    T value;
+                    try {
+                        if (stage == VueRagStage.EMBEDDING) metrics.recordEmbeddingCall();
+                        value = operation.get();
+                    } finally {
+                        metrics.recordStageDuration(stage, kind, Duration.ofNanos(System.nanoTime() - started));
+                    }
+                    if (deadline != null) deadline.requireActive();
+                    result.complete(value);
+                } catch (Throwable failure) {
+                    result.completeExceptionally(failure);
+                } finally {
+                    restoreContext(previous);
+                    synchronized (this) { state = 2; runner = null; }
+                    taskFinished(this);
+                }
+            }
+
+            private void reject(Throwable failure) {
+                result.completeExceptionally(failure);
+                cancel(false);
+            }
+
+            private void cancel(boolean interruptRunning) {
+                boolean queued;
+                synchronized (this) {
+                    if (state == 2) return;
+                    queued = state == 0;
+                    if (queued) state = 2;
+                    else if (interruptRunning && !result.isDone() && runner != null) runner.interrupt();
+                }
+                result.cancel(false);
+                if (queued) {
+                    workers.remove(this);
+                    taskFinished(this);
+                }
+            }
+        }
+    }
+
+    private static void closeRegistration(AutoCloseable registration) {
+        if (registration == null) return;
+        try { registration.close(); }
+        catch (Exception failure) { throw new IllegalStateException("关闭RAG取消注册失败", failure); }
     }
 
     private static void restoreContext(Map<String, String> context) {
-        if (context == null) {
-            MDC.clear();
-        } else {
-            MDC.setContextMap(context);
-        }
+        if (context == null) MDC.clear(); else MDC.setContextMap(context);
     }
 }

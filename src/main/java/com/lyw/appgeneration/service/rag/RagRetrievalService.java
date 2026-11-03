@@ -7,6 +7,10 @@ import com.lyw.appgeneration.service.rag.catalog.NativeTemplateCatalog;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.model.VueFeatureContext;
+import com.lyw.appgeneration.service.rag.model.CurrentVueProject;
+import com.lyw.appgeneration.service.rag.model.VueTurnRagResult;
+import com.lyw.appgeneration.core.resource.ResourcePreparationScope;
 import com.lyw.appgeneration.service.rag.retrieval.NativeTemplateCatalogProvider;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -68,6 +72,18 @@ public class RagRetrievalService {
             return VueRagContext.unavailable();
         }
         return vueHybridRetrievalService.retrieve(rawQuery);
+    }
+
+    public VueFeatureContext retrieveVueFeatures(String query, CurrentVueProject project) {
+        if (!props.isEnabled()) return VueFeatureContext.unavailable();
+        return vueHybridRetrievalService.retrieveFeatures(query, project, props.getHybrid().isEnabled());
+    }
+
+    public VueTurnRagResult prepareVueResources(String query, CurrentVueProject project, boolean initial,
+            ResourcePreparationScope scope, java.util.function.Consumer<VueTurnRagResult> publish) {
+        if (!props.isEnabled()) return initial ? VueTurnRagResult.initial(VueRagContext.unavailable())
+                : VueTurnRagResult.followUp(VueFeatureContext.unavailable());
+        return vueHybridRetrievalService.prepareOnline(query, project, initial, props.getHybrid().isEnabled(), scope, publish);
     }
 
     /**

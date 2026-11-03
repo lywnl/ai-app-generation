@@ -51,6 +51,19 @@ public class VueProjectBuilder {
             "vite", "4.4.5",
             "@vitejs/plugin-vue", "4.2.3");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    /** 模板参考沿用真实构建白名单，避免另建一份可能漂移的依赖规则。 */
+    public static Map<String, String> trustedRuntimeDependencies() {
+        return TRUSTED_RUNTIME_DEPENDENCIES;
+    }
+
+    public static Map<String, String> trustedDevelopmentDependencies() {
+        return TRUSTED_DEVELOPMENT_DEPENDENCIES;
+    }
+
+    public static List<String> forbiddenDependencyResolutionFiles() {
+        return FORBIDDEN_NPM_RESOLUTION_FILES;
+    }
     private static final String TRUSTED_VITE_CONFIG = """
             import { defineConfig } from 'vite'
             import vue from '@vitejs/plugin-vue'
@@ -333,6 +346,12 @@ public class VueProjectBuilder {
         if (!TRUSTED_BUILD_SCRIPT.equals(buildScript)) {
             return "package.json build 脚本必须固定为 " + TRUSTED_BUILD_SCRIPT;
         }
+        return dependencyContractViolation(packageJson);
+    }
+
+    /** 只读复用实际构建依赖契约；候选召回不能推断不受信依赖图的兼容性。 */
+    public static String dependencyContractViolation(JsonNode packageJson) {
+        if (packageJson == null || !packageJson.isObject()) return "package.json 必须是 JSON 对象";
         for (String fieldName : FORBIDDEN_PACKAGE_FIELDS) {
             if (packageJson.has(fieldName)) {
                 return "package.json 不允许包含可改变依赖图的字段: " + fieldName;
@@ -349,7 +368,7 @@ public class VueProjectBuilder {
                 "devDependencies");
     }
 
-    private String validateDependencyNames(
+    private static String validateDependencyNames(
             JsonNode dependencyNode,
             Map<String, String> trustedDependencies,
             String fieldName) {

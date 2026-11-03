@@ -1,0 +1,542 @@
+[
+  {
+    "id": "V01",
+    "category": "普通只读",
+    "input": "这个页面展示了什么？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V02",
+    "category": "普通只读",
+    "input": "解释一下新闻列表组件的职责。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V03",
+    "category": "普通只读",
+    "input": "购物车现在是怎么实现的？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V04",
+    "category": "普通只读",
+    "input": "页面用了哪些颜色和字体？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V05",
+    "category": "普通只读",
+    "input": "刚才修改了哪些文件？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V06",
+    "category": "普通只读",
+    "input": "当前的工程目录里有哪些组件？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V07",
+    "category": "普通只读",
+    "input": "分析一下这段界面的布局问题。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V08",
+    "category": "普通只读",
+    "input": "目前登录表单有哪些校验？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V09",
+    "category": "普通只读",
+    "input": "这个图表的数据从哪里来？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V10",
+    "category": "普通只读",
+    "input": "构建失败的原因是什么？请说明。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V11",
+    "category": "资料关键词只读",
+    "input": "这些图片是从哪里搜索来的？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V12",
+    "category": "资料关键词只读",
+    "input": "现在首页的 Logo 是怎么生成的？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V13",
+    "category": "资料关键词只读",
+    "input": "解释一下模板里使用的响应式布局。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V14",
+    "category": "资料关键词只读",
+    "input": "RAG 召回的功能片段是什么含义？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V15",
+    "category": "资料关键词只读",
+    "input": "图片放大后发虚的原因是什么？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V16",
+    "category": "资料关键词只读",
+    "input": "如果要更换背景图，通常有哪些步骤？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V17",
+    "category": "资料关键词只读",
+    "input": "我只想了解新闻页可以增加哪些功能。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V18",
+    "category": "资料关键词只读",
+    "input": "请列出目前页面中使用的图片 URL。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V19",
+    "category": "资料关键词只读",
+    "input": "为什么模板里有 package.json？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V20",
+    "category": "资料关键词只读",
+    "input": "这个网站采用了什么工程骨架？",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V21",
+    "category": "明确不修改",
+    "input": "只解释这个按钮的作用，不要修改任何文件。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V22",
+    "category": "明确不修改",
+    "input": "先别改图片，告诉我可以怎么优化。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V23",
+    "category": "明确不修改",
+    "input": "不要生成新的 Logo，我只是问现在这个 Logo 的来源。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V24",
+    "category": "明确不修改",
+    "input": "只分析购物车的 bug，不需要修复。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V25",
+    "category": "明确不修改",
+    "input": "我还没决定加新闻功能，先说说工作量，别动代码。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V26",
+    "category": "明确不修改",
+    "input": "请查看构建脚本，但不要执行构建。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V27",
+    "category": "明确不修改",
+    "input": "“把首页改成深色”是我举的例子，这轮只解释主题切换原理。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V28",
+    "category": "明确不修改",
+    "input": "不要检索图片或改代码，只回答现在用了几张照片。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V29",
+    "category": "明确不修改",
+    "input": "先不要应用模板，帮我分析当前技术栈。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V30",
+    "category": "明确不修改",
+    "input": "不要改颜色和布局，仅总结目前存在的问题。",
+    "mode": "READ_ONLY",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": true
+  },
+  {
+    "id": "V31",
+    "category": "普通修改",
+    "input": "把首页按钮改成蓝色。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V32",
+    "category": "普通修改",
+    "input": "调整卡片间距到 24px。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V33",
+    "category": "普通修改",
+    "input": "把页脚的联系电话改成 400-123-4567。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V34",
+    "category": "普通修改",
+    "input": "删除首页重复的标题。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V35",
+    "category": "普通修改",
+    "input": "修复现有组件中的变量拼写错误。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V36",
+    "category": "普通修改",
+    "input": "把已有图片的宽度改为 100%。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V37",
+    "category": "普通修改",
+    "input": "修复当前背景图片的错误地址，使用代码里已经存在的正确 URL。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V38",
+    "category": "普通修改",
+    "input": "重构已有样式，合并重复的 CSS。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V39",
+    "category": "普通修改",
+    "input": "执行一次构建并修复发现的错误。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V40",
+    "category": "普通修改",
+    "input": "继续完善。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V41",
+    "category": "新增功能资料",
+    "input": "新增新闻列表和新闻详情功能。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V42",
+    "category": "新增功能资料",
+    "input": "增加购物车和结算交互，不需要新增图片。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V43",
+    "category": "新增功能资料",
+    "input": "添加包含校验的预约表单。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V44",
+    "category": "新增功能资料",
+    "input": "新增销量统计图表页面。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V45",
+    "category": "新增功能资料",
+    "input": "为现有网站增加登录和注册功能。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V46",
+    "category": "新增功能资料",
+    "input": "解释现在的分页问题，并新增完整的分页与筛选功能。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V47",
+    "category": "新增功能资料",
+    "input": "创建一个没有配图的任务管理网站。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V48",
+    "category": "新增功能资料",
+    "input": "新增员工管理页面，包括查询和编辑。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V49",
+    "category": "新增功能资料",
+    "input": "只补齐订单详情交互，参考相关功能实现，不要换图片。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V50",
+    "category": "新增功能资料",
+    "input": "增加 FAQ 折叠列表和站内搜索功能。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V51",
+    "category": "图片资料修改",
+    "input": "把首页背景图换成新的森林照片。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V52",
+    "category": "图片资料修改",
+    "input": "给现有产品卡片搜索并换上新的产品配图。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V53",
+    "category": "图片资料修改",
+    "input": "重新设计并生成一个新的品牌 Logo。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V54",
+    "category": "图片资料修改",
+    "input": "不要改功能，只把横幅图片换成海边日出照片。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V55",
+    "category": "图片资料修改",
+    "input": "解释当前配图的问题，然后搜索并换成更合适的科技图片。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V56",
+    "category": "两类资料修改",
+    "input": "创建一个带产品图片的企业官网。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V57",
+    "category": "两类资料修改",
+    "input": "新增旅行目的地展示功能，并为各目的地准备照片。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V58",
+    "category": "两类资料修改",
+    "input": "增加带新闻封面图片的新闻列表和详情页。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": true,
+    "needImageSearch": true,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V59",
+    "category": "模糊或混合修改",
+    "input": "优化一下。",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  },
+  {
+    "id": "V60",
+    "category": "模糊或混合修改",
+    "input": "为什么不把按钮改成红色？",
+    "mode": "MUTATION_REQUIRED",
+    "needRag": false,
+    "needImageSearch": false,
+    "criticalNoMutation": false
+  }
+]

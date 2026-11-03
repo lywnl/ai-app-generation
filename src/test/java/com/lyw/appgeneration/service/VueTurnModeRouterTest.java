@@ -21,14 +21,19 @@ import static org.mockito.Mockito.when;
 class VueTurnModeRouterTest {
 
     @Test
-    void 选中元素信息固定为变更模式且不调用分类模型() {
+    void 选中元素信息固定为变更模式且调用一次分类模型() {
         VueTurnModeRoutingServiceFactory factory = mock(
                 VueTurnModeRoutingServiceFactory.class);
         VueTurnModeRouter router = new VueTurnModeRouter(factory);
+        VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
+        when(factory.create()).thenReturn(service);
+        when(service.route(org.mockito.ArgumentMatchers.anyString())).thenReturn(
+                "{\"mode\":\"READ_ONLY\",\"needRag\":true,\"needImageSearch\":true}");
 
         assertEquals(VueTurnMode.MUTATION_REQUIRED,
                 router.route("查看这个元素\n\n选中元素信息：\n- 标签：button", true));
-        verify(factory, never()).create();
+        verify(factory).create();
+        verify(service).route("查看这个元素\n\n选中元素信息：\n- 标签：button");
     }
 
     @Test
@@ -37,9 +42,9 @@ class VueTurnModeRouterTest {
                 VueTurnModeRoutingServiceFactory.class);
         VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
         when(factory.create()).thenReturn(service);
-        when(service.route("页面都有什么")).thenReturn(VueTurnMode.READ_ONLY);
+        when(service.route("页面都有什么")).thenReturn("{\"mode\":\"READ_ONLY\",\"needRag\":false,\"needImageSearch\":false}");
         when(service.route("把按钮改成红色"))
-                .thenReturn(VueTurnMode.MUTATION_REQUIRED);
+                .thenReturn("{\"mode\":\"MUTATION_REQUIRED\",\"needRag\":false,\"needImageSearch\":false}");
         VueTurnModeRouter router = new VueTurnModeRouter(factory);
 
         assertEquals(VueTurnMode.READ_ONLY,
@@ -88,7 +93,7 @@ class VueTurnModeRouterTest {
         VueTurnModeRoutingService service = mock(VueTurnModeRoutingService.class);
         when(factory.create()).thenReturn(service);
         when(service.route("页面都有什么"))
-                .thenReturn(VueTurnMode.READ_ONLY);
+                .thenReturn("{\"mode\":\"READ_ONLY\",\"needRag\":false,\"needImageSearch\":false}");
         VueTurnModeRouter router = new VueTurnModeRouter(factory);
         Logger logger = (Logger) LoggerFactory.getLogger(
                 VueTurnModeRouter.class);

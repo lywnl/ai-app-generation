@@ -58,6 +58,7 @@ class MemoryCompressionMetricsCollectorTest {
             assertEquals(Set.of(
                     "recordContextGate",
                     "recordEstimatedTokens",
+                    "recordTransientResourceTokens",
                     "recordRequestSnapshot",
                     "recordSummaryReuse",
                     "recordCompatibleRead",
@@ -107,6 +108,7 @@ class MemoryCompressionMetricsCollectorTest {
         collector.recordL2Candidate(
                 MemoryCompressionMetricsCollector.CandidateStatus.ACTIVE);
         collector.recordL2RecallTokens(800);
+        collector.recordTransientResourceTokens(1_200, 300);
         collector.recordRequestSnapshot(12, 12_000, 3);
         collector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.COMMITTED_SNAPSHOT);
         collector.recordCompatibleRead(MemoryCompressionMetricsCollector.CompatibleRead.RETRY_NEW_PAIR);
@@ -131,6 +133,11 @@ class MemoryCompressionMetricsCollectorTest {
         assertMetricTags(registry, "memory_l2_candidate_total",
                 Set.of("status"));
         assertMetricTags(registry, "memory_l2_recall_tokens", Set.of());
+        assertMetricTags(registry, "memory_transient_resource_tokens", Set.of("kind"));
+        assertEquals(1_200D, registry.get("memory_transient_resource_tokens")
+                .tag("kind", "rag").summary().totalAmount());
+        assertEquals(300D, registry.get("memory_transient_resource_tokens")
+                .tag("kind", "images").summary().totalAmount());
         for (String name : List.of("memory_context_retained_messages", "memory_context_retained_tokens",
                 "memory_context_deduplicated_results", "memory_summary_model_calls_total")) {
             assertMetricTags(registry, name, Set.of());
@@ -167,6 +174,8 @@ class MemoryCompressionMetricsCollectorTest {
         assertScrapeSample(scrape, "memory_l2_candidate_total",
                 Map.of("status", "active"));
         assertScrapeSample(scrape, "memory_l2_recall_tokens_count", Map.of());
+        assertScrapeSample(scrape, "memory_transient_resource_tokens_count", Map.of("kind", "rag"));
+        assertScrapeSample(scrape, "memory_transient_resource_tokens_count", Map.of("kind", "images"));
         for (String forbidden : Set.of(
                 "appId", "app_id", "userId", "user_id",
                 "turnId", "turn_id", "model_name", "error_message",
@@ -240,6 +249,7 @@ class MemoryCompressionMetricsCollectorTest {
             collector.recordSummaryDraftSuccess(80, 0);
             collector.recordSummaryDraftFailure(1);
             collector.recordRequestSnapshot(1, 100, 0);
+            collector.recordTransientResourceTokens(100, 20);
             collector.recordSummaryReuse(MemoryCompressionMetricsCollector.SummaryReuse.IN_FLIGHT);
             collector.recordCompatibleRead(MemoryCompressionMetricsCollector.CompatibleRead.COMPATIBLE);
             collector.recordSummaryModelCall();

@@ -29,6 +29,10 @@ public final class ImageCollectionPolicy {
     }
 
     public static List<ImageSearchTask> selectSearchTasks(List<ImageSearchTask> tasks) {
+        return selectSearchTasks(tasks, ImageCollectionQuota.INITIAL);
+    }
+
+    public static List<ImageSearchTask> selectSearchTasks(List<ImageSearchTask> tasks, ImageCollectionQuota quota) {
         if (tasks == null) {
             return List.of();
         }
@@ -38,7 +42,7 @@ public final class ImageCollectionPolicy {
             String query = normalizeWhitespace(task == null ? null : task.query());
             if (!query.isEmpty() && queries.add(query.toLowerCase(Locale.ROOT))) {
                 selected.add(new ImageSearchTask(query));
-                if (selected.size() == MAX_SEARCH_TASKS) {
+                if (selected.size() == quota.maxSearchTasks()) {
                     break;
                 }
             }
@@ -67,7 +71,11 @@ public final class ImageCollectionPolicy {
     }
 
     public static List<ImageResource> limitContextResources(List<ImageResource> images) {
-        return selectResources(images, MAX_SEARCH_IMAGES, MAX_LOGO_IMAGES);
+        return limitContextResources(images, ImageCollectionQuota.INITIAL);
+    }
+
+    public static List<ImageResource> limitContextResources(List<ImageResource> images, ImageCollectionQuota quota) {
+        return selectResources(images, quota.maxSearchImages(), MAX_LOGO_IMAGES);
     }
 
     private static List<ImageResource> selectResources(List<ImageResource> images,

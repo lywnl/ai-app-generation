@@ -1,67 +1,60 @@
 package com.lyw.appgeneration.service;
 
 import com.lyw.appgeneration.ai.VueTurnModeRoutingServiceFactory;
+import com.lyw.appgeneration.core.handler.VueTurnDecision;
 import com.lyw.appgeneration.core.handler.VueTurnMode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
 
-/** Vue 回合模式路由器，仅保留选中元素的确定性规则，其余交给分类模型。 */
+/** 每个用户回合只联合判断一次，选中元素的修改权限由服务端固定。 */
 @Slf4j
 @Service
 public final class VueTurnModeRouter {
-
     private final VueTurnModeRoutingServiceFactory factory;
 
     public VueTurnModeRouter(VueTurnModeRoutingServiceFactory factory) {
         this.factory = Objects.requireNonNull(factory, "Vue 模式路由工厂不能为空");
     }
 
-    /**
-     * @param userMessage 用户消息
-     * @param hasHistory 是否已经存在历史消息；仅用于保持调用方接口兼容
-     * @return 回合执行模式
-     */
+    /** 兼容只需要模式的调用方，历史有无不参与分类。 */
     public VueTurnMode route(String userMessage, boolean hasHistory) {
+        return decide(userMessage).mode();
+    }
+
+    public VueTurnDecision decide(String userMessage) {
         long startedAt = System.nanoTime();
-        if (containsSelectedElementInfo(userMessage)) {
-            return recordDecision(VueTurnMode.MUTATION_REQUIRED,
-                    "SELECTED_ELEMENT",
-                    "NONE", startedAt);
-        }
+        boolean selected = userMessage != null && userMessage.contains("选中元素信息：");
+        String source = selected ? "SELECTED_ELEMENT" : "ROUTING_MODEL";
         try {
-            VueTurnMode modelMode = factory.create().route(userMessage);
-            if (modelMode == null) {
-                throw new VueTurnModeRoutingException("分类模型返回空结果");
-            }
-            return recordDecision(modelMode, "ROUTING_MODEL", "NONE", startedAt);
+            var parsed = VueTurnDecisionParser.parse(factory.create().route(userMessage), selected);
+            recordDecision(parsed.decision(), source, parsed.rawRag(), parsed.rawImages(),
+                    parsed.degradationReason().isEmpty() ? "NONE" : parsed.degradationReason(), startedAt);
+            return parsed.decision();
         } catch (RuntimeException exception) {
-            if (exception instanceof VueTurnModeRoutingException) {
-                log.warn("Vue 回合模式分类失败，source=ROUTING_MODEL,"
-                                + "exceptionType={}",
-                        exception.getClass().getSimpleName());
-                throw exception;
+            if (selected) {
+                var fallback = new VueTurnDecision(VueTurnMode.MUTATION_REQUIRED, false, false);
+                recordDecision(fallback, source, "UNAVAILABLE", "UNAVAILABLE",
+                        exception.getClass().getSimpleName(), startedAt);
+                return fallback;
             }
-            log.warn("Vue 回合模式分类失败，source=ROUTING_MODEL,"
-                            + "exceptionType={}",
-                    exception.getClass().getSimpleName());
+            log.warn("Vue 回合联合分类失败,source={},elapsedMs={},exceptionType={}",
+                    source, elapsedMillis(startedAt), exception.getClass().getSimpleName());
+            if (exception instanceof VueTurnModeRoutingException) throw exception;
             throw new VueTurnModeRoutingException("分类模型调用失败", exception);
         }
     }
 
-    private VueTurnMode recordDecision(
-            VueTurnMode mode, String source, String exceptionType,
-            long startedAt) {
-        long elapsedMillis = Math.max(0L,
-                (System.nanoTime() - startedAt) / 1_000_000L);
-        log.info("Vue 回合模式分类完成，mode={},source={},elapsedMs={},"
-                        + "exceptionType={}",
-                mode, source, elapsedMillis, exceptionType);
-        return mode;
+    private void recordDecision(VueTurnDecision decision, String source, String rawRag,
+                                String rawImages, String degradation, long startedAt) {
+        log.info("Vue 回合联合分类完成,mode={},source={},needRag={},needImageSearch={},"
+                        + "rawNeedRag={},rawNeedImageSearch={},degradation={},elapsedMs={}",
+                decision.mode(), source, decision.needRag(), decision.needImageSearch(),
+                rawRag, rawImages, degradation, elapsedMillis(startedAt));
     }
 
-    private boolean containsSelectedElementInfo(String userMessage) {
-        return userMessage != null && userMessage.contains("选中元素信息：");
+    private long elapsedMillis(long startedAt) {
+        return Math.max(0, (System.nanoTime() - startedAt) / 1_000_000L);
     }
 }

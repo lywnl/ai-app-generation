@@ -22,7 +22,11 @@ public class ImageCollectionPromptBuilder {
 
     /** 仅返回图片参考资料，供在线回合临时 SystemMessage 使用。 */
     public String buildContext(List<ImageResource> images) {
-        List<ImageResource> selected = ImageCollectionPolicy.limitContextResources(images);
+        return buildContext(images, ImageCollectionQuota.INITIAL);
+    }
+
+    public String buildContext(List<ImageResource> images, ImageCollectionQuota quota) {
+        List<ImageResource> selected = ImageCollectionPolicy.limitContextResources(images, quota);
         if (selected.isEmpty()) {
             return "";
         }

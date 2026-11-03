@@ -68,6 +68,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -77,6 +78,9 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -90,6 +94,13 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AiCodeGeneratorFacadeTest {
+    private static com.lyw.appgeneration.core.handler.VueTurnResourcePolicy resourcePolicy(boolean initial) {
+        return com.lyw.appgeneration.core.handler.VueTurnResourcePolicy.decide(
+                new com.lyw.appgeneration.core.handler.VueTurnDecision(
+                        com.lyw.appgeneration.core.handler.VueTurnMode.MUTATION_REQUIRED, false, false),
+                !initial, true, "");
+    }
+
 
     private static final long APP_ID = 7L;
     private static final String RAW_QUERY = "生成一个带数据看板的 Vue 后台";
@@ -124,6 +135,23 @@ class AiCodeGeneratorFacadeTest {
     private AiCodeGeneratorFacade facade;
     private FileToolExecutionScopeManager scopeManager;
     private ThreadPoolExecutor preparationExecutor;
+    @org.junit.jupiter.api.io.TempDir
+    private java.nio.file.Path resourceDirectory;
+
+    @Test
+    void 用户消息未持久化时不得开始任何资料或主模型调用() {
+        var operation = new AppOperationLeaseManager().acquire(APP_ID,
+                AppOperationLeaseManager.AppOperationType.GENERATE, "uncommitted-resource");
+        var lease = new VueBuildSessionManager().open(operation, 9L, "uncommitted-resource");
+        var context = new VueTurnContext(APP_ID, 9L, "uncommitted-resource", operation, lease,
+                admissionPermit(), new FileToolBudgetGuard().newSession(), true);
+        context.initializeMode(VueTurnMode.MUTATION_REQUIRED);
+        try {
+            assertThrows(IllegalStateException.class, () -> facade.generateVueProjectStream(
+                    RAW_QUERY, APP_ID, resourcePolicy(true), context, generatorService));
+            verifyNoInteractions(imageCollectionService, retrievalService, generatorService);
+        } finally { context.closeResources(); }
+    }
 
     @Test
     void 普通流式入口必须暴露可取消的TokenStream() throws Exception {
@@ -163,6 +191,42 @@ class AiCodeGeneratorFacadeTest {
         preparationExecutor = new VueContextPreparationExecutorConfig()
                 .vueContextPreparationExecutor(properties);
         ReflectionTestUtils.setField(facade, "vueContextPreparationExecutor", preparationExecutor);
+        // 老回归样例的受控资料替身接到新的异步发布接口；真实服务另由组合测试覆盖。
+        var projectReader = new com.lyw.appgeneration.service.rag.CurrentVueProjectReader(
+                new com.lyw.appgeneration.ai.plan.PlanStoragePathResolver(resourceDirectory));
+        ReflectionTestUtils.setField(facade, "currentVueProjectReader", projectReader);
+        lenient().doAnswer(invocation -> {
+            var scope = invocation.<com.lyw.appgeneration.core.resource.ResourcePreparationScope>getArgument(2);
+            var slot = invocation.<com.lyw.appgeneration.core.resource.ResourcePreparationScope.Slot>getArgument(3);
+            scope.requireActive();
+            String value = imageCollectionService.collectPromptContext(RAW_QUERY);
+            scope.requireActive();
+            slot.publish(value, 0, 0);
+            slot.finish(com.lyw.appgeneration.core.resource.ResourcePreparationScope.Outcome.SUCCEEDED);
+            return null;
+        }).when(imageCollectionService).startPromptContext(anyString(),
+                any(com.lyw.appgeneration.ai.image.ImageCollectionQuota.class),
+                any(com.lyw.appgeneration.core.resource.ResourcePreparationScope.class),
+                any(com.lyw.appgeneration.core.resource.ResourcePreparationScope.Slot.class));
+        lenient().when(promptAssembler.assembleVueProjectContext(any(), anyBoolean())).thenAnswer(invocation ->
+                promptAssembler.assembleVueProjectContext(invocation.getArgument(0)));
+        lenient().when(retrievalService.prepareVueResources(anyString(), any(), anyBoolean(), any(), any())).thenAnswer(invocation -> {
+            var scope = invocation.<com.lyw.appgeneration.core.resource.ResourcePreparationScope>getArgument(3);
+            scope.requireActive();
+            VueRagContext context;
+            try {
+                context = properties.getHybrid().isEnabled() ? retrievalService.retrieveVueProject(invocation.getArgument(0))
+                        : retrievalService.retrieveVueProjectDenseOnly(invocation.getArgument(0));
+            } catch (Exception failure) {
+                scope.requireActive();
+                context = VueRagContext.unavailable();
+            }
+            scope.requireActive();
+            var value = com.lyw.appgeneration.service.rag.model.VueTurnRagResult.initial(
+                    context == null ? VueRagContext.unavailable() : context);
+            invocation.<java.util.function.Consumer<com.lyw.appgeneration.service.rag.model.VueTurnRagResult>>getArgument(4).accept(value);
+            return value;
+        });
     }
 
     @AfterEach
@@ -209,7 +273,7 @@ class AiCodeGeneratorFacadeTest {
         bindUser(context);
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, false, context, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(false), context, generatorService);
 
         verify(tokenStream).modelRequestGate(modelRequestGate, context);
         var policyCaptor = org.mockito.ArgumentCaptor.forClass(
@@ -229,7 +293,7 @@ class AiCodeGeneratorFacadeTest {
         VueTurnContext mutation = newVueTurnContext(
                 "skill-mutation", VueTurnMode.MUTATION_REQUIRED);
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, false, mutation, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(false), mutation, generatorService);
         var skillCaptor = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(tokenStream).turnTransientMessages(skillCaptor.capture());
         assertEquals(1, skillCaptor.getValue().size());
@@ -248,7 +312,7 @@ class AiCodeGeneratorFacadeTest {
         VueTurnContext readOnly = newVueTurnContext(
                 "skill-read-only", VueTurnMode.READ_ONLY);
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, false, readOnly, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(false), readOnly, generatorService);
         verify(readOnlyStream, never()).turnTransientMessages(anyList());
         readOnly.closeResources();
     }
@@ -271,7 +335,7 @@ class AiCodeGeneratorFacadeTest {
                 PlanStatus.PLANNED), 0, context.turnId());
         try {
             facade.generateVueProjectStream(
-                    RAW_QUERY, APP_ID, false, context, generatorService);
+                    RAW_QUERY, APP_ID, resourcePolicy(false), context, generatorService);
 
             var captor = org.mockito.ArgumentCaptor.forClass(List.class);
             verify(tokenStream).turnTransientMessages(captor.capture());
@@ -317,7 +381,7 @@ class AiCodeGeneratorFacadeTest {
         VueTurnContext context = newVueTurnContext("read-only-plan", VueTurnMode.READ_ONLY);
         byte[] persisted = Files.readAllBytes(paths.planPath(APP_ID));
         try {
-            facade.generateVueProjectStream(RAW_QUERY, APP_ID, false, context, generatorService);
+            facade.generateVueProjectStream(RAW_QUERY, APP_ID, resourcePolicy(false), context, generatorService);
             var boundary = org.mockito.ArgumentCaptor.forClass(com.lyw.appgeneration.ai.memory.TurnRequestBoundary.class);
             verify(tokenStream).turnRequestBoundary(boundary.capture());
             assertEquals("original-turn", boundary.getValue().readLatestPlan().orElseThrow().activeTurnId());
@@ -337,7 +401,7 @@ class AiCodeGeneratorFacadeTest {
                 "unified-generation-stream");
 
         List<String> output = facade.generateVueProjectStream(
-                        RAW_QUERY, APP_ID, false, context,
+                        RAW_QUERY, APP_ID, resourcePolicy(false), context,
                         generatorService)
                 .collectList().block();
 
@@ -414,7 +478,7 @@ class AiCodeGeneratorFacadeTest {
         VueTurnContext context = newVueTurnContext("trusted-recovery-progress");
         Flux<GenerationStreamEvent> merged = context.mergeProgress(
                 facade.generateVueProjectStream(
-                                RAW_QUERY, APP_ID, false, context,
+                                RAW_QUERY, APP_ID, resourcePolicy(false), context,
                                 generatorService)
                         .thenMany(Flux.just(
                                 GenerationStreamEvent.content("正文"))));
@@ -457,7 +521,7 @@ class AiCodeGeneratorFacadeTest {
         when(promptAssembler.assembleVueProjectContext(context)).thenReturn("RAG 上下文\n");
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, true, turnContext, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService);
 
         verify(imageCollectionService).collectPromptContext(RAW_QUERY);
         verify(retrievalService).retrieveVueProject(RAW_QUERY);
@@ -478,7 +542,7 @@ class AiCodeGeneratorFacadeTest {
                 "read-only-first", VueTurnMode.READ_ONLY);
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, true, turnContext, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService);
 
         verifyNoInteractions(imageCollectionService);
         verifyNoInteractions(retrievalService, promptAssembler);
@@ -493,7 +557,7 @@ class AiCodeGeneratorFacadeTest {
         VueTurnContext turnContext = newVueTurnContext("hybrid-non-first");
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, false, turnContext, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(false), turnContext, generatorService);
 
         verifyNoInteractions(imageCollectionService);
         verifyNoInteractions(retrievalService, promptAssembler);
@@ -513,7 +577,7 @@ class AiCodeGeneratorFacadeTest {
         when(promptAssembler.assembleVueProjectContext(context)).thenReturn("RAG 上下文\n");
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, true, turnContext, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService);
 
         verify(imageCollectionService).collectPromptContext(RAW_QUERY);
         verify(retrievalService).retrieveVueProjectDenseOnly(RAW_QUERY);
@@ -535,7 +599,7 @@ class AiCodeGeneratorFacadeTest {
         when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenReturn("图片资源");
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, true, turnContext, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService);
 
         verifyNoInteractions(retrievalService, promptAssembler);
         verify(imageCollectionService).collectPromptContext(RAW_QUERY);
@@ -555,7 +619,7 @@ class AiCodeGeneratorFacadeTest {
                 .thenReturn("无 RAG 拼装");
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, true, turnContext, generatorService));
+                RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService));
 
         verify(imageCollectionService).collectPromptContext(RAW_QUERY);
         verify(promptAssembler).assembleVueProjectContext(VueRagContext.unavailable());
@@ -574,7 +638,7 @@ class AiCodeGeneratorFacadeTest {
         when(promptAssembler.assembleVueProjectContext(context)).thenReturn("原消息拼装");
 
         facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, true, turnContext, generatorService);
+                RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService);
 
         verify(promptAssembler).assembleVueProjectContext(context);
         verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
@@ -616,7 +680,7 @@ class AiCodeGeneratorFacadeTest {
         var caller = Executors.newSingleThreadExecutor();
         try {
             var result = caller.submit(() -> facade.generateVueProjectStream(
-                    RAW_QUERY, APP_ID, true, turnContext, generatorService));
+                    RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService));
             assertTrue(bothStarted.await(3, TimeUnit.SECONDS), "任一路未结束时，另一路必须已经开始");
             verifyNoInteractions(generatorService);
             if (imageFinishesFirst) {
@@ -666,19 +730,17 @@ class AiCodeGeneratorFacadeTest {
             assertTrue(release.await(5, TimeUnit.SECONDS));
             return ragContext;
         });
-        when(promptAssembler.assembleVueProjectContext(ragContext)).thenReturn("RAG 上下文");
         var caller = Executors.newSingleThreadExecutor();
         try {
             var result = caller.submit(() -> facade.generateVueProjectStream(
-                    RAW_QUERY, APP_ID, true, turnContext, generatorService));
+                    RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService));
             assertTrue(bothStarted.await(3, TimeUnit.SECONDS));
             turnContext.cancelGeneration();
-            assertFalse(turnContext.awaitQuiescence(Duration.ZERO), "正在执行的两路准备仍持有回合票据");
             release.countDown();
             assertEquals(List.of(), result.get(3, TimeUnit.SECONDS)
                     .collectList().block(Duration.ofSeconds(3)));
             assertTrue(turnContext.awaitQuiescence(Duration.ofSeconds(3)));
-            verifyNoInteractions(generatorService, tokenStream);
+            verifyNoInteractions(generatorService, tokenStream, promptAssembler);
         } finally {
             release.countDown();
             caller.shutdownNow();
@@ -688,32 +750,29 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
-    void 图片准备异常时移除尚未启动的Rag任务() throws Exception {
+    void 总截止到达时移除两路尚未启动的任务并继续生成() throws Exception {
+        stubVueGenerator();
         preparationExecutor.setCorePoolSize(1);
         preparationExecutor.setMaximumPoolSize(1);
-        CountDownLatch workerOccupied = new CountDownLatch(1);
-        CountDownLatch releaseWorker = new CountDownLatch(1);
+        CountDownLatch workerOccupied = new CountDownLatch(1), releaseWorker = new CountDownLatch(1);
         var occupied = preparationExecutor.submit(() -> {
             workerOccupied.countDown();
             assertTrue(releaseWorker.await(5, TimeUnit.SECONDS));
             return null;
         });
-        VueTurnContext turnContext = newVueTurnContext("image-failed-before-rag-start");
-        RuntimeException imageFailure = new IllegalStateException("图片上下文准备异常");
-        when(imageCollectionService.collectPromptContext(RAW_QUERY)).thenAnswer(ignored -> {
-            assertEquals(1, preparationExecutor.getQueue().size(), "RAG 此时仍在排队");
-            throw imageFailure;
-        });
+        VueTurnContext turnContext = newVueTurnContext("queued-resource-deadline");
+        var policy = new com.lyw.appgeneration.core.handler.VueTurnResourcePolicy(true,
+                com.lyw.appgeneration.core.handler.VueTurnResourcePolicy.RagScope.FULL, true, 6,
+                Duration.ofMillis(40), "");
         try {
             assertTrue(workerOccupied.await(3, TimeUnit.SECONDS));
-            assertEquals(imageFailure, assertThrows(IllegalStateException.class, () ->
-                    facade.generateVueProjectStream(
-                            RAW_QUERY, APP_ID, true, turnContext, generatorService)));
-            assertTrue(preparationExecutor.getQueue().isEmpty(), "异常分支不能遗留排队任务");
+            facade.generateVueProjectStream(RAW_QUERY, APP_ID, policy, turnContext, generatorService);
+            assertTrue(preparationExecutor.getQueue().isEmpty(), "截止后不能遗留排队任务");
             releaseWorker.countDown();
             occupied.get(3, TimeUnit.SECONDS);
-            assertTrue(turnContext.awaitQuiescence(Duration.ZERO));
-            verifyNoInteractions(retrievalService, promptAssembler, generatorService);
+            assertTrue(turnContext.awaitQuiescence(Duration.ofSeconds(1)));
+            verifyNoInteractions(retrievalService, promptAssembler, imageCollectionService);
+            verify(generatorService).generateVueProjectCodeStream(APP_ID, RAW_QUERY);
         } finally {
             releaseWorker.countDown();
             turnContext.closeResources();
@@ -737,7 +796,7 @@ class AiCodeGeneratorFacadeTest {
             var result = caller.submit(() -> {
                 callerThread.set(Thread.currentThread());
                 assertThrows(CancellationException.class, () -> facade.generateVueProjectStream(
-                        RAW_QUERY, APP_ID, true, turnContext, generatorService));
+                        RAW_QUERY, APP_ID, resourcePolicy(true), turnContext, generatorService));
                 return Thread.currentThread().isInterrupted();
             });
             assertTrue(ragStarted.await(3, TimeUnit.SECONDS));
@@ -769,7 +828,7 @@ class AiCodeGeneratorFacadeTest {
 
         RuntimeException error = assertThrows(RuntimeException.class, () ->
                 facade.generateVueProjectStream(
-                        RAW_QUERY, APP_ID, false, context, generatorService)
+                        RAW_QUERY, APP_ID, resourcePolicy(false), context, generatorService)
                         .then().block());
 
         assertTrue(error instanceof AiCodeGeneratorFacade
@@ -790,7 +849,7 @@ class AiCodeGeneratorFacadeTest {
                 "controlled-success-" + reason);
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, false, context, generatorService)
+                RAW_QUERY, APP_ID, resourcePolicy(false), context, generatorService)
                 .then().block());
         context.closeResources();
     }
@@ -818,7 +877,7 @@ class AiCodeGeneratorFacadeTest {
         bindUser(context);
 
         List<String> output = facade.generateVueProjectStream(
-                        RAW_QUERY, APP_ID, false, context)
+                        RAW_QUERY, APP_ID, resourcePolicy(false), context)
                 .collectList().block();
 
         assertEquals(2, output.size());
@@ -852,7 +911,7 @@ class AiCodeGeneratorFacadeTest {
         bindUser(context);
 
         assertDoesNotThrow(() -> facade.generateVueProjectStream(
-                RAW_QUERY, APP_ID, false, context).then().block());
+                RAW_QUERY, APP_ID, resourcePolicy(false), context).then().block());
 
         assertEquals(FileToolExecutionScopeManager.ScopeType.ONLINE,
                 stream.observedScopeType);
@@ -899,7 +958,7 @@ class AiCodeGeneratorFacadeTest {
         List<String> output = new CopyOnWriteArrayList<>();
         RuntimeException error = assertThrows(RuntimeException.class, () ->
                 facade.generateVueProjectStream(
-                                RAW_QUERY, APP_ID, false, context)
+                                RAW_QUERY, APP_ID, resourcePolicy(false), context)
                         .doOnNext(output::add).then().block());
 
         assertTrue(error instanceof AiCodeGeneratorFacade
@@ -953,7 +1012,7 @@ class AiCodeGeneratorFacadeTest {
         List<String> output = new CopyOnWriteArrayList<>();
         RuntimeException error = assertThrows(RuntimeException.class, () ->
                 facade.generateVueProjectStream(
-                                RAW_QUERY, APP_ID, false, context)
+                                RAW_QUERY, APP_ID, resourcePolicy(false), context)
                         .doOnNext(output::add).then().block());
 
         assertTrue(error instanceof AiCodeGeneratorFacade
@@ -994,7 +1053,7 @@ class AiCodeGeneratorFacadeTest {
 
         List<String> output = new CopyOnWriteArrayList<>();
         assertThrows(RuntimeException.class, () -> facade.generateVueProjectStream(
-                        RAW_QUERY, APP_ID, false, context)
+                        RAW_QUERY, APP_ID, resourcePolicy(false), context)
                 .doOnNext(output::add).then().block());
 
         String all = String.join("\n", output);

@@ -18,6 +18,7 @@ import com.lyw.appgeneration.core.concurrency.AppDataLifecycleFence;
 import com.lyw.appgeneration.core.handler.StreamHandlerExecutor;
 import com.lyw.appgeneration.core.handler.VueTurnContext;
 import com.lyw.appgeneration.core.handler.VueTurnMode;
+import com.lyw.appgeneration.core.handler.VueTurnResourcePolicy;
 import com.lyw.appgeneration.core.handler.GenerationStreamEvent;
 import com.lyw.appgeneration.core.handler.GenerationCancellationRegistry;
 import com.lyw.appgeneration.core.handler.VueTurnCancellationCoordinator;
@@ -128,7 +129,7 @@ class AppServiceImplVueTurnTest {
     void 主动取消收尾本身失败必须结束原流并传播错误() {
         prepareExplicitCancellation();
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.concat(Flux.just("已开始"), Flux.never()));
         when(executor.doExecuteVue(any(), any())).thenAnswer(invocation ->
                 invocation.<Flux<String>>getArgument(0).map(GenerationStreamEvent::content));
@@ -158,7 +159,7 @@ class AppServiceImplVueTurnTest {
     void 已发正文后主动取消必须仍发送唯一终态并结束流() {
         ToolMessageCollapser collapser = prepareExplicitCancellation();
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.concat(Flux.just(startedText()), Flux.never()));
 
         try (var coordinator = installRealVuePipeline(collapser)) {
@@ -184,7 +185,7 @@ class AppServiceImplVueTurnTest {
         var pending = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
         var model = reactor.core.publisher.Sinks.many().unicast().<String>onBackpressureBuffer();
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenAnswer(invocation -> {
                     VueTurnContext context = invocation.getArgument(3);
                     context.registerModelCancellation(model::tryEmitComplete);
@@ -232,7 +233,7 @@ class AppServiceImplVueTurnTest {
         when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(savedUser(301L, "需求"), savedUser(302L, "需求"));
         List<Long> identities = new ArrayList<>();
-        when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), anyBoolean(), any(), eq(generator)))
+        when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenAnswer(invocation -> {
                     VueTurnContext context = invocation.getArgument(3);
                     identities.add(context.userHistoryId());
@@ -272,7 +273,7 @@ class AppServiceImplVueTurnTest {
         when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenAnswer(invocation -> {
                     VueTurnContext context = invocation.getArgument(3);
                     return Flux.defer(() -> {
@@ -343,6 +344,39 @@ class AppServiceImplVueTurnTest {
     private SimpleMeterRegistry metricsRegistry;
     private VueTurnAdmissionController admissionController;
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(ChatMemoryOutcome.class)
+    void 只有可靠成功终态才退出首次强制策略(ChatMemoryOutcome outcome) {
+        var last = savedAiMessage("文案不参与成功判断");
+        last.setMemoryOutcome(outcome);
+        when(history.getLastMessage(APP_ID)).thenReturn(last);
+        when(history.hasSucceededGeneration(APP_ID)).thenReturn(outcome == ChatMemoryOutcome.SUCCEEDED);
+        when(history.addChatMessageAndReturn(APP_ID, "继续", "user", USER_ID))
+                .thenReturn(savedUser(101L, "继续"));
+        VueTurnContext context = ReflectionTestUtils.invokeMethod(service, "openVueTurn", APP_ID, USER_ID);
+        try {
+            Object committed = ReflectionTestUtils.invokeMethod(service, "prepareVueTurn", APP_ID,
+                    "继续", User.builder().id(USER_ID).build(), context, "创建企业官网");
+            VueTurnResourcePolicy policy = ReflectionTestUtils.invokeMethod(committed, "resourcePolicy");
+            assertEquals(outcome != ChatMemoryOutcome.SUCCEEDED, policy.initialBootstrap());
+            assertEquals(outcome != ChatMemoryOutcome.SUCCEEDED, policy.prepareImages());
+            assertEquals(outcome == ChatMemoryOutcome.SUCCEEDED ? VueTurnResourcePolicy.RagScope.NONE
+                    : VueTurnResourcePolicy.RagScope.FULL, policy.ragScope());
+            if (policy.initialBootstrap()) assertTrue(policy.ragQuery("继续").contains("创建企业官网"));
+            verify(vueTurnModeRoutingService).route("继续");
+            verify(history).addChatMessageAndReturn(APP_ID, "继续", "user", USER_ID);
+        } finally { context.closeResources(); }
+    }
+
+    @Test
+    void 成功资格查询失败在路由与用户持久化前停止() {
+        when(history.hasSucceededGeneration(APP_ID)).thenThrow(new IllegalStateException("数据库暂不可用"));
+        assertThrows(GenerationPreflightException.class, () -> service.chatToGenCode(APP_ID,
+                "继续", User.builder().id(USER_ID).build()).blockLast());
+        verify(vueTurnModeRoutingService, never()).route(anyString());
+        verify(history, never()).addChatMessageAndReturn(anyLong(), anyString(), anyString(), anyLong());
+    }
+
     @BeforeEach
     void setUp() {
         operationManager = new AppOperationLeaseManager();
@@ -371,10 +405,11 @@ class AppServiceImplVueTurnTest {
                 vueTurnModeRouter);
         ReflectionTestUtils.setField(service, "generationCancellationRegistry",
                 new GenerationCancellationRegistry());
+        ReflectionTestUtils.setField(service, "ragProperties", new com.lyw.appgeneration.config.RagProperties());
         when(vueTurnModeRoutingServiceFactory.create())
                 .thenReturn(vueTurnModeRoutingService);
         when(vueTurnModeRoutingService.route(anyString()))
-                .thenReturn(VueTurnMode.MUTATION_REQUIRED);
+                .thenReturn("{\"mode\":\"MUTATION_REQUIRED\",\"needRag\":false,\"needImageSearch\":false}");
         App app = App.builder().id(APP_ID).userId(USER_ID)
                 .codeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue()).build();
         service = org.mockito.Mockito.spy(service);
@@ -455,7 +490,7 @@ class AppServiceImplVueTurnTest {
                         ToolMessageCollapser.CollapseStatus.COLLAPSED,
                         List.of()));
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.defer(() -> {
                     modelStarts.incrementAndGet();
                     return Flux.never();
@@ -517,7 +552,7 @@ class AppServiceImplVueTurnTest {
                     eq(cancelledMemoryProjection()),
                     eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
             verify(facade, never()).generateVueProjectStream(
-                    anyString(), anyLong(), anyBoolean(), any(), any());
+                    anyString(), anyLong(), any(VueTurnResourcePolicy.class), any(), any());
             assertEquals(0, modelStarts.get());
             assertEquals(null, droppedError.get(),
                     "正常取消后的迟到 Handler 不得产生丢弃异常");
@@ -538,7 +573,7 @@ class AppServiceImplVueTurnTest {
         AtomicInteger starts = new AtomicInteger();
         when(history.getLastMessage(APP_ID)).thenReturn(null);
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.defer(() -> {
                     starts.incrementAndGet();
                     return Flux.just("raw");
@@ -564,7 +599,7 @@ class AppServiceImplVueTurnTest {
         order.verify(history).addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID);
         order.verify(executor).doExecuteVue(any(), any());
         order.verify(facade).generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator));
     }
 
     @Test
@@ -574,7 +609,7 @@ class AppServiceImplVueTurnTest {
         when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.just("raw"));
         when(executor.doExecuteVue(any(), any())).thenAnswer(invocation -> {
             VueTurnContext context = invocation.getArgument(1);
@@ -619,7 +654,7 @@ class AppServiceImplVueTurnTest {
         when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.defer(() -> {
                     modelStarts.incrementAndGet();
                     return Flux.just("raw");
@@ -642,7 +677,7 @@ class AppServiceImplVueTurnTest {
         verify(history, times(1)).addChatMessageAndReturn(
                 APP_ID, "需求", "user", USER_ID);
         verify(facade, times(1)).generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator));
         operationManager.acquire(
                 APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-metrics-failure").close();
@@ -680,7 +715,7 @@ class AppServiceImplVueTurnTest {
         assertEquals("模型服务余额不足，请充值后重试。", failure.safeMessage());
         assertEquals(GenerationPreflightException.Kind.SYSTEM, failure.kind());
         verify(history, never()).addChatMessageAndReturn(eq(APP_ID), anyString(), anyString(), eq(USER_ID));
-        verify(facade, never()).generateVueProjectStream(anyString(), anyLong(), anyBoolean(), any(), any());
+        verify(facade, never()).generateVueProjectStream(anyString(), anyLong(), any(VueTurnResourcePolicy.class), any(), any());
         operationManager.acquire(APP_ID, AppOperationLeaseManager.AppOperationType.GENERATE,
                 "after-routing-balance-error").close();
     }
@@ -700,10 +735,10 @@ class AppServiceImplVueTurnTest {
                 .thenReturn(savedAiMessage(message));
         when(collapser.finishLastTurn(any(), any(), any())).thenReturn(collapsed());
         if (synchronous) {
-            when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+            when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                     .thenThrow(failure);
         } else {
-            when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+            when(facade.generateVueProjectStream(eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                     .thenReturn(Flux.error(new java.util.concurrent.CompletionException(failure)));
         }
 
@@ -772,7 +807,7 @@ class AppServiceImplVueTurnTest {
         verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "页面都有什么", "user", USER_ID);
         verify(facade, never()).generateVueProjectStream(
-                anyString(), anyLong(), anyBoolean(), any(), any());
+                anyString(), anyLong(), any(VueTurnResourcePolicy.class), any(), any());
     }
 
     @Test
@@ -818,7 +853,7 @@ class AppServiceImplVueTurnTest {
                 .id(5L).appId(APP_ID).userId(USER_ID).message("旧需求")
                 .messageType("user").build());
         when(facade.generateVueProjectStream(anyString(), anyLong(),
-                anyBoolean(), any(), any())).thenReturn(Flux.empty());
+                any(VueTurnResourcePolicy.class), any(), any())).thenReturn(Flux.empty());
         when(history.addChatMessageAndReturn(APP_ID, "新需求", "user", USER_ID))
                 .thenReturn(savedUser(101L, "新需求"));
         when(history.repairOrphanUserTurn(APP_ID, USER_ID,
@@ -837,7 +872,7 @@ class AppServiceImplVueTurnTest {
         order.verify(factory).prepareVueColdRebuild(APP_ID);
         order.verify(history).addChatMessageAndReturn(APP_ID, "新需求", "user", USER_ID);
         order.verify(facade).generateVueProjectStream(
-                eq("新需求"), eq(APP_ID), eq(false), any(), eq(generator));
+                eq("新需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator));
     }
 
     @Test
@@ -854,7 +889,7 @@ class AppServiceImplVueTurnTest {
 
         verify(factory, never()).prepareVueColdRebuild(APP_ID);
         verify(facade, never()).generateVueProjectStream(
-                anyString(), anyLong(), anyBoolean(), any(), any());
+                anyString(), anyLong(), any(VueTurnResourcePolicy.class), any(), any());
         verify(history, never()).addChatMessageAndReturn(
                 APP_ID, "新需求", "user", USER_ID);
         verify(history, never()).addAiMessageAndReturn(
@@ -892,7 +927,7 @@ class AppServiceImplVueTurnTest {
                     ReflectionTestUtils.invokeMethod(
                             service, "prepareVueTurn",
                             APP_ID, "需求", User.builder().id(USER_ID).build(),
-                            context));
+                            context, ""));
             assertTrue(historyEntered.await(1, TimeUnit.SECONDS));
 
             assertEquals(VueTurnContext.PreCommitTerminationDecision.PRE_COMMIT_WON,
@@ -934,7 +969,7 @@ class AppServiceImplVueTurnTest {
         when(collapser.finishLastTurn(any(), any(), any()))
                 .thenReturn(collapsed());
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenThrow(preparationFailure);
 
         try (var coordinator = installRealVuePipeline(collapser)) {
@@ -996,7 +1031,7 @@ class AppServiceImplVueTurnTest {
         }
 
         verify(facade, never()).generateVueProjectStream(
-                anyString(), anyLong(), anyBoolean(), any(), any());
+                anyString(), anyLong(), any(VueTurnResourcePolicy.class), any(), any());
         verify(history, times(1)).addAiMessageAndReturn(
                 eq(APP_ID), eq(VueTurnFinalizer.SYSTEM_ERROR_MESSAGE),
                 eq(systemErrorMemoryProjection()),
@@ -1071,7 +1106,7 @@ class AppServiceImplVueTurnTest {
                         eq(cancelledMemoryProjection()),
                         eq(ChatMemoryOutcome.CANCELLED), eq(USER_ID));
                 verify(facade, never()).generateVueProjectStream(
-                        anyString(), anyLong(), anyBoolean(), any(), any());
+                        anyString(), anyLong(), any(VueTurnResourcePolicy.class), any(), any());
                 assertEquals(0, modelSubscriptions.get());
                 assertEquals(VueTurnContext.TurnStage.FINALIZED,
                         context.turnState().stage());
@@ -1181,7 +1216,7 @@ class AppServiceImplVueTurnTest {
         when(history.addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID))
                 .thenReturn(savedUser(101L, "需求"));
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.empty());
         when(executor.doExecuteVue(any(), any())).thenAnswer(invocation ->
                 invocation.<Flux<String>>getArgument(0)
@@ -1196,7 +1231,7 @@ class AppServiceImplVueTurnTest {
         order.verify(history).addChatMessageAndReturn(APP_ID, "需求", "user", USER_ID);
         order.verify(executor).doExecuteVue(any(), any());
         order.verify(facade).generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator));
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator));
     }
 
     private VueTurnCancellationCoordinator installRealVuePipeline(
@@ -1275,9 +1310,13 @@ class AppServiceImplVueTurnTest {
                 .orElseThrow();
         var constructor = committedType.getDeclaredConstructor(
                 VueTurnContext.class, AiCodeGeneratorService.class,
-                String.class, boolean.class, Throwable.class);
+                String.class, com.lyw.appgeneration.core.handler.VueTurnDecision.class,
+                VueTurnResourcePolicy.class, Throwable.class);
         constructor.setAccessible(true);
-        return constructor.newInstance(context, generator, "需求", true, null);
+        var decision = new com.lyw.appgeneration.core.handler.VueTurnDecision(
+                VueTurnMode.MUTATION_REQUIRED, false, false);
+        return constructor.newInstance(context, generator, "需求", decision,
+                VueTurnResourcePolicy.decide(decision, false, true, ""), null);
     }
 
     private CommittedTurnFixture createCommittedTurnFixture(String turnId)
@@ -1333,7 +1372,7 @@ class AppServiceImplVueTurnTest {
     private AtomicInteger stubNeverEndingVueModel() {
         AtomicInteger modelSubscriptions = new AtomicInteger();
         when(facade.generateVueProjectStream(
-                eq("需求"), eq(APP_ID), eq(true), any(), eq(generator)))
+                eq("需求"), eq(APP_ID), any(VueTurnResourcePolicy.class), any(), eq(generator)))
                 .thenReturn(Flux.defer(() -> {
                     modelSubscriptions.incrementAndGet();
                     return Flux.never();

@@ -44,6 +44,31 @@ class ImageCollectionServiceTest {
     private ExecutorService executor;
     private ImageCollectionService service;
 
+    @Test
+    void 后续配额在搜索前和格式化后均限制且不凑数() {
+        var plan = new ImageCollectionPlan();
+        plan.setContentImageTasks(List.of(new ImageCollectionPlan.ImageSearchTask("  "),
+                new ImageCollectionPlan.ImageSearchTask("新闻"), new ImageCollectionPlan.ImageSearchTask(" 新闻 "),
+                new ImageCollectionPlan.ImageSearchTask("办公"), new ImageCollectionPlan.ImageSearchTask("城市")));
+        plan.setLogoTasks(List.of(new ImageCollectionPlan.LogoTask("新Logo"), new ImageCollectionPlan.LogoTask("多余Logo")));
+        when(planService.planImageCollection(anyString())).thenReturn(plan);
+        when(imageSearchTool.searchContentImages(anyString())).thenAnswer(invocation -> IntStream.range(0, 8)
+                .mapToObj(i -> ImageResource.builder().category(ImageCategoryEnum.CONTENT)
+                        .description("😀".repeat(100)).url("https://images.test/" + invocation.getArgument(0) + "/" + i + "?size=200&fit=cover").build()).toList());
+        when(logoGeneratorTool.generateLogos(anyString(), any(BooleanSupplier.class))).thenReturn(List.of(
+                ImageResource.builder().category(ImageCategoryEnum.LOGO).url("https://logo.test/one").build(),
+                ImageResource.builder().category(ImageCategoryEnum.LOGO).url("https://logo.test/two").build()));
+        String result = service.collectPromptContext("只换图片", ImageCollectionQuota.FOLLOW_UP);
+        verify(imageSearchTool, times(2)).searchContentImages(anyString());
+        verify(imageSearchTool, never()).searchContentImages("城市");
+        verify(logoGeneratorTool, times(1)).generateLogos(anyString(), any(BooleanSupplier.class));
+        assertEquals(6, result.lines().filter(line -> line.contains("https://images.test/")).count());
+        assertEquals(1, result.lines().filter(line -> line.contains("https://logo.test/")).count());
+        assertTrue(result.contains("?size=200&fit=cover"));
+        assertFalse(result.contains("😀".repeat(80)));
+        assertFalse(result.contains("https://logo.test/two"));
+    }
+
     @BeforeEach
     void setUp() {
         executor = Executors.newFixedThreadPool(4);

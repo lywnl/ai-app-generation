@@ -33,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -89,6 +90,10 @@ public final class VueTurnContext implements ContextContinuationGate {
     private UserCommitState userCommitState = UserCommitState.PREPARING;
     private volatile long userHistoryId;
     private final CallbackGate callbackGate = new CallbackGate();
+    private final Object resourceCancellationLock = new Object();
+    private final Map<Object, Runnable> resourceCancellations = new LinkedHashMap<>();
+    private boolean resourceCancellationClosed;
+
     private final TurnProgressChannel progressChannel =
             new TurnProgressChannel();
     private final FileToolBudgetGuard.Session budgetSession;
@@ -617,6 +622,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             return false;
         }
         callbackGate.revoke();
+        cancelResourcePreparation();
         if (lease != null) {
             lease.cancel();
         }
@@ -629,6 +635,7 @@ public final class VueTurnContext implements ContextContinuationGate {
             return false;
         }
         callbackGate.revoke();
+        cancelResourcePreparation();
         return true;
     }
 
@@ -805,6 +812,54 @@ public final class VueTurnContext implements ContextContinuationGate {
         }
     }
 
+    /** 资料任务使用通用操作租约，主模型取消位置保持独立。 */
+    public AutoCloseable registerResourceCancellation(Runnable action) {
+        Objects.requireNonNull(action, "资料取消动作不能为空");
+        AtomicBoolean invoked = new AtomicBoolean();
+        Runnable once = () -> { if (invoked.compareAndSet(false, true)) action.run(); };
+        Object key = new Object();
+        boolean immediate;
+        synchronized (resourceCancellationLock) {
+            immediate = resourceCancellationClosed || resourcesClosed.get();
+            if (!immediate) resourceCancellations.put(key, once);
+        }
+        if (immediate) once.run();
+        AutoCloseable outer;
+        try {
+            outer = operationLease == null ? () -> { } : operationLease.registerCancellation(once);
+        } catch (IllegalStateException closed) {
+            synchronized (resourceCancellationLock) { resourceCancellations.remove(key); }
+            once.run();
+            return () -> { };
+        }
+        return () -> {
+            synchronized (resourceCancellationLock) { resourceCancellations.remove(key); }
+            outer.close();
+        };
+    }
+
+    public boolean resourcePreparationActive() {
+        return !resourcesClosed.get() && turnState.get().stage() == TurnStage.ACTIVE
+                && callbackGate.isActive() && !remainingUntilDeadline().isZero()
+                && (operationLease == null || operationLease.isActive());
+    }
+
+    private void cancelResourcePreparation() {
+        List<Runnable> actions;
+        synchronized (resourceCancellationLock) {
+            resourceCancellationClosed = true;
+            actions = List.copyOf(resourceCancellations.values());
+            resourceCancellations.clear();
+        }
+        actions.forEach(action -> {
+            try { action.run(); }
+            catch (RuntimeException failure) {
+                log.warn("资料取消回调失败,appId={},turnId={},errorType={}",
+                        appId, turnId, failure.getClass().getSimpleName());
+            }
+        });
+    }
+
     public void registerModelCancellation(Runnable cancellationAction) {
         lease().registerModelCancellation(cancellationAction);
     }
@@ -812,6 +867,7 @@ public final class VueTurnContext implements ContextContinuationGate {
     /** 先关闭内层回调门，再触发 Vue/app 租约取消及模型、构建取消动作。 */
     public void cancelGeneration() {
         callbackGate.revoke();
+        cancelResourcePreparation();
         progressChannel.close();
         if (lease != null) {
             lease.cancel();
@@ -820,6 +876,7 @@ public final class VueTurnContext implements ContextContinuationGate {
 
     public void revokeCallbacks() {
         callbackGate.revoke();
+        cancelResourcePreparation();
         progressChannel.close();
     }
 
@@ -951,6 +1008,7 @@ public final class VueTurnContext implements ContextContinuationGate {
         progressChannel.close();
         DeleteTakeoverRegistration takeoverRegistration =
                 deleteTakeoverRegistration.getAndSet(null);
+        cancelResourcePreparation();
         closeAll(buildProgressGuard, takeoverRegistration, lease, operationLease, admissionPermit);
     }
 
@@ -1178,6 +1236,8 @@ public final class VueTurnContext implements ContextContinuationGate {
 
         private boolean active = true;
         private int inFlight;
+
+        private synchronized boolean isActive() { return active; }
 
         private synchronized Ticket tryEnter() {
             if (!active) {

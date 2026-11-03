@@ -223,6 +223,18 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     @Override
+    public boolean hasSucceededGeneration(Long appId) {
+        ThrowUtils.throwIf(appId == null || appId <= 0,
+                ErrorCode.PARAMS_ERROR, "应用ID不能为空");
+        // 仅取存在性；沿用 appId 索引，不读取正文，不把查询失败当作从未成功。
+        return getOne(QueryWrapper.create().select("id")
+                .eq("appId", appId)
+                .eq("messageType", ChatHistoryMessageTypeEnum.AI.getValue())
+                .eq("memoryOutcome", ChatMemoryOutcome.SUCCEEDED.name())
+                .eq("isDelete", 0).limit(1)) != null;
+    }
+
+    @Override
     public boolean repairOrphanUserTurn(
             Long appId, Long userId, String aiMessage) {
         ChatHistory lastMessage = getLastMessage(appId);

@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 /**
  * 图片搜索工具(根据关键词搜索内容图片)
@@ -43,18 +44,26 @@ public class ImageSearchTool {
 
     @Tool("搜索内容相关的图片，用于网站内容展示")
     public List<ImageResource> searchContentImages(@P("搜索关键词") String query) {
+        return searchContentImages(query, 0, () -> true);
+    }
+
+    /** Vue 在线资料使用请求级剩余时间；不改变共享客户端或普通工具协议。 */
+    public List<ImageResource> searchContentImages(String query, int timeoutMs, BooleanSupplier active) {
         String normalizedQuery = ImageCollectionPolicy.normalizeWhitespace(query);
-        if (normalizedQuery.isEmpty()) {
+        if (normalizedQuery.isEmpty() || !active.getAsBoolean()) {
             return List.of();
         }
         List<ImageResource> imageList = new ArrayList<>();
         Set<String> urls = new HashSet<>();
-        try (HttpResponse response = HttpRequest.get(apiUrl)
+        HttpRequest request = HttpRequest.get(apiUrl)
                 .header("Authorization", pexelsApiKey)
                 .form("query", normalizedQuery)
                 .form("per_page", ImageCollectionPolicy.MAX_RESULTS_PER_SEARCH)
-                .form("page", 1)
-                .execute()) {
+                .form("page", 1);
+        if (timeoutMs > 0) request.timeout(timeoutMs);
+        if (!active.getAsBoolean()) return List.of();
+        try (HttpResponse response = request.execute()) {
+            if (!active.getAsBoolean()) return List.of();
             if (response.isOk()) {
                 JSONObject result = JSONUtil.parseObj(response.body());
                 JSONArray photos = result.getJSONArray("photos");
@@ -79,7 +88,7 @@ public class ImageSearchTool {
                 }
             }
         } catch (Exception e) {
-            log.error("Pexels API 调用失败: {}", e.getMessage(), e);
+            log.warn("Pexels API 调用失败,errorType={}", e.getClass().getSimpleName());
         }
         return imageList;
     }

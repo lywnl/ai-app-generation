@@ -7,6 +7,12 @@ import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.VueRagContext;
+import com.lyw.appgeneration.service.rag.model.VueFeatureContext;
+import com.lyw.appgeneration.service.rag.model.CurrentVueProject;
+import com.lyw.appgeneration.service.rag.model.VueTurnRagResult;
+import com.lyw.appgeneration.core.resource.ResourcePreparationScope;
+import java.util.function.Consumer;
+import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
@@ -250,6 +256,154 @@ public class VueHybridRetrievalService {
         }
     }
 
+    /** 后续仅访问功能池，兼容基准来自当前工程，不重新检索骨架。 */
+    public VueFeatureContext retrieveFeatures(String query, CurrentVueProject project, boolean hybrid) {
+        if (project == null || !project.available()) return VueFeatureContext.unavailable();
+        VueRetrievalResources resources = resourceProvider.current().orElse(null);
+        if (resources == null || invalidQuery(query, resources.catalog())) return VueFeatureContext.unavailable();
+        try (var request = execution.openRequest()) {
+            var embedding = queryEmbedding(request, query);
+            ChainResult result = hybrid ? request.await(retrieveChain(request, embedding,
+                    bm25Channel(request, query, resources.catalog(), RagDocumentKind.FEATURE_SNIPPET),
+                    query, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K, resources,
+                    qualityScores(resources.catalog())))
+                    : request.await(denseChannel(request, embedding, resources.catalog(), RagDocumentKind.FEATURE_SNIPPET)
+                    .thenApply(channel -> new ChainResult(resolveParents(channel.candidates(),
+                            RagDocumentKind.FEATURE_SNIPPET, resources.catalog()), channel.failed())));
+            List<TemplateDoc> features = compatibleProjectFeatures(project, result.documents(), VueFeatureContext.MAX_FEATURES);
+            metricsCollector.recordFinalSelection(0, features.size());
+            return new VueFeatureContext(features, resources.catalog().getCatalogVersion(), result.degraded());
+        }
+    }
+
+    List<TemplateDoc> compatibleProjectFeatures(CurrentVueProject project, List<TemplateDoc> candidates, int limit) {
+        if (!project.available()) return List.of();
+        return selectCompatibleFeatures(project.compatibilityDocument(), candidates.stream()
+                .filter(this::allowedProjectDependencies).toList(), limit);
+    }
+
+    /** 在线共用截止；每个渠道完成即发布可用部分，慢重排不能抹掉已经完成的召回。 */
+    public VueTurnRagResult prepareOnline(String query, CurrentVueProject project, boolean initial,
+            boolean hybrid, ResourcePreparationScope scope, Consumer<VueTurnRagResult> publish) {
+        scope.requireActive();
+        VueRetrievalResources resources = resourceProvider.current().orElse(null);
+        scope.requireActive();
+        VueTurnRagResult unavailable = initial ? VueTurnRagResult.initial(VueRagContext.unavailable())
+                : VueTurnRagResult.followUp(VueFeatureContext.unavailable());
+        if (resources == null || invalidQuery(query, resources.catalog())
+                || project.existing() && !project.available() || !initial && !project.available()) {
+            publish.accept(unavailable);
+            return unavailable;
+        }
+        OnlineSelection selection = new OnlineSelection(resources.catalog(), project, initial, hybrid, scope, publish);
+        try (var request = execution.openRequest(scope)) {
+            selection.publish();
+            var embedding = queryEmbedding(request, query);
+            Map<String, Double> quality = qualityScores(resources.catalog());
+            List<CompletableFuture<Void>> chains = new ArrayList<>();
+            if (initial) chains.add(onlineChain(request, embedding, query, RagDocumentKind.PROJECT_SKELETON,
+                    SKELETON_RERANK_TOP_K, resources, quality, hybrid, selection));
+            chains.add(onlineChain(request, embedding, query, RagDocumentKind.FEATURE_SNIPPET,
+                    FEATURE_RERANK_TOP_K, resources, quality, hybrid, selection));
+            request.await(CompletableFuture.allOf(chains.toArray(CompletableFuture[]::new)));
+            return selection.last;
+        }
+    }
+
+    private CompletableFuture<Void> onlineChain(VueRagExecutor.RequestScope request,
+            CompletableFuture<Embedding> embedding, String query, RagDocumentKind kind, int rerankTopK,
+            VueRetrievalResources resources, Map<String, Double> quality, boolean hybrid, OnlineSelection selection) {
+        var bm25 = hybrid ? bm25Channel(request, query, resources.catalog(), kind)
+                : CompletableFuture.completedFuture(new ChannelResult(List.of(), false));
+        var dense = denseChannel(request, embedding, resources.catalog(), kind);
+        // 登记的回调也属于链：最终重排发布后不会被稍晚执行的早期渠道回调覆盖。
+        var observedBm25 = bm25.thenApply(value -> { selection.channel(kind, true, value); return value; });
+        var observedDense = dense.thenApply(value -> { selection.channel(kind, false, value); return value; });
+        return observedBm25.thenCombine(observedDense, RecallPair::new).thenCompose(pair -> hybrid
+                ? finishChain(request, pair.bm25(), pair.dense(), query, kind, rerankTopK, resources, quality)
+                : CompletableFuture.completedFuture(new ChainResult(resolveParents(pair.dense().candidates(), kind,
+                        resources.catalog()), pair.dense().failed())))
+                .handle((value, failure) -> { selection.finished(kind, value, failure); return null; });
+    }
+
+    private final class OnlineSelection {
+        private final TemplateCatalog catalog;
+        private final CurrentVueProject project;
+        private final boolean initial;
+        private final boolean hybrid;
+        private final ResourcePreparationScope scope;
+        private final Consumer<VueTurnRagResult> consumer;
+        private final Map<RagDocumentKind, PoolSelection> pools = new java.util.EnumMap<>(RagDocumentKind.class);
+        private VueTurnRagResult last;
+
+        private OnlineSelection(TemplateCatalog catalog, CurrentVueProject project, boolean initial, boolean hybrid,
+                                ResourcePreparationScope scope, Consumer<VueTurnRagResult> consumer) {
+            this.catalog = catalog; this.project = project; this.initial = initial; this.hybrid = hybrid;
+            this.scope = scope; this.consumer = consumer;
+            if (initial) pools.put(RagDocumentKind.PROJECT_SKELETON, new PoolSelection());
+            pools.put(RagDocumentKind.FEATURE_SNIPPET, new PoolSelection());
+        }
+
+        private synchronized void channel(RagDocumentKind kind, boolean sparse, ChannelResult value) {
+            if (!scope.canStart()) return;
+            var pool = pools.get(kind);
+            if (pool.finished) return;
+            if (sparse) pool.bm25 = value; else pool.dense = value;
+            publish();
+        }
+
+        private synchronized void finished(RagDocumentKind kind, ChainResult value, Throwable failure) {
+            if (!scope.canStart()) return;
+            var pool = pools.get(kind);
+            pool.finished = true;
+            if (failure == null) pool.finalResult = value;
+            publish();
+        }
+
+        private List<TemplateDoc> documents(RagDocumentKind kind) {
+            PoolSelection pool = pools.get(kind);
+            if (pool == null) return List.of();
+            if (pool.finalResult != null) return pool.finalResult.documents();
+            if (!hybrid) return resolveParents(pool.dense.candidates(), kind, catalog);
+            return resolveParents(fusionService.fuse(pool.bm25.candidates(), pool.dense.candidates(),
+                    qualityScores(catalog), FUSION_TOP_K), kind, catalog);
+        }
+
+        private synchronized void publish() {
+            if (!scope.canStart()) return;
+            boolean degraded = pools.values().stream().anyMatch(pool -> pool.finalResult == null || pool.finalResult.degraded());
+            List<TemplateDoc> candidates = documents(RagDocumentKind.FEATURE_SNIPPET);
+            if (initial) {
+                TemplateDoc skeleton = documents(RagDocumentKind.PROJECT_SKELETON).stream()
+                        .filter(doc -> !project.existing() || isCompatible(project.compatibilityDocument(), doc)
+                                && allowedProjectDependencies(doc)).findFirst().orElse(null);
+                if (skeleton == null && !project.existing()) { skeleton = basicSkeleton(catalog); degraded = true; }
+                List<TemplateDoc> features = project.available()
+                        ? compatibleProjectFeatures(project, candidates, FINAL_FEATURE_TOP_K)
+                        : skeleton == null ? List.of() : selectCompatibleFeatures(skeleton, candidates, FINAL_FEATURE_TOP_K);
+                last = VueTurnRagResult.initial(new VueRagContext(skeleton, features, catalog.getCatalogVersion(), degraded));
+            } else {
+                last = VueTurnRagResult.followUp(new VueFeatureContext(compatibleProjectFeatures(project, candidates,
+                        VueFeatureContext.MAX_FEATURES), catalog.getCatalogVersion(), degraded));
+            }
+            consumer.accept(last);
+        }
+    }
+
+    private static final class PoolSelection {
+        private ChannelResult bm25 = new ChannelResult(List.of(), true);
+        private ChannelResult dense = new ChannelResult(List.of(), true);
+        private ChainResult finalResult;
+        private boolean finished;
+    }
+
+    private boolean allowedProjectDependencies(TemplateDoc document) {
+        Map<String, String> allowed = new HashMap<>(VueProjectBuilder.trustedRuntimeDependencies());
+        allowed.putAll(VueProjectBuilder.trustedDevelopmentDependencies());
+        return allDependencies(document).entrySet().stream().allMatch(entry -> allowed.containsKey(entry.getKey())
+                && dependencyVersionsCompatible(allowed.get(entry.getKey()), entry.getValue()));
+    }
+
     private DensePair retrieveDensePools(String rawQuery, TemplateCatalog catalog) {
         if (invalidQuery(rawQuery, catalog)) {
             return new DensePair(new DenseResult(List.of(), false), new DenseResult(List.of(), false));
@@ -398,7 +552,9 @@ public class VueHybridRetrievalService {
                                              RagDocumentKind expectedKind,
                                              TemplateCatalog catalog) {
         List<TemplateDoc> parents = new ArrayList<>();
+        Set<String> seen = new java.util.HashSet<>();
         for (RankedCandidate candidate : candidates) {
+            if (candidate == null || candidate.documentKind() != expectedKind || !seen.add(candidate.documentId())) continue;
             catalog.findDocumentById(candidate.documentId())
                     .filter(document -> document.getDocumentKind() == expectedKind)
                     .ifPresent(parents::add);
@@ -417,8 +573,10 @@ public class VueHybridRetrievalService {
                                                         List<TemplateDoc> candidates,
                                                         int topK) {
         List<TemplateDoc> selected = new ArrayList<>();
+        Set<String> seen = new java.util.HashSet<>();
         for (TemplateDoc candidate : candidates) {
-            if (candidate.getDocumentKind() == RagDocumentKind.FEATURE_SNIPPET
+            if (candidate != null && seen.add(candidate.getId())
+                    && candidate.getDocumentKind() == RagDocumentKind.FEATURE_SNIPPET
                     && isCompatible(skeleton, candidate)) {
                 selected.add(candidate);
                 if (selected.size() == topK) {

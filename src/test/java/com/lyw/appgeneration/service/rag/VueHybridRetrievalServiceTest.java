@@ -872,6 +872,86 @@ class VueHybridRetrievalServiceTest {
         verify(harness.bm25, never()).retrieve(any(), any(), any(), anyInt());
     }
 
+    @Test
+    void 后续只访问功能池最多两个并按当前工程过滤() {
+        TemplateDoc first = compatibleFeature("first");
+        TemplateDoc second = compatibleFeature("second");
+        TemplateDoc third = compatibleFeature("third");
+        TemplateDoc incompatible = compatibleFeature("wrong-framework");
+        incompatible.setFramework("vue@2.7.0");
+        TemplateDoc forbidden = compatibleFeature("forbidden");
+        forbidden.getDependencies().put("untrusted-package", "1.0.0");
+        var candidates = List.of(incompatible, forbidden, first, second, third);
+        Harness h = harness(candidates);
+        when(h.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(candidates(candidates, RagDocumentKind.FEATURE_SNIPPET));
+        var current = new com.lyw.appgeneration.service.rag.model.CurrentVueProject(
+                com.lyw.appgeneration.service.rag.model.CurrentVueProject.Status.AVAILABLE,
+                first.getDependencies(), first.getDevDependencies(), "NONE");
+        var result = h.service.retrieveFeatures(QUERY, current, true);
+        assertEquals(List.of(first, second), result.features());
+        verify(h.bm25, never()).retrieve(any(), any(), eq(RagDocumentKind.PROJECT_SKELETON), anyInt());
+        verify(h.dense, never()).retrieveWithEmbedding(any(), any(), eq(RagDocumentKind.PROJECT_SKELETON), anyInt());
+        verify(h.rerank).rerankVue(eq(QUERY), anyList(), eq(8));
+        assertEquals(CATALOG_VERSION, result.catalogVersion());
+    }
+
+    @Test
+    void 功能渠道和重排失败仍可降级而未知工程不查询() {
+        TemplateDoc feature = compatibleFeature("feature-only");
+        Harness h = harness(List.of(feature));
+        when(h.dense.embedQuery(any())).thenThrow(new IllegalStateException("embedding unavailable"));
+        when(h.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(List.of(new RankedCandidate(feature.getId(), RagDocumentKind.FEATURE_SNIPPET, 1, 1),
+                        new RankedCandidate(feature.getId(), RagDocumentKind.FEATURE_SNIPPET, 2, .5),
+                        new RankedCandidate("old-catalog-unknown", RagDocumentKind.FEATURE_SNIPPET, 3, .2)));
+        when(h.rerank.rerankVue(any(), anyList(), anyInt())).thenThrow(new RerankException("unavailable"));
+        var current = new com.lyw.appgeneration.service.rag.model.CurrentVueProject(
+                com.lyw.appgeneration.service.rag.model.CurrentVueProject.Status.AVAILABLE,
+                feature.getDependencies(), feature.getDevDependencies(), "NONE");
+        var result = h.service.retrieveFeatures(QUERY, current, true);
+        assertEquals(List.of(feature), result.features());
+        assertTrue(result.degraded());
+        assertTrue(h.service.retrieveFeatures(QUERY,
+                com.lyw.appgeneration.service.rag.model.CurrentVueProject.unavailable("UNKNOWN"), true).features().isEmpty());
+        verify(h.dense, times(1)).embedQuery(QUERY);
+    }
+
+    @Test
+    void 截止前已完成的功能召回保留且截止后不发起重排() throws Exception {
+        TemplateDoc feature = compatibleFeature("ready-before-deadline");
+        Harness h = harness(List.of(feature));
+        java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong();
+        CountDownLatch published = new CountDownLatch(1);
+        when(h.bm25.retrieve(eq(QUERY), eq(CATALOG_VERSION), eq(RagDocumentKind.FEATURE_SNIPPET), eq(10)))
+                .thenReturn(candidates(List.of(feature), RagDocumentKind.FEATURE_SNIPPET));
+        when(h.dense.retrieveWithEmbedding(any(), any(), any(), anyInt())).thenAnswer(i -> {
+            assertTrue(published.await(2, TimeUnit.SECONDS));
+            clock.set(java.time.Duration.ofSeconds(8).toNanos());
+            return List.of();
+        });
+        var current = new com.lyw.appgeneration.service.rag.model.CurrentVueProject(
+                com.lyw.appgeneration.service.rag.model.CurrentVueProject.Status.AVAILABLE,
+                feature.getDependencies(), feature.getDevDependencies(), "NONE");
+        try (var scope = new com.lyw.appgeneration.core.resource.ResourcePreparationScope(
+                java.time.Duration.ofSeconds(8), () -> true, clock::get, "rag-partial")) {
+            var slot = scope.slot("rag");
+            try {
+                h.service.prepareOnline(QUERY, current, false, true, scope, value -> {
+                    if (!value.followUp().features().isEmpty()) {
+                        assertTrue(slot.publish("completed-feature", value.featureCount(), 0));
+                        published.countDown();
+                    }
+                });
+            } catch (java.util.concurrent.CancellationException deadline) { /* 已完成资料仍由slot持有。 */ }
+            var snapshot = scope.awaitAndFreeze();
+            assertEquals(1, snapshot.size());
+            assertEquals("completed-feature", snapshot.getFirst().text());
+            verify(h.rerank, never()).rerankVue(any(), anyList(), anyInt());
+            verify(h.bm25, never()).retrieve(any(), any(), eq(RagDocumentKind.PROJECT_SKELETON), anyInt());
+        }
+    }
+
     private void stubSuccessfulRecall(Harness harness,
                                       List<TemplateDoc> skeletons,
                                       List<TemplateDoc> features) {
