@@ -628,12 +628,13 @@ const readonlyUnavailableMessage = computed(() => {
   return isAppDeployed(appInfo.value) ? '已部署页面地址暂不可用' : '应用尚未部署，暂时没有可查看的发布页面'
 })
 
-const showLeftTabs = computed(() => isVue.value && isOwner.value && layout.value !== 'workspace')
+const showPreviewPanels = computed(() => isVue.value && layout.value !== 'workspace')
+const showLeftTabs = computed(() => showPreviewPanels.value && isOwner.value)
 const {
   container: workspaceContainer, separator: workspaceSeparator, leftPercent,
   enabled: resizeEnabled, isResizing, style: resizeStyle,
   startResize, moveResize, endResize, handleKeydown: handleResizeKeydown, reset: resetWorkspaceResize,
-} = useWorkspaceResize(showLeftTabs)
+} = useWorkspaceResize(showPreviewPanels)
 const showPlanTab = computed(() => showLeftTabs.value && activeLeftTab.value === 'plan')
 const showConversation = computed(() => !showPlanTab.value)
 
