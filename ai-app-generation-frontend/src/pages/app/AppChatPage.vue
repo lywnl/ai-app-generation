@@ -7,6 +7,7 @@
         <a-tag v-if="appInfo?.codeGenType" color="blue" class="code-gen-type-tag">
           {{ formatCodeGenType(appInfo.codeGenType) }}
         </a-tag>
+        <a-tag v-if="appInfo && !isOwner" color="default">只读查看</a-tag>
       </div>
       <div class="header-right">
         <a-button type="default" @click="showAppDetail">
@@ -16,6 +17,7 @@
           应用详情
         </a-button>
         <a-button
+          v-if="isOwner"
           type="primary"
           ghost
           @click="downloadCode"
@@ -27,7 +29,7 @@
           </template>
           下载代码
         </a-button>
-        <a-button type="primary" @click="deployApp" :loading="deploying">
+        <a-button v-if="isOwner" type="primary" @click="deployApp" :loading="deploying">
           <template #icon>
             <CloudUploadOutlined />
           </template>
@@ -63,6 +65,17 @@
         </div>
         <!-- 消息区域 -->
         <div v-show="showConversation" id="chat-panel" class="messages-container" ref="messagesContainer" :role="showLeftTabs ? 'tabpanel' : undefined" :aria-labelledby="showLeftTabs ? 'chat-tab' : undefined">
+          <div v-if="loadingHistory && messages.length === 0" class="history-state" role="status">
+            <a-spin size="small" /> 正在加载对话历史…
+          </div>
+          <a-alert v-if="historyError" class="history-error" type="error" :message="historyError" show-icon>
+            <template #action>
+              <a-button size="small" :loading="loadingHistory" @click="retryChatHistory">重试</a-button>
+            </template>
+          </a-alert>
+          <div v-else-if="historyLoaded && !loadingHistory && messages.length === 0" class="history-state">
+            暂无对话记录
+          </div>
           <!-- 加载更多按钮 -->
           <div v-if="hasMoreHistory" class="load-more-container">
             <a-button type="link" @click="loadMoreHistory" :loading="loadingHistory" size="small">
@@ -258,20 +271,9 @@
         </a-alert>
 
         <!-- 用户消息输入框 -->
-        <div v-show="showConversation" class="input-container">
+        <div v-if="isOwner" v-show="showConversation" class="input-container">
           <div class="input-wrapper">
-            <a-tooltip v-if="!isOwner" title="无法在别人的作品下对话哦~" placement="top">
-              <a-textarea
-                v-model:value="userInput"
-                :placeholder="getInputPlaceholder()"
-                :rows="4"
-                :maxlength="1000"
-                @keydown="handleInputKeydown"
-                :disabled="isGenerating || !isOwner"
-              />
-            </a-tooltip>
             <a-textarea
-              v-else
               v-model:value="userInput"
               :placeholder="getInputPlaceholder()"
               :rows="4"
@@ -296,6 +298,9 @@
               </a-button>
             </div>
           </div>
+        </div>
+        <div v-else class="readonly-notice" role="note">
+          当前为只读查看，只有作者可以继续对话、编辑页面或部署应用。
         </div>
       </div>
       <aside v-if="isVue && isOwner && layout === 'workspace'" class="generation-plan-sidebar">
@@ -329,7 +334,7 @@
       <!-- 右侧网页展示区域 -->
       <div v-show="!isVue || layout !== 'workspace'" class="preview-section">
         <div class="preview-header">
-          <h3>{{ layout === 'previous-preview' ? '上一版预览' : '生成后的网页展示' }}</h3>
+          <h3>{{ layout === 'previous-preview' ? '上一版预览' : !isOwner && isAppDeployed(appInfo) ? '已部署页面' : '生成后的网页展示' }}</h3>
           <div class="preview-actions">
             <a-button v-if="isVue && layout === 'previous-preview'" type="link" @click="layout = 'workspace'">返回执行区</a-button>
             <a-button
@@ -354,7 +359,11 @@
           </div>
         </div>
         <div class="preview-content">
-          <div v-if="isVue && layout === 'previous-preview' && !previousAvailable" class="preview-placeholder">上一版预览暂不可用</div>
+          <div v-if="!isOwner && previewFailed" class="preview-placeholder" role="status">
+            <p>页面暂时无法加载，请稍后重试</p>
+            <a-button @click="retryReadonlyPreview">重新加载</a-button>
+          </div>
+          <div v-else-if="isVue && layout === 'previous-preview' && !previousAvailable" class="preview-placeholder">上一版预览暂不可用</div>
           <div v-else-if="!previewUrl && !isGenerating" class="preview-placeholder">
             <div class="placeholder-icon" aria-hidden="true">
               <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -364,7 +373,11 @@
                 <line x1="8" y1="32" x2="56" y2="32" />
               </svg>
             </div>
-            <p>网站文件生成完成后将在这里展示</p>
+            <p>{{ isOwner ? '网站文件生成完成后将在这里展示' : readonlyUnavailableMessage }}</p>
+          </div>
+          <div v-else-if="!isOwner && previewUrl && !previewReady" class="preview-loading" role="status">
+            <a-spin size="large" />
+            <p>正在加载页面…</p>
           </div>
           <div v-else-if="isGenerating && !isVue" class="preview-loading" role="status" aria-live="polite">
             <a-spin size="large" />
@@ -378,7 +391,7 @@
             }}</p>
           </div>
           <iframe
-            v-if="previewUrl && (isVue || !isGenerating)"
+            v-if="previewUrl && (isVue || !isGenerating) && (isOwner || !previewFailed)"
             v-show="layout !== 'previous-preview' || previousAvailable"
             :key="previewLoadId"
             ref="previewFrame"
@@ -387,7 +400,7 @@
             class="preview-iframe"
             frameborder="0"
             @load="onIframeLoad"
-            @error="invalidatePreview"
+            @error="onIframeError"
           ></iframe>
           <p v-if="isVue && layout === 'previous-preview' && previousAvailable && crossOrigin" class="preview-note">已保留本页内容，部分资源状态无法确认</p>
         </div>
@@ -460,6 +473,8 @@ import GenerationPlanPanel from '@/components/GenerationPlanPanel.vue'
 import GenerationExecutionTimeline from '@/components/GenerationExecutionTimeline.vue'
 import { useGenerationPlan } from '@/composables/useGenerationPlan'
 import { useGenerationPreview } from '@/composables/useGenerationPreview'
+import { useAppChatHistory } from '@/composables/useAppChatHistory'
+import { getReadonlyPreviewUrl, isAppDeployed, isAppFeaturedAndDeployed, isAppOwner } from '@/utils/appViewAccess'
 import { vAutoScroll } from '@/directives/autoScroll'
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
@@ -517,7 +532,7 @@ function legacyToolCalls(item: Message): Map<string, ToolCallView> {
 function updateToolCardState(item: Message, key: string, state: ToolCardState) {
   item.toolCardStates ??= {}
   item.toolCardStates[key] = { ...state }
-  if (appId.value) setGenerationToolCardState(appId.value, key, state)
+  if (isOwner.value && appId.value) setGenerationToolCardState(appId.value, key, state)
 }
 
 const messages = ref<Message[]>([])
@@ -545,14 +560,22 @@ const handleMessagesScroll = () => {
 }
 
 // 对话历史相关
-const loadingHistory = ref(false)
-const hasMoreHistory = ref(false)
-const lastCreateTime = ref<string>()
-const historyLoaded = ref(false)
+const history = useAppChatHistory(listAppChatHistory, (records, isLoadMore) => {
+  const historyMessages: Message[] = records.map((chat) => ({
+    id: chat.id ? `history-${chat.id}` : createUuid(),
+    type: (chat.messageType === 'user' ? 'user' : 'ai') as 'user' | 'ai',
+    content: chat.message || '',
+    createTime: chat.createTime,
+  })).reverse()
+  if (isLoadMore) messages.value.unshift(...historyMessages)
+  else messages.value = historyMessages
+})
+const { loading: loadingHistory, hasMore: hasMoreHistory, loaded: historyLoaded, error: historyError } = history
 
 // 预览相关
 const previewUrl = ref('')
 const previewReady = ref(false)
+const previewFailed = ref(false)
 const previewFrame = ref<HTMLIFrameElement>()
 const previewLoadId = ref(0)
 const previewState = useGenerationPreview()
@@ -591,11 +614,18 @@ const visualEditor = new VisualEditor({
 
 // 权限相关
 const isOwner = computed(() => {
-  return appInfo.value?.userId === loginUserStore.loginUser.id
+  return isAppOwner(appInfo.value, loginUserStore.loginUser.id)
 })
 
 const isAdmin = computed(() => {
   return loginUserStore.loginUser.userRole === 'admin'
+})
+
+const readonlyUnavailableMessage = computed(() => {
+  if (!isAdmin.value && !isAppFeaturedAndDeployed(appInfo.value)) {
+    return '仅精选且已部署的应用可供其他用户查看'
+  }
+  return isAppDeployed(appInfo.value) ? '已部署页面地址暂不可用' : '应用尚未部署，暂时没有可查看的发布页面'
 })
 
 const showLeftTabs = computed(() => isVue.value && isOwner.value && layout.value !== 'workspace')
@@ -668,54 +698,11 @@ const showAppDetail = () => {
 
 // 加载对话历史
 const loadChatHistory = async (isLoadMore = false) => {
-  if (!appId.value || loadingHistory.value) return
-  loadingHistory.value = true
-  const epoch = pageEpoch
-  try {
-    const params: API.listAppChatHistoryParams = {
-      appId: appId.value as unknown as number,
-      pageSize: 10,
-    }
-    // 如果是加载更多，传递最后一条消息的创建时间作为游标
-    if (isLoadMore && lastCreateTime.value) {
-      params.lastCreateTime = lastCreateTime.value
-    }
-    const res = await listAppChatHistory(params)
-    if (epoch !== pageEpoch) return
-    if (res.data.code === 0 && res.data.data) {
-      const chatHistories = res.data.data.records || []
-      if (chatHistories.length > 0) {
-        // 将对话历史转换为消息格式，并按时间正序排列（老消息在前）
-        const historyMessages: Message[] = chatHistories
-          .map((chat) => ({
-            id: chat.id ? `history-${chat.id}` : createUuid(),
-            type: (chat.messageType === 'user' ? 'user' : 'ai') as 'user' | 'ai',
-            content: chat.message || '',
-            createTime: chat.createTime,
-          }))
-          .reverse() // 反转数组，让老消息在前
-        if (isLoadMore) {
-          // 加载更多时，将历史消息添加到开头
-          messages.value.unshift(...historyMessages)
-        } else {
-          // 初始加载，直接设置消息列表
-          messages.value = historyMessages
-        }
-        // 更新游标
-        lastCreateTime.value = chatHistories[chatHistories.length - 1]?.createTime
-        // 检查是否还有更多历史
-        hasMoreHistory.value = chatHistories.length === 10
-      } else {
-        hasMoreHistory.value = false
-      }
-      historyLoaded.value = true
-    }
-  } catch (error) {
-    console.error('加载对话历史失败：', error)
-    message.error('加载对话历史失败')
-  } finally {
-    if (epoch === pageEpoch) loadingHistory.value = false
-  }
+  if (appId.value) await history.load(appId.value, isLoadMore)
+}
+
+const retryChatHistory = async () => {
+  await history.retry()
 }
 
 // 加载更多历史消息
@@ -741,10 +728,16 @@ const fetchAppInfo = async () => {
     if (res.data.code === 0 && res.data.data) {
       appInfo.value = res.data.data
 
-      // 先加载对话历史
+      // 访客通过精选与部署检查后先打开发布页面；历史加载不阻断页面展示。
+      if (!isOwner.value) {
+        initialPreviewPending = false
+        const target = getReadonlyPreviewUrl(appInfo.value, isAdmin.value,
+          getStaticPreviewUrl(appInfo.value.codeGenType || CodeGenTypeEnum.HTML, id))
+        if (target) updatePreview(false, target)
+      }
       await loadChatHistory()
       if (epoch !== pageEpoch) return
-      const sessionSnapshot = getGenerationSessionSnapshot(id)
+      const sessionSnapshot = isOwner.value ? getGenerationSessionSnapshot(id) : null
       if (isOwner.value && sessionSnapshot?.status === 'streaming') {
         if (!isVue.value && messages.value.length >= 2) {
           updatePreview()
@@ -755,7 +748,7 @@ const fetchAppInfo = async () => {
         applySessionSnapshot(sessionSnapshot)
         activeSessionAppId.value = id
         finalizeGeneration(sessionSnapshot)
-      } else if ((!isVue.value || !isOwner.value) && messages.value.length >= 2) {
+      } else if (isOwner.value && !isVue.value && messages.value.length >= 2) {
         updatePreview()
       }
       syncPlanContext()
@@ -897,6 +890,7 @@ const resolveVueSessionType = (): boolean | undefined => {
 }
 
 const startGeneration = async (inputMessage: string, aiMessageIndex: number) => {
+  if (!isOwner.value) return
   const targetAppId = appId.value
   if (!targetAppId) {
     message.error('应用ID不存在')
@@ -931,6 +925,7 @@ const startGeneration = async (inputMessage: string, aiMessageIndex: number) => 
 }
 
 const stopGeneration = async () => {
+  if (!isOwner.value) return
   const targetAppId = activeSessionAppId.value
   const generationId = targetAppId ? getActiveGenerationId(targetAppId) : undefined
   if (!targetAppId || !generationId || isStopping.value) return
@@ -950,6 +945,7 @@ const stopGeneration = async () => {
 }
 
 const restoreActiveSessionIfNeeded = () => {
+  if (!isOwner.value) return
   const targetAppId = appId.value
   if (!targetAppId || isGenerating.value || sessionMessageKey.value !== null) {
     return
@@ -967,6 +963,8 @@ const restoreActiveSessionIfNeeded = () => {
 
 // 发送初始消息
 const sendInitialMessage = async (prompt: string) => {
+  if (!isOwner.value) return
+  const epoch = pageEpoch
   // 添加用户消息
   messages.value.push({
     id: createUuid(),
@@ -985,6 +983,7 @@ const sendInitialMessage = async (prompt: string) => {
   })
 
   await nextTick()
+  if (epoch !== pageEpoch || !isOwner.value) return
   stickBottom.value = true
   scrollToBottom()
 
@@ -993,9 +992,10 @@ const sendInitialMessage = async (prompt: string) => {
 
 // 发送消息
 const sendMessage = async () => {
-  if (!userInput.value.trim() || isGenerating.value) {
+  if (!isOwner.value || !userInput.value.trim() || isGenerating.value) {
     return
   }
+  const epoch = pageEpoch
 
   let message = userInput.value.trim()
   // 如果有选中的元素，将元素信息添加到提示词中
@@ -1036,6 +1036,7 @@ const sendMessage = async () => {
   })
 
   await nextTick()
+  if (epoch !== pageEpoch || !isOwner.value) return
   stickBottom.value = true
   scrollToBottom()
 
@@ -1043,22 +1044,30 @@ const sendMessage = async () => {
 }
 
 // 更新预览
-const updatePreview = (forceReload = false) => {
+const updatePreview = (forceReload = false, targetUrl?: string) => {
   if (appId.value) {
     const codeGenType = appInfo.value?.codeGenType || CodeGenTypeEnum.HTML
-    const basePreviewUrl = getStaticPreviewUrl(codeGenType, appId.value)
+    const basePreviewUrl = targetUrl ?? getStaticPreviewUrl(codeGenType, appId.value)
     const newPreviewUrl = forceReload
       ? `${basePreviewUrl}${basePreviewUrl.includes('?') ? '&' : '?'}_t=${Date.now()}`
       : basePreviewUrl
     previewReady.value = false
+    previewFailed.value = false
     releaseResourceObserver?.()
     previewProbe?.abort()
     clearTimeout(previewTimer)
     previewLoadId.value = previewState.startLoad()
     const identity = previewLoadId.value
-    if (isVue.value) previewTimer = setTimeout(() => { if (identity === previewLoadId.value) invalidatePreview() }, 15000)
+    if (isVue.value || !isOwner.value) previewTimer = setTimeout(() => { if (identity === previewLoadId.value) invalidatePreview() }, 15000)
     previewUrl.value = newPreviewUrl
   }
+}
+
+const retryReadonlyPreview = () => {
+  if (isOwner.value || !appId.value) return
+  const target = getReadonlyPreviewUrl(appInfo.value, isAdmin.value,
+    getStaticPreviewUrl(appInfo.value?.codeGenType || CodeGenTypeEnum.HTML, appId.value))
+  if (target) updatePreview(true, target)
 }
 
 // 后端回合终态是唯一刷新依据；失败时保留旧预览，便于用户继续对照修复。
@@ -1104,6 +1113,7 @@ const scrollToLatestMessageOnEntry = () => {
 
 // 下载代码
 const downloadCode = async () => {
+  if (!isOwner.value) return
   if (!appId.value) {
     message.error('应用ID不存在')
     return
@@ -1142,6 +1152,7 @@ const downloadCode = async () => {
 
 // 部署应用
 const deployApp = async () => {
+  if (!isOwner.value) return
   if (!appId.value) {
     message.error('应用ID不存在')
     return
@@ -1185,14 +1196,19 @@ const openDeployedSite = () => {
 // iframe加载完成
 const invalidatePreview = () => {
   previewState.invalidate(); previewReady.value = false
+  if (!isOwner.value && previewUrl.value) previewFailed.value = true
   previewProbe?.abort()
   clearTimeout(previewTimer)
+}
+const onIframeError = (event: Event) => {
+  const iframe = event.target as HTMLIFrameElement
+  if (iframe === previewFrame.value && Number(iframe.dataset.loadId) === previewLoadId.value) invalidatePreview()
 }
 const onIframeLoad = async (event: Event) => {
   const iframe = event.target as HTMLIFrameElement
   const identity = Number(iframe.dataset.loadId)
   if (iframe !== previewFrame.value || identity !== previewLoadId.value) return
-  if (!isVue.value) {
+  if (!isVue.value && isOwner.value) {
     previewReady.value = true
     visualEditor.init(iframe); visualEditor.onIframeLoad()
     return
@@ -1204,7 +1220,7 @@ const onIframeLoad = async (event: Event) => {
       || (doc.title === 'Error' && /^Cannot GET\b/.test(doc.body?.textContent?.trim() ?? '')))) {
       invalidatePreview(); return
     }
-    if (doc) {
+    if (doc && isOwner.value) {
       const failed = () => { if (identity === previewLoadId.value) invalidatePreview() }
       doc.addEventListener('error', failed, true)
       releaseResourceObserver?.()
@@ -1233,15 +1249,18 @@ const onIframeLoad = async (event: Event) => {
   if (previewState.loaded(identity, cross)) {
     clearTimeout(previewTimer)
     previewReady.value = true
-    visualEditor.init(iframe)
-    visualEditor.onIframeLoad()
-  } else if (isVue.value) {
+    if (isOwner.value) {
+      visualEditor.init(iframe)
+      visualEditor.onIframeLoad()
+    }
+  } else if (isVue.value || !isOwner.value) {
     invalidatePreview()
   }
 }
 
 // 编辑应用
 const editApp = () => {
+  if (!isOwner.value && !isAdmin.value) return
   if (appInfo.value?.id) {
     router.push(`/app/edit/${appInfo.value.id}`)
   }
@@ -1249,6 +1268,7 @@ const editApp = () => {
 
 // 删除应用
 const deleteApp = async () => {
+  if (!isOwner.value && !isAdmin.value) return
   if (!appInfo.value?.id) return
 
   try {
@@ -1268,6 +1288,7 @@ const deleteApp = async () => {
 
 // 可视化编辑相关函数
 const toggleEditMode = () => {
+  if (!isOwner.value) return
   // 检查 iframe 是否已经加载
   const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
   if (!iframe) {
@@ -1307,21 +1328,21 @@ const handleInputKeydown = (event: KeyboardEvent) => {
 }
 
 const handleIframeMessage = (event: MessageEvent) => {
+  if (!isOwner.value) return
   if (isVue.value && (layout.value !== 'preview' || isGenerating.value)) return
   if (event.source !== previewFrame.value?.contentWindow || !event.data || typeof event.data !== 'object') return
   visualEditor.handleIframeMessage(event)
 }
 
-watch(() => [route.params.id, loginUserStore.loginUser.id], () => {
+watch(() => [route.params.id, loginUserStore.loginUser.id, loginUserStore.loginUser.userRole], () => {
   pageEpoch++; detachSession.value?.(); detachSession.value = null
   resetWorkspaceResize()
   activeLeftTab.value = 'chat'; chatScrollTop = 0; planScrollTop = 0
   planQuery.dispose(); lastSession.value = null; activeSessionAppId.value = null; sessionMessageKey.value = null
-  messages.value = []; appInfo.value = undefined; historyLoaded.value = false; loadingHistory.value = false
-  hasMoreHistory.value = false; lastCreateTime.value = undefined; isGenerating.value = false
+  messages.value = []; appInfo.value = undefined; history.reset(); isGenerating.value = false
   visualEditor.disableEditMode(); isEditMode.value = false; selectedElementInfo.value = null
   releaseResourceObserver?.(); previewProbe?.abort(); clearTimeout(previewTimer); previewState.reset()
-  previewUrl.value = ''; previewReady.value = false; initialPreviewPending = true
+  previewUrl.value = ''; previewReady.value = false; previewFailed.value = false; initialPreviewPending = true
   void fetchAppInfo()
 })
 
@@ -1337,6 +1358,7 @@ onMounted(() => {
 
 // 清理资源
 onUnmounted(() => {
+  history.reset()
   pageEpoch++; planQuery.dispose(); clearTimeout(previewTimer); releaseResourceObserver?.(); previewProbe?.abort()
   window.removeEventListener('message', handleIframeMessage)
   detachSession.value?.()
@@ -1410,6 +1432,25 @@ onUnmounted(() => {
   padding: 16px;
   overflow-y: auto;
   scroll-behavior: auto;
+}
+
+.history-state {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.history-error {
+  margin-bottom: 12px;
+}
+
+.readonly-notice {
+  margin-top: auto;
+  padding: 18px 20px;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  background: var(--bg-soft);
+  font-size: 13px;
 }
 
 .message-item {

@@ -1,0 +1,618 @@
+{
+  "version": 1,
+  "change": "enable-deployed-app-readonly-view",
+  "profile": "strict",
+  "environment": "U3 精选且已部署；Java/MVC 和实际构建前端；身份、存储、发布页面与 SSE 为本机合成夹具，未访问生产",
+  "requirements": [
+    {
+      "id": "Requirement: 精选且已部署应用的历史只读访问",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 普通用户查看精选且已部署应用",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 非精选的已部署应用不开放历史",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 未部署和不完整部署记录",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 作者和管理员兼容",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 请求边界与状态变化",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 跨用户历史仅提供展示数据",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/model/entity/ChatHistory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 序列化后无内部记忆内容",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/model/entity/ChatHistory.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 非作者独立预览部署页面",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/featured-deployed.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/preview-failure.txt"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 不满足共享资格时不加载预览",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/featured-deployed.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/preview-failure.txt"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 历史为空或失败仍显示发布页面",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/featured-deployed.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/preview-failure.txt"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 草稿与发布页面不同",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/featured-deployed.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/preview-failure.txt"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 预览不可用",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useGenerationPreview.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/featured-deployed.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/preview-failure.txt"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 查看页面不授予修改权限",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/owner-generated.jpg"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 已部署应用的普通访客",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/owner-generated.jpg"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 直接请求写接口",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/owner-generated.jpg"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 作者正常操作",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/owner-generated.jpg"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Requirement: 只读加载状态隔离",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 历史失败后重试",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 迟到请求与账号切换",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 1.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 1.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java",
+        "src/main/java/com/lyw/appgeneration/controller/AppController.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 2.1",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 2.2",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.ts"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 3.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java",
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.ts"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistoryReadonlyAccessTest.java",
+        "src/test/java/com/lyw/appgeneration/controller/AppReadonlyHttpContractTest.java",
+        "ai-app-generation-frontend/src/utils/appViewAccess.test.ts",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.test.ts",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/junit",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/code-state.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/type-check/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/production-build/command.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 3.2",
+      "implementation": [
+        "ai-app-generation-frontend/src/pages/app/AppChatPage.vue",
+        "ai-app-generation-frontend/src/utils/appViewAccess.ts",
+        "ai-app-generation-frontend/src/composables/useAppChatHistory.ts",
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs"
+      ],
+      "tests": [
+        "ai-app-generation-frontend/tests/fixtures/deployed-app-view-server.mjs",
+        "ai-app-generation-frontend/src/pages/app/AppChatPageReadonlyBehavior.test.ts"
+      ],
+      "evidence": [
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/observations.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/requests.jsonl",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-summary.json",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/output.log",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/featured-deployed.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/owner-generated.jpg",
+        ".codex/enable-deployed-app-readonly-view/featured-revision/browser/preview-failure.txt"
+      ],
+      "status": "verified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-deployed-app-readonly-view/featured-revision/backend-final/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-deployed-app-readonly-view/featured-revision/backend-final/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ChatHistoryReadonlyAccessTest,AppReadonlyHttpContractTest,ChatHistoryServiceImplLoadTest,AppServiceDownloadLifecycleTest,AppServiceDeletionLifecycleTest,AppServiceDeploymentLifecycleTest,StaticResourceControllerTest,AppControllerPlanTest,AppPlanQueryServiceTest,AppControllerSseTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-03T06:50:56.915813+00:00",
+      "finished_at": "2026-11-03T06:51:11.480340+00:00",
+      "evidence": ".codex/enable-deployed-app-readonly-view/featured-revision/backend-final/command.json"
+    },
+    {
+      "command": "/opt/homebrew/opt/node@24/bin/node /Users/lllyw/ai-app-generation/ai-app-generation-frontend/node_modules/vitest/vitest.mjs run --config /Users/lllyw/ai-app-generation/.codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.config.mjs --reporter=json --outputFile /Users/lllyw/ai-app-generation/.codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/vitest.json src/utils/appViewAccess.test.ts src/composables/useAppChatHistory.test.ts src/pages/app/AppChatPageReadonlyBehavior.test.ts src/pages/app/AppChatPageGeneratingStatus.test.ts src/pages/app/AppChatPageScrollBehavior.test.ts src/composables/useGenerationPreview.test.ts src/composables/useGenerationPlan.test.ts src/utils/generationSession.test.ts src/api/appControllerContract.test.ts src/api/planLoginBehavior.test.ts src/api/appPlan.test.ts src/utils/loginRedirect.test.ts src/config/deployUrlContract.test.ts",
+      "cwd": "/Users/lllyw/ai-app-generation/ai-app-generation-frontend",
+      "exit_code": 0,
+      "started_at": "2026-11-03T06:50:58.093972+00:00",
+      "finished_at": "2026-11-03T06:51:06.287949+00:00",
+      "evidence": ".codex/enable-deployed-app-readonly-view/featured-revision/frontend-final/command.json"
+    },
+    {
+      "command": "/opt/homebrew/opt/node@24/bin/node ai-app-generation-frontend/node_modules/vue-tsc/bin/vue-tsc.js -p ai-app-generation-frontend/tsconfig.app.json --noEmit --incremental --tsBuildInfoFile .codex/enable-deployed-app-readonly-view/featured-revision/type-check/build.tsbuildinfo --pretty false",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-03T06:51:51.347605+00:00",
+      "finished_at": "2026-11-03T06:51:54.431503+00:00",
+      "evidence": ".codex/enable-deployed-app-readonly-view/featured-revision/type-check/command.json"
+    },
+    {
+      "command": "env VITE_API_BASE_URL=/api /opt/homebrew/opt/node@24/bin/node ai-app-generation-frontend/node_modules/vite/bin/vite.js build ai-app-generation-frontend --outDir /Users/lllyw/ai-app-generation/.codex/enable-deployed-app-readonly-view/featured-revision/production-build/dist --emptyOutDir --base /",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-03T06:51:51.347607+00:00",
+      "finished_at": "2026-11-03T06:51:56.072481+00:00",
+      "evidence": ".codex/enable-deployed-app-readonly-view/featured-revision/production-build/command.json"
+    },
+    {
+      "command": "python3 .codex/enable-deployed-app-readonly-view/verify_featured_revision.py",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-03T07:05:16.990569+00:00",
+      "finished_at": "2026-11-03T07:05:17.116429+00:00",
+      "evidence": ".codex/enable-deployed-app-readonly-view/featured-revision/verification-check/command.json"
+    }
+  ],
+  "limitations": [
+    "普通非作者的共享条件收紧；不改变直接发布 URL 和静态资源的既有公开策略",
+    "未进行真实业务数据库验证或生产发布；跨源 iframe 全部资源错误不可保证识别"
+  ]
+}

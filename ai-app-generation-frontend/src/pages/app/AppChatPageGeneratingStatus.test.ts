@@ -85,8 +85,9 @@ describe('代码生成阶段提示文案', () => {
   it('两个加载区共用四级阶段提示派生函数并可被辅助技术感知', () => {
     expect(pageSource).toContain('正在生成网站...')
     expect(pageSource).toContain('AI 正在思考...')
-    expect(pageSource.match(/role="status"/g)).toHaveLength(2)
-    expect(pageSource.match(/aria-live="polite"/g)).toHaveLength(2)
+    const generationRegions = [...pageSource.matchAll(/<div\b[^>]*aria-live="polite"[^>]*>/g)]
+    expect(generationRegions).toHaveLength(2)
+    for (const [region] of generationRegions) expect(region).toContain('role="status"')
     expect(pageSource.match(/getGenerationStatusText\(/g)).toHaveLength(2)
   })
 

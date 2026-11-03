@@ -12,6 +12,7 @@ import com.lyw.appgeneration.ai.memory.DecisionEvidenceCodec;
 import com.lyw.appgeneration.ai.memory.L0Snapshot;
 import com.lyw.appgeneration.ai.memory.L0SourceOperations;
 import com.lyw.appgeneration.ai.memory.DeadlineAwareReplaceResult;
+import com.lyw.appgeneration.constants.AppConstant;
 import com.lyw.appgeneration.constants.UserConstant;
 import com.lyw.appgeneration.exception.ErrorCode;
 import com.lyw.appgeneration.exception.ThrowUtils;
@@ -189,20 +190,40 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                                                       User loginUser) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR, "应用ID不能为空");
         ThrowUtils.throwIf(pageSize <= 0 || pageSize > 50, ErrorCode.PARAMS_ERROR, "页面大小必须在1-50之间");
-        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR);
-        // 验证权限：只有应用创建者和管理员可以查看
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null
+                        || loginUser.getId() <= 0, ErrorCode.NOT_LOGIN_ERROR);
+        // 每页都以服务端的精选状态和部署完成记录判断共享读取资格。
         App app = appService.getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+        ThrowUtils.throwIf(app == null || Integer.valueOf(1).equals(app.getIsDelete()),
+                ErrorCode.NOT_FOUND_ERROR, "应用不存在");
         boolean isAdmin = UserConstant.ADMIN_ROLE.equals(loginUser.getUserRole());
-        boolean isCreator = app.getUserId().equals(loginUser.getId());
-        ThrowUtils.throwIf(!isAdmin && !isCreator, ErrorCode.NO_AUTH_ERROR, "无权查看该应用的对话历史");
+        boolean isCreator = Objects.equals(app.getUserId(), loginUser.getId());
+        boolean isDeployed = StrUtil.isNotBlank(app.getDeployKey())
+                && app.getDeployedTime() != null;
+        boolean isShared = AppConstant.GOOD_APP_PRIORITY.equals(app.getPriority()) && isDeployed;
+        ThrowUtils.throwIf(!isAdmin && !isCreator && !isShared,
+                ErrorCode.NO_AUTH_ERROR, "仅精选且已部署的应用对其他用户开放对话历史");
         // 构建查询条件
         ChatHistoryQueryRequest queryRequest = new ChatHistoryQueryRequest();
         queryRequest.setAppId(appId);
         queryRequest.setLastCreateTime(lastCreateTime);
         QueryWrapper queryWrapper = this.getQueryWrapper(queryRequest);
         // 查询数据
-        return this.page(Page.of(1, pageSize), queryWrapper);
+        Page<ChatHistory> result = this.page(Page.of(1, pageSize), queryWrapper);
+        return isCreator || isAdmin ? result : result.map(this::toSharedDisplayHistory);
+    }
+
+    /** 共享查看只复制展示字段，不把内部记忆材料带入响应或修改原始记录。 */
+    private ChatHistory toSharedDisplayHistory(ChatHistory history) {
+        return ChatHistory.builder()
+                .id(history.getId())
+                .message(history.getMessage())
+                .messageType(history.getMessageType())
+                .appId(history.getAppId())
+                .userId(history.getUserId())
+                .createTime(history.getCreateTime())
+                .updateTime(history.getUpdateTime())
+                .build();
     }
 
     @Override
