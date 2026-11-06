@@ -53,3 +53,8 @@ tmp
 /docs/superpowers/
 /tests/deployment/
 AGENTS.md
+
+# RAG 评测集仅保留在本地。
+/src/test/resources/rag/eval-set.json
+/src/test/resources/rag/vue-hybrid-eval-set.json
+/src/test/resources/rag/vue-generation-build-cases.json

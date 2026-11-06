@@ -2,6 +2,7 @@ package com.lyw.appgeneration.rag.build;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -9,6 +10,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@EnabledIfEnvironmentVariable(named = "RAG_BUILD_EVAL", matches = "true")
 class VueGenerationBuildDatasetTest {
 
     private static final Set<String> REQUIRED_CATEGORIES = Set.of(
