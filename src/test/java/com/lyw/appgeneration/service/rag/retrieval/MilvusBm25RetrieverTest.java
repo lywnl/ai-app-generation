@@ -5,19 +5,45 @@ import com.lyw.appgeneration.service.rag.model.RagChunkKind;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClient;
+import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.service.vector.request.SearchReq;
 import io.milvus.v2.service.vector.response.SearchResp;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MilvusBm25RetrieverTest {
+
+    @ParameterizedTest
+    @ValueSource(ints = {8, 3})
+    void 子块搜索上限透传至Milvus且父文档不足不补搜(int topK) {
+        MilvusClientV2 client = mock(MilvusClientV2.class);
+        when(client.search(any(SearchReq.class))).thenReturn(response(
+                result(0.9F, "chunk-a1", "doc-a", RagDocumentKind.FEATURE_SNIPPET),
+                result(0.8F, "chunk-a2", "doc-a", RagDocumentKind.FEATURE_SNIPPET),
+                result(0.7F, "chunk-b1", "doc-b", RagDocumentKind.FEATURE_SNIPPET)));
+        MilvusBm25Retriever retriever = new MilvusBm25Retriever(new MilvusBm25SearchClient(client));
+
+        List<RankedCandidate> candidates = retriever.retrieve(
+                "pinia", "catalog-v5", RagDocumentKind.FEATURE_SNIPPET, topK);
+
+        ArgumentCaptor<SearchReq> request = ArgumentCaptor.forClass(SearchReq.class);
+        verify(client).search(request.capture());
+        assertEquals(topK, request.getValue().getTopK());
+        assertEquals(List.of("doc-a", "doc-b"), candidates.stream().map(RankedCandidate::documentId).toList());
+        assertEquals(List.of(1, 2), candidates.stream().map(RankedCandidate::rank).toList());
+    }
 
     @Test
     void 同一父文档多个chunk只保留最高分并稳定排序() {

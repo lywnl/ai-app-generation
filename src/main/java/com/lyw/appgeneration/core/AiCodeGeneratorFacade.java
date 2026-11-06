@@ -347,7 +347,7 @@ public class AiCodeGeneratorFacade {
                 scope.submit(vueContextPreparationExecutor, "rag", () -> turnContext.tryCallCallback(() -> {
                     var project = currentVueProjectReader.read(appId, scope::canStart);
                     scope.requireActive();
-                    log.info("[Vue资料兼容] appId={},turnId={},status={},reason={}",
+                    log.info("[Vue工程识别] appId={},turnId={},status={},reason={}",
                             appId, turnContext.turnId(), project.status(), project.reason());
                     var result = ragRetrievalService.prepareVueResources(resourcePolicy.ragQuery(userMessage), project,
                             resourcePolicy.initialBootstrap(), scope, value -> {

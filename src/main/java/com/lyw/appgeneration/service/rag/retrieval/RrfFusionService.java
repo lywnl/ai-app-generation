@@ -1,5 +1,6 @@
 package com.lyw.appgeneration.service.rag.retrieval;
 
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
 import com.lyw.appgeneration.service.rag.model.RankedCandidate;
 import org.springframework.stereotype.Component;
@@ -18,11 +19,11 @@ import java.util.Map;
 public class RrfFusionService {
 
     public static final int DEFAULT_K = 60;
-    public static final int DEFAULT_TOP_K = 15;
+    public static final int DEFAULT_TOP_K = RagConstants.VUE_FUSION_TOP_K;
     private static final double DEFAULT_CHANNEL_WEIGHT = 1.0;
 
     /**
-     * 使用固定参数 k=60、两路权重 1.0，最多返回 15 个候选。
+     * 使用固定参数 k=60、两路权重 1.0，按共享融合上限返回父模板候选。
      */
     public List<RankedCandidate> fuse(List<RankedCandidate> bm25Candidates,
                                       List<RankedCandidate> denseCandidates,

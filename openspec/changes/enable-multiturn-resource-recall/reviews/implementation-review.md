@@ -1,65 +1,53 @@
 # Implementation Review: enable-multiturn-resource-recall
 
-- 评审日期：2026-11-02（Asia/Shanghai）
-- Profile：strict
-- 评审者与独立性：`/root/multiturn_code_review`；未实施本轮业务代码、未修改正式测试或规划。只写本报告及 `.codex` 下的独立复现材料。
-- 当前结论：`PASS`。两项兼容问题均已修复；最终差异、连续 Java 调用链、压缩与协议恢复、取消及相关回归证据已复核，没有开放代码阻塞。该结论为独立代码质量评审，不代替本变更正式验收记录。
-- 基线：Git `6938c2f` 加当前未提交实现；最终源码快照见 [reviewed-sources.json](../../../../.codex/enable-multiturn-resource-recall/independent-review/reviewed-sources.json)。已确认当前源码与最新 `reuse-sandbox/code-state.json` 无哈希差异；较 `regression-v2` 的唯一代码差异是复用测试的沙箱启用注解，该测试已单独重测通过。
+- 评审日期：2026-11-06（Asia/Shanghai）。
+- Profile：strict。
+- 评审者与独立性：`/root/vue_rag_implementation_review`；独立执行上下文，未编写本轮业务代码、测试或规划。独立审阅当前文件、运行日志、JUnit/Vitest 结果及源码快照，只直接交付本报告，没有重复运行 Maven。
+- 当前结论：`PASS`。U5 实现满足本次已批准的行为，未发现开放业务代码阻塞；一项文档准确性问题已由主执行者修正并经本评审者复核关闭。本结论是独立代码质量评审，不代替最终验收清单与验收指纹。
+- 审查基线：HEAD `b8b164c348a95dbebaf0455d66eed3e26a65dc59` 加当前 U5 工作区修改。核心及组合回归的 `code-state.json` 内容一致，SHA-256 为 `570821e6264f797ee1b14bf7d3c3521fe26530ca10ee2e2b6c36e50e74bf93a3`；所登记源码、测试、构建清单及模板文件均与当前字节匹配。文档修订单独核对，最终 README SHA-256 为 `c23d436eb51d3b9cb09eb0649c69110e6685e9241661982bf94e15431610a895`。
 
 ## 评审范围与依据
 
-按本变更 proposal、specs、design、tasks 及 `.agents/shared/openspec/verification-evidence.md` 核对：联合路由解析、持久化成功资格、固定资源策略、现有工程兼容读取、后续功能专用召回、图片显式配额、单一资料截止、排队与物理调用寿命、取消和删除、Facade 临时资料组装以及预算观测。
+项目根为 `/Users/lllyw/ai-app-generation`。依据实际 AGENTS.md、实现验收规则、已批准的 `.codex/plans/Vue-RAG检索简化执行计划.md`、当前规划评审及 tasks 第 8 节进行核查。规划等级仍为 strict，U5 只替代原有 RAG 数量、兼容筛选和清单读取约定；首次成功策略、取消隔离、已有工程保护、实际构建依赖契约及同轮上下文边界继续有效。
 
-具体检查了 ResourcePreparationScope、VueRagExecutor、VueTurnContext、VueHybridRetrievalService、CurrentVueProjectReader、VueProjectBuilder、ImageCollectionService/Policy/Quota/PromptBuilder、ImageSearchTool、VueTurnModeRouter/DecisionParser/ResourcePolicy、AppServiceImpl/ChatHistoryServiceImpl、AiCodeGeneratorFacade 及 UnifiedContextRequestPreparer 的本轮修改，并核对相关维护性测试与已保留执行记录。读取 AppPlanStateManager、PlanStoragePathResolver、SecureFileAccess 以及通用操作租约作为调用链依据；这些来源与允许修改的代码不是新的产品需求。
+审查覆盖 RagConstants、VueHybridRetrievalService 的普通/在线/后续/生产与离线 Dense-only 入口、Dense/BM25/RRF、CurrentVueProjectReader/CurrentVueProject、两个结果类型、Facade 与 RagPromptAssembler 的消费路径、README 及相关测试。补查了 PlanStoragePathResolver、SecureFileAccess、VueRagExecutor、ResourcePreparationScope 和实际重排响应校验，确认本轮修改没有绕开它们。
 
-未执行真实供应商、数据库或业务服务操作，未重复运行主执行者已获授权的分类评测。没有改动用户已有 generationSession.test.ts 内容或暂存状态，也没有改动 `.DS_Store`。
+旧独立报告已完整保存在 `.codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/reviews/implementation-review.md`；写入本报告前复核其与旧主报告字节一致，备份 SHA-256 为 `95960a119bf9a32e5826323a8f39e5a5c0764f609d7aca352193ee6afc878172`。旧 7.4 评审和旧兼容性结论不作为新行为的通过依据。
 
 ## Findings 与处置
 
-### CR-1 / P1：计划初始化空目录使真实新应用跳过完整 RAG（已关闭）
+### CR-U5-1 / P2：说明未清晰区分初始和后续召回阶段（已关闭）
 
-初始实现中，Facade 先执行 initializePlanContext，AppPlanStateManager.loadForTurn 经带副作用的计划读取创建空工程目录；CurrentVueProjectReader 随后把缺少 package.json 的目录一律识别为已有不可用工程。prepareOnline 因此提前降级，真实新应用首轮不会进行骨架和功能池召回。仅在 Facade 中使用空 plan manager 的测试无法发现此问题。
+初审时 README 将正常混合检索统一描述为 4 次 Milvus 搜索、最多 2 次重排，关闭混合时也统一写成两池 Dense；这会误导读者理解后续功能专用路径的实际请求数量。同一文档还保留“仅首轮”的旧描述，并把不可用目录写成绝对“不注入 RAG”，未说明仍可提供保护已有工程的空资料说明。
 
-独立本地复现先得到 ABSENT，再调用真实 loadForTurn 后得到 UNAVAILABLE/PACKAGE_MISSING。复现使用当时冻结的本轮字节码，没有外部调用；记录见 [empty-project-probe.log](../../../../.codex/enable-multiturn-resource-recall/independent-review/empty-project-probe.log) 和 [执行记录](../../../../.codex/enable-multiturn-resource-recall/independent-review/empty-project-probe-command.json)。该早期字节码用于保留故障证据，不能用于判断当前修复是否生效。
-
-当前修复在同一安全目录句柄内区分完全空目录与任何已有文件/子目录：完全空目录为 ABSENT/EMPTY_PROJECT_DIRECTORY；已有部分文件但清单缺失继续保守拒绝。已核对 CurrentVueProjectReaderTest 的真实 AppPlanStateManager 初始化场景、partial.js 保护场景及 `review-fixes` 通过记录。最终 VueMultiturnResourceRecallE2ETest 使用同一目录的真实计划管理器与兼容读取，验证首次失败、重试成功两轮均执行完整召回，该分支已在最终组合测试通过。
-
-### CR-2 / P2：工程兼容读取未复用完整依赖契约（已关闭）
-
-初始读取只检查依赖名及非空字符串，忽略固定版本和 overrides、optionalDependencies、peerDependencies、workspaces 等可改变依赖图的字段。这样可能把顶层声明 Vue 3、但依赖图已被覆盖的工程当作兼容基准，违反已确认的现有工程依赖约束。
-
-当前修复抽取并复用 VueProjectBuilder.dependencyContractViolation，保留原构建的固定版本校验和禁用字段，同时检查既有禁止的解析文件是否存在。模板文档之间的原版本范围比较保持原样。已核对 `latest`、`*`、范围、其他固定版本、禁用字段与解析文件测试，并读取 CurrentVueProjectReaderTest、VueProjectBuilderTest、AppServiceImplVueTurnTest 的 `review-fixes` 成功记录。
+主执行者已修正相关段落：初始完整检索为 1 次 Embedding、4 次搜索、最多 2 次重排；后续为 1 次 Embedding、2 次搜索、最多 1 次重排。Dense-only、基础骨架兜底、首次持久化成功边界、每轮资源策略、15/8 秒截止及同轮复用均已明确。不可用目录表述为跳过模板检索并保守保护已有工程，与 Facade 的实际消费行为一致。本评审者复读修订内容，确认没有改变已批准的实现或验收要求；该发现关闭，文案修订不要求重复代码测试。
 
 ## 当前检查结论
 
-- 普通模式无可靠 JSON/mode 时失败，资源字段独立降级；选中元素固定修改先于只读资源清零，真实异常 cause 保留。未发现额外字段取得执行权限的路径。
-- 成功资格查询仅取本应用未删除 ai/SUCCEEDED 的 id，原话提交与权限入口保留；只读策略不会启动资料，后续范围和配额由服务端决定。
-- 资料截止只创建一次并受回合剩余期限限制。任务开始、依赖提交和结果发布均检查该范围，冻结后不可注入迟到结果；图片按任务索引汇总，RAG 可发布已完成渠道结果。
-- 取消登记使用通用租约且与主模型取消独立。队列项可以移除，RAG 许可依靠物理任务集合归还；没有把 Future 取消直接当成外部调用退出。
-- 恢复和续调沿用既有不可变临时消息入口，没有新增 L0/L1 候选存储或跨回合结果缓存。完整请求与两类临时资料 Token 观测仍采用项目本地估算口径。
-- 全局模型 JSON 配置及非 Vue 生成入口保留。后续功能格式化不会使用缺骨架初始化提示，文件参考仍按原子块预算处理。
+- **数量与请求一致。** RagConstants 是 8/10/1/4/2 的共享来源。Dense 的 `maxResults(topK)` 和 BM25 经真实 SearchReq 构造的 `topK` 均透传；BM25 固定 10 的独立常量已移除。RRF 默认 10，k=60、双路权重和质量分/ID 同分排序保持。子块聚合后不足不补搜、不凑父模板。
+- **筛选完整移除，结构校验保留。** 普通混合、在线部分发布、后续功能、生产/离线 Dense-only 均按排名选取；不存在框架、语言、构建工具、共同依赖或候选依赖白名单筛选残留。目录版本和类型仍在检索通道校验，父文档仍由当前目录回查并去重；重排仍验证数量、index 唯一性/范围及有限分数。模板元数据仍进入语义描述，源码不发送给重排。
+- **各阶段与降级受同一上限约束。** 正常重排、关闭重排、重排失败、任一通道失败及在线提前发布使用骨架 1、初始功能 4、后续功能 2；结果类型再次限制功能数量。后续不访问骨架池。当前工程没有骨架候选时继续现状；仅新工程允许固定基础骨架，离线基线不引入兜底。
+- **目录识别不读取工程清单。** 通过既有安全目录句柄只调用 `iterator().hasNext()`，不递归、不打开 package.json、不跟随目录条目链接。缺失/空为 ABSENT，安全非空为 AVAILABLE；路径拒绝、目录读取失败、截止或取消为 UNAVAILABLE。活跃状态在目录访问前后核对，`existing()` 对未知状态保守为 true。真实目录测试覆盖部分文件、子目录、悬空内部链接、工程/祖先链接、文件替代目录、读取权限和计划初始化空目录。
+- **取消和已有工程保护保留。** 在线渠道回调参与最终链组合，已完成重排不会再被迟到渠道覆盖；发布前检查 scope，Slot 冻结与发布共用关闭边界。执行器继续在排队、许可、执行和接纳结果时检查截止，物理任务退出后才释放许可。Facade 继续通过同一回合边界冻结资料；不因首轮失败重试或缺少清单而授权重建已有工程。
+- **实际构建契约未放宽。** VueProjectBuilder 和依赖管理实现未在 U5 修改；当前回归仍验证白名单外依赖、非注册表依赖来源、解析配置与锁文件等在安装前被拒绝。检索参考资格与真实构建权限保持各自职责。
 
 ## 已读取证据与限制
 
-早期 t1-routing、t2-policy-fixed、t3-features、t4-images、t5-executor-core、t5-image-cancel、t5-rag-deadline、review-fixes 用于定位实现与修复过程，记录仍保留。最终核对以下原始证据，均为退出码 0、失败 0、错误 0、跳过 0：
+原始记录均位于 `.codex/enable-multiturn-resource-recall/`，本评审者核对了 command.json 的退出码、报告实际执行项和当前源码哈希：
 
-| 范围 | 实际执行 | 证据 |
+| 记录标签 | 实际范围与数量 | 结果 |
 | --- | --- | --- |
-| 后端主要回归及连续资源调用链 | 35 类、536 项 | [regression-v2/command.json](../../../../.codex/enable-multiturn-resource-recall/regression-v2/command.json) 及同目录 JUnit |
-| 原计划热窗口和恢复事件边界 | 2 类、17 项 | [memory-boundary/command.json](../../../../.codex/enable-multiturn-resource-recall/memory-boundary/command.json) 及同目录 JUnit |
-| 新增沙箱注解后的资料复用复测 | 1 类、3 项；属于前述 536 项的重复验证 | [reuse-sandbox/command.json](../../../../.codex/enable-multiturn-resource-recall/reuse-sandbox/command.json) 及同目录 JUnit |
-| 前端会话解析、错误与结束状态 | 2 个测试文件、116 项 | [frontend/command.json](../../../../.codex/enable-multiturn-resource-recall/frontend/command.json) 和 vitest.json |
+| `vue-rag-selection-core` | 18 类、205 项：请求参数、RRF、重排 HTTP、编排、目录、提示词、执行器、原生检索、构建器与资料取消 | 退出码 0，失败/错误/跳过均 0 |
+| `vue-rag-selection-composed` | E2E 1 项、上下文复用 3 项、Facade 59 项，共 63 项；使用 `--sandbox` 对应的独立 user.dir | 退出码 0，失败/错误/跳过均 0 |
+| `vue-rag-selection-boundaries` | 成功终态查询 2 项、AppService Vue 回合 38 项、资源策略 3 项，共 43 项 | 退出码 0，失败/错误/跳过均 0 |
+| `vue-rag-selection-frontend` | generationSession 与 AppChatPageGeneratingStatus 两文件，共 116 项 | 退出码 0；Vitest success=true，失败/待执行/todo 均 0，登记的 94 个前端文件均与当前源码匹配 |
 
-后端不重复统计为 37 类、553 项。`regression-v2` 命令列有 36 个选择器，其中 CompressionAwareChatMemoryTest 在项目中不存在，未产生执行记录，不能计入已执行类数；实际 JUnit 为 35 类。随后补充实际存在的 PlanRestoreWindowTest 和 PlanRestoreEventGateTest 验证了保留的记忆边界。
+初轮 `vue-rag-selection-resume-check` 为 84 项、1 项失败，原因是旧 RRF 测试仍期望 15；该失败原件保留。当前测试改用两路各 8 个不重合候选，验证默认融合前 10 个，同时覆盖显式上限、重复父模板和空结果；后续核心回归已实际通过，不能把初轮失败本身算作成功。
 
-连续 E2E 使用真实 AppService、Facade、RAG 混合编排、图片收集、AiServices、统一请求门禁、计划/文件/构建工具、流解析和 Finalizer；文件实际写入隔离沙箱。已核对六轮终态 ANSWERED→SYSTEM_ERROR→SUCCEEDED→SUCCEEDED→SUCCEEDED→SUCCEEDED、两次骨架池召回、三次功能池召回、6/6/2 主题的图片请求、同回合资料一致与请求计量一致。后续回合未附加上轮候选，候选标记未直接进入 L0 或模拟数据库，原始工具调用与结果保持配对。
+组合测试确实运行了连续六回合、工具续调、同步摘要、协议恢复和候选替换。它串联真实 Java 服务、资料编排、请求门禁、文件/计划工具和终态流程，但数据库、分类/生成/摘要模型、检索提供方、图片提供方及 npm 执行器使用本地替身；不证明真实 Milvus、DashScope 或 npm 构建质量。重排 HTTP 测试只使用本地环回服务。
 
-VueResourceContextReuseTest 分别驱动工具续调、协议恢复、未完成工具链恢复，使用真实 Token 估算触发同步摘要；摘要替身输入的来源快照不含候选资料，压缩后仍携带各一份相同资料，两类资料各准备一次。沙箱注解已补齐并复测，避免普通测试运行读取本机应用路径。取消、删除、队列清理及物理调用许可回收继续由聚焦测试和最终回归覆盖。
+本次没有新增真实检索质量、召回率、费用或耗时改善的实测结论。历史分类对照仅保留其当时输入和模型条件下的结果；不宣称旧整包验收证据全部仍与当前代码匹配。主执行者已对当前受影响的成功边界和前端行为补测，本报告仅据实引用上述新证据。
 
-已读取真实分类 `classification/summary.json`：旧/新各 120 次，共 240 次，模式误判和非法输出均为 0，新版资源字段错误为 0，关键否定样例新增误判为 0；平均耗时约为旧版 733ms、新版 772ms。该结果仅限固定合成样例和当次 deepseek-flash，不等同于所有线上表达均无退化。未重新发起付费调用。
+## 交接
 
-## 最终差异与交接
-
-已复核阶段性报告后的业务差异：Facade 在付费资料准备前检查持久用户边界；OnlineSelection 尊重 hybrid 开关，Dense-only 路径不执行 RRF；准备池保留原线程命名和既有容量；预算观测维持低基数指标。新增测试和夹具运行器均在项目内隔离，模板夹具纳入运行哈希。`git diff --check` 通过，受保护前端测试的内容哈希和暂存状态与实施前一致。
-
-没有开放阻塞，可将本报告与最终源码、测试及原始证据绑定到正式验收。当前验证中的数据库、外部检索/图片和主生成模型均为替身，npm 构建执行器也是替身；不能据此声称已验证真实供应商延迟、真实 npm 构建或部署后的生产环境。真实分类效果另有上述授权范围内的 240 次证据。最终交付判断由 reports/verification.md 汇总，不扩大为重启、提交、推送、部署或数据库操作授权。
+独立代码质量评审通过，文档发现已关闭。最终 `git diff --check` 返回 0。由主执行者完成当前需求/任务到实现和证据的结构化映射、最终验收报告及机器指纹；本报告不自动归档、提交、推送或部署。

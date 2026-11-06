@@ -35,3 +35,14 @@
 - 持续约束：本文件、已批准计划、本变更规格设计、AGENTS.md、共享工作流。
 - 持续兼容约束：正式 vue-mutation-promotion、vue-soft-replan、vue-build-progress-guard 规范中原模式升级、计划工具与构建/取消行为；其中“每轮临时注入计划且不进聊天记忆”已被 reuse-plan-context/specs/vue-soft-replan/spec.md 的 PLAN_RESTORE 有序热窗口规则替代，本轮不将其恢复为旧方式。窗口额度以 reduce-recent-context-window/specs/context-summarization/spec.md 的 8,192 Token 为准。本轮候选资料独立于计划恢复消息，不改变上述已交付规则，不重新宣称旧验收指纹有效。
 - 实施参考：路由/Facade/图片/RAG/会话服务及对应测试和配置，允许在本变更范围修改；旧 limit-image-context 未归档规划仅用于确认已实现的配额与文本格式，逐结果等待和固定后续配额由 U4 明确替代。
+
+## U5：2026-11-05 Vue RAG 检索简化修订
+
+- 原始位置：当前对话的数量讨论、规划问答及最新 PLEASE IMPLEMENT THIS PLAN 消息。
+- 必要原文：“我的链路希望也保持一致并且删除兼容判断逻辑 你看是否可以”；“两个通道改为8个 rrf改为10个 这样可以不”；工程识别选择“只检查目录状态（推荐）”。用户随后完整批准《Vue RAG 数量统一与移除兼容筛选执行计划》。
+- 已批准计划保存于 ../../../../.codex/plans/Vue-RAG检索简化执行计划.md；此前 Plan 模式只读说明已被本次明确实施授权替代。
+- 采纳：各通道8个子块、每池RRF最多10个父模板，骨架1/首轮功能4/后续功能2共用重排及最终上限；移除全部RAG候选兼容过滤及package.json依赖门槛；工程仅按安全目录缺失/空/非空/不可用识别。
+- 保留：类型/目录版本/ID校验、现有并发截止取消、骨架兜底边界、已有工程保护、实际构建依赖契约、模板元数据、其他模式和接口。目录内链接只视为条目，不跟随；工程目录自身链接拒绝。
+- 替代：U4计划中package.json 64 KiB兼容读取和候选匹配要求，以及旧10/15/3/8检索数；不替代模式分类、图片、存储或回合生命周期。历史任务和证据保留，不能用旧兼容测试证明新行为。
+- 验收：本次仅运行本地核心回归与受控Java组合链路；真实Milvus/DashScope检索评测需另行授权，旧分类评测授权不扩大为本次付费调用。
+- 历史原件：../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/ 保存本次修订前规划、报告及机器记录的原始字节。

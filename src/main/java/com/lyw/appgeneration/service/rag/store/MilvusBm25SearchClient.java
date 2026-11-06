@@ -23,7 +23,6 @@ import java.util.function.Supplier;
 @Slf4j
 public class MilvusBm25SearchClient {
 
-    public static final int QUERY_TOP_K = 10;
     private static final String BM25_FIELD = "bm25_sparse_vector";
 
     private final Supplier<MilvusClientV2> clientSupplier;

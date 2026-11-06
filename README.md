@@ -39,7 +39,7 @@ flowchart TD
     USER(["用户输入提示词"])
     ENTRY["发送生成请求<br/>POST /api/app/chat/gen/code"]
     CHECK["后端检查权限，建立回合<br/>保存用户消息"]
-    CONTEXT["准备上下文：历史记忆 + 当前计划<br/>首轮按需并行准备图片与 RAG"]
+    CONTEXT["准备上下文：历史记忆 + 当前计划<br/>按本轮资源策略并行准备图片与 RAG"]
     PLAN["Plan：制定或调整文件计划<br/>makePlan / updatePlan，保存 .plan.json"]
     EXEC["Execute：进入 ReAct 工具循环<br/>读取文件 / Skill → 修改文件 → 观察真实结果"]
     NEXT{"下一步？"}
@@ -63,7 +63,7 @@ flowchart TD
 
 模型决定“改什么、下一步做什么”，后端负责真实执行和状态确认。循环中的每次模型请求都检查 Token 预算，必要时压缩历史；正文、工具结果和计划进度通过 SSE 实时展示。
 
-Vue 首轮需要修改文件时，图片准备与 RAG 检索并行执行，RAG 受 `rag.enabled` 控制。两路完成后，按“图片 → RAG”的固定顺序加入临时上下文，再请求代码模型；后续修改和只读回合不自动重复准备这些参考资料。
+Vue 修改回合在首次持久化 `SUCCEEDED` 前强制准备图片与 RAG，失败后的重试仍按这一策略处理；成功后的修改分别按本轮资源标记准备，RAG 只检索功能池。只读回合跳过资料准备，RAG 总开关仍由 `rag.enabled` 控制。图片与 RAG 并行，共享初始 15 秒、后续 8 秒的准备截止，并受剩余回合期限约束；按“图片 → RAG”的固定顺序将已完成资料加入本轮临时上下文，再请求代码模型。
 
 已有计划可直接复用，不必每轮重新创建。真实构建最多 3 次，构建前拒绝不计次数；纠偏后仍无进展也会受控停止。HTML、多文件和纯只读问答不走这套完整的 Vue 构建流程，网站发布则是预览之后的独立操作。
 
@@ -177,18 +177,20 @@ flowchart TD
     SD --> SK
     FB --> FT["功能池：RRF 融合 → 父文档回查 → Rerank"]
     FD --> FT
-    SK --> SELECT["选择骨架，筛选兼容的功能片段"]
+    SK --> SELECT["按相关性选取骨架和功能片段"]
     FT --> SELECT
     SELECT --> CONTEXT["按长度预算组装模板上下文 → 主生成模型"]
 ```
 
-一次正常混合检索执行 **1 次 Embedding、4 次 Milvus 搜索、最多 2 次 Rerank**，调用数不含客户端内部重试。查询向量只在当前请求内共享；Embedding 与两路 BM25 同时提交，向量就绪后两路 Dense 并发执行。每个池自己的召回完成后即可融合、回查和重排，最后按骨架、功能的固定身份合并结果。
+上图的初始完整混合检索执行 **1 次 Embedding、4 次 Milvus 搜索、最多 2 次 Rerank**；成功后的功能专用检索执行 **1 次 Embedding、2 次 Milvus 搜索、最多 1 次 Rerank**，调用数不含客户端内部重试。查询向量只在当前请求内共享；初始阶段的 Embedding 与两池 BM25 同时提交，向量就绪后两池 Dense 并发执行。每个池自己的召回完成后即可融合、回查和重排，最后按骨架、功能的固定身份合并结果。
 
-Milvus 检索命中的是模板的短子块；召回通道按父文档 ID 聚合去重，再从内存模板目录取回完整父文档用于重排和上下文组装。并发执行保留原有 RRF 排序、兼容筛选和上下文长度限制。
+Milvus 检索命中的是模板的短子块；召回通道按父文档 ID 聚合去重，再从内存模板目录取回完整父文档用于重排和上下文组装。两路各搜索最多 8 个子块，按父文档 ID 聚合后允许不足、不补搜；每池 RRF 最多保留 10 个父模板。重排请求和最终交付共用骨架 1、首轮功能 4、后续功能 2 的上限，重排关闭或失败时沿可用候选顺序取相同数量。RRF 排序、目录版本与文档类型校验及上下文长度预算继续生效。
 
-Embedding 使用 DashScope `text-embedding-v4`，重排使用 `gte-rerank-v2`。共享 Embedding 失败时，两路 Dense 都不可用，继续使用 BM25；重排失败退回原候选顺序，缺少骨架候选时尝试固定基础骨架兜底。
+RAG 按相关性选择参考资料，不比较模板与工程的框架、语言、构建工具或依赖兼容性。已有工程仅通过安全目录状态识别，不读取 `package.json`：目录缺失或完全为空属于新工程，安全非空目录属于已有工程；不安全或不可访问时跳过模板检索，保守保护已有工程。目录内链接仅作为条目、不跟随目标；资料不授权重建已有工程，真实构建仍执行固定依赖契约。
 
-关闭 `rag.hybrid.enabled` 后，Vue 的生产 Dense-only 入口仍复用一次 Embedding、并发执行两路 Dense，并保留父文档回查和骨架兜底。HTML 和多文件模式使用各自的 Dense 链路。
+Embedding 使用 DashScope `text-embedding-v4`，重排使用 `gte-rerank-v2`。Embedding 失败时，本次 Dense 通道不可用，继续使用可用的 BM25 结果；重排失败退回原候选顺序。新工程缺少骨架候选时尝试固定基础骨架兜底，已有工程继续沿用当前工程，离线 Dense-only 基线不增加兜底。
+
+关闭 `rag.hybrid.enabled` 后，Vue 的生产 Dense-only 入口仍使用一次 Embedding：初始完整召回并发搜索骨架、功能两池，后续仅搜索功能池；保留父文档回查及上述新工程骨架兜底边界。HTML 和多文件模式使用各自的 Dense 链路。
 
 模板文件必须完成摄取才能进入 Milvus。普通启动和部署默认不重新导入；已有模板与索引保存在数据卷中，重启不用重新 Embedding。首次导入或更新见 [模板导入说明](prod/UPGRADE-V2.md#模板导入与验收)，导入会调用 Embedding 并产生费用。
 
@@ -202,9 +204,9 @@ Logo 默认使用 DashScope `wan2.2-t2i-flash`，每个 Logo 任务生成 **1 �
 
 正常查询间隔默认 **1000 毫秒**，从上次发起查询时计算；单次查询先返回再继续下一次，当前后端实例共享 **每秒 10 次查询额度**。遇到 429、503、504 时退避后查询；生成失败、取消或状态异常时跳过该 Logo。
 
-`image.collection.timeout-seconds` 默认 30 秒，表示依次收集结果时，对当前结果的等待窗口，整个图片准备可能超过 30 秒。外层等待超时或中断后会停止 Logo 后续轮询；已发出的网络请求仍受客户端超时约束，云端已提交的生成任务可能继续执行。
+兼容图片入口的 `image.collection.timeout-seconds` 默认 30 秒，表示依次收集结果时对当前结果的等待窗口，整个图片准备可能超过 30 秒。Vue 在线回合改用与 RAG 共用的初始 15 秒、后续 8 秒截止，覆盖图片规划、搜索与 Logo 调用；截止时保留已完成部分。外层等待超时或中断后会停止 Logo 后续轮询；已发出的网络请求仍受客户端超时约束，云端已提交的生成任务可能继续执行。
 
-图片与 RAG 的并行准备适用于上述 Vue 首轮修改回合。多文件网页首轮仍先准备图片、再执行 RAG；HTML 模式不调用图片采集。
+图片与 RAG 的并行准备按上述 Vue 每轮资源策略执行，后续可单独补充其中一类。多文件网页首轮仍先准备图片、再执行 RAG；HTML 模式不调用图片采集。
 
 核心代码：[ImageCollectionService](src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java)、[LogoGeneratorTool](src/main/java/com/lyw/appgeneration/ai/image/tools/LogoGeneratorTool.java)。
 
@@ -234,7 +236,7 @@ Vue 回合结束时，最终决策证据、展示文本、可信结果及必要�
 
 `.plan.json` 是独立执行状态，不是 L1/L2 记忆；聊天被摘要不会改写计划文件。MySQL 保留稳定对话历史，支持页面回放与热窗口恢复。
 
-首轮按既有条件准备的 RAG、图片和 Skill 目录在该回合各请求中复用，每请求各一份并计入预算，URL 和文件路径保持原值；下一用户回合重新按原条件准备。同步摘要后的重新组装复用本次已领取的纠正反馈，不重复领取；构建与只读升级反馈仍由有效模型响应确认送达。计划快照和独立临时资料不写入 L0。
+本轮准备的 RAG、图片和 Skill 目录在该回合各请求中复用，每请求各一份并计入预算，URL 和文件路径保持原值；下一用户回合的 RAG、图片重新按本轮资源策略准备，Skill 目录沿用既有准备条件。候选资料替换上轮清单，工具续调和同步摘要不重复召回。同步摘要后的重新组装复用本次已领取的纠正反馈，不重复领取；构建与只读升级反馈仍由有效模型响应确认送达。计划快照和独立临时资料不写入 L0。
 
 用户回合的关键决策材料独立保存在 `chat_history.decisionEvidence`，内部保存版本、来源及证据修订，不通过历史 API 返回，也不拼入 `memoryMessage` 或 L2。用户原话引用同一记录的 `message`；模型解释、成功计划的目标、用途和修订原因保留原始表达。文件实际修改与后续构建验证分别留证，关联文件已修改不代表整段建议都已采用，构建前发生的验证也不能证明之后的修改成功。相同来源按条目合并，迟到采集不能覆盖更完整的依据；没有原始理由时不从代码反向编造。
 
@@ -431,7 +433,7 @@ bash deploy.sh
 | --- | --- |
 | [AppServiceImpl](src/main/java/com/lyw/appgeneration/service/impl/AppServiceImpl.java) / [AppCreationExecutorConfig](src/main/java/com/lyw/appgeneration/config/AppCreationExecutorConfig.java) | 创建应用时并行选型、命名，汇总结果后入库 |
 | [AiCodeGeneratorFacade](src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java) | 生成入口、上下文准备、工具与流装配 |
-| [VueContextPreparationExecutorConfig](src/main/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfig.java) | Vue 首轮 RAG 分支使用的独立入口执行器 |
+| [VueContextPreparationExecutorConfig](src/main/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfig.java) | Vue 每轮 RAG 与图片规划使用的独立资料准备入口执行器 |
 | [VueHybridRetrievalService](src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java) | 查询向量复用、骨架与功能分池并发检索 |
 | [ImageCollectionService](src/main/java/com/lyw/appgeneration/ai/image/ImageCollectionService.java) / [LogoGeneratorTool](src/main/java/com/lyw/appgeneration/ai/image/tools/LogoGeneratorTool.java) | 图片规划与并发采集、Logo 提交与可取消轮询 |
 | [ai/plan](src/main/java/com/lyw/appgeneration/ai/plan) | 计划持久化、状态更新与偏差检测 |

@@ -40,7 +40,7 @@ public class MilvusBm25Retriever {
             return List.of();
         }
         SearchResp response = searchClient.search(
-                rawQuery, catalogVersion, documentKind, MilvusBm25SearchClient.QUERY_TOP_K);
+                rawQuery, catalogVersion, documentKind, topK);
         return aggregate(response, catalogVersion, documentKind, topK);
     }
 

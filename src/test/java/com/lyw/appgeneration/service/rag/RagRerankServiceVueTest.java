@@ -1,17 +1,23 @@
 package com.lyw.appgeneration.service.rag;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyw.appgeneration.config.RagProperties;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
 import com.lyw.appgeneration.service.rag.model.TemplateDoc;
 import com.lyw.appgeneration.service.rag.model.RetrievedSnippet;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -19,6 +25,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RagRerankServiceVueTest {
+
+    @ParameterizedTest
+    @CsvSource({"1, 6", "4, 6", "2, 6", "4, 2"})
+    void 重排HTTP请求与交付共用场景上限且候选不足时不凑数(int topK, int candidateCount) throws IOException {
+        List<TemplateDoc> candidates = IntStream.range(0, candidateCount)
+                .mapToObj(index -> document("document-" + index)).toList();
+        int expected = Math.min(topK, candidateCount);
+        ObjectMapper json = new ObjectMapper();
+        String response = json.writeValueAsString(Map.of("output", Map.of("results",
+                IntStream.range(0, expected).mapToObj(index ->
+                        Map.of("index", index, "relevance_score", 0.9 - index * 0.01)).toList())));
+        AtomicReference<String> requestBody = new AtomicReference<>();
+
+        List<TemplateDoc> result = rerankVue(response, candidates, topK, requestBody);
+
+        var request = json.readTree(requestBody.get());
+        assertEquals(expected, request.path("parameters").path("top_n").intValue());
+        assertEquals(candidateCount, request.path("input").path("documents").size());
+        assertEquals(candidates.subList(0, expected), result);
+    }
 
     @Test
     void nativeRerankTextUsesSemanticsAndNeverReadsSourceCode() {
@@ -121,10 +147,17 @@ class RagRerankServiceVueTest {
     private List<TemplateDoc> rerankVue(String response,
                                         List<TemplateDoc> candidates,
                                         int topK) throws IOException {
+        return rerankVue(response, candidates, topK, new AtomicReference<>());
+    }
+
+    private List<TemplateDoc> rerankVue(String response,
+                                        List<TemplateDoc> candidates,
+                                        int topK,
+                                        AtomicReference<String> requestBody) throws IOException {
         HttpServer server = HttpServer.create(
                 new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/rerank", exchange -> {
-            exchange.getRequestBody().readAllBytes();
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, body.length);

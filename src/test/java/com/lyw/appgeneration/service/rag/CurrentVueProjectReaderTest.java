@@ -4,84 +4,126 @@ import com.lyw.appgeneration.ai.plan.PlanStoragePathResolver;
 import com.lyw.appgeneration.service.rag.model.CurrentVueProject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class CurrentVueProjectReaderTest {
     @TempDir Path output;
-    private static final String PACKAGE = "{\"dependencies\":{\"vue\":\"3.3.4\"},"
-            + "\"devDependencies\":{\"vite\":\"4.4.5\",\"@vitejs/plugin-vue\":\"4.2.3\"}}";
+
     private CurrentVueProjectReader reader() { return new CurrentVueProjectReader(new PlanStoragePathResolver(output)); }
     private Path project() throws Exception { return Files.createDirectory(output.resolve("vue_project_7")); }
 
     @Test
-    void 缺失工程不创建文件存在但缺清单不能当空工程() throws Exception {
+    void 缺失或空目录为新工程但不会创建目录() throws Exception {
         assertEquals(CurrentVueProject.Status.ABSENT, reader().read(7).status());
+        assertEquals("PROJECT_ABSENT", reader().read(7).reason());
         assertFalse(Files.exists(output.resolve("vue_project_7")));
-        Path existing = project();
-        assertEquals(CurrentVueProject.Status.ABSENT, reader().read(7).status());
-        Files.writeString(existing.resolve("partial.js"), "// 已经生成的部分工程");
-        assertEquals("PACKAGE_MISSING", reader().read(7).reason());
-        assertTrue(reader().read(7).existing());
-    }
-    @Test
-    void 读取当前版本和依赖且大小有界() throws Exception {
-        Path path = project().resolve("package.json");
-        Files.writeString(path, PACKAGE);
-        var current = reader().read(7);
-        assertTrue(current.available());
-        assertEquals("vue@3.3.4", current.compatibilityDocument().getFramework());
-        assertEquals("vite@4.4.5", current.compatibilityDocument().getBuildTool());
-        assertThrows(UnsupportedOperationException.class, () -> current.dependencies().put("extra", "1"));
-        Files.writeString(path, " ".repeat(CurrentVueProjectReader.MAX_PACKAGE_BYTES + 1));
-        assertEquals("PACKAGE_TOO_LARGE", reader().read(7).reason());
-    }
-    @Test
-    void 无效清单未知依赖和已截止不注入() throws Exception {
-        Path path = project().resolve("package.json");
-        for (String invalid : new String[]{"{", "[]", "{}", PACKAGE + " {}",
-                PACKAGE.replace("\"vue\"", "\"unsafe-lib\"")}) {
-            Files.writeString(path, invalid);
-            assertFalse(reader().read(7).available());
-        }
-        Files.writeString(path, PACKAGE);
-        assertEquals("DEADLINE_OR_CANCELLED", reader().read(7, () -> false).reason());
-    }
-    @Test
-    void 工程和清单符号链接均拒绝且应用隔离() throws Exception {
-        Path real = Files.createDirectory(output.resolve("vue_project_8"));
-        Files.writeString(real.resolve("package.json"), PACKAGE);
-        Path project = output.resolve("vue_project_7");
-        Files.createSymbolicLink(project, real);
-        assertFalse(reader().read(7).available());
-        Files.delete(project);
-        Files.createDirectory(project);
-        Files.createSymbolicLink(project.resolve("package.json"), real.resolve("package.json"));
-        assertFalse(reader().read(7).available());
-        assertTrue(reader().read(8).available());
+        project();
+        assertEquals("EMPTY_PROJECT_DIRECTORY", reader().read(7).reason());
+        assertFalse(reader().read(7).existing());
     }
 
     @Test
-    void 完整复用固定依赖版本和禁用依赖图规则() throws Exception {
+    void 只有部分文件或子目录也属于已有工程() throws Exception {
         Path directory = project();
-        Path packageJson = directory.resolve("package.json");
-        for (String version : new String[]{"latest", "*", "^3.3.4", "3.4.0", ">=2 <4"}) {
-            Files.writeString(packageJson, PACKAGE.replace("3.3.4", version));
-            assertFalse(reader().read(7).available(), version);
+        Path partial = directory.resolve("partial.js");
+        Files.writeString(partial, "// 已有代码");
+        assertTrue(reader().read(7).available());
+        assertTrue(reader().read(7).existing());
+        assertFalse(Files.exists(directory.resolve("package.json")));
+        Files.delete(partial);
+        Files.createDirectory(directory.resolve("src"));
+        assertTrue(reader().read(7).available());
+    }
+
+    @Test
+    void 清单格式大小或依赖内容不影响目录状态() throws Exception {
+        Path manifest = project().resolve("package.json");
+        for (String value : new String[]{"{", "[]", "{}", "{} {}", " ".repeat(64 * 1024 + 1),
+                "{\"dependencies\":{\"unsafe-lib\":\"latest\",\"vue\":\"^2\"},\"workspaces\":[]}"}) {
+            Files.writeString(manifest, value);
+            assertEquals(CurrentVueProject.Status.AVAILABLE, reader().read(7).status());
         }
-        for (String field : new String[]{"overrides", "optionalDependencies", "peerDependencies", "workspaces"}) {
-            Files.writeString(packageJson, PACKAGE.substring(0, PACKAGE.length() - 1) + ",\"" + field + "\":{}}");
-            assertEquals("UNTRUSTED_DEPENDENCY_CONTRACT", reader().read(7).reason(), field);
-        }
-        Files.writeString(packageJson, PACKAGE);
-        for (String name : com.lyw.appgeneration.core.builder.VueProjectBuilder.forbiddenDependencyResolutionFiles()) {
+    }
+
+    @Test
+    void 锁文件和解析配置不阻止资料召回() throws Exception {
+        Path directory = project();
+        for (String name : new String[]{"package-lock.json", "npm-shrinkwrap.json", ".npmrc"}) {
             Path file = directory.resolve(name);
-            Files.writeString(file, "测试不允许的解析文件");
-            assertEquals("UNTRUSTED_DEPENDENCY_RESOLUTION", reader().read(7).reason());
+            Files.writeString(file, "不应读取的内容");
+            assertTrue(reader().read(7).available(), name);
             Files.delete(file);
         }
+    }
+
+    @Test
+    void 目录内部链接只作为条目且不跟随目标() throws Exception {
+        Path directory = project();
+        // 悬空链接仍应标记已有工程，证明无需打开或检查链接目标。
+        Files.createSymbolicLink(directory.resolve("package.json"), output.resolve("不存在的目标"));
         assertTrue(reader().read(7).available());
+        assertFalse(Files.exists(output.resolve("不存在的目标")));
+    }
+
+    @Test
+    void 工程和祖先路径链接拒绝且其他应用不受影响() throws Exception {
+        Path real = Files.createDirectory(output.resolve("vue_project_8"));
+        Files.writeString(real.resolve("existing.txt"), "已有工程");
+        Files.createSymbolicLink(output.resolve("vue_project_7"), real);
+        var rejected = reader().read(7);
+        assertEquals(CurrentVueProject.Status.UNAVAILABLE, rejected.status());
+        assertTrue(rejected.existing());
+        assertTrue(reader().read(8).available());
+        Path alias = output.resolve("alias");
+        Files.createSymbolicLink(alias, output);
+        assertEquals(CurrentVueProject.Status.UNAVAILABLE,
+                new CurrentVueProjectReader(new PlanStoragePathResolver(alias)).read(8).status());
+    }
+
+    @Test
+    void 无法作为目录打开时不伪装成新工程() throws Exception {
+        Files.writeString(output.resolve("vue_project_7"), "普通文件不是目录");
+        var result = reader().read(7);
+        assertEquals(CurrentVueProject.Status.UNAVAILABLE, result.status());
+        assertEquals("UNSAFE_PROJECT_PATH", result.reason());
+        assertTrue(result.existing());
+    }
+
+    @Test
+    void 无权读取的目录不可用但不可读的清单不影响目录识别() throws Exception {
+        Path directory = project();
+        Path manifest = Files.writeString(directory.resolve("package.json"), "不应读取");
+        var filePermissions = Files.getPosixFilePermissions(manifest);
+        var directoryPermissions = Files.getPosixFilePermissions(directory);
+        try {
+            Files.setPosixFilePermissions(manifest, Set.of());
+            assertTrue(reader().read(7).available());
+            Files.setPosixFilePermissions(directory, Set.of());
+            CurrentVueProject unavailable = reader().read(7);
+            assertEquals(CurrentVueProject.Status.UNAVAILABLE, unavailable.status());
+            assertTrue(unavailable.existing());
+        } finally {
+            Files.setPosixFilePermissions(directory, directoryPermissions);
+            Files.setPosixFilePermissions(manifest, filePermissions);
+        }
+    }
+
+    @Test
+    void 截止前后都检查活跃状态() throws Exception {
+        Files.writeString(project().resolve("partial.js"), "已有文件");
+        assertEquals("DEADLINE_OR_CANCELLED", reader().read(7, () -> false).reason());
+        AtomicInteger checks = new AtomicInteger();
+        assertEquals("DEADLINE_OR_CANCELLED", reader().read(7, () -> checks.incrementAndGet() == 1).reason());
+        checks.set(0);
+        assertEquals("DEADLINE_OR_CANCELLED", reader().read(7, () -> checks.incrementAndGet() <= 2).reason());
+        checks.set(0);
+        assertEquals("DEADLINE_OR_CANCELLED", reader().read(99, () -> checks.incrementAndGet() == 1).reason());
     }
 
     @Test

@@ -1,68 +1,39 @@
-# 实施与验证证据
+# U5 实施与验证证据
 
-基线为 `6938c2f` 加当前工作区实现。完整命令、退出码、起止时间和源码 SHA-256 保存在各运行目录；[执行汇总](../../../../.codex/enable-multiturn-resource-recall/test-summary.json) 同时保留早期失败与当前有效结果。需求、场景及任务的详细映射统一维护在 [verification-manifest.json](verification-manifest.json)。
+本次为 2026-11-06 继续完成的 Vue RAG 数量统一与取消兼容筛选，范围是 tasks 第 8 节。Git 基线为 `b8b164c348a95dbebaf0455d66eed3e26a65dc59` 加当前未提交修改。详细映射以 [verification-manifest.json](verification-manifest.json) 为准，实际执行数与源码核对见 [汇总](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-verification/summary.json)。
 
-## 当前有效结果
+## 本次执行结果
 
-| 验证范围 | 结果 | 原始记录 |
+| 范围 | 实际执行与结果 | 原始记录 |
 | --- | --- | --- |
-| Java 综合回归：路由、策略、成功查询、RAG、图片、截止、取消、Facade、请求门禁、预算、构建与受控端到端 | 实际 35 类、536 项，失败/错误/跳过均为 0 | [regression-v2](../../../../.codex/enable-multiturn-resource-recall/regression-v2/command.json)，同目录 `junit/`、`maven.log`、`code-state.json` |
-| 当前计划恢复及热窗口边界 | 2 类、17 项，失败/错误/跳过均为 0 | [memory-boundary](../../../../.codex/enable-multiturn-resource-recall/memory-boundary/command.json) |
-| 恢复测试增加沙箱启用保护后的聚焦复测 | 3 项，失败/错误/跳过均为 0，替代综合回归中相同的 3 项 | [reuse-sandbox](../../../../.codex/enable-multiturn-resource-recall/reuse-sandbox/command.json) |
-| 前端会话解析、余额错误、生成中状态及终态 | 116 项通过，无失败或待执行项 | [frontend](../../../../.codex/enable-multiturn-resource-recall/frontend/command.json)、同目录 `vitest.json` |
-| 经用户单独授权的真实分类对照 | 240 次，旧新各 120 次，通过固定样例门槛 | [classification-command](../../../../.codex/enable-multiturn-resource-recall/classification-command.json)、[summary](../../../../.codex/enable-multiturn-resource-recall/classification/summary.json) |
+| 核心回归 | 18 类、205 项，失败/错误/跳过均为 0 | [vue-rag-selection-core](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json) |
+| 沙箱组合回归 | E2E 1 项、资料复用 3 项、Facade 59 项，共 63 项；失败/错误/跳过均为 0 | [vue-rag-selection-composed](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json) |
+| 持续边界补测 | 成功终态查询 2 项、AppService Vue 回合 38 项、资源策略 3 项，共 43 项；失败/错误/跳过均为 0 | [vue-rag-selection-boundaries](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json) |
+| 前端会话回归 | 两个文件、116 项，失败/待执行/todo 均为 0 | [vue-rag-selection-frontend](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/command.json) |
 
-Java 不重复计数共 37 类、553 项。综合回归命令中有一个不存在的 `CompressionAwareChatMemoryTest` 选择器，Maven 未对单个未匹配选择器报错；它不计入执行或通过数。已另行运行项目实际存在的 `PlanRestoreWindowTest` 和 `PlanRestoreEventGateTest` 核对对应边界。
+Java 合计 24 个不同测试类、311 项，不重复累计初轮排错结果。各运行目录保留命令、退出码、UTC 起止时间、`code-state.json`、原始日志及 JUnit/Vitest 报告。Java 25 使用现有 Maven 离线验证脚本；Node 24 使用现有前端脚本，未安装新依赖。
 
-Java 使用现有 Java 25、Maven 离线仓库及项目测试配置。`run_tests.py` 的 `--sandbox` 将测试工作目录和临时目录放入本次运行目录，并复制 `embed_text` 只读夹具，夹具也进入源码快照。`VueMultiturnResourceRecallE2ETest` 和 `VueResourceContextReuseTest` 均有沙箱启用条件；上述正式运行中均实际执行，没有用跳过代替通过。复用测试注解是 `regression-v2` 后唯一的源码变化，其余业务和测试输入未变，以 `reuse-sandbox/code-state.json` 绑定最终源码。
+组合测试显式传入 `--sandbox`，实际工作目录和临时文件位于本次 `.codex` 目录；已逐类核对执行数量，未将目录条件导致的跳过算作通过。三组 Java 源码快照与当前登记源码一致；前端本次快照包含的 94 个文件也与当前文件匹配。
 
-## 受控连续调用链
+## 实现与行为覆盖
 
-`VueMultiturnResourceRecallE2ETest` 连接真实 `AppServiceImpl → AiCodeGeneratorFacade → RAG/图片编排 → AiServices/TokenStream → UnifiedContextRequestPreparer → 计划/文件/构建工具 → JsonMessageStreamHandler/Finalizer`，在 `.codex` 沙箱实际写入工程文件和计划。
+- `RagConstants` 集中 8/10/1/4/2；Dense 请求对象和 BM25 经真实 `MilvusBm25SearchClient` 构造的 `SearchReq` 验证搜索上限与显式参数透传，父文档不足不补搜。两路各 8 个不重合父模板验证 RRF 默认保留 10 个，重复父模板、空结果、k=60 和稳定排序继续核验。
+- 本机 HTTP 重排测试捕获实际 `top_n`，覆盖 1/4/2 与候选不足。普通、在线、后续、生产及离线 Dense-only 按排名选择；技术栈或依赖不一致仍可入选，类型、目录版本、父文档回查及重排响应合法性继续检查。在线正常、关闭/失败重排、BM25/Dense 失败和截止前部分交付均核对阶段上限。
+- 真实临时目录覆盖缺失、空目录、部分文件、子目录、任意清单内容、锁文件、悬空内部链接、工程及祖先链接、普通文件替代目录、POSIX 权限拒绝、截止取消及真实计划初始化。Reader 不读取清单；已有工程无骨架候选时继续现状，构建器仍拒绝违反依赖契约的工程。
+- 真实 Java 组合调用连接 AppService、Facade、检索编排、AiServices/请求门禁、文件与计划工具、终态处理。六回合覆盖只读、首次失败、重试成功、样式、新闻、背景；工具续调、同步摘要和协议恢复复用同一资料，下轮替换清单，不直接把候选写入 L0/L1/历史。
 
-数据库接口、分类与生成模型、检索供应商、图片供应商及 npm 构建执行器是替身；没有声称真实数据库、图片供应商或 npm 构建通过。测试按顺序驱动：只读问答、首次创建失败、重试成功、调整样式、新增新闻、更换背景图。每轮都核对实际模型请求、持久终态、检索次数、完整工具批次、候选未直接进入 L0/历史、同轮清单固定及下轮替换。
+## 失败、评审与历史复用
 
-`VueResourceContextReuseTest` 在工具续调、协议恢复和未完成工具链恢复三条真实请求路径上触发同步摘要；摘要模型替身只接收原始来源，候选资料不在摘要输入内。摘要后沿用同一资料列表，RAG 与图片各准备一次，计量消息与发送消息完全一致。
+初轮 [vue-rag-selection-resume-check](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-resume-check/command.json) 实际 84 项、1 项失败：RRF 默认测试仍断言旧值 15，实际值已为 10。修复测试以两路候选验证真实截断行为，后续核心回归通过；保留原非零记录，不把它计为通过。
 
-并发边界通过可注入时钟和闩锁验证：排队计入唯一预算，慢主题不掩盖后面已完成结果，过期后不搜索或重排，取消删除不启动主模型，队列清理且忽略中断的物理调用退出前不提前归还 RAG 许可。生产默认值另断言为初始 15 秒、后续 8 秒；没有把模拟网络耗时当作线上性能。
+[独立代码评审](../reviews/implementation-review.md) 为 PASS。评审者未编写业务代码、测试或规划；CR-U5-1 指出的 README 初始/后续调用数量、每轮资源策略和不可用目录说明已修正并复核关闭。
 
-本次合成 E2E 的本地预算示例：初始 RAG 303 Token、18 张图片清单 608 Token；后续功能参考 198 Token、6 张图片清单 263 Token；只读和纯样式轮两类资料均为 0。每轮资料准备日志同时记录数量和等待耗时。数字来自测试数据和本地估算器，不是模型供应商计费值，也不表示真实图片 URL 的固定成本。
+旧报告与原指纹保存在 [历史变更副本](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/)，旧 [执行证据](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/reports/execution-evidence.md) 保持原字节。未变化模块的本地结果按相关输入核对复用；旧快照之外的 `ChatHistoryServiceImpl` 和前端变化来自既有其他提交，本轮已对受影响的成功资格、资源策略和会话行为补测，未修改这些业务文件。
 
-## 真实分类对照
+原 240 次真实分类对照的输入、路由/解析代码和运行器仍与历史快照一致，只保留其固定样例与当次模型结论，本轮没有重新调用分类或检索供应商。旧兼容读取和筛选要求由 U5 替代，不以旧兼容测试证明新行为。
 
-授权、输入哈希及两次零调用启动失败见 [classification-authorization.md](classification-authorization.md)。`deepseek-flash`、temperature=0、maxTokens=256、无重试，60 条固定合成输入旧新提示词各两轮，实际 240 次且未补跑。
+## 边界与交付
 
-| 指标 | 旧提示词 | 联合提示词 |
-| --- | ---: | ---: |
-| READ_ONLY 误判 | 0 | 0 |
-| MUTATION_REQUIRED 误判 | 0 | 0 |
-| 非法输出 | 0 | 0 |
-| 平均耗时 | 732.625 ms | 772.192 ms |
-| P95 耗时 | 1069 ms | 1030 ms |
+本次数据库、生成/分类/摘要模型、RAG/图片供应商及 npm 执行器使用替身；重排 HTTP 为本机环回服务，文件和计划真实写入测试沙箱。没有真实 Milvus/DashScope 召回质量、供应商时延或 npm 构建的新增实测结论。
 
-新版 RAG 标记错误、图片标记错误及关键否定新增误判均为 0。该结果仅适用于固定 60 条样例和当次模型响应，不泛化为所有线上表达的准确率承诺。样例、旧/新提示词与运行器输入哈希仍和授权记录一致；早期冻结的 `classification-build` 仅证明这次分类评测，不冒充最终业务字节码。
-
-## 失败与修复记录
-
-所有非零运行保留，不计为通过。后续运行重新验证了相关修复，未降低验收条件。
-
-| 原记录 | 失败及处置 | 有效后续证据 |
-| --- | --- | --- |
-| `t2-policy` | 内部 `CommittedVueTurn` 构造签名和策略测试夹具未同步 | `t2-policy-fixed`、`regression-v2` |
-| `t5-executor-base`、`t6-facade` | 任务组/内部 API 接线期间编译未完成 | `t5-executor-core`、`t5-wiring-compile`、`regression-v2` |
-| `t6-facade-fixed`、`t6-facade-v3` | 当前 Mockito 配置不能模拟 final reader，及取消分支的多余 stub | 改用真实安全 reader/移除无效 stub；`t5-image-cancel`、`regression-v2` |
-| `t7-java-e2e`、`t7-java-e2e-v2`、`t7-composed` | 连续夹具最初缺当前持久用户边界，后续仍有请求/轮次断言失败 | 完成真实服务、终态与请求装配；`t7-composed-v2`、`regression-v2` |
-| `dense-compat` | 沙箱缺 `embed_text`，以及线程名兼容断言失败 | 复制夹具并纳入哈希、恢复原线程名前缀；`regression-v2` |
-| `regression` | 同一夹具缺失及新增指标未同步接口白名单 | 补齐夹具和低基数指标契约/采样验证；`regression-v2` |
-| 独立 CR-1、CR-2 | 计划初始化空目录被当成旧工程；兼容读取未复用完整依赖契约 | 安全识别完全空目录、复用固定版本与依赖解析约束；`review-fixes`、`regression-v2` |
-| 在线 Dense-only 复核 | 在线部分结果必须尊重关闭混合检索的配置 | `OnlineSelection` 按开关选 Dense 顺序；生产夹具测试在 `regression-v2` 通过 |
-
-每项原始命令位于 `.codex/enable-multiturn-resource-recall/<记录名>/command.json`；对应日志和 JUnit 与命令同目录，全部被执行汇总索引。失败日志中的预期故障注入和模拟供应商错误不被描述为真实服务故障。
-
-## 边界与保护项
-
-- 原有 `generationSession.test.ts` 内容与暂存状态保持不变，`.DS_Store` 未处理。最终保护核对见 `final-checks.json`。
-- 没有数据库迁移、新 Redis 字段或候选结果持久化；L0/L1 协议、8,192 Token 窗口和计划恢复热窗口保持原行为。
-- 共享工程类型枚举路由通过真实本机 HTTP 替身测试回归；未运行需要额外付费的真实工程类型分类集成测试。非 Vue 生成及余额提示在 Java 和前端回归范围内。
-- 除已授权的分类对照，未调用真实 RAG、搜索图片或 Logo 服务。未提交、推送、重启或部署，当前运行服务尚未加载本轮源码。
-- 回退需整体撤销联合提示词、解析器和资料策略，避免新旧格式错配；归档与运行环境切换仍按各自授权执行。
+公共 HTTP/SSE、模板数据、实际构建依赖约束和已交付多轮策略保持原契约。没有提交、推送、部署、重启、数据库迁移或归档；回退范围仅是 U5 的 RAG 数量、选择和目录识别修订。原始证据仍被验收引用，需要保留。

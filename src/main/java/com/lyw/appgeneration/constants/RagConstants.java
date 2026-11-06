@@ -11,6 +11,14 @@ import java.util.Map;
  */
 public final class RagConstants {
 
+    /** 每条 Vue 召回通道的子块搜索上限，父文档聚合后允许不足。 */
+    public static final int VUE_CHANNEL_TOP_K = 8;
+    /** 每个文档池经过 RRF 融合后交给重排的父模板上限。 */
+    public static final int VUE_FUSION_TOP_K = 10;
+    public static final int VUE_SKELETON_TOP_K = 1;
+    public static final int VUE_INITIAL_FEATURE_TOP_K = 4;
+    public static final int VUE_FOLLOWUP_FEATURE_TOP_K = 2;
+
     /** Vue 召回同时使用稠密向量和 Milvus 原生 BM25。 */
     public static final String VUE_BM25_COLLECTION = "templates_vue_bm25";
 

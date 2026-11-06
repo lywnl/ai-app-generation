@@ -1,41 +1,32 @@
-# 实现验收：enable-multiturn-resource-recall
+# U5 实现验收：enable-multiturn-resource-recall
 
-结论：**Ready for Archive**。本轮 18 项实施任务、10 项 Requirement 和 20 项 Scenario 已核验，未解决阻塞为 0。本结论针对当前源码与下述验证范围，不表示已归档、提交或切换运行环境。
+结论：**Ready for Archive**。本次批准的 Vue RAG 修订（tasks 8.1—8.5）已完成，未解决阻塞为 0。结论针对当前本地实现与下述验证范围，不代表已经归档或发布。
 
-## 基线与范围
+## 基线与实现
 
-- Profile：`strict`；schema：`spec-driven`。Git 基线为 `6938c2fca8ca5038a57f7d2f234967b5f61bc828` 加本轮未提交修改。
-- [独立规划评审](../reviews/change-review.md) 为 PASS；实施开始记录为 `2026-11-02T12:56:53.780712+00:00`，持续约束 `check-plan` 仍有效。只更新任务 checkbox，未改写已确认需求或验收门槛。
-- 主要实现为联合路由与解析、成功终态存在性查询、本轮资源策略、当前工程安全兼容读取、功能专用 RAG、图片阶段配额、统一截止与可注销取消登记、Facade 临时资料以及本地 Token 观测。
-- 原有前端 `generationSession.test.ts` 内容与暂存状态保持不变，`.DS_Store` 未处理；源码、测试、构建清单、模板夹具及前端相关输入一并绑定验收。没有数据库迁移或新增候选资料持久化。
+- Profile：`strict`；schema：`spec-driven`。Git HEAD 为 `b8b164c348a95dbebaf0455d66eed3e26a65dc59`，验收包含当前未提交修改。
+- [规划评审](../reviews/change-review.md) 为 PASS；原 U5 实施开始记录 `2026-11-05T16:15:14.358681+00:00` 保留，本次恢复实施及验收均核对持续约束。未重置开始时间、未修改任务正文，仅根据真实证据完成第 8 节 checkbox。
+- 两通道各最多搜索 8 个子块，RRF 每池最多保留 10 个父模板；重排与最终选取共用骨架 1、首轮功能 4、后续功能 2 的上限，候选不足不补搜、不凑数。
+- RAG 已移除框架、语言、构建工具、依赖版本及候选依赖白名单筛选。工程状态仅由安全目录的缺失/空/非空/不可用识别，不读取 `package.json`；原目录版本、文档类型、ID/响应校验、截止取消、已有工程保护和实际构建依赖契约继续有效。
 
-## 证据与结果
+## 证据与覆盖
 
-逐项映射以 [verification-manifest.json](verification-manifest.json) 的 48 条记录为准，包含实现文件、测试文件、当前 JUnit/真实评测证据及命令。运行详情、失败处置和性能口径见 [execution-evidence.md](execution-evidence.md)，不在本报告重复全部映射。
+详细需求/场景/任务 → 实现 → 测试 → 原始证据映射以 [verification-manifest.json](verification-manifest.json) 的 57 条记录为准，覆盖当前 10 项 Requirement、24 项 Scenario 和 23 项任务。实际命令、运行范围、失败处置和复用依据见 [execution-evidence.md](execution-evidence.md)，汇总和源码一致性检查保存在 [summary.json](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-verification/summary.json)。
 
-- Java：37 个实际执行的测试类，共 553 项不重复测试，失败、错误和跳过均为 0。核心回归 536 项、计划恢复及热窗口补充 17 项；资料恢复测试增加沙箱保护后的 3 项聚焦复测替代旧结果，不重复计数。
-- 前端：两个测试文件，116 项通过，无失败或待执行项。覆盖既有会话解析、余额提示和结束状态。
-- 真实分类：用户批准的 60 条合成输入、旧新各两轮，实际 240 次 `deepseek-flash` 调用，无重试或额外补跑。两种模式误判、非法输出、关键否定新增误判均为 0；新版两项资源标记错误均为 0。平均耗时旧版 732.625 ms、新版 772.192 ms，P95 分别为 1069/1030 ms。该结论仅适用于固定样例和当次模型。
-- `git diff --check`、`openspec validate enable-multiturn-resource-recall --strict`、当前规划约束检查均通过。命令与原始输出、受保护文件和分类输入哈希核对见 [final-checks.json](../../../../.codex/enable-multiturn-resource-recall/final-checks.json)。
+本次 Java 实际执行 **24 类、311 项**：核心 205、沙箱组合 63、持续边界 43，失败/错误/跳过均为 0。前端会话回归 **116 项**通过，无失败、待执行或 todo。首次失败重试、仅功能池、候选跨回合替换、同轮续调复用、数据合法性、各种降级及真实目录安全边界均有对应验证。
 
-最终源码快照为 `reuse-sandbox/code-state.json`。与核心回归快照相比仅资料恢复测试的沙箱启用注解变化，已聚焦重测；其余相关输入未变。前端 89 个输入文件和授权分类输入也核对一致，未用旧运行结果代替变动代码的验证。
+初轮 84 项中的旧 RRF 断言失败被保留并由当前通过证据替代，没有通过修改验收要求解决失败。所有新增 Java 和前端运行的登记源码与当前字节一致。README 仅在测试后作阶段语义澄清，已由独立评审复核；文案没有改变业务实现。
 
-## 高风险边界
+未变化模块复用原本地证据并核对相关输入；旧源码快照中涉及 U5 或已提交历史服务变化的部分均以新测试覆盖，前端因旧快照之后已有变化而补测。原第 1—7 节保留历史完成事实，原清单兼容读取、兼容筛选和旧数量已明确由 U5 替代。旧真实分类评测只保留当次模型与固定样例结论，不宣称本轮重新验证模型效果。
 
-真实 Java 组合链路覆盖 `AppServiceImpl → Facade → RAG/图片编排 → AiServices/统一请求门禁 → 计划/文件/构建工具 → 流解析与 Finalizer`。六个连续回合验证只读、首次失败、重试成功、纯样式、仅 RAG 和仅图片策略；工具续调及三条压缩恢复路径核对资料只准备一次、固定复用、下轮替换、请求与计量一致、候选不直接进入 L0/L1/历史和完整工具配对。
+## 独立评审与静态检查
 
-截止与取消测试覆盖单一 15/8 秒预算、剩余回合期限、执行器排队、RAG 请求许可、截止后不新增调用、稳定顺序的部分结果、迟到拒绝、通用取消回调注销、应用隔离和删除阻断。忽略中断的物理 RAG 调用退出前不提前释放接纳许可。原计划热窗口、8,192 Token 近期窗口和摘要协议未修改。
+[独立代码质量评审](../reviews/implementation-review.md) 为 **PASS**，评审者 `/root/vue_rag_implementation_review` 未编写本轮代码、测试或规划。CR-U5-1 的 README 阶段与目录语义问题已修正、复核关闭，无开放业务代码阻塞。
 
-安全读取按当前工程的固定依赖版本与禁止依赖解析规则判断，不兼容、缺失、损坏或不安全路径保守降级。只读请求不因图片或模板关键词被服务器强行升级；选中元素仍服务端固定修改，资源字段只提供资料判断。共享工程类型枚举协议、非 Vue 生成和余额提示均有本次回归证据。
+`git diff --check`、OpenSpec strict 校验、持续规划约束检查、任务完成状态及结构化验收清单均通过；原始检查结果见 [checks.json](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-verification/checks.json) 与 [manifest-check.json](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-verification/manifest-check.json)。验收指纹保存在 `reports/verification.json`，由标准库助手绑定当前代码、测试、构建输入、报告、独立评审与原始证据。
 
-## 独立评审与异常处置
+## 限制与交付
 
-[独立代码评审](../reviews/implementation-review.md) 为 **PASS**，评审者 `/root/multiturn_code_review` 未实施本轮业务代码。CR-1（真实计划初始化空目录误判）与 CR-2（兼容读取未复用完整依赖契约）均已关闭；最终源码与 [独立评审快照](../../../../.codex/enable-multiturn-resource-recall/independent-review/reviewed-sources.json) 一致。
+本次是本地逻辑与受控组合验收。数据库、模型、检索/图片供应商和 npm 执行器使用替身，重排 HTTP 仅为环回服务；没有真实 Milvus/DashScope 检索质量、费用或耗时改善的实测结论。
 
-早期编译接线、Mockito 夹具、连续调用链装配、沙箱模板夹具和指标契约失败均保留原始非零记录，并由当前通过结果替代。核心回归命令中的 `CompressionAwareChatMemoryTest` 选择器不存在，不计为执行或通过；实际恢复边界已用两个现存测试类补测。分类脚本的两次启动失败均发生在外部调用前，调用数为 0，最终 240 次记录完整。没有把环境失败、跳过或未匹配测试计为通过。
-
-## 验证限制与交付
-
-本轮除分类对照外，数据库、主生成模型、RAG/图片供应商以及 npm 执行器均使用替身；文件和计划实际写入 `.codex` 沙箱。本次不声称真实供应商延迟、真实数据库集成、真实 npm 构建或部署环境已验证，也未运行需额外付费的工程类型模型集成测试。对应公共枚举协议由本机 HTTP 替身测试覆盖。
-
-当前服务未重启，尚未加载本轮源码；没有提交、push、归档或部署。回退应整体撤销本轮提示词、解析器和多轮资源策略，避免新旧响应格式错配。旧变更评审及验收记录保持原样；`.codex` 原始证据仍被本次验收引用，需要保留，不能按普通缓存清理。
+未提交、推送、部署、重启、迁移或归档。回退只撤销 U5 的检索数量、筛选及目录识别修订，不撤销已交付的多轮路由和图片策略。原规划、评审、验收及证据保存在 [历史副本](../../../../.codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/)，保持原字节；本次原始运行证据同样需要保留。

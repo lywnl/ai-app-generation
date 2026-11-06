@@ -2,7 +2,7 @@
   "version": 1,
   "change": "enable-multiturn-resource-recall",
   "profile": "strict",
-  "environment": "Java 25 / Maven 离线 / 项目 .codex 沙箱；模型、DB、检索图片与 npm 为替身，分类对照为授权内 240 次真实 deepseek-flash 调用",
+  "environment": "Java 25 / Maven 离线 / Node 24 / 项目 .codex 沙箱；RAG HTTP 使用本机替身，DB/模型/图片/npm 不调用真实供应商",
   "requirements": [
     {
       "id": "Requirement: 每个用户回合联合判断模式和资料需求",
@@ -24,7 +24,9 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -49,7 +51,9 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -74,7 +78,9 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -99,7 +105,9 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -124,7 +132,9 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -148,8 +158,10 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml"
       ],
       "status": "verified"
     },
@@ -172,8 +184,10 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml"
       ],
       "status": "verified"
     },
@@ -196,8 +210,10 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml"
       ],
       "status": "verified"
     },
@@ -216,12 +232,14 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -240,12 +258,14 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -264,12 +284,14 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -296,16 +318,18 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
@@ -337,16 +361,18 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
@@ -356,138 +382,335 @@
       "status": "verified"
     },
     {
-      "id": "Requirement: 初始和后续 RAG 保持工程兼容",
+      "id": "Requirement: 初始和后续 RAG 按相关性与统一上限选取",
       "implementation": [
+        "src/main/java/com/lyw/appgeneration/constants/RagConstants.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25Retriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClient.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
         "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
         "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
         "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueTurnRagResult.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "README.md",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
         "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
-        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClientTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueResourceContextReuseTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClientTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.RrfFusionServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueProjectSystemPromptTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 请求和交付使用同一上限",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/constants/RagConstants.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25Retriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClient.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClientTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionServiceTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClientTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.RrfFusionServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 不再按元数据兼容性淘汰候选",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
       ],
       "status": "verified"
     },
     {
       "id": "Scenario: 后续资料专用语义",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
-        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
         "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueTurnRagResult.java",
         "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
+        "README.md",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
         "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
-        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueResourceContextReuseTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueProjectSystemPromptTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
       ],
       "status": "verified"
     },
     {
-      "id": "Scenario: 无法安全确认兼容",
+      "id": "Scenario: 仅按安全目录识别工程",
       "implementation": [
         "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
         "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
-        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
         "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueTurnRagResult.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java"
+        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java"
       ],
       "tests": [
         "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
-        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 清单内容不影响RAG资格",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
+        "README.md",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueResourceContextReuseTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueProjectSystemPromptTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Scenario: 空工程和不可用工程的边界",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
       ],
       "status": "verified"
     },
     {
       "id": "Scenario: 检索渠道失败",
       "implementation": [
-        "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
-        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
         "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/model/VueTurnRagResult.java",
         "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
-        "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java"
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/VueRagExecutor.java",
+        "src/main/java/com/lyw/appgeneration/core/resource/ResourcePreparationScope.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnResourcePolicy.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
       ],
       "tests": [
-        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
-        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
         "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
-        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/VueRagExecutorTest.java",
+        "src/test/java/com/lyw/appgeneration/core/resource/ResourcePreparationScopeTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnResourceCancellationTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueResourceContextReuseTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistorySucceededGenerationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnResourcePolicyTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml"
       ],
       "status": "verified"
     },
@@ -523,8 +746,12 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -560,8 +787,12 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -597,8 +828,12 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -624,14 +859,20 @@
         "src/test/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfigTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml"
       ],
       "status": "verified"
@@ -658,14 +899,20 @@
         "src/test/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfigTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml"
       ],
       "status": "verified"
@@ -692,14 +939,20 @@
         "src/test/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfigTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml"
       ],
       "status": "verified"
@@ -723,14 +976,20 @@
         "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml"
       ],
       "status": "verified"
@@ -754,14 +1013,20 @@
         "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml"
       ],
       "status": "verified"
@@ -784,15 +1049,15 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/code-state.json",
@@ -818,15 +1083,15 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/code-state.json",
@@ -852,15 +1117,15 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/code-state.json",
@@ -888,21 +1153,21 @@
         "src/test/resources/vue-turn-routing/baseline-system-prompt.txt"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollectorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
         ".codex/enable-multiturn-resource-recall/classification-command.json",
         ".codex/enable-multiturn-resource-recall/classification.log",
         ".codex/enable-multiturn-resource-recall/classification/metadata.json",
         ".codex/enable-multiturn-resource-recall/classification/observations.jsonl",
         ".codex/enable-multiturn-resource-recall/classification/summary.json",
         ".codex/enable-multiturn-resource-recall/final-checks.json",
-        "openspec/changes/enable-multiturn-resource-recall/reports/classification-authorization.md"
+        "openspec/changes/enable-multiturn-resource-recall/reports/classification-authorization.md",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollectorTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
       ],
       "status": "verified"
     },
@@ -926,21 +1191,21 @@
         "src/test/resources/vue-turn-routing/baseline-system-prompt.txt"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollectorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
         ".codex/enable-multiturn-resource-recall/classification-command.json",
         ".codex/enable-multiturn-resource-recall/classification.log",
         ".codex/enable-multiturn-resource-recall/classification/metadata.json",
         ".codex/enable-multiturn-resource-recall/classification/observations.jsonl",
         ".codex/enable-multiturn-resource-recall/classification/summary.json",
         ".codex/enable-multiturn-resource-recall/final-checks.json",
-        "openspec/changes/enable-multiturn-resource-recall/reports/classification-authorization.md"
+        "openspec/changes/enable-multiturn-resource-recall/reports/classification-authorization.md",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollectorTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
       ],
       "status": "verified"
     },
@@ -964,7 +1229,9 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -992,8 +1259,10 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml"
       ],
       "status": "verified"
@@ -1013,12 +1282,14 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -1037,12 +1308,14 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
       ],
       "status": "verified"
     },
@@ -1068,17 +1341,19 @@
         "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/reports/verification-manifest.json"
       ],
-      "status": "verified"
+      "status": "verified",
+      "note": "保留历史完成事实；U5 已替代原清单兼容读取和选择规则，当前行为按任务 8.1—8.5 验收。"
     },
     {
       "id": "Task: 3.2",
@@ -1102,17 +1377,19 @@
         "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/reports/verification-manifest.json"
       ],
-      "status": "verified"
+      "status": "verified",
+      "note": "保留历史完成事实；U5 已替代原清单兼容读取和选择规则，当前行为按任务 8.1—8.5 验收。"
     },
     {
       "id": "Task: 3.3",
@@ -1136,15 +1413,15 @@
         "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
       ],
       "status": "verified"
     },
@@ -1180,8 +1457,12 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -1217,8 +1498,12 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
       ],
       "status": "verified"
     },
@@ -1244,17 +1529,25 @@
         "src/test/java/com/lyw/appgeneration/config/VueContextPreparationExecutorConfigTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/reports/verification-manifest.json"
       ],
-      "status": "verified"
+      "status": "verified",
+      "note": "保留历史完成事实；U5 已替代原清单兼容读取和选择规则，当前行为按任务 8.1—8.5 验收。"
     },
     {
       "id": "Task: 5.2",
@@ -1275,14 +1568,20 @@
         "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml"
       ],
       "status": "verified"
@@ -1315,17 +1614,23 @@
         "src/test/java/com/lyw/appgeneration/core/handler/VueTurnContextTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml"
       ],
@@ -1354,16 +1659,18 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
@@ -1390,15 +1697,15 @@
         "src/test/java/com/lyw/appgeneration/ai/memory/PlanRestoreEventGateTest.java"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/code-state.json",
@@ -1435,13 +1742,13 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/code-state.json",
@@ -1521,22 +1828,30 @@
         "ai-app-generation-frontend/src/pages/app/AppChatPageGeneratingStatus.test.ts"
       ],
       "evidence": [
+        ".codex/enable-multiturn-resource-recall/final-checks.json",
+        ".codex/enable-multiturn-resource-recall/test-summary.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnDecisionParserTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnModeRouterTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.RoutingAiModelConfigTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPlanTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionPolicyTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionServiceTest.xml",
@@ -1544,27 +1859,23 @@
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageSearchToolTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.ImageCollectionHttpIntegrationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.tools.LogoGeneratorToolTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.image.ImageCollectionDeadlineTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.config.VueContextPreparationExecutorConfigTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.concurrency.AppOperationLeaseManagerTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnContextTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.UnifiedContextRequestGateTest.xml",
         ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.ContextCompressionCoordinatorTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreWindowTest.xml",
         ".codex/enable-multiturn-resource-recall/memory-boundary/command.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/code-state.json",
         ".codex/enable-multiturn-resource-recall/memory-boundary/junit/TEST-com.lyw.appgeneration.ai.memory.PlanRestoreEventGateTest.xml",
-        ".codex/enable-multiturn-resource-recall/frontend/command.json",
-        ".codex/enable-multiturn-resource-recall/frontend/code-state.json",
-        ".codex/enable-multiturn-resource-recall/frontend/vitest.json",
-        ".codex/enable-multiturn-resource-recall/final-checks.json",
-        ".codex/enable-multiturn-resource-recall/test-summary.json"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/vitest.json"
       ],
       "status": "verified"
     },
@@ -1588,21 +1899,21 @@
         "src/test/resources/vue-turn-routing/baseline-system-prompt.txt"
       ],
       "evidence": [
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollectorTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
-        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/command.json",
-        ".codex/enable-multiturn-resource-recall/reuse-sandbox/code-state.json",
         ".codex/enable-multiturn-resource-recall/classification-command.json",
         ".codex/enable-multiturn-resource-recall/classification.log",
         ".codex/enable-multiturn-resource-recall/classification/metadata.json",
         ".codex/enable-multiturn-resource-recall/classification/observations.jsonl",
         ".codex/enable-multiturn-resource-recall/classification/summary.json",
         ".codex/enable-multiturn-resource-recall/final-checks.json",
-        "openspec/changes/enable-multiturn-resource-recall/reports/classification-authorization.md"
+        "openspec/changes/enable-multiturn-resource-recall/reports/classification-authorization.md",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.monitor.MemoryCompressionMetricsCollectorTest.xml",
+        ".codex/enable-multiturn-resource-recall/regression-v2/command.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/code-state.json",
+        ".codex/enable-multiturn-resource-recall/regression-v2/junit/TEST-com.lyw.appgeneration.service.VueTurnRoutingComparisonRunnerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
       ],
       "status": "verified"
     },
@@ -1617,10 +1928,202 @@
       ],
       "evidence": [
         "openspec/changes/enable-multiturn-resource-recall/reviews/implementation-review.md",
-        ".codex/enable-multiturn-resource-recall/independent-review/reviewed-sources.json"
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-verification/summary.json"
       ],
       "status": "verified",
-      "note": "由未实施代码的独立评审者复核最终源码与修复；不是供应商或部署验证。"
+      "note": "U5 当前修改由独立评审者复核；原 7.4 报告保留在 vue-rag-selection-before/change，未将旧报告作为当前评审。"
+    },
+    {
+      "id": "Task: 8.1",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/constants/RagConstants.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25Retriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClient.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClientTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClientTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.RrfFusionServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 8.2",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 8.3",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 8.4",
+      "implementation": [
+        "README.md",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueResourceContextReuseTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueProjectSystemPromptTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "Task: 8.5",
+      "implementation": [
+        "src/main/java/com/lyw/appgeneration/constants/RagConstants.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25Retriever.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClient.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueRagContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/VueFeatureContext.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRetrievalService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagRerankService.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReader.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/model/CurrentVueProject.java",
+        "src/main/java/com/lyw/appgeneration/ai/plan/PlanStoragePathResolver.java",
+        "src/main/java/com/lyw/appgeneration/core/builder/VueProjectBuilder.java",
+        "README.md",
+        "src/main/java/com/lyw/appgeneration/core/AiCodeGeneratorFacade.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/RagPromptAssembler.java",
+        "src/main/java/com/lyw/appgeneration/service/rag/retrieval/VueRagExecutor.java",
+        "src/main/java/com/lyw/appgeneration/core/resource/ResourcePreparationScope.java",
+        "src/main/java/com/lyw/appgeneration/core/handler/VueTurnResourcePolicy.java",
+        "src/main/java/com/lyw/appgeneration/service/impl/ChatHistoryServiceImpl.java"
+      ],
+      "tests": [
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/DenseRetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/MilvusBm25RetrieverTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/store/MilvusBm25SearchClientTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/RrfFusionServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRerankServiceVueTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueHybridRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagRetrievalServiceTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/ingest/VueKnowledgeIngestorTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/CurrentVueProjectReaderTest.java",
+        "src/test/java/com/lyw/appgeneration/core/builder/VueProjectBuilderTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueMultiturnResourceRecallE2ETest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/RagPromptAssemblerTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/VueProjectSystemPromptTest.java",
+        "src/test/java/com/lyw/appgeneration/core/AiCodeGeneratorFacadeTest.java",
+        "src/test/java/com/lyw/appgeneration/ai/memory/VueResourceContextReuseTest.java",
+        "src/test/java/com/lyw/appgeneration/service/rag/retrieval/VueRagExecutorTest.java",
+        "src/test/java/com/lyw/appgeneration/core/resource/ResourcePreparationScopeTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnResourceCancellationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/ChatHistorySucceededGenerationTest.java",
+        "src/test/java/com/lyw/appgeneration/service/impl/AppServiceImplVueTurnTest.java",
+        "src/test/java/com/lyw/appgeneration/core/handler/VueTurnResourcePolicyTest.java"
+      ],
+      "evidence": [
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.DenseRetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.MilvusBm25RetrieverTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.store.MilvusBm25SearchClientTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.RrfFusionServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRerankServiceVueTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueHybridRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagRetrievalServiceTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.ingest.VueKnowledgeIngestorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.CurrentVueProjectReaderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.builder.VueProjectBuilderTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueMultiturnResourceRecallE2ETest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.RagPromptAssemblerTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.VueProjectSystemPromptTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.core.AiCodeGeneratorFacadeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/junit/TEST-com.lyw.appgeneration.ai.memory.VueResourceContextReuseTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.service.rag.retrieval.VueRagExecutorTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.resource.ResourcePreparationScopeTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourceCancellationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.ChatHistorySucceededGenerationTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.service.impl.AppServiceImplVueTurnTest.xml",
+        ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/junit/TEST-com.lyw.appgeneration.core.handler.VueTurnResourcePolicyTest.xml"
+      ],
+      "status": "verified"
     }
   ],
   "commands": [
@@ -1874,10 +2377,103 @@
       "exit_code": 0,
       "output": "{\"valid\": true, \"change\": \"openspec/changes/enable-multiturn-resource-recall\", \"profile\": \"strict\"}\n",
       "evidence": ".codex/enable-multiturn-resource-recall/final-checks.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-core/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-core/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=DenseRetrieverTest,MilvusBm25RetrieverTest,MilvusBm25SearchClientTest,RrfFusionServiceTest,RagRerankServiceVueTest,VueHybridRetrievalServiceTest,CurrentVueProjectReaderTest,RagPromptAssemblerTest,VueProjectSystemPromptTest,VueRagExecutorTest,RagRetrievalServiceTest,NativeTemplateCatalogTest,NativeTemplateCatalogProviderTest,VueKnowledgeIngestorTest,VueProjectBuilderTest,VueDependencyManagerTest,ResourcePreparationScopeTest,VueTurnResourceCancellationTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:13:02.829291+00:00",
+      "finished_at": "2026-11-06T02:13:16.574095+00:00",
+      "tests": "DenseRetrieverTest,MilvusBm25RetrieverTest,MilvusBm25SearchClientTest,RrfFusionServiceTest,RagRerankServiceVueTest,VueHybridRetrievalServiceTest,CurrentVueProjectReaderTest,RagPromptAssemblerTest,VueProjectSystemPromptTest,VueRagExecutorTest,RagRetrievalServiceTest,NativeTemplateCatalogTest,NativeTemplateCatalogProviderTest,VueKnowledgeIngestorTest,VueProjectBuilderTest,VueDependencyManagerTest,ResourcePreparationScopeTest,VueTurnResourceCancellationTest",
+      "code_state": ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/code-state.json",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-core/command.json"
+    },
+    {
+      "command": "mvn '-DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-composed/tmp -Duser.dir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-composed/sandbox' -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-composed/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=VueMultiturnResourceRecallE2ETest,VueResourceContextReuseTest,AiCodeGeneratorFacadeTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:14:04.731963+00:00",
+      "finished_at": "2026-11-06T02:14:09.166672+00:00",
+      "tests": "VueMultiturnResourceRecallE2ETest,VueResourceContextReuseTest,AiCodeGeneratorFacadeTest",
+      "code_state": ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/code-state.json",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-composed/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=ChatHistorySucceededGenerationTest,AppServiceImplVueTurnTest,VueTurnResourcePolicyTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:16:42.553126+00:00",
+      "finished_at": "2026-11-06T02:16:47.002436+00:00",
+      "tests": "ChatHistorySucceededGenerationTest,AppServiceImplVueTurnTest,VueTurnResourcePolicyTest",
+      "code_state": ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/code-state.json",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-boundaries/command.json"
+    },
+    {
+      "command": "/opt/homebrew/opt/node@24/bin/node /Users/lllyw/ai-app-generation/ai-app-generation-frontend/node_modules/vitest/vitest.mjs run --config /Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/vitest.config.mjs --reporter=json --outputFile /Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/vitest.json src/utils/generationSession.test.ts src/pages/app/AppChatPageGeneratingStatus.test.ts",
+      "cwd": "/Users/lllyw/ai-app-generation/ai-app-generation-frontend",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:16:43.708857+00:00",
+      "finished_at": "2026-11-06T02:16:51.841209+00:00",
+      "code_state": ".codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/code-state.json",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-frontend/command.json"
+    },
+    {
+      "command": "mvn -DargLine=-Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-resume-check/tmp -Djava.io.tmpdir=/Users/lllyw/ai-app-generation/.codex/enable-multiturn-resource-recall/vue-rag-selection-resume-check/tmp -o -s /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -gs /Users/lllyw/ai-app-generation/.codex/reports/l2-memory/settings.xml -Dmaven.repo.local=/Users/lllyw/ai-app-generation/.codex/maven-repository -q -Dtest=DenseRetrieverTest,MilvusBm25RetrieverTest,MilvusBm25SearchClientTest,RrfFusionServiceTest,CurrentVueProjectReaderTest,VueHybridRetrievalServiceTest,RagPromptAssemblerTest,RagRerankServiceVueTest test",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 1,
+      "started_at": "2026-11-06T02:07:26.826271+00:00",
+      "finished_at": "2026-11-06T02:07:40.563711+00:00",
+      "tests": "DenseRetrieverTest,MilvusBm25RetrieverTest,MilvusBm25SearchClientTest,RrfFusionServiceTest,CurrentVueProjectReaderTest,VueHybridRetrievalServiceTest,RagPromptAssemblerTest,RagRerankServiceVueTest",
+      "code_state": ".codex/enable-multiturn-resource-recall/vue-rag-selection-resume-check/code-state.json",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-resume-check/command.json",
+      "note": "历史失败：旧 RRF 默认上限断言仍为 15；已由 core 中的新 8/10 场景通过结果替代。"
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:25:49.830312+00:00",
+      "finished_at": "2026-11-06T02:25:49.865754+00:00",
+      "stdout": "",
+      "stderr": "",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-verification/checks.json"
+    },
+    {
+      "command": "git diff --cached --quiet",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:25:49.865785+00:00",
+      "finished_at": "2026-11-06T02:25:49.874691+00:00",
+      "stdout": "",
+      "stderr": "",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-verification/checks.json"
+    },
+    {
+      "command": "openspec validate enable-multiturn-resource-recall --type change --strict --json",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:25:49.874718+00:00",
+      "finished_at": "2026-11-06T02:25:50.920448+00:00",
+      "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"enable-multiturn-resource-recall\",\n      \"type\": \"change\",\n      \"valid\": true,\n      \"issues\": [],\n      \"durationMs\": 13\n    }\n  ],\n  \"summary\": {\n    \"totals\": {\n      \"items\": 1,\n      \"passed\": 1,\n      \"failed\": 0\n    },\n    \"byType\": {\n      \"change\": {\n        \"items\": 1,\n        \"passed\": 1,\n        \"failed\": 0\n      }\n    }\n  },\n  \"version\": \"1.0\",\n  \"root\": {\n    \"path\": \"/Users/lllyw/ai-app-generation\",\n    \"source\": \"nearest\"\n  }\n}\n",
+      "stderr": "",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-verification/checks.json"
+    },
+    {
+      "command": "python3 -B .agents/shared/openspec/scripts/evidence.py check-plan --root . --change openspec/changes/enable-multiturn-resource-recall --profile strict",
+      "cwd": "/Users/lllyw/ai-app-generation",
+      "exit_code": 0,
+      "started_at": "2026-11-06T02:25:50.920544+00:00",
+      "finished_at": "2026-11-06T02:25:51.012933+00:00",
+      "stdout": "{\"valid\": true, \"change\": \"openspec/changes/enable-multiturn-resource-recall\", \"profile\": \"strict\"}\n",
+      "stderr": "",
+      "evidence": ".codex/enable-multiturn-resource-recall/vue-rag-selection-verification/checks.json"
     }
   ],
+  "current_summary": ".codex/enable-multiturn-resource-recall/vue-rag-selection-verification/summary.json",
+  "historical_baseline": ".codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/reports/verification-manifest.json",
+  "evidence_policy": "优先引用 U5 新运行；未变化模块保留原本地证据并核对测试源码，旧源码差异均映射到新测试。旧真实分类结果仅代表其固定样例和当次模型，前端已因既有提交变化补测。",
   "limitations": [
-    "本机服务没有重启；未声明真实 RAG/图片供应商、数据库或 npm 构建已验证。",
-    "保留非零历史运行，当前通过证据由各条目明确指定；测试选择器未匹配不计入已执行。"
+    "未重新实测真实 Milvus/DashScope 检索质量、供应商时延或真实 npm 构建。",
+    "未提交、推送、部署、重启或归档；历史非零命令保留但不计为当前通过。"
   ]
 }

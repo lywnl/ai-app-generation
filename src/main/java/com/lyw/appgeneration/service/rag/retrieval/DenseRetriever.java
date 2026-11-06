@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.rag.retrieval;
 
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.model.enums.CodeGenTypeEnum;
 import com.lyw.appgeneration.service.rag.model.RagChunkKind;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
@@ -31,7 +32,7 @@ import static dev.langchain4j.store.embedding.filter.MetadataFilterBuilder.metad
 @Slf4j
 public class DenseRetriever {
 
-    public static final int DEFAULT_TOP_K = 10;
+    public static final int DEFAULT_TOP_K = RagConstants.VUE_CHANNEL_TOP_K;
 
     private final EmbeddingModel embeddingModel;
     private final Map<CodeGenTypeEnum, EmbeddingStore<TextSegment>> embeddingStores;
@@ -46,7 +47,7 @@ public class DenseRetriever {
     }
 
     /**
-     * 使用默认 Top10 从当前 Vue 目录版本召回指定父文档类型。
+     * 使用共享子块搜索上限，从当前 Vue 目录版本召回指定父文档类型。
      */
     public List<RankedCandidate> retrieve(String rawQuery,
                                           String catalogVersion,

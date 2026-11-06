@@ -42,6 +42,22 @@ class RagPromptAssemblerTest {
         assertTrue(context.length() <= VueRagBudgetPolicy.FEATURE_CONTEXT_BUDGET);
     }
 
+    @Test
+    void 已有工程无骨架时继续现有工程且不宣称兼容确认() {
+        TemplateDoc feature = document("已有工程的功能参考", RagDocumentKind.FEATURE_SNIPPET,
+                file("src/views/News.vue", "FEATURE_REFERENCE"));
+
+        String context = assembler.assembleVueProjectContext(
+                new VueRagContext(null, List.of(feature), "catalog-v1", true), true);
+
+        assertTrue(context.contains("保留磁盘上的技术栈、依赖约束和已有文件"));
+        assertTrue(context.contains("不能作为重新选择技术栈或重建已有工程的授权"));
+        assertTrue(context.contains("未提供可用骨架资料；继续沿用现有工程"));
+        assertTrue(context.contains("FEATURE_REFERENCE"));
+        assertFalse(context.contains("最小可运行工程"));
+        assertFalse(context.contains("可确认兼容"));
+    }
+
     private RagPromptAssembler assembler;
     private VueRagMetricsCollector metrics;
 

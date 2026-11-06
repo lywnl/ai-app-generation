@@ -57,7 +57,7 @@ class DenseRetrieverTest {
     }
 
     @Test
-    void defaultsToTopTenAndAggregatesParentByHighestDenseScore() {
+    void defaultsToTopEightAndAggregatesParentByHighestDenseScore() {
         RecordingStore vueStore = new RecordingStore(List.of(
                 match(0.72, metadata("chunk-b-1", "document-b", "FEATURE_SNIPPET", "OVERVIEW", CATALOG_VERSION)),
                 match(0.91, metadata("chunk-a-1", "document-a", "FEATURE_SNIPPET", "OVERVIEW", CATALOG_VERSION)),
@@ -70,7 +70,8 @@ class DenseRetrieverTest {
         List<RankedCandidate> result = retriever.retrieve(
                 "登录与上传", CATALOG_VERSION, RagDocumentKind.FEATURE_SNIPPET);
 
-        assertEquals(10, vueStore.request.maxResults());
+        assertEquals(8, vueStore.request.maxResults());
+        assertEquals(1, vueStore.searchCount, "父文档聚合后不足搜索上限时不补搜");
         assertEquals(List.of("document-a", "document-b", "document-c"), result.stream()
                 .map(RankedCandidate::documentId).toList());
         assertEquals(List.of(1, 2, 3), result.stream().map(RankedCandidate::rank).toList());

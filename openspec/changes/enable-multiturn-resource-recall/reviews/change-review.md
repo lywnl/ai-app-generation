@@ -1,64 +1,70 @@
 # Change Review: enable-multiturn-resource-recall
 
-- 评审日期：2026-11-02
-- Profile：strict
-- Source Coverage：Pass。已批准用户计划与 U1—U4 在规格、设计和任务中均有对应，旧计划注入和首轮资料条款的部分替代关系已明确。
-- Pre-Apply Decision：PASS
-- Validation Confidence：规划与可实施性检查充分；CLI 返回 spec-driven 四件套齐备，复用主执行者对定稿输入执行的 `openspec validate enable-multiturn-resource-recall --strict` 成功结果。本评审核对了相关真实源码、测试入口及 UTF-8 普通文件布局，未执行业务测试、启用服务或调用真实模型，不证明分类效果、性能或实现已通过。
-- 评审者与独立性：`/root/multiturn_planning_review`，独立评审执行上下文；未撰写本轮 proposal/specs/design/tasks，未实施业务代码。来源修订由主执行者完成，本评审者已重新读取并核对。
-- 核验方式：machine。项目单根、规划为普通 UTF-8 文件，任务为 Markdown checkbox；Python 3.14.8 可用。
-- 机器记录：`reviews/planning-review.json`，由主执行者在本报告定稿后运行 record-plan/check-plan 生成并核验；本报告自身不代替该记录。
+- 评审日期：2026-11-06（Asia/Shanghai）；U5 请求与规划起始于 2026-11-05。
+- Profile：strict。
+- Source Coverage：Pass。U5 已确认的数量、兼容筛选移除、目录识别与本地验收要求均有对应规划；被替代的 U4 条款与历史任务已显式界定。
+- Pre-Apply Decision：PASS。
+- Validation Confidence：已独立阅读当前 proposal、specs、design、tasks、sources 及批准计划，核对关键实现与验证入口；CLI 严格校验通过。此结论仅批准按规划实施，不证明新实现或检索效果已经通过验证。
+- 评审者与独立性：子代理 /root/rag_selection_review；未撰写 U5 规划或业务代码，独立执行本轮规划评审并直接交付本报告。
+- 核验方式：machine。单一项目根、普通 UTF-8 规划文件及 Markdown checkbox 任务符合现有助手范围。
+- 机器记录：reviews/planning-review.json。旧记录不作为 U5 有效基线；主代理在本报告定稿后执行 record-plan、check-plan、start-apply，本评审者未运行这些登记命令。
 
 ## 评审范围与依据
 
-实际 schema 为 `spec-driven`，`.openspec.yaml` 显式指定 `x-workflow_profile: strict`，没有等级字段冲突。评审覆盖 proposal、单份能力规格 `vue-turn-resource-recall`、design、tasks、sources，以及 `.codex/plans/Vue多轮资料召回与联合路由执行计划.md` 中已批准的业务与授权边界。
+项目根为 /Users/lllyw/ai-app-generation，schema 为 spec-driven，元数据 x-workflow_profile 为 strict。当前代码参考 HEAD 为 b8b164c348a95dbebaf0455d66eed3e26a65dc59；评审时 src 与 README 尚无本轮业务修改。
 
-持续约束为本轮规划、已确认来源、AGENTS.md 和适用共享工作流，以及 proposal D1—D4 中按采纳范围选取的有效规范。正式 `vue-soft-replan` 的旧临时计划注入场景不作为回退要求；当前 PLAN_RESTORE 采用 D3，近期原文额度以 D3 中较新的 8,192 Token 规则为准。D4 只保留资料在同回合复用、不直接进入 L0/L1、不继承旧候选的生命周期；旧首条准备限制由本轮新能力替代。
+本轮范围为 U5 修订及 tasks 第 8 节：各通道最多 8 个子块、RRF 每池最多 10 个父模板、重排与最终共用 1/4/2 上限；取消 RAG 兼容筛选；目录仅按安全的缺失/空/非空/不可用状态识别；保留现有工程、数据类型、目录版本、去重、取消截止和实际构建依赖契约。
 
-以下均为允许按任务修改的实施参考，不应作为冻结源码约束：
+持续约束为 AGENTS.md、共享工作流与来源规则、sources/user-request.md 的有效采纳范围、当前规格设计，以及 .codex/plans/Vue-RAG检索简化执行计划.md。D1—D4 中只读升级、计划/构建、PLAN_RESTORE、近期窗口和同轮资料范围继续有效；相应文件存在，相关条款已核对。旧 U4 的清单兼容读取、候选匹配和旧数量由 U5 替代，未将其作为新的强制要求。
 
-- `src/main/java/com/lyw/appgeneration/service/VueTurnModeRouter.java`、`ai/VueTurnModeRoutingService.java`、路由提示词及相应测试；共用 RoutingAiModelConfig 的枚举入口需兼容回归。
-- `service/impl/AppServiceImpl.java`、ChatHistoryService/Impl、`core/AiCodeGeneratorFacade.java` 及会话调用链测试。
-- `service/rag/` 的混合检索、格式化和受管执行器，`ai/image/` 的规划、收集、配额和外部工具，当前安全文件访问方式及相应测试。
-- `core/handler/VueTurnContext.java`、`core/concurrency/AppOperationLeaseManager.java`、统一请求预备与 TokenStream 续调链路，及必要的取消、压缩、协议恢复测试。
-- `limit-image-context` 仅作为已实现限额和文本格式的参考；不复用其验收指纹来证明本轮实现。
+实现参考核对了 VueHybridRetrievalService 的在线与后续入口、CurrentVueProjectReader、CurrentVueProject、安全目录解析器、Dense/BM25/RRF 数量路径、结果类型上限及本地 run_tests.py。源码、测试和 README 是允许按任务修改的参考，不应作为持续冻结输入登记。
 
-确认基线为 `6938c2f`，开始评审时业务代码尚无本轮改动；用户已有 `generationSession.test.ts` 三处新增非空断言和未跟踪 `.DS_Store` 均需保护。本轮未检查真实数据库内容、运行服务状态、线上模型准确率和供应商性能，也未重新验收旧变更。
+第 1—7 节是既往完成记录，旧分类、图片、前端与独立评审结果未在本轮重验。主代理已在 .codex/enable-multiturn-resource-recall/vue-rag-selection-before/change/ 保存原件；本次核对原规划/代码评审报告、planning-review.json、verification.md、verification.json 与修改前当前文件的字节一致。未要求以旧兼容测试或旧整包验收记录证明新行为。
 
 ## Blocking findings
 
-无开放阻塞。
+无。
 
-已关闭的来源问题：最初 D2 未区分正式规范中的旧临时计划注入条款与当前 PLAN_RESTORE，且未登记旧统一摘要规格中的首条资料触发限制。定稿已通过 D2 的部分采纳、D3 的当前热窗口与 8K 边界、D4 的资料触发部分替代及 sources 的同步说明消除歧义；未修改旧报告、未增加产品决定。
+规划对本次修改的全部必要选择已给出可实施定义：8 是子块上限；不足不补搜；10 是每池父模板上限；1/4/2 按阶段共用；后续不查骨架；UNAVAILABLE 不视作新工程；非空安全目录内的链接仅作为条目而不跟随；真实构建依赖限制保留。任务 8.1—8.5 未勾选，不存在把当前未实施行为标记完成的问题。
 
 ## Warnings
 
-以下为已由设计和任务覆盖的实施风险，不需要新的产品决定，也不阻塞编码：
+无需要用户重新决定的实质性警告。以下实施与验收边界已由 U5 采纳，不能在交付时遗漏：
 
-1. **双分支队列与物理任务寿命。** 当前 preparation executor 线程数取 RAG 并发许可数与回合上限的较小值，队列原按每回合一个任务设计。新双分支不能依靠扩大池解决等待；不得在该池占用线程等待同池子任务。任务 5.1—5.3 必须验证饱和拒绝、排队取消清理，以及 Future 已取消但底层调用未退出时不提前释放 RAG 请求许可。
-2. **截止与取消是不同结果。** `AppOperationLease.registerCancellation` 已有独立且可关闭的注册入口；`registerModelCancellation` 是主模型位置。任务 5.2、6.1 需覆盖注册与取消竞态、回调注销、等待唤醒以及最终发送门，资料超时不能把本轮标为取消。仅在外层 Future.get 增加超时不足以满足设计。
-3. **后续兼容必须保守。** 当前兼容判断基于模板框架、语言、构建工具及共享依赖的受限版本规则。新入口须以实际工程形成可核验约束，读取失败或不支持的版本表达不能冒充兼容；后续格式化必须绕开缺骨架降级。首次资格不构成重建已有工程的授权。任务 3.1—3.3 已安排对应验证。
-4. **真实分类证据不可由替身代替。** 任务 7.3 应先固定人工标注和旧新提示词，再在相同模型参数下执行获准的最多 240 次调用；若客户端存在隐式重试，执行清单应能保证实际调用上限。未获准、未运行或门槛未满足时保持任务未完成并如实登记，不宣称无退化。
+- 8/10 减少候选覆盖，取消兼容筛选后不同技术栈的合法模板也会按排名返回。本次只授权本地逻辑与受控 Java 组合回归，不得据此宣称真实检索质量无退化或耗时改善。
+- 仅修改 CHANNEL_TOP_K 不足以改变当前 BM25 固定搜索量；任务 8.1 已明确要求实际 SearchReq 透传 topK，并统一 Dense/RRF 默认入口和结果类型内部上限。
+- VueMultiturnResourceRecallE2ETest 受 user.dir 条件限制；现有 run_tests.py 的 --sandbox 会创建符合条件的项目内沙箱并设置 user.dir。本轮验收必须检查测试实际执行数量，不能将跳过计为通过。
+- 历史 Context/Migration 段描述最初交付，U5 专节及第 8 节限定本轮范围和回退；新的机器记录应绑定当前文件，不得复用旧 6938c2f 参考状态或旧实施开始时间。
 
 ## Change Source Coverage 检查结果
 
 | 来源／有效要求 | proposal | specs | design | tasks | 结论与缺口 |
 | --- | --- | --- | --- | --- | --- |
-| U1/U4：三字段、原模式语义、模式与资源错误分离、额外字段无权限 | What Changes 第1项 | 每个用户回合联合判断模式和资料需求 | 决策1 | 1.1、1.2、7.3 | 覆盖；模型失败 cause 与余额提示保留，Vue JSON 不扩大到共用枚举入口 |
-| U3/U4：选中元素固定修改且一次资源判断 | 第1项 | 选中元素请求固定修改并判断资源 | 决策1 | 1.2、2.2 | 覆盖；固定模式先于只读清零，失败后仍经过首次策略 |
-| U2/U3/U4：首次成功边界、只读、失败重试、后端策略 | 第2项 | 首次资格来自持久化成功终态；服务端固定本轮召回策略 | 决策2 | 2.1、2.2、7.1 | 覆盖；存在性查询使用现有 appId 索引，不增存储、不用目录或摘要推断 |
-| U3/U4：初始完整RAG，后续仅功能池最多2个及工程兼容 | 第2项 | 初始和后续 RAG 保持工程兼容 | 决策3 | 3.1—3.3、5.1、7.1 | 覆盖；专用结果/格式化避免错误骨架重建，失败与缺失保守降级 |
-| U3/U4/C2：6/2主题、3张、Logo≤1、去重和文本约束 | 第2项 | 图片配额按阶段贯穿请求和交付 | 决策5 | 4.1、4.2、5.3、7.1 | 覆盖；请求前及交付前都限额，保留非Vue默认行为 |
-| U3/U4：15/8秒统一等待、全部阶段耗时、部分结果与稳定顺序 | 第3项 | 所有资料准备共享单一截止时间 | 决策4 | 5.1、5.3、7.1 | 覆盖；不把预算分配给每个Future，不接纳截止后的结果 |
-| U4/D1/D2：取消、删除、共享执行器和租约隔离 | 第3项、Impact | 取消和删除切断资料与主生成 | 决策4、风险 | 5.2、5.3、6.1 | 覆盖；独立可注销注册、保持真实物理任务资源边界及主模型门禁 |
-| U2/U4/D4：新候选替代、同轮复用、不进L0/L1、预算同份 | 第4项、D4 | 候选资料仅在本轮冻结复用 | 决策6 | 6.1、6.2、7.1 | 覆盖；现有统一预备器已对附加临时消息后的同份快照计量，续调可复用 |
-| U4/D1—D3：原计划、8K窗口、只读升级、公共协议、非Vue及保护项 | Impact、Source Inputs | 固定策略与候选生命周期的边界；其他行为由有效来源持续约束 | Goals/Non-Goals、决策2、Migration Plan | 2.2、6.2、7.2 | 覆盖；没有把旧计划临时注入方式恢复为本轮要求 |
-| U4：真实Java链路、分类对照、观测、独立评审及授权 | 第5项、Impact | 可审查的评测和运行观测 | 风险、Migration Plan | 7.1—7.4、交付条件 | 覆盖；正式验收和归档未形成循环前置checkbox，费用/环境/Git授权分开 |
+| U5：8 子块、10 父模板、重排与最终 1/4/2 | What Changes；U5 行 | 初始和后续 RAG 按相关性与统一上限选取；请求和交付使用同一上限 | Decisions 3 数量集中与各路径 | 8.1、8.2、8.5 | 覆盖，单位与候选不足行为明确 |
+| U5：删除候选兼容与依赖白名单筛选 | What Changes | 不再按元数据兼容性淘汰候选 | Decisions 3 普通/在线/后续/Dense-only | 8.2、8.4 | 覆盖，结构与响应校验继续保留 |
+| U5：仅安全目录识别，不读取清单 | What Changes | 仅按安全目录识别工程；清单内容不影响RAG资格；空工程和不可用工程的边界 | Decisions 3 状态和类型简化 | 8.3、8.5 | 覆盖，目录链接和已有文件保护可验证 |
+| U5 与 U1—U4 保留部分：阶段、兜底、截止取消、同轮冻结、既有构建约束 | 修订范围与既有条目 | 后续资料专用语义、检索渠道失败及既有生命周期 Requirements | Decisions 3、4、6 | 8.2—8.5 | 仅复评本轮影响，其他历史行为继续作为约束 |
+| U5：本地核心及沙箱组合验收，真实调用另行授权 | 2026-11-05 修订范围；U5 行 | 相关新 Scenario；既有受控 Java 验收 | U5 修订的实施和回退 | 8.5、交付条件 | 覆盖，历史分类对照不扩大为本次付费调用 |
+| D1—D4 有效条款与原记录保留 | Source Inputs 替代关系 | 既有模式、生命周期和资料范围 Requirements | Goals/Non-Goals、Decisions 4/6、U5 回退 | 第 8 节说明及交付条件 | U5 未扩张为模式/图片/存储重构，源路径可读 |
 
-反向追踪成立：新增内部类型、功能专用路径、截止任务组和观测均服务于已批准行为，没有增加检索工具、候选持久化、动态回合内召回、Logo路由字段或新的数据库字段。任务依赖按 T1/T2 → T3/T4 → T5 → T6 → T7，7.3 的样例准备允许提前，不提前执行付费调用。规格与设计没有未决的产品选择，实施细节可在不改变契约的前提下落地。
+反向追踪：常量集中、BM25 实际请求透传、内部状态类型简化、提示词与日志更新、真实临时目录测试均为实现 U5 所必需；未引入新服务、模型调用、迁移或新的兼容筛选层。
+
+跨产物一致性：proposal/specs/design 对 8/10/1/4/2、目录三态及现有工程保护一致。旧任务 3.1、3.2、5.1 已通过任务首页与 U5 来源说明作部分替代；历史完成状态不代表新行为通过。新的独立实现评审和最终核验作为交付条件，不构成第 8 节任务的循环前置。
+
+## 实际校验
+
+工作目录：/Users/lllyw/ai-app-generation。
+
+- openspec validate enable-multiturn-resource-recall --type change --strict --json：退出码 0；1 项通过、0 项失败、issues 为空。
+- git diff --check -- openspec/changes/enable-multiturn-resource-recall：退出码 0。
+- 已检查规划文件普通文件类型、有效来源路径与历史快照原件；未运行业务测试、真实 Milvus、模型、部署或环境切换。
+
+CLI 通过仅证明其结构检查范围；本报告的 PASS 同时依据独立的语义、来源与实施可行性审阅。
 
 ## Apply handoff
 
-可先登记规划基线、核验参考代码并执行 start-apply，然后按任务1开始。业务测试入口沿用现有 Java 25/Maven 离线环境及既有前端测试，不需要启动真实服务。资料任务使用模型和网络替身验证真实 Java 调用链；分类对照在具体样例、参数和次数取得授权后执行。
+可按已授权范围进入第 8 节。主代理先对当前规划、有效持续约束及本报告登记 record-plan/check-plan，再在业务修改前执行 start-apply；strict 的 report 与 independent 使用本报告路径。
 
-每阶段提供对应测试及证据，重点保留成功资格查询错误、选中元素失败、排队与截止、部分结果、跨回合覆盖、压缩/协议恢复和发送前取消的失败路径。最后由未实施代码的评审者形成 implementation-review，再进入 verify-change。只有所有必需任务和真实验证满足时才可登记验收通过；本次 PASS 仅说明规划可实施，不授权提交、推送、重启、发布、迁移或真实模型费用。
+实现顺序建议为 8.1 统一参数 → 8.2 与 8.3 完成选择和状态简化 → 8.4 更新消费侧说明 → 8.5 核心与沙箱组合回归。新回归必须覆盖实际请求参数、部分结果配额、异常降级、目录检查期间取消、危险路径和已有工程提示；实际构建白名单仍要通过既有测试。
+
+验收必须取得当前实现的独立代码质量评审，并按当前相关输入判定历史证据能否复用。旧结果不匹配时应补测授权内相关项或明确列出缺口，不重新执行未授权的真实调用。报告不能把本次规划 PASS 写成实现或效果验收通过。

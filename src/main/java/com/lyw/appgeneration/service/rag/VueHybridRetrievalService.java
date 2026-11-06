@@ -1,6 +1,7 @@
 package com.lyw.appgeneration.service.rag;
 
 import com.lyw.appgeneration.config.RagProperties;
+import com.lyw.appgeneration.constants.RagConstants;
 import com.lyw.appgeneration.service.rag.catalog.TemplateCatalog;
 import com.lyw.appgeneration.service.rag.exception.RerankException;
 import com.lyw.appgeneration.service.rag.model.RagDocumentKind;
@@ -12,7 +13,6 @@ import com.lyw.appgeneration.service.rag.model.CurrentVueProject;
 import com.lyw.appgeneration.service.rag.model.VueTurnRagResult;
 import com.lyw.appgeneration.core.resource.ResourcePreparationScope;
 import java.util.function.Consumer;
-import com.lyw.appgeneration.core.builder.VueProjectBuilder;
 import com.lyw.appgeneration.service.rag.monitor.VueRagDegradationReason;
 import com.lyw.appgeneration.service.rag.monitor.VueRagLogSanitizer;
 import com.lyw.appgeneration.service.rag.monitor.VueRagMetricsCollector;
@@ -31,13 +31,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Vue 工程骨架与功能片段双链混合检索编排。
@@ -46,20 +43,7 @@ import java.util.regex.Pattern;
 @Slf4j
 public class VueHybridRetrievalService {
 
-    static final int CHANNEL_TOP_K = 10;
-    static final int FUSION_TOP_K = 15;
-    static final int SKELETON_RERANK_TOP_K = 3;
-    static final int FEATURE_RERANK_TOP_K = 8;
-    static final int FINAL_FEATURE_TOP_K = 4;
     static final String BASIC_SKELETON_ID = "vue-skeleton-basic-001";
-
-    private static final Pattern VERSION_NUMBER = Pattern.compile("(?<!\\d)(\\d+)(?:\\.\\d+)*");
-    private static final Pattern FIXED_DEPENDENCY_VERSION =
-            Pattern.compile("^(\\d+)(?:\\.\\d+){0,2}$");
-    private static final Pattern SINGLE_MAJOR_DEPENDENCY_RANGE =
-            Pattern.compile("^[\\^~]\\s*(\\d+)(?:\\.(?:\\d+|[xX*])){0,2}$");
-    private static final Pattern MINIMUM_DEPENDENCY_VERSION =
-            Pattern.compile("^>=\\s*(\\d+)(?:\\.\\d+){0,2}$");
 
     private final VueRetrievalResourceProvider resourceProvider;
     private final MilvusBm25Retriever bm25Retriever;
@@ -127,16 +111,16 @@ public class VueHybridRetrievalService {
                 }
             }
 
-            List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
-                    skeleton, featureChain.documents(), FINAL_FEATURE_TOP_K);
-            metricsCollector.recordFinalSelection(1, compatibleFeatures.size());
+            List<TemplateDoc> selectedFeatures = selectFeatures(
+                    featureChain.documents(), RagConstants.VUE_INITIAL_FEATURE_TOP_K);
+            metricsCollector.recordFinalSelection(1, selectedFeatures.size());
             log.info("[Vue RAG] 检索完成,queryHash={},catalogVersion={},skeletonId={},featureIds={},"
                             + "skeletonCount=1,featureCount={},elapsedMs={}",
                     queryHash, catalog.getCatalogVersion(), skeleton.getId(),
-                    compatibleFeatures.stream().map(TemplateDoc::getId).toList(),
-                    compatibleFeatures.size(), elapsedMillis(startNanos));
+                    selectedFeatures.stream().map(TemplateDoc::getId).toList(),
+                    selectedFeatures.size(), elapsedMillis(startNanos));
             return new VueRagContext(
-                    skeleton, compatibleFeatures, catalog.getCatalogVersion(), degraded);
+                    skeleton, selectedFeatures, catalog.getCatalogVersion(), degraded);
         } finally {
             metricsCollector.recordRetrievalDuration(
                     Duration.ofNanos(System.nanoTime() - startNanos));
@@ -144,7 +128,7 @@ public class VueHybridRetrievalService {
     }
 
     /**
-     * 使用同一目录、Embedding 与兼容性规则执行 Dense-only 离线评测基线。
+     * 使用同一目录、Embedding 与数量上限执行 Dense-only 离线评测基线。
      *
      * <p>该方法不会被生产生成链调用，也不会做基础骨架兜底；Dense 失败必须体现为 miss，
      * 避免基线被固定兜底结果抬高。
@@ -163,7 +147,7 @@ public class VueHybridRetrievalService {
             List<TemplateDoc> skeletonCandidates = resolveParents(
                     request.await(request.submit(VueRagStage.DENSE, RagDocumentKind.PROJECT_SKELETON,
                             () -> denseRetriever.retrieveWithEmbedding(embedding, catalog.getCatalogVersion(),
-                                    RagDocumentKind.PROJECT_SKELETON, CHANNEL_TOP_K))),
+                                    RagDocumentKind.PROJECT_SKELETON, RagConstants.VUE_CHANNEL_TOP_K))),
                     RagDocumentKind.PROJECT_SKELETON,
                     catalog);
             TemplateDoc skeleton = firstOfKind(
@@ -174,13 +158,13 @@ public class VueHybridRetrievalService {
             List<TemplateDoc> featureCandidates = resolveParents(
                     request.await(request.submit(VueRagStage.DENSE, RagDocumentKind.FEATURE_SNIPPET,
                             () -> denseRetriever.retrieveWithEmbedding(embedding, catalog.getCatalogVersion(),
-                                    RagDocumentKind.FEATURE_SNIPPET, CHANNEL_TOP_K))),
+                                    RagDocumentKind.FEATURE_SNIPPET, RagConstants.VUE_CHANNEL_TOP_K))),
                     RagDocumentKind.FEATURE_SNIPPET,
                     catalog);
-            List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
-                    skeleton, featureCandidates, FINAL_FEATURE_TOP_K);
+            List<TemplateDoc> selectedFeatures = selectFeatures(
+                    featureCandidates, RagConstants.VUE_INITIAL_FEATURE_TOP_K);
             return new VueRagContext(
-                    skeleton, compatibleFeatures, catalog.getCatalogVersion(), false);
+                    skeleton, selectedFeatures, catalog.getCatalogVersion(), false);
         } catch (Exception exception) {
             log.warn("[Vue RAG][Dense Baseline] 检索失败,queryHash={},catalogVersion={},candidateCount=0",
                     VueRagLogSanitizer.queryHash(rawQuery), catalog.getCatalogVersion());
@@ -225,11 +209,11 @@ public class VueHybridRetrievalService {
                 return new VueRagContext(null, List.of(), catalog.getCatalogVersion(), true);
             }
 
-            List<TemplateDoc> compatibleFeatures = selectCompatibleFeatures(
-                    skeleton, featureResult.documents(), FINAL_FEATURE_TOP_K);
-            metricsCollector.recordFinalSelection(1, compatibleFeatures.size());
+            List<TemplateDoc> selectedFeatures = selectFeatures(
+                    featureResult.documents(), RagConstants.VUE_INITIAL_FEATURE_TOP_K);
+            metricsCollector.recordFinalSelection(1, selectedFeatures.size());
             return new VueRagContext(
-                    skeleton, compatibleFeatures, catalog.getCatalogVersion(), degraded);
+                    skeleton, selectedFeatures, catalog.getCatalogVersion(), degraded);
         } finally {
             metricsCollector.recordRetrievalDuration(
                     Duration.ofNanos(System.nanoTime() - startNanos));
@@ -249,14 +233,14 @@ public class VueHybridRetrievalService {
             CompletableFuture<ChannelResult> featureBm25 = bm25Channel(
                     request, rawQuery, catalog, RagDocumentKind.FEATURE_SNIPPET);
             CompletableFuture<ChainResult> skeleton = retrieveChain(request, embedding, skeletonBm25,
-                    rawQuery, RagDocumentKind.PROJECT_SKELETON, SKELETON_RERANK_TOP_K, resources, qualityScores);
+                    rawQuery, RagDocumentKind.PROJECT_SKELETON, RagConstants.VUE_SKELETON_TOP_K, resources, qualityScores);
             CompletableFuture<ChainResult> feature = retrieveChain(request, embedding, featureBm25,
-                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K, resources, qualityScores);
+                    rawQuery, RagDocumentKind.FEATURE_SNIPPET, RagConstants.VUE_INITIAL_FEATURE_TOP_K, resources, qualityScores);
             return request.await(skeleton.thenCombine(feature, ChainPair::new));
         }
     }
 
-    /** 后续仅访问功能池，兼容基准来自当前工程，不重新检索骨架。 */
+    /** 后续仅访问功能池，确认工程目录存在后按相关性选取，不重新检索骨架。 */
     public VueFeatureContext retrieveFeatures(String query, CurrentVueProject project, boolean hybrid) {
         if (project == null || !project.available()) return VueFeatureContext.unavailable();
         VueRetrievalResources resources = resourceProvider.current().orElse(null);
@@ -265,21 +249,15 @@ public class VueHybridRetrievalService {
             var embedding = queryEmbedding(request, query);
             ChainResult result = hybrid ? request.await(retrieveChain(request, embedding,
                     bm25Channel(request, query, resources.catalog(), RagDocumentKind.FEATURE_SNIPPET),
-                    query, RagDocumentKind.FEATURE_SNIPPET, FEATURE_RERANK_TOP_K, resources,
+                    query, RagDocumentKind.FEATURE_SNIPPET, RagConstants.VUE_FOLLOWUP_FEATURE_TOP_K, resources,
                     qualityScores(resources.catalog())))
                     : request.await(denseChannel(request, embedding, resources.catalog(), RagDocumentKind.FEATURE_SNIPPET)
                     .thenApply(channel -> new ChainResult(resolveParents(channel.candidates(),
                             RagDocumentKind.FEATURE_SNIPPET, resources.catalog()), channel.failed())));
-            List<TemplateDoc> features = compatibleProjectFeatures(project, result.documents(), VueFeatureContext.MAX_FEATURES);
+            List<TemplateDoc> features = selectFeatures(result.documents(), RagConstants.VUE_FOLLOWUP_FEATURE_TOP_K);
             metricsCollector.recordFinalSelection(0, features.size());
             return new VueFeatureContext(features, resources.catalog().getCatalogVersion(), result.degraded());
         }
-    }
-
-    List<TemplateDoc> compatibleProjectFeatures(CurrentVueProject project, List<TemplateDoc> candidates, int limit) {
-        if (!project.available()) return List.of();
-        return selectCompatibleFeatures(project.compatibilityDocument(), candidates.stream()
-                .filter(this::allowedProjectDependencies).toList(), limit);
     }
 
     /** 在线共用截止；每个渠道完成即发布可用部分，慢重排不能抹掉已经完成的召回。 */
@@ -302,9 +280,9 @@ public class VueHybridRetrievalService {
             Map<String, Double> quality = qualityScores(resources.catalog());
             List<CompletableFuture<Void>> chains = new ArrayList<>();
             if (initial) chains.add(onlineChain(request, embedding, query, RagDocumentKind.PROJECT_SKELETON,
-                    SKELETON_RERANK_TOP_K, resources, quality, hybrid, selection));
+                    RagConstants.VUE_SKELETON_TOP_K, resources, quality, hybrid, selection));
             chains.add(onlineChain(request, embedding, query, RagDocumentKind.FEATURE_SNIPPET,
-                    FEATURE_RERANK_TOP_K, resources, quality, hybrid, selection));
+                    selection.featureTopK, resources, quality, hybrid, selection));
             request.await(CompletableFuture.allOf(chains.toArray(CompletableFuture[]::new)));
             return selection.last;
         }
@@ -330,6 +308,7 @@ public class VueHybridRetrievalService {
         private final TemplateCatalog catalog;
         private final CurrentVueProject project;
         private final boolean initial;
+        private final int featureTopK;
         private final boolean hybrid;
         private final ResourcePreparationScope scope;
         private final Consumer<VueTurnRagResult> consumer;
@@ -340,6 +319,7 @@ public class VueHybridRetrievalService {
                                 ResourcePreparationScope scope, Consumer<VueTurnRagResult> consumer) {
             this.catalog = catalog; this.project = project; this.initial = initial; this.hybrid = hybrid;
             this.scope = scope; this.consumer = consumer;
+            this.featureTopK = initial ? RagConstants.VUE_INITIAL_FEATURE_TOP_K : RagConstants.VUE_FOLLOWUP_FEATURE_TOP_K;
             if (initial) pools.put(RagDocumentKind.PROJECT_SKELETON, new PoolSelection());
             pools.put(RagDocumentKind.FEATURE_SNIPPET, new PoolSelection());
         }
@@ -366,7 +346,7 @@ public class VueHybridRetrievalService {
             if (pool.finalResult != null) return pool.finalResult.documents();
             if (!hybrid) return resolveParents(pool.dense.candidates(), kind, catalog);
             return resolveParents(fusionService.fuse(pool.bm25.candidates(), pool.dense.candidates(),
-                    qualityScores(catalog), FUSION_TOP_K), kind, catalog);
+                    qualityScores(catalog), RagConstants.VUE_FUSION_TOP_K), kind, catalog);
         }
 
         private synchronized void publish() {
@@ -374,17 +354,14 @@ public class VueHybridRetrievalService {
             boolean degraded = pools.values().stream().anyMatch(pool -> pool.finalResult == null || pool.finalResult.degraded());
             List<TemplateDoc> candidates = documents(RagDocumentKind.FEATURE_SNIPPET);
             if (initial) {
-                TemplateDoc skeleton = documents(RagDocumentKind.PROJECT_SKELETON).stream()
-                        .filter(doc -> !project.existing() || isCompatible(project.compatibilityDocument(), doc)
-                                && allowedProjectDependencies(doc)).findFirst().orElse(null);
+                TemplateDoc skeleton = firstOfKind(
+                        documents(RagDocumentKind.PROJECT_SKELETON), RagDocumentKind.PROJECT_SKELETON);
                 if (skeleton == null && !project.existing()) { skeleton = basicSkeleton(catalog); degraded = true; }
-                List<TemplateDoc> features = project.available()
-                        ? compatibleProjectFeatures(project, candidates, FINAL_FEATURE_TOP_K)
-                        : skeleton == null ? List.of() : selectCompatibleFeatures(skeleton, candidates, FINAL_FEATURE_TOP_K);
+                List<TemplateDoc> features = skeleton == null && !project.existing()
+                        ? List.of() : selectFeatures(candidates, featureTopK);
                 last = VueTurnRagResult.initial(new VueRagContext(skeleton, features, catalog.getCatalogVersion(), degraded));
             } else {
-                last = VueTurnRagResult.followUp(new VueFeatureContext(compatibleProjectFeatures(project, candidates,
-                        VueFeatureContext.MAX_FEATURES), catalog.getCatalogVersion(), degraded));
+                last = VueTurnRagResult.followUp(new VueFeatureContext(selectFeatures(candidates, featureTopK), catalog.getCatalogVersion(), degraded));
             }
             consumer.accept(last);
         }
@@ -395,13 +372,6 @@ public class VueHybridRetrievalService {
         private ChannelResult dense = new ChannelResult(List.of(), true);
         private ChainResult finalResult;
         private boolean finished;
-    }
-
-    private boolean allowedProjectDependencies(TemplateDoc document) {
-        Map<String, String> allowed = new HashMap<>(VueProjectBuilder.trustedRuntimeDependencies());
-        allowed.putAll(VueProjectBuilder.trustedDevelopmentDependencies());
-        return allDependencies(document).entrySet().stream().allMatch(entry -> allowed.containsKey(entry.getKey())
-                && dependencyVersionsCompatible(allowed.get(entry.getKey()), entry.getValue()));
     }
 
     private DensePair retrieveDensePools(String rawQuery, TemplateCatalog catalog) {
@@ -435,7 +405,7 @@ public class VueHybridRetrievalService {
                                                          String rawQuery, TemplateCatalog catalog,
                                                          RagDocumentKind kind) {
         return recall(VueRagDegradationReason.BM25_FAILED, request.submit(VueRagStage.BM25, kind,
-                () -> bm25Retriever.retrieve(rawQuery, catalog.getCatalogVersion(), kind, CHANNEL_TOP_K)));
+                () -> bm25Retriever.retrieve(rawQuery, catalog.getCatalogVersion(), kind, RagConstants.VUE_CHANNEL_TOP_K)));
     }
 
     private CompletableFuture<ChannelResult> denseChannel(VueRagExecutor.RequestScope request,
@@ -444,7 +414,7 @@ public class VueHybridRetrievalService {
         // 共享计算失败时，两池都走原来的 Dense 失败分支，不额外重算向量。
         return recall(VueRagDegradationReason.DENSE_FAILED, embedding.thenCompose(value ->
                 request.submit(VueRagStage.DENSE, kind, () -> denseRetriever.retrieveWithEmbedding(
-                        value, catalog.getCatalogVersion(), kind, CHANNEL_TOP_K))));
+                        value, catalog.getCatalogVersion(), kind, RagConstants.VUE_CHANNEL_TOP_K))));
     }
 
     private TemplateDoc basicSkeleton(TemplateCatalog catalog) {
@@ -474,7 +444,7 @@ public class VueHybridRetrievalService {
                 || dense.failed() || dense.candidates().isEmpty();
 
         List<RankedCandidate> fused = fusionService.fuse(
-                bm25.candidates(), dense.candidates(), qualityScores, FUSION_TOP_K);
+                bm25.candidates(), dense.candidates(), qualityScores, RagConstants.VUE_FUSION_TOP_K);
         metricsCollector.recordRrfCandidates(fused.size());
         log.debug("[Vue RAG] RRF融合完成,queryHash={},catalogVersion={},candidateIds={},candidateCount={}",
                 VueRagLogSanitizer.queryHash(rawQuery), resources.catalog().getCatalogVersion(),
@@ -564,20 +534,19 @@ public class VueHybridRetrievalService {
 
     private TemplateDoc firstOfKind(List<TemplateDoc> documents, RagDocumentKind kind) {
         return documents.stream()
-                .filter(document -> document.getDocumentKind() == kind)
+                .filter(document -> document != null && document.getId() != null && !document.getId().isBlank()
+                        && document.getDocumentKind() == kind)
                 .findFirst()
                 .orElse(null);
     }
 
-    private List<TemplateDoc> selectCompatibleFeatures(TemplateDoc skeleton,
-                                                        List<TemplateDoc> candidates,
-                                                        int topK) {
+    private List<TemplateDoc> selectFeatures(List<TemplateDoc> candidates, int topK) {
         List<TemplateDoc> selected = new ArrayList<>();
         Set<String> seen = new java.util.HashSet<>();
         for (TemplateDoc candidate : candidates) {
-            if (candidate != null && seen.add(candidate.getId())
+            if (candidate != null && candidate.getId() != null && !candidate.getId().isBlank()
                     && candidate.getDocumentKind() == RagDocumentKind.FEATURE_SNIPPET
-                    && isCompatible(skeleton, candidate)) {
+                    && seen.add(candidate.getId())) {
                 selected.add(candidate);
                 if (selected.size() == topK) {
                     break;
@@ -585,126 +554,6 @@ public class VueHybridRetrievalService {
             }
         }
         return List.copyOf(selected);
-    }
-
-    private boolean isCompatible(TemplateDoc skeleton, TemplateDoc feature) {
-        return hasSameMajorVersion(skeleton.getFramework(), feature.getFramework())
-                && normalize(skeleton.getLanguage()).equals(normalize(feature.getLanguage()))
-                && hasSameBuildTool(skeleton.getBuildTool(), feature.getBuildTool())
-                && sharedDependenciesCompatible(skeleton, feature);
-    }
-
-    private boolean hasSameBuildTool(String left, String right) {
-        String leftTool = toolName(left);
-        return !leftTool.isBlank() && leftTool.equals(toolName(right));
-    }
-
-    private boolean hasSameMajorVersion(String left, String right) {
-        Integer leftMajor = majorVersion(left);
-        Integer rightMajor = majorVersion(right);
-        return leftMajor != null && leftMajor.equals(rightMajor);
-    }
-
-    private boolean sharedDependenciesCompatible(TemplateDoc skeleton, TemplateDoc feature) {
-        Map<String, String> skeletonDependencies = allDependencies(skeleton);
-        Map<String, String> featureDependencies = allDependencies(feature);
-        Set<String> sharedNames = new java.util.HashSet<>(skeletonDependencies.keySet());
-        sharedNames.retainAll(featureDependencies.keySet());
-        for (String dependency : sharedNames) {
-            if (!dependencyVersionsCompatible(
-                    skeletonDependencies.get(dependency), featureDependencies.get(dependency))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean dependencyVersionsCompatible(String left, String right) {
-        DependencyVersionRange leftRange = dependencyVersionRange(left);
-        DependencyVersionRange rightRange = dependencyVersionRange(right);
-        if (leftRange.kind() == DependencyRangeKind.UNBOUNDED
-                || rightRange.kind() == DependencyRangeKind.UNBOUNDED) {
-            return true;
-        }
-        if (leftRange.kind() == DependencyRangeKind.UNSUPPORTED
-                || rightRange.kind() == DependencyRangeKind.UNSUPPORTED) {
-            return false;
-        }
-        if (leftRange.kind() == DependencyRangeKind.MINIMUM
-                && rightRange.kind() == DependencyRangeKind.MINIMUM) {
-            return true;
-        }
-        if (leftRange.kind() == DependencyRangeKind.MINIMUM) {
-            return rightRange.major() >= leftRange.major();
-        }
-        if (rightRange.kind() == DependencyRangeKind.MINIMUM) {
-            return leftRange.major() >= rightRange.major();
-        }
-        return leftRange.major() == rightRange.major();
-    }
-
-    private DependencyVersionRange dependencyVersionRange(String value) {
-        String normalized = normalize(value);
-        if (normalized.equals("*") || normalized.equals("latest")) {
-            return new DependencyVersionRange(DependencyRangeKind.UNBOUNDED, -1);
-        }
-        Matcher minimumMatcher = MINIMUM_DEPENDENCY_VERSION.matcher(normalized);
-        if (minimumMatcher.matches()) {
-            return new DependencyVersionRange(
-                    DependencyRangeKind.MINIMUM, Integer.parseInt(minimumMatcher.group(1)));
-        }
-        Matcher fixedMatcher = FIXED_DEPENDENCY_VERSION.matcher(normalized);
-        if (fixedMatcher.matches()) {
-            return new DependencyVersionRange(
-                    DependencyRangeKind.SINGLE_MAJOR, Integer.parseInt(fixedMatcher.group(1)));
-        }
-        Matcher rangeMatcher = SINGLE_MAJOR_DEPENDENCY_RANGE.matcher(normalized);
-        if (rangeMatcher.matches()) {
-            return new DependencyVersionRange(
-                    DependencyRangeKind.SINGLE_MAJOR, Integer.parseInt(rangeMatcher.group(1)));
-        }
-        // 这里只实现任务所需的 npm 版本子集，复杂比较符集合和并集必须保守拒绝。
-        return new DependencyVersionRange(DependencyRangeKind.UNSUPPORTED, -1);
-    }
-
-    private Map<String, String> allDependencies(TemplateDoc document) {
-        Map<String, String> dependencies = new HashMap<>();
-        addDependencies(dependencies, document.getDependencies());
-        addDependencies(dependencies, document.getDevDependencies());
-        return dependencies;
-    }
-
-    private void addDependencies(Map<String, String> target, Map<String, String> source) {
-        if (source == null) {
-            return;
-        }
-        source.forEach((name, version) -> {
-            if (name != null && !name.isBlank()) {
-                target.put(normalize(name), version);
-            }
-        });
-    }
-
-    private String toolName(String value) {
-        String normalized = normalize(value);
-        int at = normalized.indexOf('@');
-        if (at > 0) {
-            return normalized.substring(0, at);
-        }
-        Matcher matcher = VERSION_NUMBER.matcher(normalized);
-        return matcher.find() ? normalized.substring(0, matcher.start()).strip() : normalized;
-    }
-
-    private Integer majorVersion(String value) {
-        if (value == null) {
-            return null;
-        }
-        Matcher matcher = VERSION_NUMBER.matcher(value);
-        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
-    }
-
-    private String normalize(String value) {
-        return value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
     }
 
     private Map<String, Double> qualityScores(TemplateCatalog catalog) {
@@ -734,13 +583,4 @@ public class VueHybridRetrievalService {
     private record RecallPair(ChannelResult bm25, ChannelResult dense) {
     }
 
-    private record DependencyVersionRange(DependencyRangeKind kind, int major) {
-    }
-
-    private enum DependencyRangeKind {
-        SINGLE_MAJOR,
-        MINIMUM,
-        UNBOUNDED,
-        UNSUPPORTED
-    }
 }

@@ -74,19 +74,36 @@ class RrfFusionServiceTest {
     }
 
     @Test
-    void defaultsToTopFifteenAndRejectsInvalidCandidates() {
-        List<RankedCandidate> bm25 = java.util.stream.IntStream.rangeClosed(1, 20)
-                .mapToObj(index -> candidate("document-%02d".formatted(index), index))
+    void 两路各八个不重合父模板默认融合前十个并拒绝非法候选() {
+        List<RankedCandidate> bm25 = java.util.stream.IntStream.rangeClosed(1, 8)
+                .mapToObj(index -> candidate("bm25-%02d".formatted(index), index))
+                .toList();
+        List<RankedCandidate> dense = java.util.stream.IntStream.rangeClosed(1, 8)
+                .mapToObj(index -> candidate("dense-%02d".formatted(index), index))
                 .toList();
         List<RankedCandidate> withInvalid = new java.util.ArrayList<>(bm25);
         withInvalid.add(new RankedCandidate("", RagDocumentKind.FEATURE_SNIPPET, 1, 1.0));
         withInvalid.add(new RankedCandidate("bad-rank", RagDocumentKind.FEATURE_SNIPPET, 0, 1.0));
 
-        List<RankedCandidate> result = fusionService.fuse(withInvalid, List.of(), Map.of());
+        List<RankedCandidate> result = fusionService.fuse(withInvalid, dense, Map.of());
 
-        assertEquals(15, result.size());
-        assertEquals("document-01", result.getFirst().documentId());
-        assertEquals("document-15", result.getLast().documentId());
+        assertEquals(List.of("bm25-01", "dense-01", "bm25-02", "dense-02", "bm25-03",
+                "dense-03", "bm25-04", "dense-04", "bm25-05", "dense-05"),
+                result.stream().map(RankedCandidate::documentId).toList());
+        assertEquals(6, fusionService.fuse(withInvalid, dense, Map.of(), 6).size());
+    }
+
+    @Test
+    void 两路重复父模板只合并一次且不足和空结果不填充() {
+        List<RankedCandidate> result = fusionService.fuse(
+                List.of(candidate("shared", 1), candidate("shared", 3)),
+                List.of(candidate("shared", 1), candidate("dense-only", 2)), Map.of());
+
+        assertEquals(List.of("shared", "dense-only"), result.stream().map(RankedCandidate::documentId).toList());
+        assertEquals(2.0 / 61.0, result.getFirst().score(), 1.0e-12);
+        assertTrue(fusionService.fuse(List.of(), List.of(), Map.of()).isEmpty());
+        assertTrue(fusionService.fuse(null, null, null).isEmpty());
+        assertTrue(fusionService.fuse(result, List.of(), Map.of(), 0).isEmpty());
     }
 
     private RankedCandidate candidate(String documentId, int rank) {
